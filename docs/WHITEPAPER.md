@@ -145,12 +145,12 @@ This design provides auditable and machine-parsable operational evidence while p
 
 Let:
 
-- $ R_t $ = raw token cost of direct MCP metadata surfaces per cycle,
-- $ F_t $ = facade token cost per cycle,
-- $ S_t = R_t - F_t $ = token savings,
-- $ \eta = S_t / R_t $ = fractional savings.
+- $R_t$ = raw token cost of direct MCP metadata surfaces per cycle,
+- $F_t$ = facade token cost per cycle,
+- $S_t = R_t - F_t$ = token savings,
+- $\eta = S_t / R_t$ = fractional savings.
 
-In direct mode, repeated loop cost over $ n $ turns approximates:
+In direct mode, repeated loop cost over $n$ turns approximates:
 
 $$
 C_{raw}(n) = n \cdot R_t
@@ -162,17 +162,17 @@ $$
 C_{facade}(n) = n \cdot I + D
 $$
 
-where $ I $ is compact index cost.
+where $I$ is compact index cost.
 
-When $ R_t \gg I $, savings scale with loop length:
+When $R_t \gg I $, savings scale with loop length:
 
 $$
 \eta(n) = 1 - \frac{nI + D}{nR_t}
 $$
 
-As $ n \to \infty $, $ \eta(n) \to 1 - I/R_t $.
+As $n \to \infty $, $\eta(n) \to 1 - I/R_t $.
 
-Warmplane’s measured results fit this behavior: large $ R_t/I $ ratios produce very high sustained savings.
+Warmplane’s measured results fit this behavior: large $R_t/I$ ratios produce very high sustained savings.
 
 ## 5. Evaluation Methodology
 
