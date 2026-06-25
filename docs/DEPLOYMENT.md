@@ -11,7 +11,7 @@ Common runtime variables:
 - `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317`
 - `WARMPLANE_SERVICE_NAME=warmplane-prod`
 
-Use env-backed secrets for upstream auth (`tokenEnv`, `passwordEnv`).
+Use env-backed secrets for upstream auth (`tokenEnv`, `passwordEnv`), or use the standard `oauth2` flow for dynamic bearer tokens. Note that OAuth2 configuration requires loopback redirect capability on the running environment.
 
 ## 2) systemd Service
 

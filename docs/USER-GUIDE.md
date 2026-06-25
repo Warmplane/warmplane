@@ -161,10 +161,30 @@ Basic:
 }
 ```
 
+OAuth2 (OAuth 2.1 / OIDC):
+
+```json
+{
+  "type": "oauth2",
+  "clientId": "client-id-here",
+  "authorizationServerUrl": "https://auth.example.com",
+  "scopes": ["read", "write"],
+  "clientMetadataUrl": "https://example.com/metadata.json"
+}
+```
+
 Rules:
 
 - bearer: exactly one of `token` or `tokenEnv`
 - basic: exactly one of `password` or `passwordEnv`
+- oauth2: requires non-empty `clientId` and `authorizationServerUrl`. Optionally takes `scopes` and `clientMetadataUrl`.
+
+When OAuth2 is configured, Warmplane automatically spins up a local background proxy server on an ephemeral loopback port to:
+- Probe and discover authorization servers (RFC 9728 & RFC 8414).
+- Execute the cryptographically bound Authorization Code flow with PKCE (`S256`).
+- Handle loopback redirection callbacks and validate the expected issuer parameter (RFC 9207 / SEP-2468).
+- Accumulate scopes dynamically during step-up challenges (`403 Forbidden` with `insufficient_scope`).
+- Silently refresh access tokens using refresh tokens (`offline_access`).
 
 ### 4.5 Policy
 
@@ -442,7 +462,7 @@ MCP smoke test:
 
 ## 13. Reference Docs
 
-- API spec: [spec.md](/Users/origo/src/mcp-fast-cli/docs/spec.md)
-- Token research: [TOKEN_EFFICIENCY_RESEARCH_REPORT.md](/Users/origo/src/mcp-fast-cli/docs/research/TOKEN_EFFICIENCY_RESEARCH_REPORT.md)
-- Editorial: [NEXT_LEVEL_TOOL_CALLING.md](/Users/origo/src/mcp-fast-cli/docs/NEXT_LEVEL_TOOL_CALLING.md)
-- Narrative take: [TAKE_TWO.md](/Users/origo/src/mcp-fast-cli/docs/TAKE_TWO.md)
+- API spec: [spec.md](docs/spec.md)
+- Token research: [TOKEN_EFFICIENCY_RESEARCH_REPORT.md](docs/research/TOKEN_EFFICIENCY_RESEARCH_REPORT.md)
+- Editorial: [NEXT_LEVEL_TOOL_CALLING.md](docs/NEXT_LEVEL_TOOL_CALLING.md)
+- Narrative take: [TAKE_TWO.md](docs/TAKE_TWO.md)

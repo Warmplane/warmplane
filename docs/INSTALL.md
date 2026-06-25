@@ -5,8 +5,8 @@ This document covers practical install paths for Warmplane and release packaging
 ## 1) Build from Source
 
 ```bash
-git clone https://github.com/mrorigo/mcp-fast-cli.git
-cd mcp-fast-cli
+git clone https://github.com/warmplane/warmplane.git
+cd warmplane
 cargo build --release
 ./target/release/warmplane --help
 ```

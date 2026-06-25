@@ -106,7 +106,7 @@ For HTTP/SSE upstreams, Warmplane supports:
 - `protocolVersion` header control,
 - `allowStateless` behavior,
 - custom headers,
-- auth (`bearer`, `basic`) with env-backed secret options.
+- authentication schemas: static credentials (`bearer`, `basic`) and dynamic `oauth2` (OAuth 2.1 / OIDC) flows featuring PKCE (`S256`), dynamic server discovery (RFC 9728 & RFC 8414), scope accumulation during step-up challenges, and silent token refreshing via rotated refresh tokens.
 
 ### 3.3 Deterministic Call Model
 
@@ -293,12 +293,19 @@ This reduces mean-time-to-understand during incidents and supports policy/compli
 
 ## 8. Security and Trust Boundaries
 
-Warmplane does not eliminate upstream risk; it concentrates control points.
+Warmplane does not eliminate upstream risk; it concentrates control points. 
+
+By upgrading to standard OAuth 2.1 authentication patterns, Warmplane achieves major architectural security bounds:
+
+- **Mitigation of Confused Deputy Attacks**: Employs Resource Indicators (RFC 8707) to bound issued access tokens to the exact canonical target server URI, preventing token replay attacks across services.
+- **Defending against Authorization Mix-Ups**: Implements exact string-match issuer parameter verification (RFC 9207 / SEP-2468) during loopback redirects to eliminate session hijack risks.
+- **Securing Public Clients (PKCE)**: Uses S256 PKCE verification to safeguard temporary redirect authorization codes from interception.
+- **Egress Filtering and SSRF Defenses**: Discovery and token requests utilize strict hostname and scheme validations to avoid server-side request forgery (SSRF).
 
 Recommended deployment posture:
 
 - bind local interfaces conservatively,
-- use env-backed secrets,
+- use env-backed secrets or OAuth2 dynamic verification,
 - enforce deny-by-default for destructive operations,
 - separate read/write policy profiles by workload class,
 - audit call paths via trace IDs.

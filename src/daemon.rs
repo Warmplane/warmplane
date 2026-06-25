@@ -15,7 +15,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
     net::TcpListener,
     process::Command,
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, RwLock},
     time::timeout,
 };
 use tracing::info;
@@ -215,6 +215,9 @@ fn build_http_headers(server_id: &str, srv_cfg: &ServerConfig) -> Result<HeaderM
                 auth_value.set_sensitive(true);
                 headers.insert(AUTHORIZATION, auth_value);
             }
+            AuthConfig::Oauth2 { .. } => {
+                // Auth headers are injected dynamically by the local proxy
+            }
         }
     }
 
@@ -241,6 +244,19 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
 
     info!(server_count = config.mcp_servers.len(), "booting upstream MCP servers");
 
+    // Initialize central OAuth registry and proxy server if any server uses OAuth2
+    let oauth_registry = crate::oauth2::OAuthRegistry::default();
+    let mut oauth_proxy_port = None;
+
+    let has_oauth2 = config.mcp_servers.values().any(|s| {
+        matches!(s.auth, Some(AuthConfig::Oauth2 { .. }))
+    });
+
+    if has_oauth2 {
+        let port = crate::oauth2::start_oauth_proxy_server(oauth_registry.clone()).await?;
+        oauth_proxy_port = Some(port);
+    }
+
     for (server_id, srv_cfg) in config.mcp_servers {
         info!(%server_id, "starting upstream server");
         let mcp_client = if let Some(command) = &srv_cfg.command {
@@ -255,13 +271,49 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                 format!("Failed to negotiate stdio MCP connection for {}", server_id)
             })?
         } else if let Some(url) = &srv_cfg.url {
+            let mut target_url = url.clone();
+
+            if let Some(AuthConfig::Oauth2 { client_id, authorization_server_url, scopes, client_metadata_url }) = &srv_cfg.auth {
+                let proxy_port = oauth_proxy_port.ok_or_else(|| anyhow!("OAuth proxy server failed to initialize"))?;
+
+                // Discover the OAuth authorization server metadata
+                let discovery = crate::oauth2::discover_auth_server(url, Some(authorization_server_url)).await?;
+
+                let client_state = crate::oauth2::OAuth2ClientState {
+                    server_id: server_id.clone(),
+                    client_id: client_id.clone(),
+                    _authorization_server_url: authorization_server_url.clone(),
+                    scopes: Arc::new(RwLock::new(scopes.iter().cloned().collect())),
+                    token_state: Arc::new(RwLock::new(None)),
+                    discovery,
+                    client_metadata_url: client_metadata_url.clone(),
+                    remote_base_url: url.clone(),
+                };
+
+                // Perform the initial browser-based PKCE auth flow
+                let initial_token = crate::oauth2::run_oauth2_flow(&client_state, &oauth_registry, proxy_port).await?;
+                {
+                    let mut guard = client_state.token_state.write().await;
+                    *guard = Some(initial_token);
+                }
+
+                // Add to registry so proxy can handle incoming requests
+                {
+                    let mut clients = oauth_registry.clients.write().await;
+                    clients.insert(server_id.clone(), client_state);
+                }
+
+                // Rewrite transport target URL to route through the local proxy
+                target_url = format!("http://127.0.0.1:{}/proxy/{}/", proxy_port, server_id);
+            }
+
             let headers = build_http_headers(&server_id, &srv_cfg)?;
             let http_client = reqwest::Client::builder()
                 .default_headers(headers)
                 .build()
                 .with_context(|| format!("Failed to build HTTP client for {}", server_id))?;
 
-            let mut transport_config = StreamableHttpClientTransportConfig::with_uri(url.clone());
+            let mut transport_config = StreamableHttpClientTransportConfig::with_uri(target_url);
             if let Some(allow_stateless) = srv_cfg.allow_stateless {
                 transport_config.allow_stateless = allow_stateless;
             }

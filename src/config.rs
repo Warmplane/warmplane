@@ -60,6 +60,16 @@ pub enum AuthConfig {
         #[serde(default, rename = "passwordEnv")]
         password_env: Option<String>,
     },
+    Oauth2 {
+        #[serde(rename = "clientId")]
+        client_id: String,
+        #[serde(rename = "authorizationServerUrl")]
+        authorization_server_url: String,
+        #[serde(default)]
+        scopes: Vec<String>,
+        #[serde(default, rename = "clientMetadataUrl")]
+        client_metadata_url: Option<String>,
+    },
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -192,6 +202,25 @@ fn validate_config(config: &McpConfig) -> Result<()> {
                         );
                     }
                 }
+                AuthConfig::Oauth2 {
+                    client_id,
+                    authorization_server_url,
+                    scopes: _,
+                    client_metadata_url: _,
+                } => {
+                    if client_id.trim().is_empty() {
+                        anyhow::bail!(
+                            "Server '{}' oauth2 auth requires non-empty 'clientId'",
+                            server_id
+                        );
+                    }
+                    if authorization_server_url.trim().is_empty() {
+                        anyhow::bail!(
+                            "Server '{}' oauth2 auth requires non-empty 'authorizationServerUrl'",
+                            server_id
+                        );
+                    }
+                }
             }
         }
     }
@@ -294,6 +323,37 @@ mod tests {
         server.auth = Some(AuthConfig::Bearer {
             token: None,
             token_env: Some("MCP_TOKEN".to_string()),
+        });
+        assert!(validate_config(&config_with_server(server)).is_ok());
+    }
+
+    #[test]
+    fn oauth2_auth_requires_non_empty_fields() {
+        let mut server = empty_server();
+        server.url = Some("https://example.com/mcp".to_string());
+        server.auth = Some(AuthConfig::Oauth2 {
+            client_id: "".to_string(),
+            authorization_server_url: "https://auth.example.com".to_string(),
+            scopes: vec![],
+            client_metadata_url: None,
+        });
+        let err = validate_config(&config_with_server(server.clone())).unwrap_err();
+        assert!(err.to_string().contains("requires non-empty 'clientId'"));
+
+        server.auth = Some(AuthConfig::Oauth2 {
+            client_id: "client1".to_string(),
+            authorization_server_url: "  ".to_string(),
+            scopes: vec![],
+            client_metadata_url: None,
+        });
+        let err = validate_config(&config_with_server(server.clone())).unwrap_err();
+        assert!(err.to_string().contains("requires non-empty 'authorizationServerUrl'"));
+
+        server.auth = Some(AuthConfig::Oauth2 {
+            client_id: "client1".to_string(),
+            authorization_server_url: "https://auth.example.com".to_string(),
+            scopes: vec!["read".to_string()],
+            client_metadata_url: Some("https://example.com/metadata.json".to_string()),
         });
         assert!(validate_config(&config_with_server(server)).is_ok());
     }

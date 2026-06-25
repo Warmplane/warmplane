@@ -123,28 +123,23 @@ Per `mcpServers.<id>`, transport selection is strict and inferred:
 
 No legacy config fallback is supported.
 
-### HTTP Auth
-
-`auth.type = "bearer"`:
-
-```json
-{
-  "type": "bearer",
-  "tokenEnv": "MCP_TOKEN"
-}
-```
-
-`auth.type = "basic"`:
-
-```json
-{
-  "type": "basic",
-  "username": "svc-user",
-  "passwordEnv": "MCP_PASSWORD"
-}
-```
-
 For bearer/basic, exactly one direct secret (`token`/`password`) or env-backed secret (`tokenEnv`/`passwordEnv`) is required.
+
+`auth.type = "oauth2"`:
+
+```json
+{
+  "type": "oauth2",
+  "clientId": "client-id-here",
+  "authorizationServerUrl": "https://auth.example.com",
+  "scopes": ["read", "write"],
+  "clientMetadataUrl": "https://example.com/metadata.json"
+}
+```
+
+For OAuth2 configurations:
+- Both `clientId` and `authorizationServerUrl` are required.
+- Warmplane spins up a local background proxy that handles server discovery (RFC 9728 & RFC 8414), PKCE code exchanges, callback redirect handling with issuer validation (RFC 9207 / SEP-2468), scope accumulation on step-ups (`403 insufficient_scope`), and silent access token refreshes.
 
 ## Run Modes
 
@@ -258,12 +253,12 @@ Operational notes:
 - `trace_id` in execution envelopes can be correlated with logs and distributed traces.
 - When OTEL is enabled, traces are exported via OTLP gRPC and local structured logs remain active.
 
-For detailed request/response contracts, see [docs/spec.md](/Users/origo/src/mcp-fast-cli/docs/spec.md).
+For detailed request/response contracts, see [docs/spec.md](docs/spec.md).
 
 Additional references:
 
-- OpenAPI: [openapi.yaml](/Users/origo/src/mcp-fast-cli/docs/openapi.yaml)
-- Config schema: [config.schema.json](/Users/origo/src/mcp-fast-cli/docs/config.schema.json)
-- Install/distribution: [INSTALL.md](/Users/origo/src/mcp-fast-cli/docs/INSTALL.md)
-- Deployment runbook: [DEPLOYMENT.md](/Users/origo/src/mcp-fast-cli/docs/DEPLOYMENT.md)
-- Observability: [OBSERVABILITY.md](/Users/origo/src/mcp-fast-cli/docs/OBSERVABILITY.md)
+- OpenAPI: [openapi.yaml](docs/openapi.yaml)
+- Config schema: [config.schema.json](docs/config.schema.json)
+- Install/distribution: [INSTALL.md](docs/INSTALL.md)
+- Deployment runbook: [DEPLOYMENT.md](docs/DEPLOYMENT.md)
+- Observability: [OBSERVABILITY.md](docs/OBSERVABILITY.md)

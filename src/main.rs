@@ -8,6 +8,7 @@ mod http_v1;
 mod mcp_server;
 mod models;
 mod telemetry;
+mod oauth2;
 
 use config::{load_config, resolve_client_port, DEFAULT_PORT};
 use models::{Cli, Commands};
