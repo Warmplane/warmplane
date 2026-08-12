@@ -87,7 +87,11 @@ impl ServerHandler for FacadeMcpServer {
                     .get("request_id")
                     .and_then(Value::as_str)
                     .map(ToString::to_string);
-                self.call_capability_value(capability_id.to_string(), call_args.clone(), request_id)
+                let context: Option<crate::context::RequestContext> = args
+                    .get("_meta")
+                    .or_else(|| args.get("context"))
+                    .and_then(|v| serde_json::from_value(v.clone()).ok());
+                self.call_capability_value(capability_id.to_string(), call_args.clone(), request_id, context)
                     .await
             }
             TOOL_RESOURCES_LIST => self.list_resources_value().await,
@@ -99,7 +103,11 @@ impl ServerHandler for FacadeMcpServer {
                     .get("request_id")
                     .and_then(Value::as_str)
                     .map(ToString::to_string);
-                self.read_resource_value(resource_id.to_string(), request_id).await
+                let context: Option<crate::context::RequestContext> = args
+                    .get("_meta")
+                    .or_else(|| args.get("context"))
+                    .and_then(|v| serde_json::from_value(v.clone()).ok());
+                self.read_resource_value(resource_id.to_string(), request_id, context).await
             }
             TOOL_PROMPTS_LIST => self.list_prompts_value().await,
             TOOL_PROMPT_GET => {
@@ -110,8 +118,12 @@ impl ServerHandler for FacadeMcpServer {
                     .get("request_id")
                     .and_then(Value::as_str)
                     .map(ToString::to_string);
+                let context: Option<crate::context::RequestContext> = args
+                    .get("_meta")
+                    .or_else(|| args.get("context"))
+                    .and_then(|v| serde_json::from_value(v.clone()).ok());
                 let arguments = args.get("arguments").cloned();
-                self.get_prompt_value(prompt_id.to_string(), arguments, request_id).await
+                self.get_prompt_value(prompt_id.to_string(), arguments, request_id, context).await
             }
             _ => {
                 return Err(McpError::invalid_params(
@@ -305,6 +317,7 @@ impl FacadeMcpServer {
             None => Ok(error_envelope(
                 next_trace_id(),
                 None,
+                None,
                 "TOOL_NOT_FOUND",
                 format!("Capability '{}' not found", id),
                 false,
@@ -317,12 +330,15 @@ impl FacadeMcpServer {
         capability_id: String,
         args: Value,
         request_id: Option<String>,
+        context: Option<crate::context::RequestContext>,
     ) -> std::result::Result<Value, String> {
         let trace_id = next_trace_id();
+        let ctx = context.unwrap_or_default();
         if !self.state.policy.allows(&capability_id) {
             return Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "INVALID_ARGS",
                 format!("Capability '{}' blocked by policy", capability_id),
                 false,
@@ -333,6 +349,7 @@ impl FacadeMcpServer {
             return Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "TOOL_NOT_FOUND",
                 format!("Capability '{}' not found", capability_id),
                 false,
@@ -343,6 +360,7 @@ impl FacadeMcpServer {
             return Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' is unreachable", meta.server),
                 true,
@@ -362,6 +380,7 @@ impl FacadeMcpServer {
             return Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' mailbox is closed", meta.server),
                 true,
@@ -372,6 +391,7 @@ impl FacadeMcpServer {
             Ok(Ok(data)) => Ok(json!({
                 "ok": true,
                 "request_id": request_id,
+                "context": ctx,
                 "trace_id": trace_id,
                 "data": data,
                 "error": null,
@@ -379,6 +399,7 @@ impl FacadeMcpServer {
             Ok(Err(UpstreamCallError::Timeout)) => Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "UPSTREAM_TIMEOUT",
                 format!("Tool call timed out after {}ms", self.state.tool_timeout_ms),
                 true,
@@ -386,6 +407,7 @@ impl FacadeMcpServer {
             Ok(Err(UpstreamCallError::Upstream(err))) => Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "UPSTREAM_ERROR",
                 err,
                 false,
@@ -393,6 +415,7 @@ impl FacadeMcpServer {
             Err(_) => Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "INTERNAL_ERROR",
                 "Daemon actor task died",
                 true,
@@ -434,12 +457,15 @@ impl FacadeMcpServer {
         &self,
         resource_id: String,
         request_id: Option<String>,
+        context: Option<crate::context::RequestContext>,
     ) -> std::result::Result<Value, String> {
         let trace_id = next_trace_id();
+        let ctx = context.unwrap_or_default();
         if !self.state.policy.allows(&resource_id) {
             return Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "INVALID_ARGS",
                 format!("Resource '{}' blocked by policy", resource_id),
                 false,
@@ -450,6 +476,7 @@ impl FacadeMcpServer {
             return Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "RESOURCE_NOT_FOUND",
                 format!("Resource '{}' not found", resource_id),
                 false,
@@ -460,6 +487,7 @@ impl FacadeMcpServer {
             return Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' is unreachable", meta.server),
                 true,
@@ -478,6 +506,7 @@ impl FacadeMcpServer {
             return Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' mailbox is closed", meta.server),
                 true,
@@ -488,6 +517,7 @@ impl FacadeMcpServer {
             Ok(Ok(data)) => Ok(json!({
                 "ok": true,
                 "request_id": request_id,
+                "context": ctx,
                 "trace_id": trace_id,
                 "data": data,
                 "error": null,
@@ -495,6 +525,7 @@ impl FacadeMcpServer {
             Ok(Err(UpstreamCallError::Timeout)) => Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "UPSTREAM_TIMEOUT",
                 format!("Resource read timed out after {}ms", self.state.tool_timeout_ms),
                 true,
@@ -502,6 +533,7 @@ impl FacadeMcpServer {
             Ok(Err(UpstreamCallError::Upstream(err))) => Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "UPSTREAM_ERROR",
                 err,
                 false,
@@ -509,6 +541,7 @@ impl FacadeMcpServer {
             Err(_) => Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "INTERNAL_ERROR",
                 "Daemon actor task died",
                 true,
@@ -551,12 +584,15 @@ impl FacadeMcpServer {
         prompt_id: String,
         arguments: Option<Value>,
         request_id: Option<String>,
+        context: Option<crate::context::RequestContext>,
     ) -> std::result::Result<Value, String> {
         let trace_id = next_trace_id();
+        let ctx = context.unwrap_or_default();
         if !self.state.policy.allows(&prompt_id) {
             return Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "INVALID_ARGS",
                 format!("Prompt '{}' blocked by policy", prompt_id),
                 false,
@@ -567,6 +603,7 @@ impl FacadeMcpServer {
             return Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "PROMPT_NOT_FOUND",
                 format!("Prompt '{}' not found", prompt_id),
                 false,
@@ -579,6 +616,7 @@ impl FacadeMcpServer {
                 return Ok(error_envelope(
                     trace_id,
                     request_id,
+                    Some(ctx),
                     "INVALID_ARGS",
                     "'arguments' must be a JSON object when provided",
                     false,
@@ -591,6 +629,7 @@ impl FacadeMcpServer {
             return Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' is unreachable", meta.server),
                 true,
@@ -610,6 +649,7 @@ impl FacadeMcpServer {
             return Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' mailbox is closed", meta.server),
                 true,
@@ -620,6 +660,7 @@ impl FacadeMcpServer {
             Ok(Ok(data)) => Ok(json!({
                 "ok": true,
                 "request_id": request_id,
+                "context": ctx,
                 "trace_id": trace_id,
                 "data": data,
                 "error": null,
@@ -627,6 +668,7 @@ impl FacadeMcpServer {
             Ok(Err(UpstreamCallError::Timeout)) => Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "UPSTREAM_TIMEOUT",
                 format!("Prompt get timed out after {}ms", self.state.tool_timeout_ms),
                 true,
@@ -634,6 +676,7 @@ impl FacadeMcpServer {
             Ok(Err(UpstreamCallError::Upstream(err))) => Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "UPSTREAM_ERROR",
                 err,
                 false,
@@ -641,6 +684,7 @@ impl FacadeMcpServer {
             Err(_) => Ok(error_envelope(
                 trace_id,
                 request_id,
+                Some(ctx),
                 "INTERNAL_ERROR",
                 "Daemon actor task died",
                 true,
@@ -652,6 +696,7 @@ impl FacadeMcpServer {
 fn invalid_args(message: impl Into<String>) -> Value {
     error_envelope(
         next_trace_id(),
+        None,
         None,
         "INVALID_ARGS",
         message.into(),
@@ -684,10 +729,12 @@ fn facade_tools() -> Vec<Tool> {
                 "properties":{
                     "capability_id":{"type":"string"},
                     "args":{"type":"object"},
-                    "request_id":{"type":"string"}
+                    "request_id":{"type":"string"},
+                    "context":{"type":"object"},
+                    "_meta":{"type":"object"}
                 },
                 "required":["capability_id","args"],
-                "additionalProperties":false
+                "additionalProperties":true
             })),
         ),
         Tool::new(
@@ -741,13 +788,16 @@ fn next_trace_id() -> String {
 fn error_envelope(
     trace_id: String,
     request_id: Option<String>,
+    context: Option<crate::context::RequestContext>,
     code: &str,
     message: impl Into<String>,
     retryable: bool,
 ) -> Value {
+    let ctx_val = context.unwrap_or_default();
     json!({
         "ok": false,
         "request_id": request_id,
+        "context": ctx_val,
         "trace_id": trace_id,
         "data": null,
         "error": {

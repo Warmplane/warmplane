@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 
 mod catalog;
 mod config;
+mod context;
 mod daemon;
 mod http_v1;
 mod mcp_server;
@@ -13,6 +14,7 @@ mod search;
 mod telemetry;
 
 use config::{load_config, resolve_client_port, DEFAULT_PORT};
+use context::RequestContext;
 use models::{Cli, Commands};
 
 #[tokio::main]
@@ -86,15 +88,27 @@ async fn main() -> Result<()> {
             id,
             params,
             request_id,
+            operation_id,
+            work_item_id,
+            actor_id,
+            grant_id,
         } => {
             let resolved_port = resolve_client_port(port, &config)?;
             let parsed_params: Value =
                 serde_json::from_str(&params).context("Invalid JSON parameters provided")?;
 
+            let context = RequestContext {
+                operation_id,
+                work_item_id,
+                actor_id,
+                grant_id,
+            };
+
             let payload = json!({
                 "capability_id": id,
                 "args": parsed_params,
                 "request_id": request_id,
+                "context": context,
             });
 
             let client = reqwest::Client::new();
@@ -116,11 +130,23 @@ async fn main() -> Result<()> {
             config,
             id,
             request_id,
+            operation_id,
+            work_item_id,
+            actor_id,
+            grant_id,
         } => {
             let resolved_port = resolve_client_port(port, &config)?;
+            let context = RequestContext {
+                operation_id,
+                work_item_id,
+                actor_id,
+                grant_id,
+            };
+
             let payload = json!({
                 "resource_id": id,
                 "request_id": request_id,
+                "context": context,
             });
 
             let client = reqwest::Client::new();
@@ -143,15 +169,27 @@ async fn main() -> Result<()> {
             id,
             arguments,
             request_id,
+            operation_id,
+            work_item_id,
+            actor_id,
+            grant_id,
         } => {
             let resolved_port = resolve_client_port(port, &config)?;
             let parsed_arguments: Value =
                 serde_json::from_str(&arguments).context("Invalid JSON arguments provided")?;
 
+            let context = RequestContext {
+                operation_id,
+                work_item_id,
+                actor_id,
+                grant_id,
+            };
+
             let payload = json!({
                 "prompt_id": id,
                 "arguments": parsed_arguments,
                 "request_id": request_id,
+                "context": context,
             });
 
             let client = reqwest::Client::new();

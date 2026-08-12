@@ -71,6 +71,14 @@ pub enum Commands {
         params: String,
         #[arg(long)]
         request_id: Option<String>,
+        #[arg(long)]
+        operation_id: Option<String>,
+        #[arg(long)]
+        work_item_id: Option<String>,
+        #[arg(long)]
+        actor_id: Option<String>,
+        #[arg(long)]
+        grant_id: Option<String>,
     },
     /// List compact resources from the v1 facade API
     ListResources {
@@ -88,6 +96,14 @@ pub enum Commands {
         id: String,
         #[arg(long)]
         request_id: Option<String>,
+        #[arg(long)]
+        operation_id: Option<String>,
+        #[arg(long)]
+        work_item_id: Option<String>,
+        #[arg(long)]
+        actor_id: Option<String>,
+        #[arg(long)]
+        grant_id: Option<String>,
     },
     /// List compact prompts from the v1 facade API
     ListPrompts {
@@ -107,6 +123,14 @@ pub enum Commands {
         arguments: String,
         #[arg(long)]
         request_id: Option<String>,
+        #[arg(long)]
+        operation_id: Option<String>,
+        #[arg(long)]
+        work_item_id: Option<String>,
+        #[arg(long)]
+        actor_id: Option<String>,
+        #[arg(long)]
+        grant_id: Option<String>,
     },
     /// List catalog events from the v1 change feed API
     ListCatalogEvents {
