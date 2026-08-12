@@ -103,4 +103,27 @@ mod tests {
         let v2 = vec![0.0, 1.0];
         assert!((cosine_similarity(&v1, &v2) - 0.0).abs() < 1e-5);
     }
+
+    #[cfg(feature = "semantic-search")]
+    #[test]
+    fn test_real_fastembed_model_embedding() {
+        let index = VectorSearchIndex::new().expect("Failed to initialize FastEmbed ONNX model");
+        let caps = vec![(
+            "github.issues.search".to_string(),
+            crate::daemon::CapabilityMeta {
+                server: "github".to_string(),
+                tool: "issues.search".to_string(),
+                summary: "Search open GitHub issues".to_string(),
+                description: "Search open GitHub issues".to_string(),
+                input_schema: serde_json::json!({}),
+                tags: vec!["github".to_string()],
+                examples: vec![],
+            },
+        )];
+
+        let results = index.search("find git bugs", &caps);
+        assert!(!results.is_empty(), "FastEmbed ONNX inference returned empty results");
+        assert_eq!(results[0].id, "github.issues.search");
+        assert!(results[0].score > 0.3, "Expected high semantic similarity score");
+    }
 }
