@@ -36,7 +36,8 @@ base64 = "0.22"
 rand = "0.8"
 sha2 = "0.10"
 fastembed = { version = "4.5", optional = true }
+openssl = { version = "0.10", features = ["vendored"], optional = true }
 
 [features]
 default = []
-semantic-search = ["dep:fastembed"]
+semantic-search = ["dep:fastembed", "dep:openssl"]
