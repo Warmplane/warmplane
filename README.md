@@ -35,6 +35,7 @@ All three modes share the same backend state, aliases, policy checks, and timeou
 
 ### Capabilities
 - list: compact capability index
+- search: hybrid lexical + semantic capability search with filters
 - describe: on-demand detail for one capability
 - call: normalized execution envelope
 
@@ -49,7 +50,11 @@ All three modes share the same backend state, aliases, policy checks, and timeou
 ## Install
 
 ```bash
+# Standard build (hybrid search with BM25 lexical engine)
 cargo install --path .
+
+# Build with local ONNX vector embeddings support (FastEmbed)
+cargo install --path . --features semantic-search
 ```
 
 `cargo install warmplane` is not available yet because the crate has not been published to crates.io.
@@ -152,6 +157,7 @@ warmplane daemon --config mcp_servers.json
 Endpoints:
 
 - `GET /v1/capabilities`
+- `POST /v1/capabilities/search`
 - `GET /v1/capabilities/:id`
 - `POST /v1/tools/call`
 - `GET /v1/resources`
@@ -187,6 +193,7 @@ Native MCP methods also supported:
 ```bash
 # capabilities
 warmplane list-capabilities
+warmplane search-capabilities "triage logs" --limit 5
 warmplane describe-capability db.query
 warmplane call-capability db.query --params '{"query":"SELECT 1"}'
 

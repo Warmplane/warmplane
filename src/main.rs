@@ -7,8 +7,9 @@ mod daemon;
 mod http_v1;
 mod mcp_server;
 mod models;
-mod telemetry;
 mod oauth2;
+mod search;
+mod telemetry;
 
 use config::{load_config, resolve_client_port, DEFAULT_PORT};
 use models::{Cli, Commands};
@@ -40,6 +41,33 @@ async fn main() -> Result<()> {
             let resolved_port = resolve_client_port(port, &config)?;
             let res =
                 reqwest::get(format!("http://127.0.0.1:{}/v1/capabilities", resolved_port)).await?;
+            println!("{}", res.text().await?);
+        }
+        Commands::SearchCapabilities {
+            port,
+            config,
+            query,
+            limit,
+            server,
+            tag,
+        } => {
+            let resolved_port = resolve_client_port(port, &config)?;
+            let payload = json!({
+                "query": query,
+                "limit": limit,
+                "server_ids": server,
+                "tags": tag,
+            });
+
+            let client = reqwest::Client::new();
+            let res = client
+                .post(format!(
+                    "http://127.0.0.1:{}/v1/capabilities/search",
+                    resolved_port
+                ))
+                .json(&payload)
+                .send()
+                .await?;
             println!("{}", res.text().await?);
         }
         Commands::DescribeCapability { port, config, id } => {

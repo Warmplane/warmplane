@@ -227,12 +227,45 @@ Default bind: `127.0.0.1:<port>`.
 ### HTTP endpoints
 
 - `GET /v1/capabilities`
+- `POST /v1/capabilities/search`
 - `GET /v1/capabilities/:id`
 - `POST /v1/tools/call`
 - `GET /v1/resources`
 - `POST /v1/resources/read`
 - `GET /v1/prompts`
 - `POST /v1/prompts/get`
+
+#### Capability Search (`POST /v1/capabilities/search`)
+
+Request payload:
+```json
+{
+  "query": "triage production errors",
+  "limit": 5,
+  "server_ids": ["observability"],
+  "tags": ["logs"],
+  "modes": ["read"]
+}
+```
+
+Response payload:
+```json
+{
+  "version": "v1",
+  "catalog_version": "sha256:8f2a1b...",
+  "capabilities": [
+    {
+      "id": "obs.logs.search",
+      "summary": "Search structured application logs.",
+      "server": "observability",
+      "tags": ["logs", "read"],
+      "mode": "read",
+      "score": 0.91,
+      "match_types": ["lexical", "semantic", "tag"]
+    }
+  ]
+}
+```
 
 ## 5.2 MCP server mode (stdio)
 
@@ -265,6 +298,7 @@ Capabilities:
 
 ```bash
 warmplane list-capabilities --config mcp_servers.json
+warmplane search-capabilities "triage logs" --limit 5 --config mcp_servers.json
 warmplane describe-capability db.query --config mcp_servers.json
 warmplane call-capability db.query --params '{"query":"SELECT 1"}' --config mcp_servers.json
 ```

@@ -53,11 +53,11 @@ jobs:
 
       - name: Build with cross
         if: matrix.use_cross
-        run: cross build --release --target ${{ matrix.target }}
+        run: cross build --release --target ${{ matrix.target }} --features semantic-search
 
       - name: Build with cargo
         if: ${{ !matrix.use_cross }}
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} --features semantic-search
 
       - name: Set version
         shell: bash

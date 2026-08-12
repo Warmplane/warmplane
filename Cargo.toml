@@ -1,7 +1,7 @@
 
 [package]
 name = "warmplane"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Local control plane that keeps MCP sessions warm with compact capability/resource/prompt facades."
 license = "MIT"
@@ -35,3 +35,8 @@ anyhow = "1.0"
 base64 = "0.22"
 rand = "0.8"
 sha2 = "0.10"
+fastembed = { version = "4.5", optional = true }
+
+[features]
+default = []
+semantic-search = ["dep:fastembed"]

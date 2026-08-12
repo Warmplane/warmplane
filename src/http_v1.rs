@@ -38,6 +38,49 @@ pub struct GetPromptRequest {
     pub request_id: Option<String>,
 }
 
+fn default_search_limit() -> usize {
+    8
+}
+
+#[derive(Deserialize)]
+pub struct SearchCapabilitiesRequest {
+    pub query: Option<String>,
+    #[serde(default = "default_search_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub server_ids: Vec<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub modes: Vec<String>,
+}
+
+pub async fn handle_search_capabilities(
+    State(state): State<AppState>,
+    Json(payload): Json<SearchCapabilitiesRequest>,
+) -> Json<Value> {
+    let query_str = payload.query.as_deref().unwrap_or("");
+    let filter = crate::search::SearchFilter {
+        server_ids: payload.server_ids,
+        tags: payload.tags,
+        modes: payload.modes,
+    };
+
+    let results = state.search_engine.search(
+        query_str,
+        payload.limit,
+        &filter,
+        &state.capabilities,
+        &state.policy,
+    );
+
+    Json(json!({
+        "version": "v1",
+        "catalog_version": state.catalog_version,
+        "capabilities": results,
+    }))
+}
+
 pub async fn handle_list_capabilities(State(state): State<AppState>) -> Json<Value> {
     let mut capabilities = state
         .capabilities
@@ -61,6 +104,7 @@ pub async fn handle_list_capabilities(State(state): State<AppState>) -> Json<Val
 
     Json(json!({
         "version": "v1",
+        "catalog_version": state.catalog_version,
         "capabilities": capabilities,
     }))
 }
@@ -662,7 +706,7 @@ mod tests {
         handle_get_prompt, handle_list_prompts, handle_list_resources, handle_read_resource,
         redact_value, AppState, GetPromptRequest, ReadResourceRequest,
     };
-    use crate::daemon::{Policy, PromptMeta, ResourceMeta};
+    use crate::daemon::{CapabilityMeta, Policy, PromptMeta, ResourceMeta};
     use axum::{
         body::to_bytes,
         extract::State,
@@ -724,6 +768,8 @@ mod tests {
             prompts: Arc::new(HashMap::new()),
             tool_timeout_ms: 1000,
             policy: Policy::default(),
+            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
+            catalog_version: "sha256:test".to_string(),
         };
 
         let Json(body) = handle_list_resources(State(state)).await;
@@ -745,6 +791,8 @@ mod tests {
             prompts: Arc::new(HashMap::new()),
             tool_timeout_ms: 1000,
             policy: Policy::default(),
+            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
+            catalog_version: "sha256:test".to_string(),
         };
 
         let response = handle_read_resource(
@@ -798,6 +846,8 @@ mod tests {
             prompts: Arc::new(prompts),
             tool_timeout_ms: 1000,
             policy: Policy::default(),
+            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
+            catalog_version: "sha256:test".to_string(),
         };
 
         let Json(body) = handle_list_prompts(State(state)).await;
@@ -819,6 +869,8 @@ mod tests {
             prompts: Arc::new(HashMap::new()),
             tool_timeout_ms: 1000,
             policy: Policy::default(),
+            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
+            catalog_version: "sha256:test".to_string(),
         };
 
         let response = handle_get_prompt(
@@ -866,6 +918,8 @@ mod tests {
             prompts: Arc::new(prompts),
             tool_timeout_ms: 1000,
             policy: Policy::default(),
+            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
+            catalog_version: "sha256:test".to_string(),
         };
 
         let response = handle_get_prompt(
@@ -885,5 +939,53 @@ mod tests {
             .expect("response body");
         let payload: Value = serde_json::from_slice(&bytes).expect("valid json");
         assert_eq!(payload["error"]["code"], "INVALID_ARGS");
+    }
+
+    #[tokio::test]
+    async fn handle_search_capabilities_returns_matched_results() {
+        use super::handle_search_capabilities;
+
+        let mut capabilities = HashMap::new();
+        capabilities.insert(
+            "github.issues.search".to_string(),
+            CapabilityMeta {
+                server: "github".to_string(),
+                tool: "issues.search".to_string(),
+                summary: "Search open GitHub issues".to_string(),
+                description: "Search open GitHub issues".to_string(),
+                input_schema: json!({}),
+                tags: vec!["github".to_string(), "issues".to_string()],
+                examples: vec![],
+            },
+        );
+
+        let state = AppState {
+            servers: Arc::new(HashMap::new()),
+            capabilities: Arc::new(capabilities),
+            resources: Arc::new(HashMap::new()),
+            prompts: Arc::new(HashMap::new()),
+            tool_timeout_ms: 1000,
+            policy: Policy::default(),
+            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
+            catalog_version: "sha256:test_cat".to_string(),
+        };
+
+        let Json(res) = handle_search_capabilities(
+            State(state),
+            Json(super::SearchCapabilitiesRequest {
+                query: Some("issues".to_string()),
+                limit: 5,
+                server_ids: vec![],
+                tags: vec![],
+                modes: vec![],
+            }),
+        )
+        .await;
+
+        assert_eq!(res["version"], "v1");
+        assert_eq!(res["catalog_version"], "sha256:test_cat");
+        let caps = res["capabilities"].as_array().expect("capabilities array");
+        assert_eq!(caps.len(), 1);
+        assert_eq!(caps[0]["id"], "github.issues.search");
     }
 }
