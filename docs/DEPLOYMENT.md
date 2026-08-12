@@ -59,7 +59,10 @@ Example `Dockerfile`:
 FROM rust:1.85 as builder
 WORKDIR /src
 COPY . .
+# Standard build (BM25 Lexical + Fuzzy search)
 RUN cargo build --release
+# Alternatively, build with embedded ONNX vector embeddings:
+# RUN cargo build --release --features semantic-search
 
 FROM debian:bookworm-slim
 RUN useradd -m -u 10001 warmplane

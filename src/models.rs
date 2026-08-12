@@ -38,6 +38,20 @@ pub enum Commands {
         #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
         config: String,
     },
+    /// Search capabilities using hybrid lexical and semantic search
+    SearchCapabilities {
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+        query: String,
+        #[arg(short, long, default_value = "8")]
+        limit: usize,
+        #[arg(short, long)]
+        server: Vec<String>,
+        #[arg(short, long)]
+        tag: Vec<String>,
+    },
     /// Describe one capability with full on-demand schema from the v1 facade API
     DescribeCapability {
         #[arg(short = 'p', long)]

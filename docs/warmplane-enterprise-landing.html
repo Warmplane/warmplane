@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Warmplane Enterprise | Stop the AI Integration Tax</title>
+    <meta name="description" content="Erase the token tax on your enterprise LLM workflows. Warmplane keeps your Slack, Jira, GitHub, and Linear MCP integrations lightning-fast, secure, and cost-efficient." />
+    
+    <!-- Premium Typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    
+    <style>
+        :root {
+            --bg: #09090b;
+            --card-bg: rgba(20, 20, 25, 0.7);
+            --border: rgba(255, 255, 255, 0.08);
+            --text: #fafafa;
+            --text-muted: #a1a1aa;
+            --accent: #f97316;
+            --accent-glow: rgba(249, 115, 22, 0.15);
+            --success: #10b981;
+            --gradient: linear-gradient(135deg, #f97316 0%, #ec4899 100%);
+            --font-main: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: var(--font-main);
+            overflow-x: hidden;
+            line-height: 1.6;
+        }
+
+        /* Subtle glowing background grids */
+        .grid-bg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
+            background-size: 40px 40px;
+            pointer-events: none;
+            z-index: -2;
+        }
+
+        .glow-orb {
+            position: absolute;
+            top: -150px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: -1;
+            filter: blur(80px);
+        }
+
+        /* Navigation */
+        header {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-weight: 800;
+            font-size: 24px;
+            letter-spacing: -0.5px;
+            background: var(--gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .logo-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--accent);
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .badge-enterprise {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            padding: 4px 8px;
+            border-radius: 99px;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            font-weight: 700;
+        }
+
+        /* Hero section */
+        .hero {
+            max-width: 1200px;
+            margin: 60px auto 100px;
+            padding: 0 20px;
+            text-align: center;
+        }
+
+        .tagline {
+            display: inline-block;
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--accent);
+            margin-bottom: 20px;
+            padding: 6px 16px;
+            background: rgba(249, 115, 22, 0.1);
+            border-radius: 99px;
+            border: 1px solid rgba(249, 115, 22, 0.2);
+        }
+
+        h1 {
+            font-size: 56px;
+            font-weight: 800;
+            letter-spacing: -2px;
+            line-height: 1.1;
+            margin-bottom: 24px;
+        }
+
+        h1 span {
+            background: var(--gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero-desc {
+            max-width: 680px;
+            margin: 0 auto 40px;
+            font-size: 18px;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        /* Interactive ROI Calculator Section */
+        .calculator-section {
+            max-width: 1000px;
+            margin: 0 auto 100px;
+            padding: 40px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            backdrop-filter: blur(12px);
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+        }
+
+        .calculator-title {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .calculator-title h2 {
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            margin-bottom: 8px;
+        }
+
+        .calculator-grid {
+            display: grid;
+            grid-template-columns: 1fr 1.2fr;
+            gap: 40px;
+        }
+
+        @media (max-width: 768px) {
+            .calculator-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .app-selector {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .app-checkbox {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .app-checkbox:hover {
+            border-color: rgba(249, 115, 22, 0.4);
+            background: rgba(249, 115, 22, 0.02);
+        }
+
+        .app-checkbox.selected {
+            border-color: var(--accent);
+            background: rgba(249, 115, 22, 0.05);
+            box-shadow: 0 0 15px rgba(249, 115, 22, 0.1);
+        }
+
+        .app-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .app-name {
+            font-weight: 600;
+            font-size: 16px;
+        }
+
+        .app-size {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .checkbox-custom {
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--border);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+
+        .app-checkbox.selected .checkbox-custom {
+            background-color: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .app-checkbox.selected .checkbox-custom::after {
+            content: "✓";
+            color: #fff;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        /* Results Screen */
+        .calculator-results {
+            background: rgba(0,0,0,0.2);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 32px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .results-header {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 24px;
+        }
+
+        .metric-group {
+            margin-bottom: 24px;
+        }
+
+        .metric-label {
+            font-size: 14px;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .metric-value {
+            font-size: 36px;
+            font-weight: 800;
+            letter-spacing: -1px;
+        }
+
+        .metric-value.highlight {
+            color: var(--accent);
+        }
+
+        .saving-tag {
+            display: inline-block;
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            font-size: 12px;
+            font-weight: 700;
+            padding: 4px 10px;
+            border-radius: 99px;
+            margin-top: 8px;
+        }
+
+        .calculator-bar-container {
+            width: 100%;
+            height: 8px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 99px;
+            margin: 20px 0;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .calculator-bar-before {
+            height: 100%;
+            background: #ef4444;
+            width: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        .calculator-bar-after {
+            height: 100%;
+            background: var(--success);
+            width: 10%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            transition: width 0.3s ease;
+        }
+
+        /* Value Prop Grid */
+        .features-grid {
+            max-width: 1200px;
+            margin: 0 auto 100px;
+            padding: 0 20px;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 24px;
+        }
+
+        @media (max-width: 900px) {
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .feature-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 32px;
+            transition: all 0.2s ease;
+        }
+
+        .feature-card:hover {
+            border-color: rgba(255,255,255,0.15);
+            transform: translateY(-4px);
+        }
+
+        .feature-icon {
+            font-size: 32px;
+            margin-bottom: 20px;
+        }
+
+        .feature-title {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 12px;
+        }
+
+        .feature-desc {
+            color: var(--text-muted);
+            font-size: 15px;
+        }
+
+        /* CTA Section */
+        .cta-section {
+            max-width: 600px;
+            margin: 0 auto 100px;
+            padding: 0 20px;
+            text-align: center;
+        }
+
+        .cta-card {
+            background: linear-gradient(135deg, rgba(20,20,25,0.8) 0%, rgba(30,30,35,0.8) 100%);
+            border: 1px solid var(--accent);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 10px 30px rgba(249, 115, 22, 0.1);
+        }
+
+        .cta-title {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 12px;
+        }
+
+        .cta-desc {
+            color: var(--text-muted);
+            font-size: 15px;
+            margin-bottom: 24px;
+        }
+
+        .cta-form {
+            display: flex;
+            gap: 12px;
+            max-width: 450px;
+            margin: 0 auto;
+        }
+
+        @media (max-width: 480px) {
+            .cta-form {
+                flex-direction: column;
+            }
+        }
+
+        .cta-input {
+            flex: 1;
+            padding: 14px 20px;
+            background: rgba(0,0,0,0.4);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            color: var(--text);
+            font-family: var(--font-main);
+            font-size: 15px;
+            transition: border-color 0.2s ease;
+        }
+
+        .cta-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .cta-button {
+            padding: 14px 24px;
+            background: var(--gradient);
+            border: none;
+            border-radius: 10px;
+            color: #fff;
+            font-family: var(--font-main);
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: opacity 0.2s ease;
+        }
+
+        .cta-button:hover {
+            opacity: 0.9;
+        }
+
+        .success-message {
+            display: none;
+            color: var(--success);
+            font-weight: 600;
+            margin-top: 16px;
+            font-size: 15px;
+        }
+
+        /* Footer */
+        footer {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 60px 20px;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="grid-bg"></div>
+    <div class="glow-orb"></div>
+
+    <header>
+        <div class="logo">
+            <span class="logo-dot"></span>Warmplane
+            <span class="badge-enterprise">Enterprise</span>
+        </div>
+    </header>
+
+    <section class="hero">
+        <span class="tagline">The ROI Layer for Enterprise AI</span>
+        <h1>Stop the <span>AI Integration Tax</span></h1>
+        <p class="hero-desc">
+            Simply enabling integrations like Slack, Confluence, and GitHub inside your AI workspace inflates every single prompt by thousands of tokens. Warmplane compiles smart, lightweight facades to orchestrate your data securely on-demand.
+        </p>
+    </section>
+
+    <!-- Interactive Calculator -->
+    <section class="calculator-section">
+        <div class="calculator-title">
+            <h2>Calculate Your Integration Cost</h2>
+            <p style="color: var(--text-muted);">Select the tools you've connected to your AI Assistant to see the cost reduction with Warmplane.</p>
+        </div>
+
+        <div class="calculator-grid">
+            <div class="app-selector">
+                <div class="app-checkbox selected" data-tokens="15000" onclick="toggleApp(this)">
+                    <div class="app-info">
+                        <span class="checkbox-custom"></span>
+                        <div>
+                            <div class="app-name">Atlassian Confluence</div>
+                            <div class="app-size">~15,000 tokens / prompt</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="app-checkbox selected" data-tokens="12000" onclick="toggleApp(this)">
+                    <div class="app-info">
+                        <span class="checkbox-custom"></span>
+                        <div>
+                            <div class="app-name">Jira Work Management</div>
+                            <div class="app-size">~12,000 tokens / prompt</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="app-checkbox" data-tokens="18000" onclick="toggleApp(this)">
+                    <div class="app-info">
+                        <span class="checkbox-custom"></span>
+                        <div>
+                            <div class="app-name">GitHub Workspaces</div>
+                            <div class="app-size">~18,000 tokens / prompt</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="app-checkbox" data-tokens="8000" onclick="toggleApp(this)">
+                    <div class="app-info">
+                        <span class="checkbox-custom"></span>
+                        <div>
+                            <div class="app-name">Linear Tracker</div>
+                            <div class="app-size">~8,000 tokens / prompt</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="app-checkbox" data-tokens="6000" onclick="toggleApp(this)">
+                    <div class="app-info">
+                        <span class="checkbox-custom"></span>
+                        <div>
+                            <div class="app-name">Slack Directories</div>
+                            <div class="app-size">~6,000 tokens / prompt</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="calculator-results">
+                <div>
+                    <div class="results-header">Estimated Daily Metrics (100 runs)</div>
+                    
+                    <div class="metric-group">
+                        <div class="metric-label">Tokens Sent (No Warmplane)</div>
+                        <div class="metric-value" id="raw-tokens">2,700,000</div>
+                    </div>
+
+                    <div class="metric-group">
+                        <div class="metric-label">Tokens Sent (With Warmplane)</div>
+                        <div class="metric-value highlight" id="warmplane-tokens">270,000</div>
+                        <div class="saving-tag" id="saving-pct">90% Less Token Load</div>
+                    </div>
+                </div>
+
+                <div>
+                    <div class="calculator-bar-container">
+                        <div class="calculator-bar-before"></div>
+                        <div class="calculator-bar-after" id="savings-bar"></div>
+                    </div>
+                    
+                    <div class="metric-group" style="margin-bottom: 0;">
+                        <div class="metric-label">Estimated Monthly Savings (per seat)</div>
+                        <div class="metric-value" style="color: var(--success);" id="savings-dollars">$54.50</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Value Prop Cards -->
+    <section class="features-grid">
+        <div class="feature-card">
+            <div class="feature-icon">🛡️</div>
+            <div class="feature-title">Enterprise Zero-Trust</div>
+            <div class="feature-desc">
+                Your data stays local. The daemon executes file reads and processes locally. Your code and assets never exit your secure local security boundary.
+            </div>
+        </div>
+
+        <div class="feature-card">
+            <div class="feature-icon">⚡</div>
+            <div class="feature-title">Alias Optimization</div>
+            <div class="feature-desc">
+                Promote frequently used nested commands directly to global aliases (e.g. mapping `jira.my-tasks`). Avoid exposing heavy upstream schemas to the LLM entirely.
+            </div>
+        </div>
+
+        <div class="feature-card">
+            <div class="feature-icon">💼</div>
+            <div class="feature-title">Knowledge Work Scaling</div>
+            <div class="feature-desc">
+                Exposes unified, lightweight directories first. Your LLM only pulls heavy descriptions and schemas when a specific action is ready to execute.
+            </div>
+        </div>
+
+        <div class="feature-card">
+            <div class="feature-icon">📊</div>
+            <div class="feature-title">Global Control Plane</div>
+            <div class="feature-desc">
+                Admin dashboards allow centralized telemetry analysis, seat provisioning, global alias mappings, and automatic policy-enforced audits.
+            </div>
+        </div>
+
+        <div class="feature-card">
+            <div class="feature-icon">📝</div>
+            <div class="feature-title">Compliance Audit Logging</div>
+            <div class="feature-desc">
+                Log and monitor every tool execution, capability call, and resource read across your organization's AI workspace. Stream directly to SIEM pipelines.
+            </div>
+        </div>
+
+        <div class="feature-card">
+            <div class="feature-icon">🔑</div>
+            <div class="feature-title">Dynamic Key Management</div>
+            <div class="feature-desc">
+                Securely manage access credentials. Dynamic OAuth 2.1 token rotation and silent refreshing keep agent flows running seamlessly.
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="cta-section">
+        <div class="cta-card">
+            <h3 class="cta-title">Erase the Integration Tax</h3>
+            <p class="cta-desc">Let our architects audit your team's AI integration strategy. Enter your email for a free 30-minute integration optimization consultation.</p>
+            <form class="cta-form" id="consulting-form" onsubmit="submitForm(event)">
+                <input type="email" class="cta-input" placeholder="Enter your work email" required id="cta-email" />
+                <button type="submit" class="cta-button">Claim Free Audit</button>
+            </form>
+            <div class="success-message" id="success-msg">✓ Thank you! We will reach out to schedule your free consultation shortly.</div>
+        </div>
+    </section>
+
+    <footer>
+        <p>&copy; 2026 Warmplane. Evolving AI economics securely.</p>
+    </footer>
+
+    <script>
+        function toggleApp(el) {
+            el.classList.toggle('selected');
+            calculateROI();
+        }
+
+        function calculateROI() {
+            let selectedApps = document.querySelectorAll('.app-checkbox.selected');
+            let sumTokensPerRun = 0;
+            
+            selectedApps.forEach(app => {
+                sumTokensPerRun += parseInt(app.getAttribute('data-tokens'));
+            });
+
+            // 100 runs per day baseline
+            let rawTokens = sumTokensPerRun * 100;
+            // Warmplane reduces index descriptions by ~90%
+            let warmplaneTokens = Math.round(rawTokens * 0.1);
+            let savedTokens = rawTokens - warmplaneTokens;
+
+            // Value savings (Assuming average cost of $2.25/M tokens with mixed Sonnet/GPT-5 caching)
+            let dailySavings = (savedTokens / 1000000) * 2.25;
+            let monthlySavings = dailySavings * 20; // 20 working days
+
+            document.getElementById('raw-tokens').innerText = rawTokens.toLocaleString();
+            document.getElementById('warmplane-tokens').innerText = warmplaneTokens.toLocaleString();
+            document.getElementById('savings-dollars').innerText = '$' + monthlySavings.toFixed(2);
+            
+            // Calculate percentage
+            let pct = rawTokens > 0 ? Math.round((savedTokens / rawTokens) * 100) : 0;
+            document.getElementById('saving-pct').innerText = pct + '% Less Token Load';
+            document.getElementById('savings-bar').style.width = (100 - pct) + '%';
+        }
+
+        // Initialize
+        calculateROI();
+
+        function submitForm(event) {
+            event.preventDefault();
+            let email = document.getElementById('cta-email').value;
+            if (email) {
+                document.getElementById('consulting-form').style.display = 'none';
+                document.getElementById('success-msg').style.display = 'block';
+            }
+        }
+    </script>
+</body>
+</html>

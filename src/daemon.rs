@@ -83,8 +83,8 @@ pub struct PromptMeta {
 
 #[derive(Clone, Default)]
 pub struct Policy {
-    allow: Vec<String>,
-    deny: Vec<String>,
+    pub allow: Vec<String>,
+    pub deny: Vec<String>,
     pub redact_keys: Vec<String>,
 }
 
@@ -232,6 +232,33 @@ pub struct AppState {
     pub prompts: Arc<HashMap<String, PromptMeta>>,
     pub tool_timeout_ms: u64,
     pub policy: Policy,
+    pub search_engine: Arc<crate::search::HybridSearchEngine>,
+    pub catalog_version: String,
+}
+
+pub fn compute_catalog_version(
+    capabilities: &HashMap<String, CapabilityMeta>,
+    resources: &HashMap<String, ResourceMeta>,
+    prompts: &HashMap<String, PromptMeta>,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    let mut cap_keys: Vec<_> = capabilities.keys().collect();
+    cap_keys.sort();
+    for k in cap_keys {
+        hasher.update(k.as_bytes());
+    }
+    let mut res_keys: Vec<_> = resources.keys().collect();
+    res_keys.sort();
+    for k in res_keys {
+        hasher.update(k.as_bytes());
+    }
+    let mut prompt_keys: Vec<_> = prompts.keys().collect();
+    prompt_keys.sort();
+    for k in prompt_keys {
+        hasher.update(k.as_bytes());
+    }
+    format!("sha256:{:x}", hasher.finalize())
 }
 
 pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
@@ -547,6 +574,9 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
         server_channels.insert(server_id, tx);
     }
 
+    let catalog_version = compute_catalog_version(&capabilities, &resources, &prompts);
+    let search_engine = Arc::new(crate::search::HybridSearchEngine::new());
+
     Ok(AppState {
         servers: Arc::new(server_channels),
         capabilities: Arc::new(capabilities),
@@ -554,6 +584,8 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
         prompts: Arc::new(prompts),
         tool_timeout_ms,
         policy,
+        search_engine,
+        catalog_version,
     })
 }
 
@@ -561,6 +593,10 @@ pub async fn run_daemon(port: u16, config: McpConfig) -> Result<()> {
     let app_state = initialize_state(config).await?;
     let app = Router::new()
         .route("/v1/capabilities", get(http_v1::handle_list_capabilities))
+        .route(
+            "/v1/capabilities/search",
+            post(http_v1::handle_search_capabilities),
+        )
         .route(
             "/v1/capabilities/:id",
             get(http_v1::handle_describe_capability),
