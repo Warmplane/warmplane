@@ -6,7 +6,7 @@
         <title>Warmplane | The local control plane that keeps MCP sessions warm</title>
         <meta
             name="description"
-            content="Warmplane is the local control plane that keeps MCP sessions warm for MCP: one compact runtime for tools, resources, and prompts across CLI, HTTP, and MCP-native clients."
+            content="Warmplane is the local control plane that keeps MCP sessions warm: one compact, policy-aware runtime for tools, resources, and prompts across CLI, HTTP, and MCP-native clients. Idempotent execution, catalog versioning, and full request correlation built in."
         />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -24,6 +24,8 @@
                 --accent: #c74a20;
                 --accent-soft: #f1b391;
                 --ok: #1f6f50;
+                --blue: #1a4f8a;
+                --blue-soft: #dce8f8;
                 --shadow: 0 16px 40px rgba(17, 17, 17, 0.1);
                 --radius: 18px;
             }
@@ -112,6 +114,12 @@
                 box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.35);
             }
 
+            .topbar-right {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+
             .status {
                 display: inline-flex;
                 align-items: center;
@@ -122,6 +130,20 @@
                 background: var(--paper);
                 font-family: "IBM Plex Mono", ui-monospace, monospace;
                 font-size: 0.78rem;
+            }
+
+            .version-tag {
+                display: inline-flex;
+                align-items: center;
+                border: 1px solid #be8a74;
+                border-radius: 999px;
+                padding: 7px 12px;
+                background: rgba(241, 179, 145, 0.18);
+                font-family: "IBM Plex Mono", ui-monospace, monospace;
+                font-size: 0.78rem;
+                color: var(--accent);
+                font-weight: 500;
+                text-decoration: none;
             }
 
             .dot {
@@ -276,6 +298,11 @@
                 font-size: 0.84rem;
             }
 
+            .t-green { color: #7ac98a; }
+            .t-amber { color: #e6b85c; }
+            .t-dim   { color: #7a7264; }
+            .t-blue  { color: #79b8ff; }
+
             .section {
                 margin-top: 24px;
             }
@@ -318,6 +345,27 @@
                 line-height: 1.45;
             }
 
+            .panel .eyebrow {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                font-family: "IBM Plex Mono", ui-monospace, monospace;
+                font-size: 0.72rem;
+                color: var(--accent);
+                font-weight: 500;
+                margin-bottom: 8px;
+                padding: 3px 8px;
+                border-radius: 999px;
+                background: rgba(199, 74, 32, 0.08);
+                border: 1px solid rgba(199, 74, 32, 0.2);
+            }
+
+            .panel .eyebrow.new {
+                color: var(--ok);
+                background: rgba(31, 111, 80, 0.08);
+                border-color: rgba(31, 111, 80, 0.2);
+            }
+
             .accent-panel {
                 background: linear-gradient(
                     to bottom right,
@@ -327,29 +375,12 @@
                 border-color: #be8a74;
             }
 
-            .span-8 {
-                grid-column: span 8;
-            }
-
-            .span-7 {
-                grid-column: span 7;
-            }
-
-            .span-6 {
-                grid-column: span 6;
-            }
-
-            .span-5 {
-                grid-column: span 5;
-            }
-
-            .span-4 {
-                grid-column: span 4;
-            }
-
-            .span-12 {
-                grid-column: span 12;
-            }
+            .span-8 { grid-column: span 8; }
+            .span-7 { grid-column: span 7; }
+            .span-6 { grid-column: span 6; }
+            .span-5 { grid-column: span 5; }
+            .span-4 { grid-column: span 4; }
+            .span-12 { grid-column: span 12; }
 
             .pill-list {
                 display: flex;
@@ -365,6 +396,12 @@
                 padding: 7px 10px;
                 font-size: 0.8rem;
                 color: var(--ink-soft);
+            }
+
+            .pill.new {
+                border-color: rgba(31, 111, 80, 0.3);
+                background: rgba(31, 111, 80, 0.06);
+                color: var(--ok);
             }
 
             .steps {
@@ -414,6 +451,54 @@
 
             .list li + li {
                 margin-top: 5px;
+            }
+
+            /* Changelog ribbon */
+            .changelog {
+                margin-top: 24px;
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+            }
+
+            .release {
+                display: flex;
+                align-items: flex-start;
+                gap: 14px;
+                padding: 14px 16px;
+                border: 1px solid var(--line);
+                border-radius: 14px;
+                background: var(--paper);
+                transition: box-shadow 160ms ease;
+            }
+
+            .release:hover {
+                box-shadow: 0 6px 18px rgba(17, 17, 17, 0.07);
+            }
+
+            .release-tag {
+                flex-shrink: 0;
+                font-family: "IBM Plex Mono", ui-monospace, monospace;
+                font-size: 0.78rem;
+                font-weight: 500;
+                padding: 5px 10px;
+                border-radius: 8px;
+                background: rgba(199, 74, 32, 0.08);
+                border: 1px solid rgba(199, 74, 32, 0.22);
+                color: var(--accent);
+                white-space: nowrap;
+            }
+
+            .release-body h4 {
+                margin: 0 0 4px;
+                font-size: 0.98rem;
+            }
+
+            .release-body p {
+                margin: 0;
+                color: var(--ink-soft);
+                font-size: 0.88rem;
+                line-height: 1.44;
             }
 
             .bottom-cta {
@@ -521,6 +606,12 @@
                 footer {
                     flex-direction: column;
                 }
+
+                .topbar-right {
+                    flex-direction: column;
+                    align-items: flex-end;
+                    gap: 6px;
+                }
             }
         </style>
     </head>
@@ -531,7 +622,10 @@
                     <span class="brand-mark"></span>
                     Warmplane
                 </div>
-                <div class="status"><i class="dot"></i> local control plane runtime</div>
+                <div class="topbar-right">
+                    <a class="version-tag" href="https://github.com/Warmplane/warmplane/releases/tag/v0.6.0" aria-label="Release v0.6.0">v0.6.0</a>
+                    <div class="status"><i class="dot"></i> local control plane runtime</div>
+                </div>
             </header>
 
             <section class="hero fade">
@@ -550,8 +644,8 @@
                                 <span>Alias-based index first, full schema only on demand.</span>
                             </div>
                             <div class="kpi">
-                                <strong>Safer execution path</strong>
-                                <span>Policy gates, allowlists, and deterministic routing.</span>
+                                <strong>Safe execution</strong>
+                                <span>Policy gates, idempotent calls, cancellation, and retry metadata.</span>
                             </div>
                             <div class="kpi">
                                 <strong>One abstraction, many backends</strong>
@@ -559,28 +653,32 @@
                             </div>
                             <div class="kpi">
                                 <strong>Audit-ready telemetry</strong>
-                                <span>Structured JSON logs + OTLP traces with trace correlation.</span>
+                                <span>Request correlation, OTLP traces, catalog change events.</span>
                             </div>
                         </div>
 
+                        <div class="cta">
+                            <a class="btn" href="https://github.com/Warmplane/warmplane">View on GitHub</a>
+                            <a class="btn alt" href="https://github.com/Warmplane/warmplane/blob/main/docs/USER-GUIDE.md">User Guide</a>
+                        </div>
                     </div>
 
                     <div class="terminal" aria-label="Token efficiency evidence">
                         <div class="terminal-head">Token Efficiency | measured eval output</div>
-                        <pre><code>Suite: github_copilot_only
-Discovery      54,715 -> 2,386   (95.6% savings)
-5-turn loop   260,005 -> 11,173  (95.7% savings)
-10-turn mixed 547,150 -> 22,895  (95.8% savings)
+                        <pre><code><span class="t-dim">Suite: github_copilot_only</span>
+<span class="t-dim">Discovery</span>      <span class="t-amber">54,715</span> <span class="t-dim">-&gt;</span> <span class="t-green">2,386</span>   <span class="t-green">(95.6% savings)</span>
+<span class="t-dim">5-turn loop</span>   <span class="t-amber">260,005</span> <span class="t-dim">-&gt;</span> <span class="t-green">11,173</span>  <span class="t-green">(95.7% savings)</span>
+<span class="t-dim">10-turn mixed</span> <span class="t-amber">547,150</span> <span class="t-dim">-&gt;</span> <span class="t-green">22,895</span>  <span class="t-green">(95.8% savings)</span>
 
-Control: public_filesystem_only
-Discovery       2,552 -> 1,066   (58.2% savings)
-5-turn loop    12,760 -> 5,349   (58.1% savings)
-10-turn mixed  25,520 -> 10,669  (58.2% savings)
+<span class="t-dim">Control: public_filesystem_only</span>
+<span class="t-dim">Discovery</span>       <span class="t-amber">2,552</span> <span class="t-dim">-&gt;</span> <span class="t-green">1,066</span>   <span class="t-green">(58.2% savings)</span>
+<span class="t-dim">5-turn loop</span>    <span class="t-amber">12,760</span> <span class="t-dim">-&gt;</span> <span class="t-green">5,349</span>   <span class="t-green">(58.1% savings)</span>
+<span class="t-dim">10-turn mixed</span>  <span class="t-amber">25,520</span> <span class="t-dim">-&gt;</span> <span class="t-green">10,669</span>  <span class="t-green">(58.2% savings)</span>
 
-Method
-- Raw: direct MCP tools/resources/prompts surfaces
-- Facade: /v1 indexes + on-demand capability describe
-- Tokenizer: cl100k_base</code></pre>
+<span class="t-dim">Method</span>
+<span class="t-dim">- Raw: direct MCP tools/resources/prompts surfaces</span>
+<span class="t-dim">- Facade: /v1 indexes + on-demand capability describe</span>
+<span class="t-dim">- Tokenizer: cl100k_base</span></code></pre>
                     </div>
                 </div>
             </section>
@@ -636,6 +734,7 @@ Method
                             <span class="pill">Compact Schemas</span>
                             <span class="pill">On-demand Expansion</span>
                             <span class="pill">MCP Native Exposure</span>
+                            <span class="pill">Hybrid Search</span>
                         </div>
                     </article>
                     <article class="panel span-4">
@@ -645,6 +744,67 @@ Method
                             routing without embedding policy in every agent prompt.
                         </p>
                     </article>
+
+                    <article class="panel span-4">
+                        <div class="eyebrow new">v0.6.0</div>
+                        <h3>Idempotency &amp; Deduplication</h3>
+                        <p>
+                            Pass an <code>idempotency_key</code> or <code>Idempotency-Key</code> header. Concurrent or
+                            duplicate requests wait on the active in-flight call and share its result — no double
+                            execution upstream.
+                        </p>
+                    </article>
+                    <article class="panel span-4">
+                        <div class="eyebrow new">v0.6.0</div>
+                        <h3>Operation Cancellation</h3>
+                        <p>
+                            Abort any in-flight operation by request ID via
+                            <code>POST /v1/operations/:id/cancel</code> or the
+                            <code>cancel-operation</code> CLI command. Cancellation propagates immediately.
+                        </p>
+                    </article>
+                    <article class="panel span-4">
+                        <div class="eyebrow new">v0.6.0</div>
+                        <h3>Retry Metadata Envelope</h3>
+                        <p>
+                            Every response includes a structured <code>"retry"</code> field classifying
+                            execution safety: <code>safe</code>, <code>unsafe</code>, or <code>idempotent</code>,
+                            with execution state for orchestrator-aware retry logic.
+                        </p>
+                    </article>
+
+                    <article class="panel span-6">
+                        <div class="eyebrow">v0.5.0</div>
+                        <h3>Request Context &amp; Correlation</h3>
+                        <p>
+                            Envelopes carry structured <code>context</code> fields — <code>operation_id</code>,
+                            <code>work_item_id</code>, <code>actor_id</code>, <code>grant_id</code> — propagated from
+                            body or HTTP correlation headers (<code>X-Request-ID</code>, <code>X-Actor-ID</code>, …).
+                            All span to trace context automatically.
+                        </p>
+                        <div class="pill-list">
+                            <span class="pill">X-Request-ID</span>
+                            <span class="pill">X-Operation-ID</span>
+                            <span class="pill">X-Actor-ID</span>
+                            <span class="pill">X-Grant-ID</span>
+                        </div>
+                    </article>
+                    <article class="panel span-6">
+                        <div class="eyebrow">v0.4.0</div>
+                        <h3>Catalog Versioning &amp; Cache Validation</h3>
+                        <p>
+                            The capability/resource/prompt catalog is SHA-256 versioned. Clients can use
+                            <code>If-None-Match</code> for conditional reads and get <code>304 Not Modified</code>
+                            when nothing has changed. Subscribe to the <code>GET /v1/catalog/events</code> feed
+                            to receive incremental change events.
+                        </p>
+                        <div class="pill-list">
+                            <span class="pill">ETag / If-None-Match</span>
+                            <span class="pill">SHA-256 version</span>
+                            <span class="pill">/v1/catalog/events</span>
+                        </div>
+                    </article>
+
                     <article class="panel span-4">
                         <h3>Deterministic Routing</h3>
                         <p>
@@ -660,19 +820,130 @@ Method
                         </p>
                     </article>
                     <article class="panel span-4">
-                        <h3>Transport Flexibility</h3>
-                        <p>
-                            Same capability plane accessible from terminal workflows, HTTP automation, and MCP clients,
-                            reducing duplicated integration effort.
-                        </p>
-                    </article>
-                    <article class="panel span-4">
                         <h3>Enterprise Observability</h3>
                         <p>
                             Emit structured logs for audit trails and export OpenTelemetry traces to existing collectors,
                             with trace IDs that align response envelopes and runtime events.
                         </p>
                     </article>
+                </div>
+            </section>
+
+            <section class="section fade" id="api">
+                <h2>HTTP Facade &amp; CLI</h2>
+                <p class="section-intro">
+                    Full REST API served locally by the daemon, plus a matching CLI for every operation.
+                </p>
+
+                <div class="grid">
+                    <div class="panel span-5">
+                        <div class="terminal" aria-label="HTTP endpoint listing">
+                            <div class="terminal-head">HTTP Daemon — /v1 endpoints</div>
+                            <pre><code><span class="t-dim"># Capabilities</span>
+<span class="t-blue">GET</span>  /v1/capabilities
+<span class="t-blue">POST</span> /v1/capabilities/search
+<span class="t-blue">GET</span>  /v1/capabilities/:id
+<span class="t-blue">POST</span> /v1/tools/call
+
+<span class="t-dim"># Resources</span>
+<span class="t-blue">GET</span>  /v1/resources
+<span class="t-blue">POST</span> /v1/resources/read
+
+<span class="t-dim"># Prompts</span>
+<span class="t-blue">GET</span>  /v1/prompts
+<span class="t-blue">POST</span> /v1/prompts/get
+
+<span class="t-dim"># Catalog &amp; Operations</span>
+<span class="t-blue">GET</span>  /v1/catalog/events
+<span class="t-blue">POST</span> /v1/operations/:id/cancel</code></pre>
+                        </div>
+                    </div>
+
+                    <div class="panel span-7">
+                        <div class="terminal" aria-label="CLI example commands">
+                            <div class="terminal-head">CLI Facade — example commands</div>
+                            <pre><code><span class="t-dim"># Discover &amp; search</span>
+warmplane list-capabilities
+warmplane search-capabilities "triage logs" --limit 5
+
+<span class="t-dim"># Execute with context correlation</span>
+warmplane call-capability db.query \
+  --params '{"query":"SELECT 1"}' \
+  --request-id req-101 \
+  --operation-id op-20 \
+  --actor-id user-7 \
+  --idempotency-key op-20-run-1
+
+<span class="t-dim"># Cancel an in-flight operation</span>
+warmplane cancel-operation req-101
+
+<span class="t-dim"># Catalog change events</span>
+warmplane list-catalog-events --after evt_3
+
+<span class="t-dim"># Resources &amp; prompts</span>
+warmplane read-resource fs.readme
+warmplane get-prompt prompt.code-review \
+  --arguments '{"code":"fn main() {}"}'</code></pre>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section fade" id="changelog">
+                <h2>Recent Releases</h2>
+                <p class="section-intro">Warmplane ships focused, production-ready feature increments.</p>
+
+                <div class="changelog">
+                    <div class="release">
+                        <span class="release-tag">v0.6.0</span>
+                        <div class="release-body">
+                            <h4>Idempotency, Cancellation &amp; Retry Metadata</h4>
+                            <p>
+                                In-memory idempotency store with broadcast deduplication for concurrent tool calls.
+                                Per-request <code>CancellationToken</code> registry with <code>POST /v1/operations/:id/cancel</code>.
+                                Structured <code>"retry"</code> envelope field on all execution responses classifying
+                                safety (<code>safe</code>, <code>unsafe</code>, <code>idempotent</code>) and state.
+                                <code>--idempotency-key</code> CLI flag and <code>cancel-operation</code> subcommand.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="release">
+                        <span class="release-tag">v0.5.0</span>
+                        <div class="release-body">
+                            <h4>Request Context &amp; Correlation</h4>
+                            <p>
+                                Structured <code>RequestContext</code> (<code>operation_id</code>, <code>work_item_id</code>,
+                                <code>actor_id</code>, <code>grant_id</code>) in all execution envelopes.
+                                HTTP header fallback resolution (<code>X-Request-ID</code>, <code>X-Operation-ID</code>,
+                                <code>X-Actor-ID</code>, <code>X-Grant-ID</code>). Context propagated to tracing spans
+                                and MCP <code>_meta</code> fields. Correlation CLI flags added.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="release">
+                        <span class="release-tag">v0.4.0</span>
+                        <div class="release-body">
+                            <h4>Catalog Versioning &amp; Cache Validation</h4>
+                            <p>
+                                SHA-256 catalog version computed from the full capability/resource/prompt index.
+                                <code>ETag</code> headers on all catalog reads, <code>If-None-Match</code> conditional
+                                request support returning <code>304 Not Modified</code>. New
+                                <code>GET /v1/catalog/events</code> change feed with cursor-based pagination for
+                                incremental consumers.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="release">
+                        <span class="release-tag">v0.3.0</span>
+                        <div class="release-body">
+                            <h4>Hybrid Capability Search</h4>
+                            <p>
+                                <code>POST /v1/capabilities/search</code> with BM25 lexical scoring, optional
+                                ONNX vector embeddings (FastEmbed), tag filters, server-ID filters, and mode selectors.
+                                Score-ranked, configurable limit results.
+                            </p>
+                        </div>
+                    </div>
                 </div>
             </section>
 
@@ -721,15 +992,15 @@ Method
                         </ul>
                     </article>
                     <article class="panel span-6">
-                        <h3>Multi-Environment Delivery</h3>
+                        <h3>Reliable Autonomous Workflows</h3>
                         <p>
-                            Mirror the same capability plane across local dev, staging, and production with environment-
-                            specific backends behind constant aliases.
+                            Idempotent tool calls, in-flight cancellation, and structured retry metadata let
+                            orchestrators build resilient multi-step pipelines without duplicate side-effects.
                         </p>
                         <ul class="list">
-                            <li>Predictable rollouts with stable contracts.</li>
-                            <li>Cleaner testing across transport modes.</li>
-                            <li>Easier incident response and rollback strategy.</li>
+                            <li>Deduplication prevents double-execution on retries.</li>
+                            <li>Cancel stale operations from supervisor logic.</li>
+                            <li>Retry metadata drives smart backoff decisions.</li>
                         </ul>
                     </article>
                 </div>
@@ -756,7 +1027,7 @@ Method
                     <article class="step">
                         <span class="step-num">04</span>
                         <h4>Observe + Iterate</h4>
-                        <p>Use normalized invocation events to tune alias design, profile boundaries, and token economics.</p>
+                        <p>Use catalog events, request correlation, and OTLP traces to tune alias design and token economics.</p>
                     </article>
                 </div>
             </section>
@@ -776,8 +1047,8 @@ Method
                         <h3>Built for Real Deployment Constraints</h3>
                         <p>
                             Warmplane focuses on practical needs: small interfaces, explicit contracts, runtime policy,
-                            and transport compatibility. It is not a demo wrapper; it is a control layer for production
-                            agent operations.
+                            idempotent operations, and transport compatibility. It is not a demo wrapper; it is a control
+                            layer for production agent operations.
                         </p>
                     </article>
                 </div>
@@ -792,7 +1063,7 @@ Method
             </section>
 
             <footer class="fade">
-                <span>Warmplane | The local control plane that keeps MCP sessions warm</span>
+                <span>Warmplane v0.6.0 | The local control plane that keeps MCP sessions warm</span>
                 <span><a href="https://github.com/Warmplane/warmplane">github.com/Warmplane/warmplane</a></span>
             </footer>
         </main>
