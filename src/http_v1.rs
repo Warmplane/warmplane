@@ -1,6 +1,7 @@
 use axum::{
-    extract::{Path, State},
-    http::StatusCode,
+    body::Body,
+    extract::{Path, Query, State},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     Json,
 };
@@ -13,6 +14,53 @@ use tracing::info;
 use crate::daemon::{AppState, CapabilityMeta, ServerMsg, UpstreamCallError};
 
 static TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+pub fn check_if_none_match(req_headers: &HeaderMap, catalog_version: &str) -> bool {
+    if let Some(if_none_match) = req_headers.get(header::IF_NONE_MATCH) {
+        if let Ok(val) = if_none_match.to_str() {
+            let val_clean = val.trim();
+            let version_quoted = format!("\"{}\"", catalog_version);
+            return val_clean == catalog_version || val_clean == version_quoted || val_clean == "*";
+        }
+    }
+    false
+}
+
+pub fn make_etag_header(catalog_version: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    let etag_val = format!("\"{}\"", catalog_version);
+    if let Ok(hv) = HeaderValue::from_str(&etag_val) {
+        headers.insert(header::ETAG, hv);
+    }
+    headers
+}
+
+#[derive(Deserialize)]
+pub struct CatalogEventsQuery {
+    pub after: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct CatalogEventsResponse {
+    pub catalog_version: String,
+    pub cursor: String,
+    pub events: Vec<crate::catalog::CatalogEvent>,
+}
+
+pub async fn handle_catalog_events(
+    State(state): State<AppState>,
+    Query(query): Query<CatalogEventsQuery>,
+) -> impl IntoResponse {
+    let (events, next_cursor) = state.event_store.get_events_after(query.after.as_deref());
+    (
+        make_etag_header(&state.catalog_version),
+        Json(CatalogEventsResponse {
+            catalog_version: state.catalog_version.clone(),
+            cursor: next_cursor,
+            events,
+        }),
+    )
+}
 
 #[derive(Deserialize)]
 pub struct CallCapabilityRequest {
@@ -58,7 +106,7 @@ pub struct SearchCapabilitiesRequest {
 pub async fn handle_search_capabilities(
     State(state): State<AppState>,
     Json(payload): Json<SearchCapabilitiesRequest>,
-) -> Json<Value> {
+) -> impl IntoResponse {
     let query_str = payload.query.as_deref().unwrap_or("");
     let filter = crate::search::SearchFilter {
         server_ids: payload.server_ids,
@@ -74,14 +122,24 @@ pub async fn handle_search_capabilities(
         &state.policy,
     );
 
-    Json(json!({
-        "version": "v1",
-        "catalog_version": state.catalog_version,
-        "capabilities": results,
-    }))
+    (
+        make_etag_header(&state.catalog_version),
+        Json(json!({
+            "version": "v1",
+            "catalog_version": state.catalog_version,
+            "capabilities": results,
+        })),
+    )
 }
 
-pub async fn handle_list_capabilities(State(state): State<AppState>) -> Json<Value> {
+pub async fn handle_list_capabilities(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if check_if_none_match(&headers, &state.catalog_version) {
+        return (StatusCode::NOT_MODIFIED, make_etag_header(&state.catalog_version), Body::empty()).into_response();
+    }
+
     let mut capabilities = state
         .capabilities
         .iter()
@@ -102,17 +160,27 @@ pub async fn handle_list_capabilities(State(state): State<AppState>) -> Json<Val
             .cmp(&b.get("id").and_then(|v| v.as_str()))
     });
 
-    Json(json!({
-        "version": "v1",
-        "catalog_version": state.catalog_version,
-        "capabilities": capabilities,
-    }))
+    (
+        StatusCode::OK,
+        make_etag_header(&state.catalog_version),
+        Json(json!({
+            "version": "v1",
+            "catalog_version": state.catalog_version,
+            "capabilities": capabilities,
+        })),
+    )
+        .into_response()
 }
 
 pub async fn handle_describe_capability(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
+    if check_if_none_match(&headers, &state.catalog_version) {
+        return (StatusCode::NOT_MODIFIED, make_etag_header(&state.catalog_version), Body::empty()).into_response();
+    }
+
     match state.capabilities.get(&id) {
         Some(CapabilityMeta {
             server,
@@ -124,8 +192,10 @@ pub async fn handle_describe_capability(
             examples,
         }) => (
             StatusCode::OK,
+            make_etag_header(&state.catalog_version),
             Json(json!({
                 "version": "v1",
+                "catalog_version": state.catalog_version,
                 "capability": {
                     "id": id,
                     "server": server,
@@ -139,6 +209,7 @@ pub async fn handle_describe_capability(
             .into_response(),
         None => (
             StatusCode::NOT_FOUND,
+            make_etag_header(&state.catalog_version),
             Json(error_envelope(
                 next_trace_id(),
                 None,
@@ -151,7 +222,14 @@ pub async fn handle_describe_capability(
     }
 }
 
-pub async fn handle_list_resources(State(state): State<AppState>) -> Json<Value> {
+pub async fn handle_list_resources(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if check_if_none_match(&headers, &state.catalog_version) {
+        return (StatusCode::NOT_MODIFIED, make_etag_header(&state.catalog_version), Body::empty()).into_response();
+    }
+
     let mut resources = state
         .resources
         .iter()
@@ -174,13 +252,26 @@ pub async fn handle_list_resources(State(state): State<AppState>) -> Json<Value>
             .cmp(&b.get("id").and_then(|v| v.as_str()))
     });
 
-    Json(json!({
-        "version": "v1",
-        "resources": resources,
-    }))
+    (
+        StatusCode::OK,
+        make_etag_header(&state.catalog_version),
+        Json(json!({
+            "version": "v1",
+            "catalog_version": state.catalog_version,
+            "resources": resources,
+        })),
+    )
+        .into_response()
 }
 
-pub async fn handle_list_prompts(State(state): State<AppState>) -> Json<Value> {
+pub async fn handle_list_prompts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if check_if_none_match(&headers, &state.catalog_version) {
+        return (StatusCode::NOT_MODIFIED, make_etag_header(&state.catalog_version), Body::empty()).into_response();
+    }
+
     let mut prompts = state
         .prompts
         .iter()
@@ -203,10 +294,16 @@ pub async fn handle_list_prompts(State(state): State<AppState>) -> Json<Value> {
             .cmp(&b.get("id").and_then(|v| v.as_str()))
     });
 
-    Json(json!({
-        "version": "v1",
-        "prompts": prompts,
-    }))
+    (
+        StatusCode::OK,
+        make_etag_header(&state.catalog_version),
+        Json(json!({
+            "version": "v1",
+            "catalog_version": state.catalog_version,
+            "prompts": prompts,
+        })),
+    )
+        .into_response()
 }
 
 pub async fn handle_read_resource(
@@ -703,14 +800,15 @@ fn redact_value(value: Value, redact_keys: &[String]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        handle_get_prompt, handle_list_prompts, handle_list_resources, handle_read_resource,
-        redact_value, AppState, GetPromptRequest, ReadResourceRequest,
+        handle_catalog_events, handle_get_prompt, handle_list_capabilities, handle_list_prompts,
+        handle_list_resources, handle_read_resource, redact_value, AppState, CatalogEventsQuery,
+        GetPromptRequest, ReadResourceRequest,
     };
     use crate::daemon::{CapabilityMeta, Policy, PromptMeta, ResourceMeta};
     use axum::{
         body::to_bytes,
-        extract::State,
-        http::StatusCode,
+        extract::{Query, State},
+        http::{header, HeaderMap, HeaderValue, StatusCode},
         response::IntoResponse,
         Json,
     };
@@ -770,9 +868,13 @@ mod tests {
             policy: Policy::default(),
             search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
             catalog_version: "sha256:test".to_string(),
+            event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
         };
 
-        let Json(body) = handle_list_resources(State(state)).await;
+        let response = handle_list_resources(State(state), HeaderMap::new()).await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let body: Value = serde_json::from_slice(&bytes).expect("json");
         let entries = body
             .get("resources")
             .and_then(Value::as_array)
@@ -793,6 +895,7 @@ mod tests {
             policy: Policy::default(),
             search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
             catalog_version: "sha256:test".to_string(),
+            event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
         };
 
         let response = handle_read_resource(
@@ -848,9 +951,13 @@ mod tests {
             policy: Policy::default(),
             search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
             catalog_version: "sha256:test".to_string(),
+            event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
         };
 
-        let Json(body) = handle_list_prompts(State(state)).await;
+        let response = handle_list_prompts(State(state), HeaderMap::new()).await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let body: Value = serde_json::from_slice(&bytes).expect("json");
         let entries = body
             .get("prompts")
             .and_then(Value::as_array)
@@ -871,6 +978,7 @@ mod tests {
             policy: Policy::default(),
             search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
             catalog_version: "sha256:test".to_string(),
+            event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
         };
 
         let response = handle_get_prompt(
@@ -920,6 +1028,7 @@ mod tests {
             policy: Policy::default(),
             search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
             catalog_version: "sha256:test".to_string(),
+            event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
         };
 
         let response = handle_get_prompt(
@@ -968,9 +1077,10 @@ mod tests {
             policy: Policy::default(),
             search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
             catalog_version: "sha256:test_cat".to_string(),
+            event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
         };
 
-        let Json(res) = handle_search_capabilities(
+        let response = handle_search_capabilities(
             State(state),
             Json(super::SearchCapabilitiesRequest {
                 query: Some("issues".to_string()),
@@ -980,12 +1090,77 @@ mod tests {
                 modes: vec![],
             }),
         )
-        .await;
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let res: Value = serde_json::from_slice(&bytes).expect("json");
 
         assert_eq!(res["version"], "v1");
         assert_eq!(res["catalog_version"], "sha256:test_cat");
         let caps = res["capabilities"].as_array().expect("capabilities array");
         assert_eq!(caps.len(), 1);
         assert_eq!(caps[0]["id"], "github.issues.search");
+    }
+
+    #[tokio::test]
+    async fn if_none_match_returns_304_not_modified() {
+        let state = AppState {
+            servers: Arc::new(HashMap::new()),
+            capabilities: Arc::new(HashMap::new()),
+            resources: Arc::new(HashMap::new()),
+            prompts: Arc::new(HashMap::new()),
+            tool_timeout_ms: 1000,
+            policy: Policy::default(),
+            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
+            catalog_version: "sha256:abc1234".to_string(),
+            event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::IF_NONE_MATCH, HeaderValue::from_static("\"sha256:abc1234\""));
+
+        let response = handle_list_capabilities(State(state), headers).await.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(
+            response.headers().get(header::ETAG).unwrap().to_str().unwrap(),
+            "\"sha256:abc1234\""
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_events_endpoint_returns_event_feed() {
+        let event_store = Arc::new(crate::catalog::CatalogEventStore::new());
+        event_store.record("capability", "test.tool", "added");
+
+        let state = AppState {
+            servers: Arc::new(HashMap::new()),
+            capabilities: Arc::new(HashMap::new()),
+            resources: Arc::new(HashMap::new()),
+            prompts: Arc::new(HashMap::new()),
+            tool_timeout_ms: 1000,
+            policy: Policy::default(),
+            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
+            catalog_version: "sha256:v1".to_string(),
+            event_store,
+        };
+
+        let response = handle_catalog_events(
+            State(state),
+            Query(CatalogEventsQuery { after: None }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let payload: Value = serde_json::from_slice(&bytes).expect("json");
+
+        assert_eq!(payload["catalog_version"], "sha256:v1");
+        assert_eq!(payload["cursor"], "evt_1");
+        let events = payload["events"].as_array().expect("events array");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["object_id"], "test.tool");
     }
 }

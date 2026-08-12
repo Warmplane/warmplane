@@ -234,6 +234,7 @@ pub struct AppState {
     pub policy: Policy,
     pub search_engine: Arc<crate::search::HybridSearchEngine>,
     pub catalog_version: String,
+    pub event_store: Arc<crate::catalog::CatalogEventStore>,
 }
 
 pub fn compute_catalog_version(
@@ -268,6 +269,7 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
     let mut prompts = HashMap::new();
     let tool_timeout_ms = config.tool_timeout_ms.unwrap_or(DEFAULT_TOOL_TIMEOUT_MS);
     let policy = Policy::from_config(config.policy.clone());
+    let event_store = Arc::new(crate::catalog::CatalogEventStore::new());
 
     info!(server_count = config.mcp_servers.len(), "booting upstream MCP servers");
 
@@ -389,7 +391,7 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                                 tool.get("inputSchema").cloned().unwrap_or_else(|| json!({}));
 
                             capabilities.insert(
-                                capability_id,
+                                capability_id.clone(),
                                 CapabilityMeta {
                                     server: server_id.clone(),
                                     tool: tool_name.to_string(),
@@ -400,6 +402,7 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                                     examples: vec![],
                                 },
                             );
+                            event_store.record("capability", &capability_id, "added");
                         }
                     }
                 }
@@ -444,7 +447,7 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
 
                         info!(%server_id, uri = %uri, "registered upstream resource");
                         resources.insert(
-                            resource_id,
+                            resource_id.clone(),
                             ResourceMeta {
                                 server: server_id.clone(),
                                 uri: uri.to_string(),
@@ -454,6 +457,7 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                                 tags: vec![server_id.clone()],
                             },
                         );
+                        event_store.record("resource", &resource_id, "added");
                     }
                 }
             }
@@ -497,7 +501,7 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
 
                         info!(%server_id, prompt_name = %name, "registered upstream prompt");
                         prompts.insert(
-                            prompt_id,
+                            prompt_id.clone(),
                             PromptMeta {
                                 server: server_id.clone(),
                                 name: name.to_string(),
@@ -507,6 +511,7 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                                 tags: vec![server_id.clone()],
                             },
                         );
+                        event_store.record("prompt", &prompt_id, "added");
                     }
                 }
             }
@@ -586,6 +591,7 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
         policy,
         search_engine,
         catalog_version,
+        event_store,
     })
 }
 
@@ -606,6 +612,7 @@ pub async fn run_daemon(port: u16, config: McpConfig) -> Result<()> {
         .route("/v1/prompts", get(http_v1::handle_list_prompts))
         .route("/v1/prompts/get", post(http_v1::handle_get_prompt))
         .route("/v1/tools/call", post(http_v1::handle_call_capability))
+        .route("/v1/catalog/events", get(http_v1::handle_catalog_events))
         .with_state(app_state);
 
     info!(port, "all upstream servers connected; daemon listening");

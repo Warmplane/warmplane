@@ -112,7 +112,7 @@ impl HybridSearchEngine {
                 match_vec.sort();
 
                 // Normalize score to 0.0 .. 1.0
-                let normalized_score = (raw_score * 10.0).min(1.0);
+                let normalized_score = (raw_score * 0.1).min(1.0);
                 let mode = if meta.tags.contains(&"write".to_string()) {
                     "write".to_string()
                 } else {
@@ -169,7 +169,7 @@ mod tests {
         let policy = Policy::default();
 
         let results = engine.search(
-            "issues",
+            "github issues",
             10,
             &SearchFilter::default(),
             &caps,

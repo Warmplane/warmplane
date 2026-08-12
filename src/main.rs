@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde_json::{json, Value};
 
+mod catalog;
 mod config;
 mod daemon;
 mod http_v1;
@@ -159,6 +160,15 @@ async fn main() -> Result<()> {
                 .json(&payload)
                 .send()
                 .await?;
+            println!("{}", res.text().await?);
+        }
+        Commands::ListCatalogEvents { port, config, after } => {
+            let resolved_port = resolve_client_port(port, &config)?;
+            let mut url = format!("http://127.0.0.1:{}/v1/catalog/events", resolved_port);
+            if let Some(cursor) = after {
+                url = format!("{}?after={}", url, cursor);
+            }
+            let res = reqwest::get(url).await?;
             println!("{}", res.text().await?);
         }
     }

@@ -1,2 +1,3 @@
 /target
 eval/token-efficiency/output
+.fastembed_cache/

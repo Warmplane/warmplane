@@ -226,14 +226,15 @@ Default bind: `127.0.0.1:<port>`.
 
 ### HTTP endpoints
 
-- `GET /v1/capabilities`
+- `GET /v1/capabilities` (supports `If-None-Match` header -> `304 Not Modified`, returns `ETag`)
 - `POST /v1/capabilities/search`
-- `GET /v1/capabilities/:id`
+- `GET /v1/capabilities/:id` (supports `If-None-Match` header -> `304 Not Modified`, returns `ETag`)
 - `POST /v1/tools/call`
-- `GET /v1/resources`
+- `GET /v1/resources` (supports `If-None-Match` header -> `304 Not Modified`, returns `ETag`)
 - `POST /v1/resources/read`
-- `GET /v1/prompts`
+- `GET /v1/prompts` (supports `If-None-Match` header -> `304 Not Modified`, returns `ETag`)
 - `POST /v1/prompts/get`
+- `GET /v1/catalog/events` (catalog change feed: `?after={cursor}`)
 
 #### Capability Search (`POST /v1/capabilities/search`)
 
