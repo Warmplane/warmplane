@@ -204,6 +204,9 @@ warmplane read-resource fs.readme
 # prompts
 warmplane list-prompts
 warmplane get-prompt prompt.code-review --arguments '{"code":"fn main() {}"}'
+
+# catalog change events feed
+warmplane list-catalog-events [--after evt_1]
 ```
 
 ## MCP Client Example

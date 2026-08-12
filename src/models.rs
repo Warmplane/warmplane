@@ -108,4 +108,13 @@ pub enum Commands {
         #[arg(long)]
         request_id: Option<String>,
     },
+    /// List catalog events from the v1 change feed API
+    ListCatalogEvents {
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+        #[arg(long)]
+        after: Option<String>,
+    },
 }
