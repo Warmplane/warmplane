@@ -68,6 +68,8 @@ pub struct CallCapabilityRequest {
     pub args: Value,
     #[serde(default)]
     pub request_id: Option<String>,
+    #[serde(default)]
+    pub context: Option<crate::context::RequestContext>,
 }
 
 #[derive(Deserialize)]
@@ -75,6 +77,8 @@ pub struct ReadResourceRequest {
     pub resource_id: String,
     #[serde(default)]
     pub request_id: Option<String>,
+    #[serde(default)]
+    pub context: Option<crate::context::RequestContext>,
 }
 
 #[derive(Deserialize)]
@@ -84,6 +88,8 @@ pub struct GetPromptRequest {
     pub arguments: Option<Value>,
     #[serde(default)]
     pub request_id: Option<String>,
+    #[serde(default)]
+    pub context: Option<crate::context::RequestContext>,
 }
 
 fn default_search_limit() -> usize {
@@ -213,6 +219,7 @@ pub async fn handle_describe_capability(
             Json(error_envelope(
                 next_trace_id(),
                 None,
+                None,
                 "TOOL_NOT_FOUND",
                 format!("Capability '{}' not found", id),
                 false,
@@ -308,16 +315,20 @@ pub async fn handle_list_prompts(
 
 pub async fn handle_read_resource(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<ReadResourceRequest>,
 ) -> impl IntoResponse {
     let trace_id = next_trace_id();
+    let request_id = crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
+    let req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
 
     if !state.policy.allows(&payload.resource_id) {
         return (
             StatusCode::FORBIDDEN,
             Json(error_envelope(
                 trace_id,
-                payload.request_id,
+                Some(request_id),
+                Some(req_context),
                 "INVALID_ARGS",
                 format!("Resource '{}' blocked by policy", payload.resource_id),
                 false,
@@ -331,7 +342,8 @@ pub async fn handle_read_resource(
             StatusCode::NOT_FOUND,
             Json(error_envelope(
                 trace_id,
-                payload.request_id,
+                Some(request_id),
+                Some(req_context),
                 "RESOURCE_NOT_FOUND",
                 format!("Resource '{}' not found", payload.resource_id),
                 false,
@@ -345,7 +357,8 @@ pub async fn handle_read_resource(
             StatusCode::SERVICE_UNAVAILABLE,
             Json(error_envelope(
                 trace_id,
-                payload.request_id,
+                Some(request_id),
+                Some(req_context),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' is unreachable", meta.server),
                 true,
@@ -354,9 +367,13 @@ pub async fn handle_read_resource(
             .into_response();
     };
 
-    let request_id = payload.request_id;
     info!(
         trace_id = %trace_id,
+        request_id = %request_id,
+        operation_id = ?req_context.operation_id,
+        work_item_id = ?req_context.work_item_id,
+        actor_id = ?req_context.actor_id,
+        grant_id = ?req_context.grant_id,
         resource_id = %payload.resource_id,
         uri = %meta.uri,
         "resource read start"
@@ -375,7 +392,8 @@ pub async fn handle_read_resource(
             StatusCode::SERVICE_UNAVAILABLE,
             Json(error_envelope(
                 trace_id,
-                request_id,
+                Some(request_id),
+                Some(req_context),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' mailbox is closed", meta.server),
                 true,
@@ -389,6 +407,7 @@ pub async fn handle_read_resource(
             let redacted_output = redact_value(data.clone(), &state.policy.redact_keys);
             info!(
                 trace_id = %trace_id,
+                request_id = %request_id,
                 resource_id = %payload.resource_id,
                 data = %redacted_output,
                 "resource read success"
@@ -398,6 +417,7 @@ pub async fn handle_read_resource(
                 Json(json!({
                     "ok": true,
                     "request_id": request_id,
+                    "context": req_context,
                     "trace_id": trace_id,
                     "data": data,
                     "error": null,
@@ -409,7 +429,8 @@ pub async fn handle_read_resource(
             StatusCode::GATEWAY_TIMEOUT,
             Json(error_envelope(
                 trace_id,
-                request_id,
+                Some(request_id),
+                Some(req_context),
                 "UPSTREAM_TIMEOUT",
                 format!("Resource read timed out after {}ms", state.tool_timeout_ms),
                 true,
@@ -420,7 +441,8 @@ pub async fn handle_read_resource(
             StatusCode::BAD_GATEWAY,
             Json(error_envelope(
                 trace_id,
-                request_id,
+                Some(request_id),
+                Some(req_context),
                 "UPSTREAM_ERROR",
                 err,
                 false,
@@ -431,7 +453,8 @@ pub async fn handle_read_resource(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(error_envelope(
                 trace_id,
-                request_id,
+                Some(request_id),
+                Some(req_context),
                 "INTERNAL_ERROR",
                 "Daemon actor task died",
                 true,
@@ -443,16 +466,20 @@ pub async fn handle_read_resource(
 
 pub async fn handle_get_prompt(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<GetPromptRequest>,
 ) -> impl IntoResponse {
     let trace_id = next_trace_id();
+    let request_id = crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
+    let req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
 
     if !state.policy.allows(&payload.prompt_id) {
         return (
             StatusCode::FORBIDDEN,
             Json(error_envelope(
                 trace_id,
-                payload.request_id,
+                Some(request_id),
+                Some(req_context),
                 "INVALID_ARGS",
                 format!("Prompt '{}' blocked by policy", payload.prompt_id),
                 false,
@@ -466,7 +493,8 @@ pub async fn handle_get_prompt(
             StatusCode::NOT_FOUND,
             Json(error_envelope(
                 trace_id,
-                payload.request_id,
+                Some(request_id),
+                Some(req_context),
                 "PROMPT_NOT_FOUND",
                 format!("Prompt '{}' not found", payload.prompt_id),
                 false,
@@ -480,7 +508,8 @@ pub async fn handle_get_prompt(
             StatusCode::SERVICE_UNAVAILABLE,
             Json(error_envelope(
                 trace_id,
-                payload.request_id,
+                Some(request_id),
+                Some(req_context),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' is unreachable", meta.server),
                 true,
@@ -496,7 +525,8 @@ pub async fn handle_get_prompt(
                 StatusCode::BAD_REQUEST,
                 Json(error_envelope(
                     trace_id,
-                    payload.request_id,
+                    Some(request_id),
+                    Some(req_context),
                     "INVALID_ARGS",
                     "'arguments' must be a JSON object when provided",
                     false,
@@ -507,11 +537,15 @@ pub async fn handle_get_prompt(
         None => None,
     };
 
-    let request_id = payload.request_id;
     let redacted_input =
         redact_value(serde_json::to_value(&arguments).unwrap_or(Value::Null), &state.policy.redact_keys);
     info!(
         trace_id = %trace_id,
+        request_id = %request_id,
+        operation_id = ?req_context.operation_id,
+        work_item_id = ?req_context.work_item_id,
+        actor_id = ?req_context.actor_id,
+        grant_id = ?req_context.grant_id,
         prompt_id = %payload.prompt_id,
         arguments = %redacted_input,
         "prompt get start"
@@ -531,7 +565,8 @@ pub async fn handle_get_prompt(
             StatusCode::SERVICE_UNAVAILABLE,
             Json(error_envelope(
                 trace_id,
-                request_id,
+                Some(request_id),
+                Some(req_context),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' mailbox is closed", meta.server),
                 true,
@@ -545,6 +580,7 @@ pub async fn handle_get_prompt(
             let redacted_output = redact_value(data.clone(), &state.policy.redact_keys);
             info!(
                 trace_id = %trace_id,
+                request_id = %request_id,
                 prompt_id = %payload.prompt_id,
                 data = %redacted_output,
                 "prompt get success"
@@ -554,6 +590,7 @@ pub async fn handle_get_prompt(
                 Json(json!({
                     "ok": true,
                     "request_id": request_id,
+                    "context": req_context,
                     "trace_id": trace_id,
                     "data": data,
                     "error": null,
@@ -565,7 +602,8 @@ pub async fn handle_get_prompt(
             StatusCode::GATEWAY_TIMEOUT,
             Json(error_envelope(
                 trace_id,
-                request_id,
+                Some(request_id),
+                Some(req_context),
                 "UPSTREAM_TIMEOUT",
                 format!("Prompt get timed out after {}ms", state.tool_timeout_ms),
                 true,
@@ -576,7 +614,8 @@ pub async fn handle_get_prompt(
             StatusCode::BAD_GATEWAY,
             Json(error_envelope(
                 trace_id,
-                request_id,
+                Some(request_id),
+                Some(req_context),
                 "UPSTREAM_ERROR",
                 err,
                 false,
@@ -587,7 +626,8 @@ pub async fn handle_get_prompt(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(error_envelope(
                 trace_id,
-                request_id,
+                Some(request_id),
+                Some(req_context),
                 "INTERNAL_ERROR",
                 "Daemon actor task died",
                 true,
@@ -599,15 +639,20 @@ pub async fn handle_get_prompt(
 
 pub async fn handle_call_capability(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<CallCapabilityRequest>,
 ) -> impl IntoResponse {
     let trace_id = next_trace_id();
+    let request_id = crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
+    let req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
+
     if !payload.args.is_object() {
         return (
             StatusCode::BAD_REQUEST,
             Json(error_envelope(
                 trace_id,
-                payload.request_id,
+                Some(request_id),
+                Some(req_context),
                 "INVALID_ARGS",
                 "'args' must be a JSON object",
                 false,
@@ -621,7 +666,8 @@ pub async fn handle_call_capability(
             StatusCode::FORBIDDEN,
             Json(error_envelope(
                 trace_id,
-                payload.request_id,
+                Some(request_id),
+                Some(req_context),
                 "INVALID_ARGS",
                 format!(
                     "Capability '{}' blocked by policy",
@@ -638,7 +684,8 @@ pub async fn handle_call_capability(
             StatusCode::NOT_FOUND,
             Json(error_envelope(
                 trace_id,
-                payload.request_id,
+                Some(request_id),
+                Some(req_context),
                 "TOOL_NOT_FOUND",
                 format!("Capability '{}' not found", payload.capability_id),
                 false,
@@ -652,7 +699,8 @@ pub async fn handle_call_capability(
             StatusCode::SERVICE_UNAVAILABLE,
             Json(error_envelope(
                 trace_id,
-                payload.request_id,
+                Some(request_id),
+                Some(req_context),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' is unreachable", meta.server),
                 true,
@@ -661,10 +709,14 @@ pub async fn handle_call_capability(
             .into_response();
     };
 
-    let request_id = payload.request_id;
     let redacted_input = redact_value(payload.args.clone(), &state.policy.redact_keys);
     info!(
         trace_id = %trace_id,
+        request_id = %request_id,
+        operation_id = ?req_context.operation_id,
+        work_item_id = ?req_context.work_item_id,
+        actor_id = ?req_context.actor_id,
+        grant_id = ?req_context.grant_id,
         capability_id = %payload.capability_id,
         args = %redacted_input,
         "tool call start"
@@ -684,7 +736,8 @@ pub async fn handle_call_capability(
             StatusCode::SERVICE_UNAVAILABLE,
             Json(error_envelope(
                 trace_id,
-                request_id,
+                Some(request_id),
+                Some(req_context),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' mailbox is closed", meta.server),
                 true,
@@ -698,6 +751,7 @@ pub async fn handle_call_capability(
             let redacted_output = redact_value(data.clone(), &state.policy.redact_keys);
             info!(
                 trace_id = %trace_id,
+                request_id = %request_id,
                 capability_id = %payload.capability_id,
                 data = %redacted_output,
                 "tool call success"
@@ -707,6 +761,7 @@ pub async fn handle_call_capability(
                 Json(json!({
                     "ok": true,
                     "request_id": request_id,
+                    "context": req_context,
                     "trace_id": trace_id,
                     "data": data,
                     "error": null,
@@ -718,7 +773,8 @@ pub async fn handle_call_capability(
             StatusCode::GATEWAY_TIMEOUT,
             Json(error_envelope(
                 trace_id,
-                request_id,
+                Some(request_id),
+                Some(req_context),
                 "UPSTREAM_TIMEOUT",
                 format!("Tool call timed out after {}ms", state.tool_timeout_ms),
                 true,
@@ -729,7 +785,8 @@ pub async fn handle_call_capability(
             StatusCode::BAD_GATEWAY,
             Json(error_envelope(
                 trace_id,
-                request_id,
+                Some(request_id),
+                Some(req_context),
                 "UPSTREAM_ERROR",
                 err,
                 false,
@@ -740,7 +797,8 @@ pub async fn handle_call_capability(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(error_envelope(
                 trace_id,
-                request_id,
+                Some(request_id),
+                Some(req_context),
                 "INTERNAL_ERROR",
                 "Daemon actor task died",
                 true,
@@ -757,13 +815,16 @@ fn next_trace_id() -> String {
 fn error_envelope(
     trace_id: String,
     request_id: Option<String>,
+    context: Option<crate::context::RequestContext>,
     code: &str,
     message: impl Into<String>,
     retryable: bool,
 ) -> Value {
+    let ctx_val = context.unwrap_or_default();
     json!({
         "ok": false,
         "request_id": request_id,
+        "context": ctx_val,
         "trace_id": trace_id,
         "data": null,
         "error": {
@@ -900,9 +961,11 @@ mod tests {
 
         let response = handle_read_resource(
             State(state),
+            HeaderMap::new(),
             Json(ReadResourceRequest {
                 resource_id: "missing.resource".to_string(),
                 request_id: None,
+                context: None,
             }),
         )
         .await
@@ -983,10 +1046,12 @@ mod tests {
 
         let response = handle_get_prompt(
             State(state),
+            HeaderMap::new(),
             Json(GetPromptRequest {
                 prompt_id: "missing.prompt".to_string(),
                 arguments: None,
                 request_id: None,
+                context: None,
             }),
         )
         .await
@@ -1033,10 +1098,12 @@ mod tests {
 
         let response = handle_get_prompt(
             State(state),
+            HeaderMap::new(),
             Json(GetPromptRequest {
                 prompt_id: "alpha.prompt".to_string(),
                 arguments: Some(json!("not-an-object")),
                 request_id: None,
+                context: None,
             }),
         )
         .await
@@ -1162,5 +1229,49 @@ mod tests {
         let events = payload["events"].as_array().expect("events array");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0]["object_id"], "test.tool");
+    }
+
+    #[tokio::test]
+    async fn test_request_context_and_header_fallback_in_envelope() {
+        let state = AppState {
+            servers: Arc::new(HashMap::new()),
+            capabilities: Arc::new(HashMap::new()),
+            resources: Arc::new(HashMap::new()),
+            prompts: Arc::new(HashMap::new()),
+            tool_timeout_ms: 1000,
+            policy: Policy::default(),
+            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
+            catalog_version: "sha256:test".to_string(),
+            event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
+        };
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-request-id", "req-hdr-999".parse().unwrap());
+        headers.insert("x-actor-id", "actor-hdr-12".parse().unwrap());
+        headers.insert("x-grant-id", "grant-hdr-55".parse().unwrap());
+
+        let response = handle_read_resource(
+            State(state),
+            headers,
+            Json(ReadResourceRequest {
+                resource_id: "missing.res".to_string(),
+                request_id: None,
+                context: Some(crate::context::RequestContext {
+                    operation_id: Some("op-payload-1".to_string()),
+                    ..Default::default()
+                }),
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let payload: Value = serde_json::from_slice(&bytes).expect("json");
+
+        assert_eq!(payload["request_id"], "req-hdr-999");
+        assert_eq!(payload["context"]["operation_id"], "op-payload-1");
+        assert_eq!(payload["context"]["actor_id"], "actor-hdr-12");
+        assert_eq!(payload["context"]["grant_id"], "grant-hdr-55");
     }
 }

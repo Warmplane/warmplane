@@ -195,19 +195,34 @@ Native MCP methods also supported:
 warmplane list-capabilities
 warmplane search-capabilities "triage logs" --limit 5
 warmplane describe-capability db.query
-warmplane call-capability db.query --params '{"query":"SELECT 1"}'
-
-# resources
-warmplane list-resources
-warmplane read-resource fs.readme
-
-# prompts
-warmplane list-prompts
-warmplane get-prompt prompt.code-review --arguments '{"code":"fn main() {}"}'
+# execution with correlation context
+warmplane call-capability db.query --params '{"query":"SELECT 1"}' --request-id req-101 --operation-id op-20 --actor-id user-7
+warmplane read-resource fs.readme --request-id req-102 --actor-id user-7
+warmplane get-prompt prompt.code-review --arguments '{"code":"fn main() {}"}' --request-id req-103
 
 # catalog change events feed
 warmplane list-catalog-events [--after evt_1]
 ```
+
+### Request Context & Correlation
+
+All execution envelopes (`/v1/tools/call`, `/v1/resources/read`, `/v1/prompts/get`) accept and reflect `request_id` and structured `context`:
+
+```json
+{
+  "capability_id": "github.issues.search",
+  "args": {"query": "is:open"},
+  "request_id": "req-client-8819",
+  "context": {
+    "operation_id": "op-4412",
+    "work_item_id": "task-990",
+    "actor_id": "agent-user-12",
+    "grant_id": "grant-771"
+  }
+}
+```
+
+HTTP correlation headers (`X-Request-ID`, `X-Operation-ID`, `X-Work-Item-ID`, `X-Actor-ID`, `X-Grant-ID`) serve as automatic fallbacks when request body fields are omitted.
 
 ## MCP Client Example
 
