@@ -14,8 +14,19 @@ pub struct VectorSearchIndex {
 #[cfg(feature = "semantic-search")]
 impl VectorSearchIndex {
     pub fn new() -> anyhow::Result<Self> {
-        let model = fastembed::TextEmbedding::try_new(Default::default())?;
-        Ok(Self { model })
+        let mut attempts = 0;
+        loop {
+            match fastembed::TextEmbedding::try_new(Default::default()) {
+                Ok(model) => return Ok(Self { model }),
+                Err(err) => {
+                    attempts += 1;
+                    if attempts >= 5 {
+                        return Err(err.into());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                }
+            }
+        }
     }
 
     pub fn search(&self, query: &str, capabilities: &[(String, CapabilityMeta)]) -> Vec<VectorMatchResult> {

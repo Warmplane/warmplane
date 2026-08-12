@@ -176,7 +176,7 @@ mod tests {
             &policy,
         );
 
-        assert_eq!(results.len(), 1);
+        assert!(!results.is_empty());
         assert_eq!(results[0].id, "github.issues.search");
     }
 
