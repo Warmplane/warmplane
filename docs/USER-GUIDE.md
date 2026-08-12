@@ -293,6 +293,30 @@ Native MCP methods also exposed:
 - resources: `resources/list`, `resources/read`
 - prompts: `prompts/list`, `prompts/get`
 
+## 5.3 Idempotency, Cancellation & Retry Metadata
+
+### Deduplication Store
+Pass an `idempotency_key` in payload or via `Idempotency-Key` / `X-Idempotency-Key` headers or `--idempotency-key` CLI flag.
+- First request executes the operation.
+- In-flight duplicate requests with the same key wait for the active operation to complete and share the result.
+- Subsequent calls within the TTL window receive the cached result instantly.
+
+### Operation Cancellation
+In-flight operations can be cancelled by request ID:
+- `POST /v1/operations/:id/cancel`
+- CLI command: `warmplane cancel-operation <request_id>`
+
+### Retry Metadata
+Execution envelopes include a `"retry"` object indicating whether it is safe to retry:
+```json
+{
+  "retry": {
+    "classification": "safe" | "unsafe" | "idempotent",
+    "state": "not_started" | "in_progress" | "completed" | "unknown"
+  }
+}
+```
+
 ## 5.3 CLI facade mode
 
 Capabilities:

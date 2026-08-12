@@ -164,6 +164,23 @@ Endpoints:
 - `POST /v1/resources/read`
 - `GET /v1/prompts`
 - `POST /v1/prompts/get`
+- `GET /v1/catalog/events`
+- `POST /v1/operations/:id/cancel`
+
+### Idempotency, Cancellation & Retry Metadata
+
+Warmplane standardizes execution safety for clients and autonomous agents:
+
+- **Idempotency Deduplication**: Pass `--idempotency-key` or `Idempotency-Key` / `X-Idempotency-Key` HTTP headers on tool calls. Concurrent or duplicate requests wait on the in-flight operation and receive cached execution results without re-executing upstream tools.
+- **Operation Cancellation**: In-flight calls can be safely aborted via `POST /v1/operations/:id/cancel` or `warmplane cancel-operation <request_id>`.
+- **Retry Metadata**: Every response envelope contains a `"retry"` field classifying execution safety:
+  ```json
+  "retry": {
+    "classification": "safe" | "unsafe" | "idempotent",
+    "state": "not_started" | "in_progress" | "completed" | "unknown"
+  }
+  ```
+
 
 ### 2) MCP Server (stdio)
 
