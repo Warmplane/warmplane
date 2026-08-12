@@ -235,6 +235,8 @@ pub struct AppState {
     pub search_engine: Arc<crate::search::HybridSearchEngine>,
     pub catalog_version: String,
     pub event_store: Arc<crate::catalog::CatalogEventStore>,
+    pub idempotency_store: Arc<crate::idempotency::IdempotencyStore>,
+    pub operation_registry: crate::operations::OperationRegistry,
 }
 
 pub fn compute_catalog_version(
@@ -592,6 +594,8 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
         search_engine,
         catalog_version,
         event_store,
+        idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
+        operation_registry: crate::operations::OperationRegistry::new(),
     })
 }
 
@@ -613,6 +617,10 @@ pub async fn run_daemon(port: u16, config: McpConfig) -> Result<()> {
         .route("/v1/prompts/get", post(http_v1::handle_get_prompt))
         .route("/v1/tools/call", post(http_v1::handle_call_capability))
         .route("/v1/catalog/events", get(http_v1::handle_catalog_events))
+        .route(
+            "/v1/operations/:id/cancel",
+            post(http_v1::handle_cancel_operation),
+        )
         .with_state(app_state);
 
     info!(port, "all upstream servers connected; daemon listening");

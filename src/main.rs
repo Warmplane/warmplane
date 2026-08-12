@@ -7,9 +7,11 @@ mod config;
 mod context;
 mod daemon;
 mod http_v1;
+mod idempotency;
 mod mcp_server;
 mod models;
 mod oauth2;
+mod operations;
 mod search;
 mod telemetry;
 
@@ -92,6 +94,7 @@ async fn main() -> Result<()> {
             work_item_id,
             actor_id,
             grant_id,
+            idempotency_key,
         } => {
             let resolved_port = resolve_client_port(port, &config)?;
             let parsed_params: Value =
@@ -109,6 +112,7 @@ async fn main() -> Result<()> {
                 "args": parsed_params,
                 "request_id": request_id,
                 "context": context,
+                "idempotency_key": idempotency_key,
             });
 
             let client = reqwest::Client::new();
@@ -207,6 +211,15 @@ async fn main() -> Result<()> {
                 url = format!("{}?after={}", url, cursor);
             }
             let res = reqwest::get(url).await?;
+            println!("{}", res.text().await?);
+        }
+        Commands::CancelOperation { port, config, id } => {
+            let resolved_port = resolve_client_port(port, &config)?;
+            let client = reqwest::Client::new();
+            let res = client
+                .post(format!("http://127.0.0.1:{}/v1/operations/{}/cancel", resolved_port, id))
+                .send()
+                .await?;
             println!("{}", res.text().await?);
         }
     }

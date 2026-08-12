@@ -70,6 +70,8 @@ pub struct CallCapabilityRequest {
     pub request_id: Option<String>,
     #[serde(default)]
     pub context: Option<crate::context::RequestContext>,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -79,6 +81,8 @@ pub struct ReadResourceRequest {
     pub request_id: Option<String>,
     #[serde(default)]
     pub context: Option<crate::context::RequestContext>,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -90,6 +94,8 @@ pub struct GetPromptRequest {
     pub request_id: Option<String>,
     #[serde(default)]
     pub context: Option<crate::context::RequestContext>,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 fn default_search_limit() -> usize {
@@ -220,6 +226,7 @@ pub async fn handle_describe_capability(
                 next_trace_id(),
                 None,
                 None,
+                crate::idempotency::RetryMetadata::safe("not_started"),
                 "TOOL_NOT_FOUND",
                 format!("Capability '{}' not found", id),
                 false,
@@ -321,14 +328,18 @@ pub async fn handle_read_resource(
     let trace_id = next_trace_id();
     let request_id = crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
     let req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
+    let _idempotency_key = resolve_idempotency_key(payload.idempotency_key.clone(), &headers);
+    let cancel_token: tokio_util::sync::CancellationToken = state.operation_registry.register(&request_id).await;
 
     if !state.policy.allows(&payload.resource_id) {
+        state.operation_registry.unregister(&request_id).await;
         return (
             StatusCode::FORBIDDEN,
             Json(error_envelope(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                crate::idempotency::RetryMetadata::safe("not_started"),
                 "INVALID_ARGS",
                 format!("Resource '{}' blocked by policy", payload.resource_id),
                 false,
@@ -338,12 +349,14 @@ pub async fn handle_read_resource(
     }
 
     let Some(meta) = state.resources.get(&payload.resource_id) else {
+        state.operation_registry.unregister(&request_id).await;
         return (
             StatusCode::NOT_FOUND,
             Json(error_envelope(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                crate::idempotency::RetryMetadata::safe("not_started"),
                 "RESOURCE_NOT_FOUND",
                 format!("Resource '{}' not found", payload.resource_id),
                 false,
@@ -353,12 +366,14 @@ pub async fn handle_read_resource(
     };
 
     let Some(tx) = state.servers.get(&meta.server) else {
+        state.operation_registry.unregister(&request_id).await;
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(error_envelope(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                crate::idempotency::RetryMetadata::safe("not_started"),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' is unreachable", meta.server),
                 true,
@@ -388,12 +403,14 @@ pub async fn handle_read_resource(
         .await
         .is_err()
     {
+        state.operation_registry.unregister(&request_id).await;
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(error_envelope(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                crate::idempotency::RetryMetadata::safe("not_started"),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' mailbox is closed", meta.server),
                 true,
@@ -402,7 +419,28 @@ pub async fn handle_read_resource(
             .into_response();
     }
 
-    match reply_rx.await {
+    let result: Result<Result<Value, UpstreamCallError>, oneshot::error::RecvError> = tokio::select! {
+        _ = cancel_token.cancelled() => {
+            state.operation_registry.unregister(&request_id).await;
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    crate::idempotency::RetryMetadata::safe("unknown"),
+                    "OPERATION_CANCELLED",
+                    "Resource read operation was cancelled",
+                    false,
+                )),
+            ).into_response();
+        }
+        res = reply_rx => res,
+    };
+
+    state.operation_registry.unregister(&request_id).await;
+
+    match result {
         Ok(Ok(data)) => {
             let redacted_output = redact_value(data.clone(), &state.policy.redact_keys);
             info!(
@@ -421,6 +459,7 @@ pub async fn handle_read_resource(
                     "trace_id": trace_id,
                     "data": data,
                     "error": null,
+                    "retry": crate::idempotency::RetryMetadata::safe("completed"),
                 })),
             )
                 .into_response()
@@ -431,6 +470,7 @@ pub async fn handle_read_resource(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                crate::idempotency::RetryMetadata::safe("unknown"),
                 "UPSTREAM_TIMEOUT",
                 format!("Resource read timed out after {}ms", state.tool_timeout_ms),
                 true,
@@ -443,6 +483,7 @@ pub async fn handle_read_resource(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                crate::idempotency::RetryMetadata::safe("unknown"),
                 "UPSTREAM_ERROR",
                 err,
                 false,
@@ -455,6 +496,7 @@ pub async fn handle_read_resource(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                crate::idempotency::RetryMetadata::safe("unknown"),
                 "INTERNAL_ERROR",
                 "Daemon actor task died",
                 true,
@@ -472,14 +514,18 @@ pub async fn handle_get_prompt(
     let trace_id = next_trace_id();
     let request_id = crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
     let req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
+    let _idempotency_key = resolve_idempotency_key(payload.idempotency_key.clone(), &headers);
+    let cancel_token: tokio_util::sync::CancellationToken = state.operation_registry.register(&request_id).await;
 
     if !state.policy.allows(&payload.prompt_id) {
+        state.operation_registry.unregister(&request_id).await;
         return (
             StatusCode::FORBIDDEN,
             Json(error_envelope(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                crate::idempotency::RetryMetadata::safe("not_started"),
                 "INVALID_ARGS",
                 format!("Prompt '{}' blocked by policy", payload.prompt_id),
                 false,
@@ -489,12 +535,14 @@ pub async fn handle_get_prompt(
     }
 
     let Some(meta) = state.prompts.get(&payload.prompt_id) else {
+        state.operation_registry.unregister(&request_id).await;
         return (
             StatusCode::NOT_FOUND,
             Json(error_envelope(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                crate::idempotency::RetryMetadata::safe("not_started"),
                 "PROMPT_NOT_FOUND",
                 format!("Prompt '{}' not found", payload.prompt_id),
                 false,
@@ -504,12 +552,14 @@ pub async fn handle_get_prompt(
     };
 
     let Some(tx) = state.servers.get(&meta.server) else {
+        state.operation_registry.unregister(&request_id).await;
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(error_envelope(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                crate::idempotency::RetryMetadata::safe("not_started"),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' is unreachable", meta.server),
                 true,
@@ -521,12 +571,14 @@ pub async fn handle_get_prompt(
     let arguments = match payload.arguments {
         Some(Value::Object(map)) => Some(map),
         Some(_) => {
+            state.operation_registry.unregister(&request_id).await;
             return (
                 StatusCode::BAD_REQUEST,
                 Json(error_envelope(
                     trace_id,
                     Some(request_id),
                     Some(req_context),
+                    crate::idempotency::RetryMetadata::safe("not_started"),
                     "INVALID_ARGS",
                     "'arguments' must be a JSON object when provided",
                     false,
@@ -561,12 +613,14 @@ pub async fn handle_get_prompt(
         .await
         .is_err()
     {
+        state.operation_registry.unregister(&request_id).await;
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(error_envelope(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                crate::idempotency::RetryMetadata::safe("not_started"),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' mailbox is closed", meta.server),
                 true,
@@ -575,7 +629,28 @@ pub async fn handle_get_prompt(
             .into_response();
     }
 
-    match reply_rx.await {
+    let result: Result<Result<Value, UpstreamCallError>, oneshot::error::RecvError> = tokio::select! {
+        _ = cancel_token.cancelled() => {
+            state.operation_registry.unregister(&request_id).await;
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    crate::idempotency::RetryMetadata::safe("unknown"),
+                    "OPERATION_CANCELLED",
+                    "Prompt get operation was cancelled",
+                    false,
+                )),
+            ).into_response();
+        }
+        res = reply_rx => res,
+    };
+
+    state.operation_registry.unregister(&request_id).await;
+
+    match result {
         Ok(Ok(data)) => {
             let redacted_output = redact_value(data.clone(), &state.policy.redact_keys);
             info!(
@@ -594,6 +669,7 @@ pub async fn handle_get_prompt(
                     "trace_id": trace_id,
                     "data": data,
                     "error": null,
+                    "retry": crate::idempotency::RetryMetadata::safe("completed"),
                 })),
             )
                 .into_response()
@@ -604,6 +680,7 @@ pub async fn handle_get_prompt(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                crate::idempotency::RetryMetadata::safe("unknown"),
                 "UPSTREAM_TIMEOUT",
                 format!("Prompt get timed out after {}ms", state.tool_timeout_ms),
                 true,
@@ -616,6 +693,7 @@ pub async fn handle_get_prompt(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                crate::idempotency::RetryMetadata::safe("unknown"),
                 "UPSTREAM_ERROR",
                 err,
                 false,
@@ -628,6 +706,7 @@ pub async fn handle_get_prompt(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                crate::idempotency::RetryMetadata::safe("unknown"),
                 "INTERNAL_ERROR",
                 "Daemon actor task died",
                 true,
@@ -635,6 +714,14 @@ pub async fn handle_get_prompt(
         )
             .into_response(),
     }
+}
+
+fn resolve_idempotency_key(payload_key: Option<String>, headers: &HeaderMap) -> Option<String> {
+    if let Some(k) = payload_key.filter(|s| !s.trim().is_empty()) {
+        return Some(k);
+    }
+    crate::context::extract_header_str(headers, "idempotency-key")
+        .or_else(|| crate::context::extract_header_str(headers, "x-idempotency-key"))
 }
 
 pub async fn handle_call_capability(
@@ -645,14 +732,42 @@ pub async fn handle_call_capability(
     let trace_id = next_trace_id();
     let request_id = crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
     let req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
+    let idempotency_key = resolve_idempotency_key(payload.idempotency_key.clone(), &headers);
+
+    let retry_base = if idempotency_key.is_some() {
+        crate::idempotency::RetryMetadata::idempotent
+    } else {
+        crate::idempotency::RetryMetadata::unsafe_op
+    };
+
+    if let Some(ref key) = idempotency_key {
+        match state.idempotency_store.check_or_start(key).await {
+            crate::idempotency::DeduplicateResult::Completed(cached) => {
+                return (StatusCode::OK, Json(cached)).into_response();
+            }
+            crate::idempotency::DeduplicateResult::InProgress(mut rx) => {
+                if let Ok(cached) = rx.recv().await {
+                    return (StatusCode::OK, Json(cached)).into_response();
+                }
+            }
+            crate::idempotency::DeduplicateResult::New => {}
+        }
+    }
+
+    let cancel_token: tokio_util::sync::CancellationToken = state.operation_registry.register(&request_id).await;
 
     if !payload.args.is_object() {
+        state.operation_registry.unregister(&request_id).await;
+        if let Some(ref key) = idempotency_key {
+            state.idempotency_store.remove(key).await;
+        }
         return (
             StatusCode::BAD_REQUEST,
             Json(error_envelope(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                retry_base("not_started"),
                 "INVALID_ARGS",
                 "'args' must be a JSON object",
                 false,
@@ -662,12 +777,17 @@ pub async fn handle_call_capability(
     }
 
     if !state.policy.allows(&payload.capability_id) {
+        state.operation_registry.unregister(&request_id).await;
+        if let Some(ref key) = idempotency_key {
+            state.idempotency_store.remove(key).await;
+        }
         return (
             StatusCode::FORBIDDEN,
             Json(error_envelope(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                retry_base("not_started"),
                 "INVALID_ARGS",
                 format!(
                     "Capability '{}' blocked by policy",
@@ -680,12 +800,17 @@ pub async fn handle_call_capability(
     }
 
     let Some(meta) = state.capabilities.get(&payload.capability_id) else {
+        state.operation_registry.unregister(&request_id).await;
+        if let Some(ref key) = idempotency_key {
+            state.idempotency_store.remove(key).await;
+        }
         return (
             StatusCode::NOT_FOUND,
             Json(error_envelope(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                retry_base("not_started"),
                 "TOOL_NOT_FOUND",
                 format!("Capability '{}' not found", payload.capability_id),
                 false,
@@ -695,12 +820,17 @@ pub async fn handle_call_capability(
     };
 
     let Some(tx) = state.servers.get(&meta.server) else {
+        state.operation_registry.unregister(&request_id).await;
+        if let Some(ref key) = idempotency_key {
+            state.idempotency_store.remove(key).await;
+        }
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(error_envelope(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                retry_base("not_started"),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' is unreachable", meta.server),
                 true,
@@ -732,12 +862,17 @@ pub async fn handle_call_capability(
         .await
         .is_err()
     {
+        state.operation_registry.unregister(&request_id).await;
+        if let Some(ref key) = idempotency_key {
+            state.idempotency_store.remove(key).await;
+        }
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(error_envelope(
                 trace_id,
                 Some(request_id),
                 Some(req_context),
+                retry_base("not_started"),
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' mailbox is closed", meta.server),
                 true,
@@ -746,7 +881,31 @@ pub async fn handle_call_capability(
             .into_response();
     }
 
-    match reply_rx.await {
+    let result: Result<Result<Value, UpstreamCallError>, oneshot::error::RecvError> = tokio::select! {
+        _ = cancel_token.cancelled() => {
+            state.operation_registry.unregister(&request_id).await;
+            if let Some(ref key) = idempotency_key {
+                state.idempotency_store.remove(key).await;
+            }
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    retry_base("unknown"),
+                    "OPERATION_CANCELLED",
+                    "Tool call operation was cancelled",
+                    false,
+                )),
+            ).into_response();
+        }
+        res = reply_rx => res,
+    };
+
+    state.operation_registry.unregister(&request_id).await;
+
+    match result {
         Ok(Ok(data)) => {
             let redacted_output = redact_value(data.clone(), &state.policy.redact_keys);
             info!(
@@ -756,55 +915,76 @@ pub async fn handle_call_capability(
                 data = %redacted_output,
                 "tool call success"
             );
+            let response_json = json!({
+                "ok": true,
+                "request_id": request_id,
+                "context": req_context,
+                "trace_id": trace_id,
+                "data": data,
+                "error": null,
+                "retry": retry_base("completed"),
+            });
+
+            if let Some(ref key) = idempotency_key {
+                state.idempotency_store.complete(key, response_json.clone()).await;
+            }
+
+            (StatusCode::OK, Json(response_json)).into_response()
+        }
+        Ok(Err(UpstreamCallError::Timeout)) => {
+            if let Some(ref key) = idempotency_key {
+                state.idempotency_store.remove(key).await;
+            }
             (
-                StatusCode::OK,
-                Json(json!({
-                    "ok": true,
-                    "request_id": request_id,
-                    "context": req_context,
-                    "trace_id": trace_id,
-                    "data": data,
-                    "error": null,
-                })),
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    retry_base("unknown"),
+                    "UPSTREAM_TIMEOUT",
+                    format!("Tool call timed out after {}ms", state.tool_timeout_ms),
+                    true,
+                )),
             )
                 .into_response()
         }
-        Ok(Err(UpstreamCallError::Timeout)) => (
-            StatusCode::GATEWAY_TIMEOUT,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                "UPSTREAM_TIMEOUT",
-                format!("Tool call timed out after {}ms", state.tool_timeout_ms),
-                true,
-            )),
-        )
-            .into_response(),
-        Ok(Err(UpstreamCallError::Upstream(err))) => (
-            StatusCode::BAD_GATEWAY,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                "UPSTREAM_ERROR",
-                err,
-                false,
-            )),
-        )
-            .into_response(),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                "INTERNAL_ERROR",
-                "Daemon actor task died",
-                true,
-            )),
-        )
-            .into_response(),
+        Ok(Err(UpstreamCallError::Upstream(err))) => {
+            if let Some(ref key) = idempotency_key {
+                state.idempotency_store.remove(key).await;
+            }
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    retry_base("unknown"),
+                    "UPSTREAM_ERROR",
+                    err,
+                    false,
+                )),
+            )
+                .into_response()
+        }
+        Err(_) => {
+            if let Some(ref key) = idempotency_key {
+                state.idempotency_store.remove(key).await;
+            }
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    retry_base("unknown"),
+                    "INTERNAL_ERROR",
+                    "Daemon actor task died",
+                    true,
+                )),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -816,6 +996,7 @@ fn error_envelope(
     trace_id: String,
     request_id: Option<String>,
     context: Option<crate::context::RequestContext>,
+    retry: crate::idempotency::RetryMetadata,
     code: &str,
     message: impl Into<String>,
     retryable: bool,
@@ -831,8 +1012,25 @@ fn error_envelope(
             "code": code,
             "message": message.into(),
             "retryable": retryable,
-        }
+        },
+        "retry": retry,
     })
+}
+
+pub async fn handle_cancel_operation(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let cancelled = state.operation_registry.cancel(&id).await;
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "request_id": id,
+            "cancelled": cancelled,
+        })),
+    )
+        .into_response()
 }
 
 fn redact_value(value: Value, redact_keys: &[String]) -> Value {
@@ -930,6 +1128,8 @@ mod tests {
             search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
             catalog_version: "sha256:test".to_string(),
             event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
+            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
+            operation_registry: crate::operations::OperationRegistry::new(),
         };
 
         let response = handle_list_resources(State(state), HeaderMap::new()).await.into_response();
@@ -957,6 +1157,8 @@ mod tests {
             search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
             catalog_version: "sha256:test".to_string(),
             event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
+            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
+            operation_registry: crate::operations::OperationRegistry::new(),
         };
 
         let response = handle_read_resource(
@@ -966,6 +1168,7 @@ mod tests {
                 resource_id: "missing.resource".to_string(),
                 request_id: None,
                 context: None,
+                idempotency_key: None,
             }),
         )
         .await
@@ -1015,6 +1218,8 @@ mod tests {
             search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
             catalog_version: "sha256:test".to_string(),
             event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
+            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
+            operation_registry: crate::operations::OperationRegistry::new(),
         };
 
         let response = handle_list_prompts(State(state), HeaderMap::new()).await.into_response();
@@ -1042,6 +1247,8 @@ mod tests {
             search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
             catalog_version: "sha256:test".to_string(),
             event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
+            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
+            operation_registry: crate::operations::OperationRegistry::new(),
         };
 
         let response = handle_get_prompt(
@@ -1052,6 +1259,7 @@ mod tests {
                 arguments: None,
                 request_id: None,
                 context: None,
+                idempotency_key: None,
             }),
         )
         .await
@@ -1094,6 +1302,8 @@ mod tests {
             search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
             catalog_version: "sha256:test".to_string(),
             event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
+            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
+            operation_registry: crate::operations::OperationRegistry::new(),
         };
 
         let response = handle_get_prompt(
@@ -1104,6 +1314,7 @@ mod tests {
                 arguments: Some(json!("not-an-object")),
                 request_id: None,
                 context: None,
+                idempotency_key: None,
             }),
         )
         .await
@@ -1145,6 +1356,8 @@ mod tests {
             search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
             catalog_version: "sha256:test_cat".to_string(),
             event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
+            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
+            operation_registry: crate::operations::OperationRegistry::new(),
         };
 
         let response = handle_search_capabilities(
@@ -1183,6 +1396,8 @@ mod tests {
             search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
             catalog_version: "sha256:abc1234".to_string(),
             event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
+            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
+            operation_registry: crate::operations::OperationRegistry::new(),
         };
 
         let mut headers = HeaderMap::new();
@@ -1211,6 +1426,8 @@ mod tests {
             search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
             catalog_version: "sha256:v1".to_string(),
             event_store,
+            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
+            operation_registry: crate::operations::OperationRegistry::new(),
         };
 
         let response = handle_catalog_events(
@@ -1243,6 +1460,8 @@ mod tests {
             search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
             catalog_version: "sha256:test".to_string(),
             event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
+            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
+            operation_registry: crate::operations::OperationRegistry::new(),
         };
 
         let mut headers = HeaderMap::new();
@@ -1260,6 +1479,7 @@ mod tests {
                     operation_id: Some("op-payload-1".to_string()),
                     ..Default::default()
                 }),
+                idempotency_key: None,
             }),
         )
         .await

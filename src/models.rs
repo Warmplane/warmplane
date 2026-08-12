@@ -79,6 +79,8 @@ pub enum Commands {
         actor_id: Option<String>,
         #[arg(long)]
         grant_id: Option<String>,
+        #[arg(long)]
+        idempotency_key: Option<String>,
     },
     /// List compact resources from the v1 facade API
     ListResources {
@@ -138,7 +140,15 @@ pub enum Commands {
         port: Option<u16>,
         #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
         config: String,
-        #[arg(long)]
+        #[arg(short, long)]
         after: Option<String>,
+    },
+    /// Cancel an active in-flight operation by request ID
+    CancelOperation {
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+        id: String,
     },
 }
