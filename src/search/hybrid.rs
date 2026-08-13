@@ -37,6 +37,70 @@ pub struct SearchFilter {
     pub modes: Vec<String>,
 }
 
+impl SearchFilter {
+    /// Creates a new `SearchFilterBuilder` for constructing a filter.
+    pub fn builder() -> SearchFilterBuilder {
+        SearchFilterBuilder::default()
+    }
+}
+
+/// Builder for constructing `SearchFilter` instances (`M-INIT-BUILDER`).
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
+pub struct SearchFilterBuilder {
+    server_ids: Vec<String>,
+    tags: Vec<String>,
+    modes: Vec<String>,
+}
+
+#[allow(dead_code)]
+impl SearchFilterBuilder {
+    /// Adds a server ID filter.
+    pub fn server_id(mut self, server_id: impl Into<String>) -> Self {
+        self.server_ids.push(server_id.into());
+        self
+    }
+
+    /// Sets the server ID filters list.
+    pub fn server_ids(mut self, server_ids: Vec<String>) -> Self {
+        self.server_ids = server_ids;
+        self
+    }
+
+    /// Adds a tag filter.
+    pub fn tag(mut self, tag: impl Into<String>) -> Self {
+        self.tags.push(tag.into());
+        self
+    }
+
+    /// Sets the tags filter list.
+    pub fn tags(mut self, tags: Vec<String>) -> Self {
+        self.tags = tags;
+        self
+    }
+
+    /// Adds an execution mode filter.
+    pub fn mode(mut self, mode: impl Into<String>) -> Self {
+        self.modes.push(mode.into());
+        self
+    }
+
+    /// Sets the modes filter list.
+    pub fn modes(mut self, modes: Vec<String>) -> Self {
+        self.modes = modes;
+        self
+    }
+
+    /// Builds the `SearchFilter`.
+    pub fn build(self) -> SearchFilter {
+        SearchFilter {
+            server_ids: self.server_ids,
+            tags: self.tags,
+            modes: self.modes,
+        }
+    }
+}
+
 /// Hybrid search engine combining lexical and vector scores with reciprocal rank fusion (RRF).
 pub struct HybridSearchEngine {
     vector_index: Option<VectorSearchIndex>,

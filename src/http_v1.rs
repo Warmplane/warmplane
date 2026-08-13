@@ -170,11 +170,11 @@ pub async fn handle_search_capabilities(
     Json(payload): Json<SearchCapabilitiesRequest>,
 ) -> impl IntoResponse {
     let query_str = payload.query.as_deref().unwrap_or("");
-    let filter = crate::search::SearchFilter {
-        server_ids: payload.server_ids,
-        tags: payload.tags,
-        modes: payload.modes,
-    };
+    let filter = crate::search::SearchFilter::builder()
+        .server_ids(payload.server_ids)
+        .tags(payload.tags)
+        .modes(payload.modes)
+        .build();
 
     let results = state.search_engine.search(
         query_str,

@@ -303,6 +303,108 @@ pub struct AppState {
     pub operation_registry: crate::operations::OperationRegistry,
 }
 
+impl AppState {
+    /// Creates a new `AppStateBuilder` for constructing `AppState` (`M-INIT-BUILDER`).
+    pub fn builder() -> AppStateBuilder {
+        AppStateBuilder::default()
+    }
+}
+
+/// Builder for constructing `AppState` instances (`M-INIT-BUILDER`).
+#[derive(Default)]
+pub struct AppStateBuilder {
+    servers: Option<Arc<HashMap<String, mpsc::Sender<ServerMsg>>>>,
+    capabilities: Option<Arc<HashMap<String, CapabilityMeta>>>,
+    resources: Option<Arc<HashMap<String, ResourceMeta>>>,
+    prompts: Option<Arc<HashMap<String, PromptMeta>>>,
+    tool_timeout_ms: Option<u64>,
+    policy: Option<Policy>,
+    search_engine: Option<Arc<crate::search::HybridSearchEngine>>,
+    catalog_version: Option<String>,
+    event_store: Option<Arc<crate::catalog::CatalogEventStore>>,
+    idempotency_store: Option<Arc<crate::idempotency::IdempotencyStore>>,
+    operation_registry: Option<crate::operations::OperationRegistry>,
+}
+
+impl AppStateBuilder {
+    pub fn servers(mut self, servers: Arc<HashMap<String, mpsc::Sender<ServerMsg>>>) -> Self {
+        self.servers = Some(servers);
+        self
+    }
+
+    pub fn capabilities(mut self, capabilities: Arc<HashMap<String, CapabilityMeta>>) -> Self {
+        self.capabilities = Some(capabilities);
+        self
+    }
+
+    pub fn resources(mut self, resources: Arc<HashMap<String, ResourceMeta>>) -> Self {
+        self.resources = Some(resources);
+        self
+    }
+
+    pub fn prompts(mut self, prompts: Arc<HashMap<String, PromptMeta>>) -> Self {
+        self.prompts = Some(prompts);
+        self
+    }
+
+    pub fn tool_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.tool_timeout_ms = Some(timeout_ms);
+        self
+    }
+
+    pub fn policy(mut self, policy: Policy) -> Self {
+        self.policy = Some(policy);
+        self
+    }
+
+    pub fn search_engine(mut self, search_engine: Arc<crate::search::HybridSearchEngine>) -> Self {
+        self.search_engine = Some(search_engine);
+        self
+    }
+
+    pub fn catalog_version(mut self, version: impl Into<String>) -> Self {
+        self.catalog_version = Some(version.into());
+        self
+    }
+
+    pub fn event_store(mut self, store: Arc<crate::catalog::CatalogEventStore>) -> Self {
+        self.event_store = Some(store);
+        self
+    }
+
+    pub fn idempotency_store(mut self, store: Arc<crate::idempotency::IdempotencyStore>) -> Self {
+        self.idempotency_store = Some(store);
+        self
+    }
+
+    pub fn operation_registry(mut self, registry: crate::operations::OperationRegistry) -> Self {
+        self.operation_registry = Some(registry);
+        self
+    }
+
+    pub fn build(self) -> AppState {
+        AppState {
+            servers: self.servers.unwrap_or_default(),
+            capabilities: self.capabilities.unwrap_or_default(),
+            resources: self.resources.unwrap_or_default(),
+            prompts: self.prompts.unwrap_or_default(),
+            tool_timeout_ms: self.tool_timeout_ms.unwrap_or(DEFAULT_TOOL_TIMEOUT_MS),
+            policy: self.policy.unwrap_or_default(),
+            search_engine: self
+                .search_engine
+                .unwrap_or_else(|| Arc::new(crate::search::HybridSearchEngine::new())),
+            catalog_version: self.catalog_version.unwrap_or_default(),
+            event_store: self
+                .event_store
+                .unwrap_or_else(|| Arc::new(crate::catalog::CatalogEventStore::new())),
+            idempotency_store: self
+                .idempotency_store
+                .unwrap_or_else(|| Arc::new(crate::idempotency::IdempotencyStore::default())),
+            operation_registry: self.operation_registry.unwrap_or_default(),
+        }
+    }
+}
+
 /// Computes deterministic SHA256 ETag version string over catalog keys.
 ///
 /// # Arguments
@@ -692,19 +794,19 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
     let catalog_version = compute_catalog_version(&capabilities, &resources, &prompts);
     let search_engine = Arc::new(crate::search::HybridSearchEngine::new());
 
-    Ok(AppState {
-        servers: Arc::new(server_channels),
-        capabilities: Arc::new(capabilities),
-        resources: Arc::new(resources),
-        prompts: Arc::new(prompts),
-        tool_timeout_ms,
-        policy,
-        search_engine,
-        catalog_version,
-        event_store,
-        idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
-        operation_registry: crate::operations::OperationRegistry::new(),
-    })
+    Ok(AppState::builder()
+        .servers(Arc::new(server_channels))
+        .capabilities(Arc::new(capabilities))
+        .resources(Arc::new(resources))
+        .prompts(Arc::new(prompts))
+        .tool_timeout_ms(tool_timeout_ms)
+        .policy(policy)
+        .search_engine(search_engine)
+        .catalog_version(catalog_version)
+        .event_store(event_store)
+        .idempotency_store(Arc::new(crate::idempotency::IdempotencyStore::default()))
+        .operation_registry(crate::operations::OperationRegistry::new())
+        .build())
 }
 
 /// Starts the HTTP daemon server listening on the specified TCP port.

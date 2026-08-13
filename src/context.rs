@@ -20,6 +20,61 @@ pub struct RequestContext {
     pub grant_id: Option<String>,
 }
 
+#[allow(dead_code)]
+impl RequestContext {
+    /// Creates a builder for constructing a `RequestContext` instance (`M-INIT-BUILDER`).
+    pub fn builder() -> RequestContextBuilder {
+        RequestContextBuilder::default()
+    }
+}
+
+/// Builder pattern implementation for `RequestContext` (`M-INIT-BUILDER`).
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
+pub struct RequestContextBuilder {
+    operation_id: Option<String>,
+    work_item_id: Option<String>,
+    actor_id: Option<String>,
+    grant_id: Option<String>,
+}
+
+#[allow(dead_code)]
+impl RequestContextBuilder {
+    /// Sets the operation identifier.
+    pub fn operation_id(mut self, id: impl Into<String>) -> Self {
+        self.operation_id = Some(id.into());
+        self
+    }
+
+    /// Sets the work item identifier.
+    pub fn work_item_id(mut self, id: impl Into<String>) -> Self {
+        self.work_item_id = Some(id.into());
+        self
+    }
+
+    /// Sets the actor identifier.
+    pub fn actor_id(mut self, id: impl Into<String>) -> Self {
+        self.actor_id = Some(id.into());
+        self
+    }
+
+    /// Sets the grant identifier.
+    pub fn grant_id(mut self, id: impl Into<String>) -> Self {
+        self.grant_id = Some(id.into());
+        self
+    }
+
+    /// Builds the `RequestContext`.
+    pub fn build(self) -> RequestContext {
+        RequestContext {
+            operation_id: self.operation_id,
+            work_item_id: self.work_item_id,
+            actor_id: self.actor_id,
+            grant_id: self.grant_id,
+        }
+    }
+}
+
 /// Helper function to extract and trim string values from HTTP headers.
 ///
 /// # Arguments
