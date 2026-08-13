@@ -1,845 +1,1242 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-    <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Warmplane for Integrators | The House-Guest Benchmark & Control Plane</title>
-        <meta
-            name="description"
-            content="Embed Warmplane into your AI agent application. Cut prompt context bloat by 95%+, enforce policy, trace request correlation, and eliminate MCP onboarding monologues."
-        />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-        <link
-            href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
-            rel="stylesheet"
-        />
-        <style>
-            :root {
-                --bg: oklch(98.5% 0.01 75);
-                --paper: oklch(99.5% 0.005 75);
-                --ink: oklch(16% 0.02 60);
-                --ink-muted: oklch(40% 0.03 60);
-                --line: oklch(88% 0.02 75);
-                --line-strong: oklch(75% 0.04 75);
-                
-                --accent: oklch(54% 0.22 32); /* Terracotta */
-                --accent-light: oklch(93% 0.06 35);
-                --ok: oklch(52% 0.16 150); /* Emerald Green */
-                --ok-light: oklch(95% 0.05 150);
-                --warn: oklch(58% 0.18 70); /* Amber */
-                --warn-light: oklch(95% 0.06 70);
-                --tech: oklch(48% 0.18 250); /* Deep Sapphire */
-                --tech-light: oklch(94% 0.05 250);
-
-                --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
-                --font-serif: "Instrument Serif", Georgia, serif;
-                --font-mono: "JetBrains Mono", ui-monospace, monospace;
-
-                --radius-sm: 8px;
-                --radius-md: 14px;
-                --radius-lg: 24px;
-                --shadow-subtle: 0 4px 20px -2px rgba(28, 24, 20, 0.05);
-                --shadow-elevated: 0 16px 40px -8px rgba(28, 24, 20, 0.08);
-            }
-
-            * {
-                box-sizing: border-box;
-            }
-
-            html, body {
-                margin: 0;
-                padding: 0;
-                background: var(--bg);
-                color: var(--ink);
-                font-family: var(--font-sans);
-                line-height: 1.6;
-                -webkit-font-smoothing: antialiased;
-            }
-
-            /* Grain overlay for tactile atmosphere */
-            body::before {
-                content: "";
-                position: fixed;
-                inset: 0;
-                background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.035'/%3E%3C/svg%3E");
-                pointer-events: none;
-                z-index: 999;
-            }
-
-            .shell {
-                max-width: 1200px;
-                margin: 0 auto;
-                padding: 24px 24px 96px;
-            }
-
-            /* Navigation Bar */
-            .topbar {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                padding: 16px 24px;
-                background: rgba(255, 253, 248, 0.85);
-                backdrop-filter: blur(12px);
-                border: 1px solid var(--line);
-                border-radius: 999px;
-                margin-bottom: 40px;
-            }
-
-            .brand {
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                text-decoration: none;
-                color: var(--ink);
-                font-weight: 700;
-                font-size: 1.1rem;
-                letter-spacing: -0.01em;
-            }
-
-            .brand-icon {
-                width: 28px;
-                height: 28px;
-                background: var(--accent);
-                border-radius: var(--radius-sm);
-                display: grid;
-                place-items: center;
-                color: white;
-                font-family: var(--font-mono);
-                font-size: 0.85rem;
-                font-weight: 700;
-            }
-
-            .nav-links {
-                display: flex;
-                align-items: center;
-                gap: 20px;
-            }
-
-            .nav-link {
-                color: var(--ink-muted);
-                text-decoration: none;
-                font-size: 0.9rem;
-                font-weight: 500;
-                transition: color 0.15s ease;
-            }
-
-            .nav-link:hover {
-                color: var(--ink);
-            }
-
-            .badge {
-                display: inline-flex;
-                align-items: center;
-                gap: 6px;
-                padding: 4px 12px;
-                border-radius: 999px;
-                font-family: var(--font-mono);
-                font-size: 0.78rem;
-                font-weight: 500;
-            }
-
-            .badge-accent {
-                background: var(--accent-light);
-                color: var(--accent);
-                border: 1px solid oklch(85% 0.08 35);
-            }
-
-            .badge-ok {
-                background: var(--ok-light);
-                color: var(--ok);
-                border: 1px solid oklch(88% 0.08 150);
-            }
-
-            /* Hero Section */
-            .hero {
-                text-align: center;
-                max-width: 920px;
-                margin: 0 auto 64px;
-            }
-
-            .hero-eyebrow {
-                font-family: var(--font-mono);
-                font-size: 0.85rem;
-                color: var(--accent);
-                text-transform: uppercase;
-                letter-spacing: 0.1em;
-                font-weight: 700;
-                margin-bottom: 16px;
-            }
-
-            .hero-title {
-                font-family: var(--font-serif);
-                font-size: clamp(2.8rem, 5vw, 4.5rem);
-                line-height: 1.08;
-                font-weight: 400;
-                letter-spacing: -0.02em;
-                margin: 0 0 24px;
-                color: var(--ink);
-            }
-
-            .hero-title em {
-                font-style: italic;
-                color: var(--accent);
-                font-family: var(--font-serif);
-            }
-
-            .hero-subtitle {
-                font-size: 1.2rem;
-                color: var(--ink-muted);
-                max-width: 720px;
-                margin: 0 auto 36px;
-                line-height: 1.5;
-            }
-
-            .cta-group {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                gap: 16px;
-                flex-wrap: wrap;
-            }
-
-            .btn {
-                display: inline-flex;
-                align-items: center;
-                gap: 8px;
-                padding: 12px 24px;
-                border-radius: var(--radius-md);
-                font-size: 0.95rem;
-                font-weight: 600;
-                text-decoration: none;
-                transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-                cursor: pointer;
-            }
-
-            .btn-primary {
-                background: var(--ink);
-                color: var(--paper);
-                box-shadow: var(--shadow-subtle);
-            }
-
-            .btn-primary:hover {
-                transform: translateY(-2px);
-                box-shadow: var(--shadow-elevated);
-                background: oklch(25% 0.02 60);
-            }
-
-            .btn-secondary {
-                background: var(--paper);
-                color: var(--ink);
-                border: 1px solid var(--line-strong);
-            }
-
-            .btn-secondary:hover {
-                background: var(--bg);
-                border-color: var(--ink);
-            }
-
-            /* Stats Highlight Ribbon */
-            .metrics-ribbon {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-                gap: 20px;
-                margin-bottom: 80px;
-            }
-
-            .metric-card {
-                background: var(--paper);
-                border: 1px solid var(--line);
-                border-radius: var(--radius-md);
-                padding: 24px;
-                box-shadow: var(--shadow-subtle);
-                position: relative;
-                overflow: hidden;
-            }
-
-            .metric-card::before {
-                content: "";
-                position: absolute;
-                top: 0;
-                left: 0;
-                width: 4px;
-                height: 100%;
-                background: var(--accent);
-            }
-
-            .metric-val {
-                font-family: var(--font-serif);
-                font-size: 2.8rem;
-                font-weight: 400;
-                line-height: 1;
-                color: var(--ink);
-                margin-bottom: 8px;
-            }
-
-            .metric-label {
-                font-size: 0.9rem;
-                color: var(--ink-muted);
-                font-weight: 500;
-            }
-
-            /* The House Guest Storytelling Section */
-            .section-story {
-                background: var(--paper);
-                border: 1px solid var(--line);
-                border-radius: var(--radius-lg);
-                padding: 48px;
-                box-shadow: var(--shadow-elevated);
-                margin-bottom: 80px;
-            }
-
-            .story-grid {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 40px;
-                margin-top: 32px;
-            }
-
-            @media (max-width: 840px) {
-                .story-grid {
-                    grid-template-columns: 1fr;
-                }
-            }
-
-            .story-card {
-                border: 1px solid var(--line);
-                border-radius: var(--radius-md);
-                padding: 28px;
-                position: relative;
-            }
-
-            .story-card.bad {
-                background: oklch(98.5% 0.01 35);
-                border-color: oklch(88% 0.06 35);
-            }
-
-            .story-card.good {
-                background: oklch(98.5% 0.01 150);
-                border-color: oklch(88% 0.06 150);
-            }
-
-            .story-tag {
-                font-family: var(--font-mono);
-                font-size: 0.75rem;
-                font-weight: 700;
-                text-transform: uppercase;
-                letter-spacing: 0.08em;
-                margin-bottom: 12px;
-                display: block;
-            }
-
-            .bad .story-tag { color: var(--accent); }
-            .good .story-tag { color: var(--ok); }
-
-            .story-card h3 {
-                margin: 0 0 12px;
-                font-size: 1.25rem;
-            }
-
-            .story-card p {
-                margin: 0 0 16px;
-                font-size: 0.95rem;
-                color: var(--ink-muted);
-                line-height: 1.5;
-            }
-
-            .token-pill {
-                font-family: var(--font-mono);
-                font-size: 0.85rem;
-                padding: 6px 12px;
-                border-radius: var(--radius-sm);
-                display: inline-block;
-            }
-
-            .bad .token-pill {
-                background: var(--accent-light);
-                color: var(--accent);
-            }
-
-            .good .token-pill {
-                background: var(--ok-light);
-                color: var(--ok);
-                font-weight: 700;
-            }
-
-            /* Interactive House-Guest Simulator */
-            .simulator-box {
-                background: oklch(20% 0.02 60);
-                color: oklch(95% 0.01 75);
-                border-radius: var(--radius-lg);
-                padding: 40px;
-                margin-bottom: 80px;
-                box-shadow: var(--shadow-elevated);
-            }
-
-            .simulator-header {
-                max-width: 600px;
-                margin-bottom: 32px;
-            }
-
-            .simulator-header h2 {
-                font-family: var(--font-serif);
-                font-size: 2.2rem;
-                font-weight: 400;
-                margin: 0 0 12px;
-                color: white;
-            }
-
-            .simulator-controls {
-                margin-bottom: 32px;
-            }
-
-            .slider-group {
-                display: flex;
-                flex-direction: column;
-                gap: 12px;
-            }
-
-            .slider-label {
-                display: flex;
-                justify-content: space-between;
-                font-family: var(--font-mono);
-                font-size: 0.9rem;
-            }
-
-            input[type=range] {
-                width: 100%;
-                accent-color: var(--accent);
-            }
-
-            .sim-comparison {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 24px;
-            }
-
-            @media (max-width: 700px) {
-                .sim-comparison {
-                    grid-template-columns: 1fr;
-                }
-            }
-
-            .sim-metric {
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: var(--radius-md);
-                padding: 24px;
-            }
-
-            .sim-metric-val {
-                font-family: var(--font-mono);
-                font-size: 2rem;
-                font-weight: 700;
-                margin-bottom: 4px;
-            }
-
-            .sim-metric-sub {
-                font-size: 0.85rem;
-                color: oklch(75% 0.01 75);
-            }
-
-            /* Integrator Feature Matrix Grid */
-            .section-features {
-                margin-bottom: 80px;
-            }
-
-            .section-header {
-                text-align: center;
-                max-width: 650px;
-                margin: 0 auto 48px;
-            }
-
-            .section-header h2 {
-                font-family: var(--font-serif);
-                font-size: 2.5rem;
-                font-weight: 400;
-                margin: 0 0 12px;
-            }
-
-            .feature-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-                gap: 24px;
-            }
-
-            .feature-card {
-                background: var(--paper);
-                border: 1px solid var(--line);
-                border-radius: var(--radius-md);
-                padding: 28px;
-                box-shadow: var(--shadow-subtle);
-                transition: transform 0.2s ease, border-color 0.2s ease;
-            }
-
-            .feature-card:hover {
-                transform: translateY(-3px);
-                border-color: var(--line-strong);
-            }
-
-            .feature-badge {
-                font-family: var(--font-mono);
-                font-size: 0.72rem;
-                padding: 2px 8px;
-                border-radius: 4px;
-                background: var(--tech-light);
-                color: var(--tech);
-                font-weight: 700;
-                margin-bottom: 16px;
-                display: inline-block;
-            }
-
-            .feature-card h3 {
-                margin: 0 0 10px;
-                font-size: 1.15rem;
-                font-weight: 700;
-            }
-
-            .feature-card p {
-                margin: 0;
-                font-size: 0.92rem;
-                color: var(--ink-muted);
-                line-height: 1.55;
-            }
-
-            /* Code Showcase Tabs */
-            .section-code {
-                background: var(--paper);
-                border: 1px solid var(--line);
-                border-radius: var(--radius-lg);
-                padding: 40px;
-                box-shadow: var(--shadow-elevated);
-                margin-bottom: 80px;
-            }
-
-            .code-header {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                margin-bottom: 24px;
-                flex-wrap: wrap;
-                gap: 16px;
-            }
-
-            .code-tabs {
-                display: flex;
-                gap: 8px;
-            }
-
-            .tab-btn {
-                background: transparent;
-                border: 1px solid var(--line);
-                padding: 8px 16px;
-                border-radius: var(--radius-sm);
-                font-family: var(--font-mono);
-                font-size: 0.85rem;
-                cursor: pointer;
-                color: var(--ink-muted);
-                transition: all 0.15s ease;
-            }
-
-            .tab-btn.active {
-                background: var(--ink);
-                color: var(--paper);
-                border-color: var(--ink);
-            }
-
-            .code-block {
-                background: oklch(14% 0.02 60);
-                color: oklch(92% 0.01 75);
-                border-radius: var(--radius-md);
-                padding: 24px;
-                font-family: var(--font-mono);
-                font-size: 0.88rem;
-                overflow-x: auto;
-                line-height: 1.6;
-                display: none;
-            }
-
-            .code-block.active {
-                display: block;
-            }
-
-            /* Footer */
-            .footer {
-                border-top: 1px solid var(--line);
-                padding-top: 40px;
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                color: var(--ink-muted);
-                font-size: 0.88rem;
-                flex-wrap: wrap;
-                gap: 20px;
-            }
-
-            .footer-links {
-                display: flex;
-                gap: 20px;
-            }
-
-            .footer-links a {
-                color: var(--ink-muted);
-                text-decoration: none;
-            }
-
-            .footer-links a:hover {
-                color: var(--ink);
-            }
-        </style>
-    </head>
-    <body>
-        <div class="shell">
-            <!-- Navigation -->
-            <header class="topbar">
-                <a href="index.html" class="brand">
-                    <div class="brand-icon">W</div>
-                    <span>Warmplane</span>
-                </a>
-                <div class="nav-links">
-                    <a href="index.html" class="nav-link">Main Specs</a>
-                    <a href="WHITEPAPER.md" class="nav-link">Whitepaper</a>
-                    <span class="badge badge-accent">Integrator Edition</span>
-                </div>
-            </header>
-
-            <!-- Hero Section -->
-            <section class="hero">
-                <div class="hero-eyebrow">The House-Guest Benchmark</div>
-                <h1 class="hero-title">
-                    Stop making your AI model sit through a <em>30-minute onboarding monologue</em>.
-                </h1>
-                <p class="hero-subtitle">
-                    Raw MCP forces models to read giant schema encylopedias before fetching a single file. Warmplane is the polite control plane that serves a compact menu first.
-                </p>
-                <div class="cta-group">
-                    <a href="#simulator" class="btn btn-primary">Try Savings Simulator</a>
-                    <a href="#features" class="btn btn-secondary">Explore Integrator APIs</a>
-                </div>
-            </section>
-
-            <!-- Key Metrics Ribbon -->
-            <section class="metrics-ribbon">
-                <div class="metric-card">
-                    <div class="metric-val">95.8%</div>
-                    <div class="metric-label">Token Savings on GitHub Copilot MCP Scenarios</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-val">58.2%</div>
-                    <div class="metric-label">Token Savings on Filesystem Control Workloads</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-val">&lt; 1ms</div>
-                    <div class="metric-label">Session Reuse Latency (Warm Daemon Connections)</div>
-                </div>
-            </section>
-
-            <!-- Storytelling Card Section -->
-            <section class="section-story">
-                <h2 style="font-family: var(--font-serif); font-size: 2.2rem; margin: 0 0 8px;">The Protocol Design Lesson</h2>
-                <p style="color: var(--ink-muted); margin: 0;">Imagine trapping a guest in your hallway to detail every spice, appliance, and Wi-Fi router firmware history before asking if they want coffee.</p>
-                
-                <div class="story-grid">
-                    <div class="story-card bad">
-                        <span class="story-tag">Raw MCP (Unfiltered)</span>
-                        <h3>The Monologue Host</h3>
-                        <p>Injects 200+ raw JSON tool schemas directly into every prompt turn. Causes severe context bloat, slow time-to-first-token, high API bills, and random hallucinations into irrelevant tool definitions.</p>
-                        <span class="token-pill">~38,500 Tokens / Prompt Turn</span>
-                    </div>
-
-                    <div class="story-card good">
-                        <span class="story-tag">Warmplane (Control Plane)</span>
-                        <h3>The Polite Host</h3>
-                        <p>Exposes a fast capability menu (`/v1/capabilities/search`). Model picks what it needs, Warmplane fetches details on demand and executes safely within policy boundaries.</p>
-                        <span class="token-pill">~1,600 Tokens / Prompt Turn</span>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Interactive Token Savings Simulator -->
-            <section class="simulator-box" id="simulator">
-                <div class="simulator-header">
-                    <h2>Interactive Context Bloat Calculator</h2>
-                    <p style="color: oklch(80% 0.01 75); margin: 0;">See how much context window tax you save per turn as your catalog of integrated MCP tools grows.</p>
-                </div>
-
-                <div class="simulator-controls">
-                    <div class="slider-group">
-                        <div class="slider-label">
-                            <span>Registered MCP Capabilities (Tools):</span>
-                            <span id="tool-count-display" style="color: var(--accent); font-weight: 700;">85 tools</span>
-                        </div>
-                        <input type="range" id="tool-slider" min="10" max="300" value="85" step="5" />
-                    </div>
-                </div>
-
-                <div class="sim-comparison">
-                    <div class="sim-metric">
-                        <div class="sim-metric-val" id="raw-tokens-val" style="color: oklch(75% 0.15 35);">25,500 tok</div>
-                        <div class="sim-metric-sub">Raw MCP Prompt Monologue Overhead</div>
-                    </div>
-                    <div class="sim-metric" style="border-color: rgba(70, 200, 120, 0.3);">
-                        <div class="sim-metric-val" id="warm-tokens-val" style="color: oklch(85% 0.18 150);">1,150 tok</div>
-                        <div class="sim-metric-sub">Warmplane Compact Facade (~95.5% Saved)</div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Integrator Core Features Grid -->
-            <section class="section-features" id="features">
-                <div class="section-header">
-                    <h2>Built for Application Integrators</h2>
-                    <p style="color: var(--ink-muted); margin: 0;">Warmplane keeps MCP logic decoupled from your application code, user auth, and agent loop orchestration.</p>
-                </div>
-
-                <div class="feature-grid">
-                    <div class="feature-card">
-                        <span class="feature-badge">P0 • SEARCH</span>
-                        <h3>Hybrid Capability Search</h3>
-                        <p>Execute fast BM25 + ONNX vector queries over registered tools with natural language intent matching without exposing raw schemas to the model.</p>
-                    </div>
-
-                    <div class="feature-card">
-                        <span class="feature-badge">P0 • CATALOG</span>
-                        <h3>SHA-256 Catalog Versioning</h3>
-                        <p>Clients safely cache index descriptions and validate state consistency using HTTP ETag headers and monotonic event feeds.</p>
-                    </div>
-
-                    <div class="feature-card">
-                        <span class="feature-badge">P0 • OBSERVABILITY</span>
-                        <h3>Request Correlation</h3>
-                        <p>Attach arbitrary application operation IDs (`x-correlation-id`) to trace exact Warmplane execution trees in OpenTelemetry.</p>
-                    </div>
-
-                    <div class="feature-card">
-                        <span class="feature-badge">P1 • RECOVERY</span>
-                        <h3>Idempotency & Retries</h3>
-                        <p>Safely replay external tool writes after network hiccups using client-provided `idempotency_key` headers and explicit cancellation endpoints.</p>
-                    </div>
-
-                    <div class="feature-card">
-                        <span class="feature-badge">P1 • SHAPING</span>
-                        <h3>Result Shaping & Redaction</h3>
-                        <p>Filter tool output payloads with JSONPath allowlists, clip giant responses, and automatically redact sensitive secrets before model insertion.</p>
-                    </div>
-
-                    <div class="feature-card">
-                        <span class="feature-badge">P2 • SECURITY</span>
-                        <h3>Scoped Policy Overlays</h3>
-                        <p>Dynamically restrict execution scope per request turn without mutating global system security policies.</p>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Code Integration Examples -->
-            <section class="section-code">
-                <div class="code-header">
-                    <div>
-                        <h2 style="font-family: var(--font-serif); font-size: 2rem; margin: 0 0 4px;">Embedding API Reference</h2>
-                        <p style="color: var(--ink-muted); margin: 0; font-size: 0.9rem;">Integrate via HTTP REST API or command-line IPC.</p>
-                    </div>
-                    <div class="code-tabs">
-                        <button class="tab-btn active" onclick="showTab('http')">HTTP REST</button>
-                        <button class="tab-btn" onclick="showTab('rust')">Rust SDK</button>
-                        <button class="tab-btn" onclick="showTab('cli')">CLI IPC</button>
-                    </div>
-                </div>
-
-                <pre class="code-block active" id="tab-http"><code>POST /v1/capabilities/search HTTP/1.1
-Host: localhost:9870
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Warmplane for Integrators | The House-Guest Benchmark &amp; Control Plane</title>
+  <meta name="description" content="Embed Warmplane into your AI agent application. Cut prompt context bloat by 95%+, enforce policy, trace request correlation, and eliminate MCP onboarding monologues.">
+  <meta name="keywords" content="MCP, Model Context Protocol, integrators, control plane, AI agents, tool calling, Rust, token efficiency">
+  <meta name="author" content="Warmplane">
+  <meta property="og:title" content="Warmplane for Integrators | The House-Guest Benchmark &amp; Control Plane">
+  <meta property="og:description" content="Embed Warmplane into your AI agent application. Cut prompt context bloat by 95%+, enforce policy, trace request correlation.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://warmplane.github.io/warmplane/integrators.html">
+  <link rel="canonical" href="https://warmplane.github.io/warmplane/integrators.html">
+
+  <!-- Fonts: Instrument Serif for warm authority, Plus Jakarta Sans for refined body, JetBrains Mono & DM Mono for engineering precision -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Instrument+Serif:ital@0;1&family=Plus+Jakarta+Sans:ital,wght@0,300..800;1,300..800&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap" rel="stylesheet">
+
+  <style>
+    /* ============================================================
+       DESIGN TOKENS & RESPONSIVE CORE (OKLCH PERCEPTUAL PALETTE)
+       ============================================================ */
+    :root {
+      /* Warm Amber/Ember Accent System */
+      --amber-50:  oklch(98% 0.02 75);
+      --amber-100: oklch(93% 0.04 75);
+      --amber-200: oklch(85% 0.08 72);
+      --amber-300: oklch(76% 0.13 65);
+      --amber-400: oklch(70% 0.18 55); /* Primary Ember Highlight */
+      --amber-500: oklch(62% 0.19 48);
+      --amber-glow: oklch(70% 0.18 55 / 0.25);
+
+      /* High-Tech Cyan & Terminal Green Accents */
+      --cyan-glow: oklch(78% 0.16 195);
+      --green-glow: oklch(78% 0.18 145);
+
+      /* Dark Surface Spectrum */
+      --n-0:   oklch(6% 0.006 260);    /* Deepest backdrop */
+      --n-50:  oklch(10% 0.01 260);    /* Primary Surface */
+      --n-100: oklch(14% 0.012 260);   /* Card / Panel fill */
+      --n-150: oklch(18% 0.014 260);   /* Elevated Surface */
+      --n-200: oklch(24% 0.016 260);   /* Border default */
+      --n-300: oklch(34% 0.015 260);   /* Border active */
+      --n-400: oklch(48% 0.012 260);   /* Text dim */
+      --n-500: oklch(62% 0.008 260);   /* Text muted */
+      --n-700: oklch(82% 0.004 260);   /* Text secondary */
+      --n-800: oklch(92% 0.002 260);   /* Text primary */
+      --n-900: oklch(98% 0.001 260);   /* Pure crisp text */
+
+      /* Semantic Token Mappings */
+      --bg:            var(--n-0);
+      --surface:       var(--n-50);
+      --surface-alt:   var(--n-100);
+      --surface-hover: var(--n-150);
+      --border:        var(--n-200);
+      --border-subtle: var(--n-150);
+      --border-glow:   var(--amber-glow);
+      --text:          var(--n-800);
+      --text-muted:    var(--n-500);
+      --text-dim:      var(--n-400);
+      --accent:        var(--amber-400);
+      --accent-muted:  var(--amber-500);
+
+      /* Typography Stack */
+      --ff-display: 'Instrument Serif', Georgia, serif;
+      --ff-sans:    'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      --ff-mono:    'JetBrains Mono', 'DM Mono', monospace;
+
+      /* Fluid Type Scale */
+      --fs-xs:   clamp(0.72rem, 0.65rem + 0.3vw, 0.82rem);
+      --fs-sm:   clamp(0.82rem, 0.74rem + 0.35vw, 0.92rem);
+      --fs-base: clamp(0.92rem, 0.85rem + 0.4vw, 1.02rem);
+      --fs-md:   clamp(1.05rem, 0.92rem + 0.6vw, 1.25rem);
+      --fs-lg:   clamp(1.35rem, 1.1rem + 1.1vw, 1.85rem);
+      --fs-xl:   clamp(1.85rem, 1.3rem + 2.2vw, 3.1rem);
+      --fs-2xl:  clamp(2.45rem, 1.5rem + 3.8vw, 4.6rem);
+      --fs-3xl:  clamp(3.1rem, 1.8rem + 5.5vw, 6.6rem);
+
+      /* Spacing Scale */
+      --sp-1: 0.25rem;
+      --sp-2: 0.5rem;
+      --sp-3: 0.75rem;
+      --sp-4: 1rem;
+      --sp-6: 1.5rem;
+      --sp-8: 2rem;
+      --sp-12: 3rem;
+      --sp-16: 4rem;
+      --sp-24: 6rem;
+      --sp-32: 8rem;
+
+      /* Layout */
+      --max-width: 1240px;
+      --radius-sm: 8px;
+      --radius-md: 14px;
+      --radius-lg: 22px;
+
+      --transition-fast: 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+      --transition-smooth: 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    /* Reset & Base Setup */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      color-scheme: dark;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--ff-sans);
+      font-size: var(--fs-base);
+      line-height: 1.6;
+      overflow-x: hidden;
+      min-height: 100vh;
+    }
+
+    ::selection {
+      background: oklch(70% 0.18 55 / 0.35);
+      color: #fff;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    button {
+      font: inherit;
+      cursor: pointer;
+      border: none;
+      background: none;
+    }
+
+    /* Atmospheric Background & Grain Overlay */
+    .bg-canvas {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: -2;
+      overflow: hidden;
+    }
+
+    .bg-canvas::before {
+      content: '';
+      position: absolute;
+      top: -15%;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 1100px;
+      height: 700px;
+      background: radial-gradient(ellipse at center, oklch(70% 0.18 55 / 0.12) 0%, oklch(62% 0.19 48 / 0.03) 45%, transparent 75%);
+      filter: blur(90px);
+    }
+
+    .grid-overlay {
+      position: fixed;
+      inset: 0;
+      background-image: 
+        linear-gradient(to right, oklch(24% 0.016 260 / 0.22) 1px, transparent 1px),
+        linear-gradient(to bottom, oklch(24% 0.016 260 / 0.22) 1px, transparent 1px);
+      background-size: 64px 64px;
+      mask-image: radial-gradient(ellipse at center, black 35%, transparent 80%);
+      pointer-events: none;
+      z-index: -1;
+    }
+
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 9999;
+      opacity: 0.032;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-repeat: repeat;
+      background-size: 256px 256px;
+    }
+
+    .container {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      padding: 0 var(--sp-6);
+    }
+
+    /* ============================================================
+       NAVIGATION BAR
+       ============================================================ */
+    header.nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      padding: var(--sp-4) var(--sp-6);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      background: oklch(6% 0.006 260 / 0.75);
+      border-bottom: 1px solid var(--border-subtle);
+      transition: all var(--transition-fast);
+    }
+
+    header.nav.scrolled {
+      background: oklch(6% 0.006 260 / 0.92);
+      border-bottom-color: var(--border);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    }
+
+    .nav-wrapper {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      max-width: var(--max-width);
+      margin: 0 auto;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-family: var(--ff-mono);
+      font-size: var(--fs-md);
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .logo-mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--accent), var(--amber-500));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 14px var(--amber-glow);
+    }
+
+    .logo-mark svg {
+      width: 16px;
+      height: 16px;
+      color: var(--n-0);
+    }
+
+    .nav-heat-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 8px var(--accent), 0 0 20px var(--amber-glow);
+      animation: pulse-heat 2.2s ease-in-out infinite;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: var(--sp-6);
+      align-items: center;
+      list-style: none;
+    }
+
+    .nav-links a {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      transition: color var(--transition-fast);
+    }
+
+    .nav-links a:hover {
+      color: var(--accent);
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .version-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 100px;
+      background: oklch(70% 0.18 55 / 0.12);
+      border: 1px solid oklch(70% 0.18 55 / 0.3);
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      color: var(--accent);
+      font-weight: 500;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.65rem 1.3rem;
+      border-radius: var(--radius-sm);
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: var(--n-0);
+      border-color: var(--accent);
+      box-shadow: 0 4px 20px var(--amber-glow);
+    }
+
+    .btn-primary:hover {
+      background: color-mix(in oklch, var(--accent), white 12%);
+      border-color: color-mix(in oklch, var(--accent), white 12%);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 24px oklch(70% 0.18 55 / 0.4);
+    }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-muted);
+      border-color: var(--border);
+    }
+
+    .btn-ghost:hover {
+      background: var(--surface-hover);
+      border-color: var(--text-muted);
+      color: var(--text);
+      transform: translateY(-1px);
+    }
+
+    /* ============================================================
+       HERO SECTION
+       ============================================================ */
+    .hero {
+      padding: var(--sp-32) var(--sp-6) var(--sp-12);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      position: relative;
+    }
+
+    .hero-content {
+      max-width: 960px;
+      margin-bottom: var(--sp-12);
+    }
+
+    .hero-eyebrow {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--accent);
+      margin-bottom: var(--sp-6);
+      display: flex;
+      align-items: center;
+      gap: var(--sp-3);
+    }
+
+    .hero-title {
+      font-family: var(--ff-display);
+      font-size: var(--fs-3xl);
+      line-height: 1.0;
+      font-weight: 400;
+      color: var(--n-900);
+      margin-bottom: var(--sp-8);
+      text-wrap: balance;
+      letter-spacing: -0.02em;
+    }
+
+    .hero-title em {
+      font-style: italic;
+      color: var(--accent);
+      background: linear-gradient(135deg, #ffffff 30%, var(--accent) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero-subtitle {
+      font-size: var(--fs-lg);
+      line-height: 1.55;
+      color: var(--text-muted);
+      max-width: 680px;
+      margin-bottom: var(--sp-12);
+      text-wrap: pretty;
+      font-weight: 400;
+    }
+
+    .hero-cta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--sp-4);
+      align-items: center;
+    }
+
+    /* KPI Stats Bar */
+    .hero-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: var(--sp-4);
+      padding-top: var(--sp-8);
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .hero-stat-card {
+      border: 1px solid var(--border-subtle);
+      background: var(--surface);
+      border-radius: var(--radius-sm);
+      padding: var(--sp-4) var(--sp-5);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      transition: border-color var(--transition-fast);
+    }
+
+    .hero-stat-card:hover {
+      border-color: var(--border);
+    }
+
+    .hero-stat-val {
+      font-family: var(--ff-display);
+      font-size: var(--fs-2xl);
+      line-height: 1;
+      color: var(--accent);
+    }
+
+    .hero-stat-lbl {
+      font-family: var(--ff-mono);
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-top: var(--sp-2);
+      line-height: 1.3;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* ============================================================
+       SECTION FRAMEWORK & DIVIDERS
+       ============================================================ */
+    .section {
+      padding: var(--sp-24) var(--sp-6);
+      position: relative;
+    }
+
+    .section-inner {
+      max-width: var(--max-width);
+      margin: 0 auto;
+    }
+
+    .section-label {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--accent-muted);
+      margin-bottom: var(--sp-4);
+    }
+
+    .section-heading {
+      font-family: var(--ff-display);
+      font-size: var(--fs-xl);
+      font-weight: 400;
+      line-height: 1.12;
+      color: var(--n-900);
+      margin-bottom: var(--sp-4);
+      text-wrap: balance;
+    }
+
+    .section-desc {
+      font-size: var(--fs-md);
+      color: var(--text-muted);
+      max-width: 680px;
+      margin-bottom: var(--sp-12);
+      text-wrap: pretty;
+    }
+
+    .divider {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      border: none;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    /* ============================================================
+       THE HOUSE GUEST COMPARISON
+       ============================================================ */
+    .problem-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--sp-6);
+    }
+
+    .problem-card {
+      padding: var(--sp-8);
+      border: 1px solid var(--border-subtle);
+      background: var(--surface);
+      border-radius: var(--radius-md);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .problem-card-bad::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: oklch(60% 0.2 25);
+    }
+
+    .problem-card-good::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: var(--accent);
+    }
+
+    .problem-card-tag {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: var(--sp-6);
+    }
+
+    .problem-card-bad .problem-card-tag { color: oklch(60% 0.2 25); }
+    .problem-card-good .problem-card-tag { color: var(--accent); }
+
+    .problem-card-title {
+      font-family: var(--ff-display);
+      font-size: var(--fs-lg);
+      margin-bottom: var(--sp-4);
+      color: var(--text);
+    }
+
+    .problem-card-body {
+      color: var(--text-muted);
+      font-size: var(--fs-sm);
+      line-height: 1.7;
+    }
+
+    .token-pill {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      padding: var(--sp-2) var(--sp-4);
+      border-radius: var(--radius-sm);
+      display: inline-block;
+      margin-top: var(--sp-4);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .problem-card-bad .token-pill {
+      background: oklch(60% 0.2 25 / 0.1);
+      color: oklch(60% 0.2 25);
+    }
+
+    .problem-card-good .token-pill {
+      background: oklch(70% 0.18 55 / 0.1);
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    /* ============================================================
+       INTERACTIVE CONTEXT BLOAT CALCULATOR (SIMULATOR)
+       ============================================================ */
+    .simulator-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: var(--sp-8);
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+    }
+
+    .simulator-header {
+      max-width: 650px;
+      margin-bottom: var(--sp-8);
+    }
+
+    .simulator-header h3 {
+      font-family: var(--ff-display);
+      font-size: var(--fs-xl);
+      color: var(--text);
+      margin-bottom: var(--sp-2);
+    }
+
+    .simulator-controls {
+      margin-bottom: var(--sp-8);
+    }
+
+    .slider-group {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-3);
+    }
+
+    .slider-label {
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      color: var(--text-muted);
+    }
+
+    input[type=range] {
+      width: 100%;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    .sim-comparison {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--sp-6);
+    }
+
+    .sim-metric {
+      background: var(--n-100);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: var(--sp-6);
+    }
+
+    .sim-metric-val {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xl);
+      font-weight: 700;
+      margin-bottom: var(--sp-1);
+    }
+
+    .sim-metric-sub {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      color: var(--text-dim);
+    }
+
+    /* ============================================================
+       INTEGRATOR CORE FEATURES BENTO GRID
+       ============================================================ */
+    .bento-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: var(--sp-4);
+    }
+
+    .bento-cell {
+      background: var(--surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: var(--sp-6);
+      transition: all var(--transition-smooth);
+      position: relative;
+      overflow: hidden;
+
+      &:hover {
+        border-color: var(--border);
+        background: var(--surface-hover);
+        transform: translateY(-2px);
+      }
+    }
+
+    .bento-tag {
+      display: inline-block;
+      font-family: var(--ff-mono);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 2px 8px;
+      border-radius: 100px;
+      border: 1px solid var(--border);
+      color: var(--accent);
+      background: oklch(70% 0.18 55 / 0.08);
+      margin-bottom: var(--sp-3);
+    }
+
+    .bento-title {
+      font-family: var(--ff-display);
+      font-size: var(--fs-md);
+      color: var(--text);
+      margin-bottom: var(--sp-2);
+    }
+
+    .bento-body {
+      font-size: var(--fs-sm);
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    /* ============================================================
+       CODE SHOWCASE (API REFERENCE TABS)
+       ============================================================ */
+    .code-showcase {
+      border: 1px solid var(--border-subtle);
+      background: var(--surface);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+    }
+
+    .code-block-header {
+      padding: var(--sp-3) var(--sp-4);
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--n-100);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .code-tabs {
+      display: flex;
+      gap: var(--sp-2);
+    }
+
+    .tab-btn {
+      background: transparent;
+      border: 1px solid var(--border-subtle);
+      padding: 4px 12px;
+      border-radius: var(--radius-sm);
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      cursor: pointer;
+      color: var(--text-muted);
+      transition: all var(--transition-fast);
+    }
+
+    .tab-btn.active {
+      background: var(--accent);
+      color: var(--n-0);
+      border-color: var(--accent);
+    }
+
+    .code-block-content {
+      padding: var(--sp-6);
+      background: oklch(5% 0.008 260);
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      line-height: 1.7;
+      color: var(--n-700);
+      display: none;
+      white-space: pre-wrap;
+      overflow-x: auto;
+    }
+
+    .code-block-content.active {
+      display: block;
+    }
+
+    .code-block-content .kw  { color: var(--amber-300); }
+    .code-block-content .str { color: var(--green-glow); }
+    .code-block-content .cmt { color: var(--n-400); font-style: italic; }
+    .code-block-content .num { color: var(--cyan-glow); }
+
+    /* ============================================================
+       FINAL CTA & FOOTER
+       ============================================================ */
+    .cta-section {
+      text-align: center;
+      padding: var(--sp-32) var(--sp-6);
+      position: relative;
+    }
+
+    .cta-glow {
+      position: absolute;
+      bottom: -20%;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 60vw;
+      height: 60vw;
+      max-width: 600px;
+      max-height: 600px;
+      border-radius: 50%;
+      background: radial-gradient(ellipse at center, oklch(70% 0.18 55 / 0.08) 0%, transparent 65%);
+      filter: blur(80px);
+      pointer-events: none;
+    }
+
+    .cta-title {
+      font-family: var(--ff-display);
+      font-size: var(--fs-2xl);
+      font-weight: 400;
+      color: var(--n-900);
+      margin-bottom: var(--sp-4);
+      text-wrap: balance;
+    }
+
+    .cta-title em {
+      font-style: italic;
+      color: var(--accent);
+    }
+
+    .cta-sub {
+      font-size: var(--fs-md);
+      color: var(--text-muted);
+      margin-bottom: var(--sp-8);
+    }
+
+    footer.footer {
+      padding: var(--sp-8) var(--sp-6);
+      border-top: 1px solid var(--border-subtle);
+      background: oklch(5% 0.006 260);
+      font-size: var(--fs-xs);
+      color: var(--text-dim);
+    }
+
+    .footer-wrapper {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: var(--sp-4);
+    }
+
+    .footer-links {
+      display: flex;
+      gap: var(--sp-6);
+      list-style: none;
+    }
+
+    .footer-links a:hover {
+      color: var(--accent);
+    }
+
+    /* Scroll Reveal Animations */
+    .reveal {
+      animation: reveal-up linear both;
+      animation-timeline: view();
+      animation-range: entry 0% cover 18%;
+    }
+
+    @keyframes reveal-up {
+      from { opacity: 0; transform: translateY(30px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes pulse-heat {
+      0%, 100% { opacity: 1; box-shadow: 0 0 8px var(--accent), 0 0 20px var(--amber-glow); }
+      50%      { opacity: 0.5; box-shadow: 0 0 4px var(--accent), 0 0 10px oklch(70% 0.18 55 / 0.15); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .reveal { animation: none; }
+      .nav-heat-dot { animation: none; }
+    }
+
+    @media (max-width: 960px) {
+      .hero-stats { grid-template-columns: repeat(2, 1fr); }
+      .problem-grid, .sim-comparison { grid-template-columns: 1fr; }
+      .bento-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 640px) {
+      .nav-links { display: none; }
+      .hero-stats { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Atmospheric Background Canvas -->
+  <div class="bg-canvas"></div>
+  <div class="grid-overlay"></div>
+
+  <!-- Header Navigation -->
+  <header class="nav" id="nav">
+    <div class="nav-wrapper">
+      <a href="index-hybrid.html" class="logo">
+        <div class="logo-mark">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          </svg>
+        </div>
+        <span>warmplane</span>
+        <span class="nav-heat-dot"></span>
+      </a>
+
+      <ul class="nav-links">
+        <li><a href="index-hybrid.html">Main Specs</a></li>
+        <li><a href="#benchmark">House-Guest Analogy</a></li>
+        <li><a href="#simulator">Calculator</a></li>
+        <li><a href="#features">APIs</a></li>
+        <li><a href="https://github.com/Warmplane/warmplane" target="_blank">GitHub</a></li>
+      </ul>
+
+      <div class="nav-actions">
+        <span class="version-badge">Integrator Edition</span>
+        <a href="https://github.com/Warmplane/warmplane" target="_blank" rel="noopener" class="btn btn-ghost">GitHub ↗</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero container">
+    <div class="hero-content">
+      <div class="hero-eyebrow">
+        <span>The House-Guest Benchmark</span>
+        <span class="version-badge">Integrators Guide</span>
+      </div>
+
+      <h1 class="hero-title">
+        Stop making your AI model sit through a <em>30-minute monologue</em>
+      </h1>
+
+      <p class="hero-subtitle">
+        Raw MCP forces models to read giant schema encyclopedias before fetching a single file. <strong>Warmplane</strong> is the polite control plane that serves a compact menu first—decoupling tool execution from application code.
+      </p>
+
+      <div class="hero-cta">
+        <a href="#simulator" class="btn btn-primary">Try Savings Calculator</a>
+        <a href="#features" class="btn btn-ghost">Explore Integrator APIs →</a>
+      </div>
+    </div>
+
+    <!-- Key Metrics Ribbon -->
+    <div class="hero-stats">
+      <div class="hero-stat-card">
+        <div class="hero-stat-val">95.8%</div>
+        <div class="hero-stat-lbl">Copilot MCP Token Savings</div>
+      </div>
+      <div class="hero-stat-card">
+        <div class="hero-stat-val">58.2%</div>
+        <div class="hero-stat-lbl">Filesystem Workload Savings</div>
+      </div>
+      <div class="hero-stat-card">
+        <div class="hero-stat-val">&lt; 1ms</div>
+        <div class="hero-stat-lbl">Session Reuse Latency</div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Storytelling Section: The Protocol Design Lesson -->
+  <section class="section" id="benchmark">
+    <div class="section-inner">
+      <div class="section-label reveal">01 — Protocol Design Analogy</div>
+      <h2 class="section-heading reveal">The House-Guest Lesson</h2>
+      <p class="section-desc reveal">
+        Imagine trapping a guest in your hallway to detail every spice, appliance, and Wi-Fi router firmware history before asking if they want coffee.
+      </p>
+
+      <div class="problem-grid reveal">
+        <div class="problem-card problem-card-bad">
+          <div class="problem-card-tag">Raw MCP (Unfiltered)</div>
+          <div class="problem-card-title">The Monologue Host</div>
+          <div class="problem-card-body">
+            Injects 200+ raw JSON tool schemas directly into every prompt turn. Causes severe context bloat, slow time-to-first-token, high API bills, and random hallucinations into irrelevant tool definitions.
+          </div>
+          <div class="token-pill">~38,500 Tokens / Prompt Turn</div>
+        </div>
+
+        <div class="problem-card problem-card-good">
+          <div class="problem-card-tag">Warmplane (Control Plane)</div>
+          <div class="problem-card-title">The Polite Host</div>
+          <div class="problem-card-body">
+            Exposes a fast capability menu (<code>/v1/capabilities/search</code>). Model picks what it needs, Warmplane fetches details on demand and executes safely within policy boundaries.
+          </div>
+          <div class="token-pill">~1,600 Tokens / Prompt Turn</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Interactive Token Savings Calculator -->
+  <section class="section" id="simulator">
+    <div class="section-inner">
+      <div class="section-label reveal">02 — Dynamic Estimator</div>
+      <h2 class="section-heading reveal">Interactive Context Bloat Calculator</h2>
+      <p class="section-desc reveal">
+        See how much context window tax you save per prompt turn as your catalog of integrated MCP tools grows.
+      </p>
+
+      <div class="simulator-box reveal">
+        <div class="simulator-controls">
+          <div class="slider-group">
+            <div class="slider-label">
+              <span>Registered MCP Capabilities (Tools):</span>
+              <span id="tool-count-display" style="color: var(--accent); font-weight: 700;">85 tools</span>
+            </div>
+            <input type="range" id="tool-slider" min="10" max="300" value="85" step="5">
+          </div>
+        </div>
+
+        <div class="sim-comparison">
+          <div class="sim-metric">
+            <div class="sim-metric-val" id="raw-tokens-val" style="color: oklch(60% 0.2 25);">25,500 tok</div>
+            <div class="sim-metric-sub">Raw MCP Prompt Monologue Overhead</div>
+          </div>
+          <div class="sim-metric" style="border-color: var(--border-glow);">
+            <div class="sim-metric-val" id="warm-tokens-val" style="color: var(--accent);">1,140 tok (~95.5% Saved)</div>
+            <div class="sim-metric-sub">Warmplane Compact Facade</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Integrator Core Features Bento Grid -->
+  <section class="section" id="features">
+    <div class="section-inner">
+      <div class="section-label reveal">03 — Developer Architecture</div>
+      <h2 class="section-heading reveal">Built for Application Integrators</h2>
+      <p class="section-desc reveal">
+        Warmplane keeps MCP logic decoupled from your application codebase, user authentication, and agent loop orchestration.
+      </p>
+
+      <div class="bento-grid reveal">
+        <div class="bento-cell">
+          <span class="bento-tag">P0 • Search</span>
+          <div class="bento-title">Hybrid Capability Search</div>
+          <div class="bento-body">
+            Execute fast BM25 + ONNX vector queries over registered tools with natural language intent matching without exposing raw schemas to the model.
+          </div>
+        </div>
+
+        <div class="bento-cell">
+          <span class="bento-tag">P0 • Catalog</span>
+          <div class="bento-title">SHA-256 Catalog Versioning</div>
+          <div class="bento-body">
+            Clients safely cache index descriptions and validate state consistency using HTTP ETag headers and monotonic event feeds.
+          </div>
+        </div>
+
+        <div class="bento-cell">
+          <span class="bento-tag">P0 • Observability</span>
+          <div class="bento-title">Request Correlation</div>
+          <div class="bento-body">
+            Attach arbitrary application operation IDs (<code>x-correlation-id</code>) to trace exact Warmplane execution trees in OpenTelemetry.
+          </div>
+        </div>
+
+        <div class="bento-cell">
+          <span class="bento-tag">P1 • Recovery</span>
+          <div class="bento-title">Idempotency &amp; Retries</div>
+          <div class="bento-body">
+            Safely replay external tool writes after network hiccups using client-provided <code>Idempotency-Key</code> headers and explicit cancellation endpoints.
+          </div>
+        </div>
+
+        <div class="bento-cell">
+          <span class="bento-tag">P1 • Shaping</span>
+          <div class="bento-title">Result Shaping &amp; Redaction</div>
+          <div class="bento-body">
+            Filter tool output payloads with JSONPath allowlists, clip giant responses, and automatically redact sensitive secrets before model insertion.
+          </div>
+        </div>
+
+        <div class="bento-cell">
+          <span class="bento-tag">P2 • Security</span>
+          <div class="bento-title">Scoped Policy Overlays</div>
+          <div class="bento-body">
+            Dynamically restrict execution scope per request turn without mutating global system security policies.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Embedding Code Showcase -->
+  <section class="section" id="code">
+    <div class="section-inner">
+      <div class="section-label reveal">04 — API &amp; SDK Reference</div>
+      <h2 class="section-heading reveal">Embedding Code Reference</h2>
+      <p class="section-desc reveal">
+        Integrate via RESTful HTTP API, Rust client library, or CLI IPC stream.
+      </p>
+
+      <div class="code-showcase reveal">
+        <div class="code-block-header">
+          <span style="font-family:var(--ff-mono);font-size:var(--fs-xs);color:var(--text-muted)">Embedding Examples</span>
+          <div class="code-tabs">
+            <button class="tab-btn active" onclick="showTab('http')">HTTP REST</button>
+            <button class="tab-btn" onclick="showTab('rust')">Rust SDK</button>
+            <button class="tab-btn" onclick="showTab('cli')">CLI IPC</button>
+          </div>
+        </div>
+
+        <div class="code-block-content active" id="tab-http">
+<span class="kw">POST</span> /v1/capabilities/search HTTP/1.1
+Host: localhost:9090
 Content-Type: application/json
 X-Correlation-ID: op_9f82a1b73c
 
 {
-  "query": "triage production errors in logs",
-  "limit": 5,
-  "tags": ["observability", "read_only"]
+  <span class="kw">"query"</span>: <span class="str">"triage production errors in logs"</span>,
+  <span class="kw">"limit"</span>: <span class="num">5</span>,
+  <span class="kw">"tags"</span>: [<span class="str">"observability"</span>, <span class="str">"read_only"</span>]
 }
 
-/* Response: SHA-256 catalog validated compact facade */
+<span class="cmt">/* Response: SHA-256 catalog validated compact facade */</span>
 HTTP/1.1 200 OK
-ETag: "sha256:8f2a938c..."
+ETag: <span class="str">"sha256:8f2a938c..."</span>
 
 {
-  "catalog_version": "sha256:8f2a938c...",
-  "capabilities": [
+  <span class="kw">"catalog_version"</span>: <span class="str">"sha256:8f2a938c..."</span>,
+  <span class="kw">"capabilities"</span>: [
     {
-      "id": "observability.logs.search",
-      "summary": "Search structured application logs.",
-      "score": 0.94
+      <span class="kw">"id"</span>: <span class="str">"observability.logs.search"</span>,
+      <span class="kw">"summary"</span>: <span class="str">"Search structured application logs."</span>,
+      <span class="kw">"score"</span>: <span class="num">0.94</span>
     }
   ]
-}</code></pre>
+}
+        </div>
 
-                <pre class="code-block" id="tab-rust"><code>use warmplane_client::WarmplaneClient;
+        <div class="code-block-content" id="tab-rust">
+<span class="kw">use</span> warmplane_client::WarmplaneClient;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = WarmplaneClient::connect("http://localhost:9870")?;
+<span class="kw">#[tokio::main]</span>
+<span class="kw">async fn</span> <span class="kw">main</span>() -&gt; Result&lt;(), Box&lt;<span class="kw">dyn</span> std::error::Error&gt;&gt; {
+    <span class="kw">let</span> client = WarmplaneClient::connect(<span class="str">"http://localhost:9090"</span>)?;
     
-    // Search compact catalog without schema injection
-    let results = client.search_capabilities()
-        .query("triage production errors")
-        .limit(5)
+    <span class="cmt">// Search compact catalog without schema injection</span>
+    <span class="kw">let</span> results = client.search_capabilities()
+        .query(<span class="str">"triage production errors"</span>)
+        .limit(<span class="num">5</span>)
         .send()
         .await?;
 
-    println!("Found {} candidate capabilities", results.capabilities.len());
+    println!(<span class="str">"Found {} candidate capabilities"</span>, results.capabilities.len());
     Ok(())
-}</code></pre>
-
-                <pre class="code-block" id="tab-cli"><code># Search capability catalog via CLI JSON stream
-warmplane capabilities search "triage production errors" --limit 5 --json
-
-# Execute capability with context correlation header
-warmplane exec observability.logs.search \
-  --param query="error 500" \
-  --correlation-id "task_8812"</code></pre>
-            </section>
-
-            <!-- Footer -->
-            <footer class="footer">
-                <div>© 2026 Warmplane Authors. Built for local-first agent control planes.</div>
-                <div class="footer-links">
-                    <a href="index.html">Main Specs</a>
-                    <a href="TAKE_TWO.md">Take Two Document</a>
-                    <a href="INTEGRATOR_WISHLIST.md">Integrator Wishlist</a>
-                </div>
-            </footer>
+}
         </div>
 
-        <script>
-            // Simulator Script
-            const slider = document.getElementById('tool-slider');
-            const display = document.getElementById('tool-count-display');
-            const rawTokensVal = document.getElementById('raw-tokens-val');
-            const warmTokensVal = document.getElementById('warm-tokens-val');
+        <div class="code-block-content" id="tab-cli">
+<span class="cmt"># Search capability catalog via CLI JSON stream</span>
+warmplane search-capabilities <span class="str">"triage production errors"</span> --limit <span class="num">5</span> --json
 
-            function updateSimulator() {
-                const tools = parseInt(slider.value, 10);
-                display.textContent = `${tools} tools`;
+<span class="cmt"># Execute capability with context correlation header</span>
+warmplane call-capability observability.logs.search \
+  --params <span class="str">'{"query":"error 500"}'</span> \
+  --correlation-id <span class="str">"task_8812"</span>
+        </div>
+      </div>
+    </div>
+  </section>
 
-                // Approx 300 tokens per full JSON tool schema in raw MCP
-                const rawTokens = tools * 300;
-                // Warmplane menu search remains compact (~800 base prompt + 4 tokens per item result)
-                const warmTokens = Math.round(800 + (tools * 4));
-                const savingsPct = ((1 - (warmTokens / rawTokens)) * 100).toFixed(1);
+  <!-- Final CTA Section (Identical to index-hybrid.html) -->
+  <section class="cta-section container" id="get-started">
+    <div class="cta-glow"></div>
+    <div class="section-label reveal">Open Source · MIT License</div>
+    <h2 class="cta-title reveal">
+      The cheapest token is<br>the one <em>never sent</em>
+    </h2>
+    <p class="cta-sub reveal">
+      Start cutting AI agent token overhead while adding enterprise policy control.
+    </p>
+    <div class="hero-cta" style="justify-content: center;">
+      <a href="https://github.com/Warmplane/warmplane" class="btn btn-primary" target="_blank" rel="noopener">GitHub Repository ↗</a>
+      <a href="USER-GUIDE.html" class="btn btn-ghost" target="_blank" rel="noopener">User Guide</a>
+      <a href="WHITEPAPER.html" class="btn btn-ghost" target="_blank" rel="noopener">Read Whitepaper</a>
+    </div>
+  </section>
 
-                rawTokensVal.textContent = `${rawTokens.toLocaleString()} tok`;
-                warmTokensVal.textContent = `${warmTokens.toLocaleString()} tok (~${savingsPct}% Saved)`;
-            }
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-wrapper">
+      <div>
+        © 2026 Warmplane · MIT License · Local Control Plane for MCP Sessions
+      </div>
+      <ul class="footer-links">
+        <li><a href="https://github.com/Warmplane/warmplane" target="_blank" rel="noopener">GitHub</a></li>
+        <li><a href="index-hybrid.html">Main Specs</a></li>
+        <li><a href="USER-GUIDE.html">User Guide</a></li>
+        <li><a href="NEXT_LEVEL_TOOL_CALLING.html">Next-Level Tooling</a></li>
+        <li><a href="WHITEPAPER.html">Whitepaper</a></li>
+      </ul>
+    </div>
+  </footer>
 
-            slider.addEventListener('input', updateSimulator);
-            updateSimulator();
+  <script>
+    // Header Scroll Effect
+    const nav = document.getElementById('nav');
+    let ticking = false;
+    window.addEventListener('scroll', () => {
+      if (!ticking) {
+        requestAnimationFrame(() => {
+          nav.classList.toggle('scrolled', window.scrollY > 40);
+          ticking = false;
+        });
+        ticking = true;
+      }
+    });
 
-            // Tabs script
-            function showTab(tabId) {
-                document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-                document.querySelectorAll('.code-block').forEach(blk => blk.classList.remove('active'));
-                
-                event.target.classList.add('active');
-                document.getElementById(`tab-${tabId}`).classList.add('active');
-            }
-        </script>
-    </body>
+    // Simulator Script
+    const slider = document.getElementById('tool-slider');
+    const display = document.getElementById('tool-count-display');
+    const rawTokensVal = document.getElementById('raw-tokens-val');
+    const warmTokensVal = document.getElementById('warm-tokens-val');
+
+    function updateSimulator() {
+      const tools = parseInt(slider.value, 10);
+      display.textContent = `${tools} tools`;
+
+      const rawTokens = tools * 300;
+      const warmTokens = Math.round(800 + (tools * 4));
+      const savingsPct = ((1 - (warmTokens / rawTokens)) * 100).toFixed(1);
+
+      rawTokensVal.textContent = `${rawTokens.toLocaleString()} tok`;
+      warmTokensVal.textContent = `${warmTokens.toLocaleString()} tok (~${savingsPct}% Saved)`;
+    }
+
+    if (slider) {
+      slider.addEventListener('input', updateSimulator);
+      updateSimulator();
+    }
+
+    // Tabs Script
+    function showTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.code-block-content').forEach(blk => blk.classList.remove('active'));
+      
+      event.target.classList.add('active');
+      const target = document.getElementById(`tab-${tabId}`);
+      if (target) target.classList.add('active');
+    }
+  </script>
+</body>
 </html>

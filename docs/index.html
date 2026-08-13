@@ -1,1154 +1,2021 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-    <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Warmplane | The local control plane that keeps MCP sessions warm</title>
-        <meta
-            name="description"
-            content="Warmplane is the local control plane that keeps MCP sessions warm: one compact, policy-aware runtime for tools, resources, and prompts across CLI, HTTP, and MCP-native clients. Idempotent execution, catalog versioning, and full request correlation built in."
-        />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-        <link
-            href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
-            rel="stylesheet"
-        />
-        <style>
-            :root {
-                --bg: #f7f3ea;
-                --ink: #111111;
-                --ink-soft: #38332a;
-                --paper: #fffdf6;
-                --line: #d8cfbc;
-                --accent: #c74a20;
-                --accent-soft: #f1b391;
-                --ok: #1f6f50;
-                --blue: #1a4f8a;
-                --blue-soft: #dce8f8;
-                --shadow: 0 16px 40px rgba(17, 17, 17, 0.1);
-                --radius: 18px;
-            }
-
-            * {
-                box-sizing: border-box;
-            }
-
-            html,
-            body {
-                margin: 0;
-                padding: 0;
-                background: var(--bg);
-                color: var(--ink);
-                font-family:
-                    "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
-            }
-
-            body::before,
-            body::after {
-                content: "";
-                position: fixed;
-                z-index: -1;
-                filter: blur(2px);
-                pointer-events: none;
-            }
-
-            body::before {
-                top: -120px;
-                right: -60px;
-                width: 420px;
-                height: 420px;
-                border-radius: 43% 57% 64% 36% / 37% 41% 59% 63%;
-                background: radial-gradient(
-                    circle at 30% 30%,
-                    #ffd7b9,
-                    #edb690 56%,
-                    transparent 70%
-                );
-                opacity: 0.58;
-            }
-
-            body::after {
-                bottom: -180px;
-                left: -90px;
-                width: 500px;
-                height: 500px;
-                border-radius: 58% 42% 36% 64% / 53% 31% 69% 47%;
-                background: radial-gradient(
-                    circle at 70% 25%,
-                    #f6d372,
-                    #dfac3d 50%,
-                    transparent 70%
-                );
-                opacity: 0.32;
-            }
-
-            .shell {
-                max-width: 1260px;
-                margin: 0 auto;
-                padding: 18px 18px 72px;
-            }
-
-            .topbar {
-                margin-top: 8px;
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 14px;
-            }
-
-            .brand {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                font-weight: 700;
-                letter-spacing: 0.02em;
-                font-size: 1.05rem;
-            }
-
-            .brand-mark {
-                width: 25px;
-                height: 25px;
-                border-radius: 8px;
-                background: linear-gradient(145deg, var(--accent), #d77954);
-                box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.35);
-            }
-
-            .topbar-right {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-            }
-
-            .integrators-link {
-                display: inline-flex;
-                align-items: center;
-                gap: 6px;
-                border: 1px solid var(--accent);
-                border-radius: 999px;
-                padding: 7px 14px;
-                background: rgba(199, 74, 32, 0.1);
-                font-family: "IBM Plex Mono", ui-monospace, monospace;
-                font-size: 0.78rem;
-                color: var(--accent);
-                font-weight: 600;
-                text-decoration: none;
-                transition: background 0.15s ease;
-            }
-
-            .integrators-link:hover {
-                background: rgba(199, 74, 32, 0.2);
-            }
-
-            .status {
-                display: inline-flex;
-                align-items: center;
-                gap: 8px;
-                border: 1px solid var(--line);
-                border-radius: 999px;
-                padding: 7px 12px;
-                background: var(--paper);
-                font-family: "IBM Plex Mono", ui-monospace, monospace;
-                font-size: 0.78rem;
-            }
-
-            .version-tag {
-                display: inline-flex;
-                align-items: center;
-                border: 1px solid #be8a74;
-                border-radius: 999px;
-                padding: 7px 12px;
-                background: rgba(241, 179, 145, 0.18);
-                font-family: "IBM Plex Mono", ui-monospace, monospace;
-                font-size: 0.78rem;
-                color: var(--accent);
-                font-weight: 500;
-                text-decoration: none;
-            }
-
-            .dot {
-                width: 8px;
-                height: 8px;
-                border-radius: 999px;
-                background: var(--ok);
-                box-shadow: 0 0 0 6px rgba(31, 111, 80, 0.12);
-                animation: pulse 1.8s infinite;
-            }
-
-            .hero {
-                margin-top: 14px;
-                background: linear-gradient(
-                    140deg,
-                    rgba(255, 255, 255, 0.9),
-                    rgba(247, 242, 232, 0.88)
-                );
-                border: 1px solid var(--line);
-                border-radius: 26px;
-                box-shadow: var(--shadow);
-                padding: 36px 30px;
-                position: relative;
-                overflow: hidden;
-            }
-
-            .hero::before {
-                content: "";
-                position: absolute;
-                inset: 0;
-                background:
-                    linear-gradient(
-                        to right,
-                        rgba(199, 74, 32, 0.08),
-                        transparent 44%
-                    ),
-                    repeating-linear-gradient(
-                        to right,
-                        transparent 0,
-                        transparent 26px,
-                        rgba(17, 17, 17, 0.03) 27px
-                    );
-                pointer-events: none;
-            }
-
-            .hero-inner {
-                display: grid;
-                grid-template-columns: 1.2fr 0.8fr;
-                gap: 20px;
-                position: relative;
-            }
-
-            h1 {
-                margin: 0;
-                font-size: clamp(2.4rem, 6.7vw, 4.65rem);
-                line-height: 0.92;
-                letter-spacing: -0.04em;
-                max-width: 14ch;
-            }
-
-            .lead {
-                margin-top: 16px;
-                color: var(--ink-soft);
-                font-size: clamp(1.02rem, 2vw, 1.2rem);
-                line-height: 1.46;
-                max-width: 62ch;
-            }
-
-            .lead strong {
-                color: var(--ink);
-            }
-
-            .kpis {
-                margin-top: 18px;
-                display: grid;
-                grid-template-columns: repeat(4, 1fr);
-                gap: 10px;
-            }
-
-            .kpi {
-                border: 1px solid var(--line);
-                border-radius: 12px;
-                background: rgba(255, 253, 246, 0.82);
-                padding: 10px;
-            }
-
-            .kpi strong {
-                display: block;
-                font-size: 0.96rem;
-                color: var(--ink);
-            }
-
-            .kpi span {
-                color: var(--ink-soft);
-                font-size: 0.82rem;
-            }
-
-            .cta {
-                margin-top: 22px;
-                display: flex;
-                flex-wrap: wrap;
-                gap: 10px;
-            }
-
-            .btn {
-                border-radius: 12px;
-                border: 1px solid var(--ink);
-                background: var(--ink);
-                color: #fff;
-                text-decoration: none;
-                font-weight: 700;
-                padding: 11px 14px;
-                transition:
-                    transform 140ms ease,
-                    box-shadow 140ms ease;
-            }
-
-            .btn.alt {
-                background: transparent;
-                color: var(--ink);
-                border-color: var(--line);
-            }
-
-            .btn:hover {
-                transform: translateY(-2px);
-                box-shadow: 0 12px 20px rgba(17, 17, 17, 0.14);
-            }
-
-            .terminal {
-                border-radius: 16px;
-                border: 1px solid #3f3b34;
-                overflow: hidden;
-                background: #181713;
-                color: #eee6d7;
-                box-shadow: 0 16px 28px rgba(17, 17, 17, 0.18);
-                font-family: "IBM Plex Mono", ui-monospace, monospace;
-            }
-
-            .terminal-head {
-                border-bottom: 1px solid #3f3b34;
-                padding: 10px 12px;
-                background: #24221d;
-                color: #cabca4;
-                font-size: 0.78rem;
-            }
-
-            .terminal pre {
-                margin: 0;
-                padding: 13px;
-                white-space: pre-wrap;
-                line-height: 1.45;
-                font-size: 0.84rem;
-            }
-
-            .t-green { color: #7ac98a; }
-            .t-amber { color: #e6b85c; }
-            .t-dim   { color: #7a7264; }
-            .t-blue  { color: #79b8ff; }
-
-            .section {
-                margin-top: 24px;
-            }
-
-            .section h2 {
-                margin: 0 0 12px;
-                font-size: clamp(1.45rem, 2.9vw, 2.08rem);
-                letter-spacing: -0.02em;
-            }
-
-            .section-intro {
-                margin: 0 0 14px;
-                color: var(--ink-soft);
-                max-width: 74ch;
-                line-height: 1.46;
-            }
-
-            .grid {
-                display: grid;
-                grid-template-columns: repeat(12, 1fr);
-                gap: 14px;
-            }
-
-            .panel {
-                background: var(--paper);
-                border: 1px solid var(--line);
-                border-radius: var(--radius);
-                padding: 16px;
-                box-shadow: 0 8px 16px rgba(17, 17, 17, 0.05);
-            }
-
-            .panel h3 {
-                margin: 0 0 8px;
-                font-size: 1.06rem;
-            }
-
-            .panel p {
-                margin: 0;
-                color: var(--ink-soft);
-                line-height: 1.45;
-            }
-
-            .panel .eyebrow {
-                display: inline-flex;
-                align-items: center;
-                gap: 6px;
-                font-family: "IBM Plex Mono", ui-monospace, monospace;
-                font-size: 0.72rem;
-                color: var(--accent);
-                font-weight: 500;
-                margin-bottom: 8px;
-                padding: 3px 8px;
-                border-radius: 999px;
-                background: rgba(199, 74, 32, 0.08);
-                border: 1px solid rgba(199, 74, 32, 0.2);
-            }
-
-            .panel .eyebrow.new {
-                color: var(--ok);
-                background: rgba(31, 111, 80, 0.08);
-                border-color: rgba(31, 111, 80, 0.2);
-            }
-
-            .accent-panel {
-                background: linear-gradient(
-                    to bottom right,
-                    rgba(255, 255, 255, 0.72),
-                    rgba(241, 179, 145, 0.22)
-                );
-                border-color: #be8a74;
-            }
-
-            .span-8 { grid-column: span 8; }
-            .span-7 { grid-column: span 7; }
-            .span-6 { grid-column: span 6; }
-            .span-5 { grid-column: span 5; }
-            .span-4 { grid-column: span 4; }
-            .span-12 { grid-column: span 12; }
-
-            .pill-list {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 8px;
-                margin-top: 12px;
-            }
-
-            .pill {
-                border: 1px solid var(--line);
-                border-radius: 999px;
-                background: var(--paper);
-                padding: 7px 10px;
-                font-size: 0.8rem;
-                color: var(--ink-soft);
-            }
-
-            .pill.new {
-                border-color: rgba(31, 111, 80, 0.3);
-                background: rgba(31, 111, 80, 0.06);
-                color: var(--ok);
-            }
-
-            .steps {
-                display: grid;
-                grid-template-columns: repeat(4, 1fr);
-                gap: 10px;
-            }
-
-            .step {
-                background: var(--paper);
-                border: 1px solid var(--line);
-                border-radius: 12px;
-                padding: 12px;
-            }
-
-            .step-num {
-                display: inline-block;
-                min-width: 26px;
-                text-align: center;
-                border-radius: 999px;
-                background: var(--accent);
-                color: #fff;
-                font-family: "IBM Plex Mono", ui-monospace, monospace;
-                font-size: 0.76rem;
-                padding: 3px 7px;
-                margin-bottom: 8px;
-            }
-
-            .step h4 {
-                margin: 0 0 6px;
-                font-size: 0.98rem;
-            }
-
-            .step p {
-                margin: 0;
-                color: var(--ink-soft);
-                font-size: 0.92rem;
-                line-height: 1.43;
-            }
-
-            .list {
-                margin: 10px 0 0;
-                padding-left: 18px;
-                color: var(--ink-soft);
-                line-height: 1.42;
-            }
-
-            .list li + li {
-                margin-top: 5px;
-            }
-
-            /* Changelog ribbon */
-            .changelog {
-                margin-top: 24px;
-                display: flex;
-                flex-direction: column;
-                gap: 10px;
-            }
-
-            .release {
-                display: flex;
-                align-items: flex-start;
-                gap: 14px;
-                padding: 14px 16px;
-                border: 1px solid var(--line);
-                border-radius: 14px;
-                background: var(--paper);
-                transition: box-shadow 160ms ease;
-            }
-
-            .release:hover {
-                box-shadow: 0 6px 18px rgba(17, 17, 17, 0.07);
-            }
-
-            .release-tag {
-                flex-shrink: 0;
-                font-family: "IBM Plex Mono", ui-monospace, monospace;
-                font-size: 0.78rem;
-                font-weight: 500;
-                padding: 5px 10px;
-                border-radius: 8px;
-                background: rgba(199, 74, 32, 0.08);
-                border: 1px solid rgba(199, 74, 32, 0.22);
-                color: var(--accent);
-                white-space: nowrap;
-            }
-
-            .release-body h4 {
-                margin: 0 0 4px;
-                font-size: 0.98rem;
-            }
-
-            .release-body p {
-                margin: 0;
-                color: var(--ink-soft);
-                font-size: 0.88rem;
-                line-height: 1.44;
-            }
-
-            .bottom-cta {
-                margin-top: 28px;
-                border: 1px solid #be8a74;
-                border-radius: 18px;
-                background: linear-gradient(
-                    to right,
-                    rgba(255, 253, 246, 0.88),
-                    rgba(241, 179, 145, 0.28)
-                );
-                padding: 20px;
-                display: flex;
-                flex-wrap: wrap;
-                align-items: center;
-                justify-content: space-between;
-                gap: 12px;
-            }
-
-            .bottom-cta h3 {
-                margin: 0;
-                font-size: 1.18rem;
-            }
-
-            .bottom-cta p {
-                margin: 6px 0 0;
-                color: var(--ink-soft);
-            }
-
-            .fade {
-                opacity: 0;
-                transform: translateY(14px);
-                transition:
-                    opacity 420ms ease,
-                    transform 420ms ease;
-            }
-
-            .fade.show {
-                opacity: 1;
-                transform: translateY(0);
-            }
-
-            footer {
-                margin-top: 26px;
-                color: var(--ink-soft);
-                border-top: 1px solid var(--line);
-                padding-top: 16px;
-                font-size: 0.9rem;
-                display: flex;
-                justify-content: space-between;
-                gap: 12px;
-                flex-wrap: wrap;
-            }
-
-            footer a {
-                color: var(--ink);
-                font-weight: 600;
-            }
-
-            @keyframes pulse {
-                0%,
-                100% {
-                    transform: scale(1);
-                }
-                50% {
-                    transform: scale(1.09);
-                }
-            }
-
-            @media (max-width: 980px) {
-                .hero-inner {
-                    grid-template-columns: 1fr;
-                }
-
-                .kpis {
-                    grid-template-columns: 1fr 1fr;
-                }
-
-                .steps {
-                    grid-template-columns: 1fr 1fr;
-                }
-            }
-
-            @media (max-width: 860px) {
-                .span-8,
-                .span-7,
-                .span-6,
-                .span-5,
-                .span-4 {
-                    grid-column: span 12;
-                }
-
-                .shell {
-                    padding: 14px 14px 42px;
-                }
-
-                .steps {
-                    grid-template-columns: 1fr;
-                }
-
-                .kpis {
-                    grid-template-columns: 1fr;
-                }
-
-                footer {
-                    flex-direction: column;
-                }
-
-                .topbar-right {
-                    flex-direction: column;
-                    align-items: flex-end;
-                    gap: 6px;
-                }
-            }
-        </style>
-    </head>
-    <body>
-        <main class="shell">
-            <header class="topbar fade">
-                <div class="brand">
-                    <span class="brand-mark"></span>
-                    Warmplane
-                </div>
-                <div class="topbar-right">
-                    <a class="integrators-link" href="integrators.html">Integrators Guide</a>
-                    <a class="version-tag" href="https://github.com/Warmplane/warmplane/releases/tag/v0.7.1" aria-label="Release v0.7.1">v0.7.1</a>
-                    <div class="status"><i class="dot"></i> local control plane runtime</div>
-                </div>
-            </header>
-
-            <section class="hero fade">
-                <div class="hero-inner">
-                    <div>
-                        <h1>Run your MCP estate from one high-signal surface</h1>
-                        <p class="lead">
-                            <strong>Warmplane</strong> sits in front of many MCP servers and emits a compact,
-                            policyable, agent-friendly interface for tools, resources, and prompts. Same substrate,
-                            multiple client modes: CLI, HTTP and MCP.
-                        </p>
-
-                        <div class="kpis">
-                            <div class="kpi">
-                                <strong>Lower context overhead</strong>
-                                <span>Alias-based index first, full schema only on demand.</span>
-                            </div>
-                            <div class="kpi">
-                                <strong>Safe execution</strong>
-                                <span>Policy gates, idempotent calls, cancellation, and retry metadata.</span>
-                            </div>
-                            <div class="kpi">
-                                <strong>One abstraction, many backends</strong>
-                                <span>Aggregate heterogeneous MCP servers behind one endpoint.</span>
-                            </div>
-                            <div class="kpi">
-                                <strong>Audit-ready telemetry</strong>
-                                <span>Request correlation, OTLP traces, catalog change events.</span>
-                            </div>
-                        </div>
-
-                        <div class="cta">
-                            <a class="btn" href="https://github.com/Warmplane/warmplane">View on GitHub</a>
-                            <a class="btn alt" href="https://github.com/Warmplane/warmplane/blob/main/docs/USER-GUIDE.md">User Guide</a>
-                        </div>
-                    </div>
-
-                    <div class="terminal" aria-label="Token efficiency evidence">
-                        <div class="terminal-head">Token Efficiency | measured eval output</div>
-                        <pre><code><span class="t-dim">Suite: github_copilot_only</span>
-<span class="t-dim">Discovery</span>      <span class="t-amber">54,715</span> <span class="t-dim">-&gt;</span> <span class="t-green">2,386</span>   <span class="t-green">(95.6% savings)</span>
-<span class="t-dim">5-turn loop</span>   <span class="t-amber">260,005</span> <span class="t-dim">-&gt;</span> <span class="t-green">11,173</span>  <span class="t-green">(95.7% savings)</span>
-<span class="t-dim">10-turn mixed</span> <span class="t-amber">547,150</span> <span class="t-dim">-&gt;</span> <span class="t-green">22,895</span>  <span class="t-green">(95.8% savings)</span>
-
-<span class="t-dim">Control: public_filesystem_only</span>
-<span class="t-dim">Discovery</span>       <span class="t-amber">2,552</span> <span class="t-dim">-&gt;</span> <span class="t-green">1,066</span>   <span class="t-green">(58.2% savings)</span>
-<span class="t-dim">5-turn loop</span>    <span class="t-amber">12,760</span> <span class="t-dim">-&gt;</span> <span class="t-green">5,349</span>   <span class="t-green">(58.1% savings)</span>
-<span class="t-dim">10-turn mixed</span>  <span class="t-amber">25,520</span> <span class="t-dim">-&gt;</span> <span class="t-green">10,669</span>  <span class="t-green">(58.2% savings)</span>
-
-<span class="t-dim">Method</span>
-<span class="t-dim">- Raw: direct MCP tools/resources/prompts surfaces</span>
-<span class="t-dim">- Facade: /v1 indexes + on-demand capability describe</span>
-<span class="t-dim">- Tokenizer: cl100k_base</span></code></pre>
-                    </div>
-                </div>
-            </section>
-
-            <section class="section fade" id="what-it-is">
-                <h2>What It Actually Solves</h2>
-                <p class="section-intro">
-                    Raw MCP integration is powerful, but large agent systems quickly hit practical friction: schema bulk,
-                    inconsistent server semantics, duplicated policy logic, and exploding routing complexity. Warmplane
-                    packages those concerns into a single managed capability plane that stays small at the protocol edge.
-                </p>
-
-                <div class="grid">
-                    <article class="panel span-4">
-                        <h3>Context Budget Pressure</h3>
-                        <p>
-                            Agent loops pay repeatedly for tool and prompt metadata. Compact indexes and alias contracts
-                            reduce token burn while keeping capability coverage broad.
-                        </p>
-                    </article>
-                    <article class="panel span-4">
-                        <h3>Operational Fragmentation</h3>
-                        <p>
-                            Different MCP servers imply different assumptions. The plane normalizes invocation, result
-                            envelopes, timeout behavior, and error semantics.
-                        </p>
-                    </article>
-                    <article class="panel span-4">
-                        <h3>Governance at Runtime</h3>
-                        <p>
-                            Centralized policy controls allow teams to constrain write actions, separate safe/read paths,
-                            and expose only the right capabilities to each agent role.
-                        </p>
-                    </article>
-                </div>
-            </section>
-
-            <section class="section fade" id="features">
-                <h2>Core Capabilities</h2>
-                <p class="section-intro">
-                    Designed for production agent stacks where tool surfaces must be compact, reliable, and observable.
-                </p>
-
-                <div class="grid">
-                    <article class="panel accent-panel span-8">
-                        <h3>Unified Facade for Tools, Resources, and Prompts</h3>
-                        <p>
-                            Build a lightweight contract over many upstream MCP servers. Clients can enumerate compact
-                            aliases, request expanded detail only when needed, and call through a normalized interface.
-                        </p>
-                        <div class="pill-list">
-                            <span class="pill">Alias Registry</span>
-                            <span class="pill">Compact Schemas</span>
-                            <span class="pill">On-demand Expansion</span>
-                            <span class="pill">MCP Native Exposure</span>
-                            <span class="pill">Hybrid Search</span>
-                        </div>
-                    </article>
-                    <article class="panel span-4">
-                        <h3>Policy Profiles</h3>
-                        <p>
-                            Role-aware controls for read-only, constrained write, and privileged paths. Enforce profile
-                            routing without embedding policy in every agent prompt.
-                        </p>
-                    </article>
-
-                    <article class="panel span-4">
-                        <div class="eyebrow new">v0.7.1</div>
-                        <h3>MCP Spec Parity &amp; SSE Stream</h3>
-                        <p>
-                            Full compliance with latest MCP specs: <code>POST /v1/completion/complete</code> autocompletion API,
-                            real-time <code>GET /v1/resources/updates</code> Server-Sent Events (SSE) stream, and
-                            <code>POST /v1/sampling/create_message</code> LLM delegation.
-                        </p>
-                    </article>
-                    <article class="panel span-4">
-                        <div class="eyebrow new">v0.7.0</div>
-                        <h3>Pragmatic Rust &amp; Builders</h3>
-                        <p>
-                            Full adoption of Microsoft's Pragmatic Rust Guidelines (<code>AGENTS.md</code>).
-                            Fluent Builder pattern for <code>AppState</code>, <code>SearchFilter</code>, and <code>RequestContext</code>,
-                            zero-panic contract, and canonical API docs.
-                        </p>
-                    </article>
-                    <article class="panel span-4">
-                        <div class="eyebrow">v0.6.0</div>
-                        <h3>Idempotency &amp; Deduplication</h3>
-                        <p>
-                            Pass an <code>idempotency_key</code> or <code>Idempotency-Key</code> header. Concurrent or
-                            duplicate requests wait on the active in-flight call and share its result — no double
-                            execution upstream.
-                        </p>
-                    </article>
-                    <article class="panel span-4">
-                        <div class="eyebrow">v0.6.0</div>
-                        <h3>Operation Cancellation</h3>
-                        <p>
-                            Abort any in-flight operation by request ID via
-                            <code>POST /v1/operations/:id/cancel</code> or the
-                            <code>cancel-operation</code> CLI command. Cancellation propagates immediately.
-                        </p>
-                    </article>
-                    <article class="panel span-4">
-                        <div class="eyebrow">v0.6.0</div>
-                        <h3>Retry Metadata Envelope</h3>
-                        <p>
-                            Every response includes a structured <code>"retry"</code> field classifying
-                            execution safety: <code>safe</code>, <code>unsafe</code>, or <code>idempotent</code>,
-                            with execution state for orchestrator-aware retry logic.
-                        </p>
-                    </article>
-
-                    <article class="panel span-6">
-                        <div class="eyebrow">v0.5.0</div>
-                        <h3>Request Context &amp; Correlation</h3>
-                        <p>
-                            Envelopes carry structured <code>context</code> fields — <code>operation_id</code>,
-                            <code>work_item_id</code>, <code>actor_id</code>, <code>grant_id</code> — propagated from
-                            body or HTTP correlation headers (<code>X-Request-ID</code>, <code>X-Actor-ID</code>, …).
-                            All span to trace context automatically.
-                        </p>
-                        <div class="pill-list">
-                            <span class="pill">X-Request-ID</span>
-                            <span class="pill">X-Operation-ID</span>
-                            <span class="pill">X-Actor-ID</span>
-                            <span class="pill">X-Grant-ID</span>
-                        </div>
-                    </article>
-                    <article class="panel span-6">
-                        <div class="eyebrow">v0.4.0</div>
-                        <h3>Catalog Versioning &amp; Cache Validation</h3>
-                        <p>
-                            The capability/resource/prompt catalog is SHA-256 versioned. Clients can use
-                            <code>If-None-Match</code> for conditional reads and get <code>304 Not Modified</code>
-                            when nothing has changed. Subscribe to the <code>GET /v1/catalog/events</code> feed
-                            to receive incremental change events.
-                        </p>
-                        <div class="pill-list">
-                            <span class="pill">ETag / If-None-Match</span>
-                            <span class="pill">SHA-256 version</span>
-                            <span class="pill">/v1/catalog/events</span>
-                        </div>
-                    </article>
-
-                    <article class="panel span-4">
-                        <h3>Deterministic Routing</h3>
-                        <p>
-                            Route each alias to specific upstream targets with stable behavior. Avoid accidental capability
-                            drift as your MCP graph evolves.
-                        </p>
-                    </article>
-                    <article class="panel span-4">
-                        <h3>Reliable Error Envelope</h3>
-                        <p>
-                            Standardize timeout, retry, and failure responses so agents can recover predictably instead of
-                            branching across server-specific error formats.
-                        </p>
-                    </article>
-                    <article class="panel span-4">
-                        <h3>Enterprise Observability</h3>
-                        <p>
-                            Emit structured logs for audit trails and export OpenTelemetry traces to existing collectors,
-                            with trace IDs that align response envelopes and runtime events.
-                        </p>
-                    </article>
-                </div>
-            </section>
-
-            <section class="section fade" id="api">
-                <h2>HTTP Facade &amp; CLI</h2>
-                <p class="section-intro">
-                    Full REST API served locally by the daemon, plus a matching CLI for every operation.
-                </p>
-
-                <div class="grid">
-                    <div class="panel span-5">
-                        <div class="terminal" aria-label="HTTP endpoint listing">
-                            <div class="terminal-head">HTTP Daemon — /v1 endpoints</div>
-                            <pre><code><span class="t-dim"># Capabilities</span>
-<span class="t-blue">GET</span>  /v1/capabilities
-<span class="t-blue">POST</span> /v1/capabilities/search
-<span class="t-blue">GET</span>  /v1/capabilities/:id
-<span class="t-blue">POST</span> /v1/tools/call
-
-<span class="t-dim"># Resources</span>
-<span class="t-blue">GET</span>  /v1/resources
-<span class="t-blue">POST</span> /v1/resources/read
-
-<span class="t-dim"># Prompts</span>
-<span class="t-blue">GET</span>  /v1/prompts
-<span class="t-blue">POST</span> /v1/prompts/get
-
-<span class="t-dim"># Catalog &amp; Operations</span>
-<span class="t-blue">GET</span>  /v1/catalog/events
-<span class="t-blue">POST</span> /v1/operations/:id/cancel</code></pre>
-                        </div>
-                    </div>
-
-                    <div class="panel span-7">
-                        <div class="terminal" aria-label="CLI example commands">
-                            <div class="terminal-head">CLI Facade — example commands</div>
-                            <pre><code><span class="t-dim"># Discover &amp; search</span>
-warmplane list-capabilities
-warmplane search-capabilities "triage logs" --limit 5
-
-<span class="t-dim"># Execute with context correlation</span>
-warmplane call-capability db.query \
-  --params '{"query":"SELECT 1"}' \
-  --request-id req-101 \
-  --operation-id op-20 \
-  --actor-id user-7 \
-  --idempotency-key op-20-run-1
-
-<span class="t-dim"># Cancel an in-flight operation</span>
-warmplane cancel-operation req-101
-
-<span class="t-dim"># Catalog change events</span>
-warmplane list-catalog-events --after evt_3
-
-<span class="t-dim"># Resources &amp; prompts</span>
-warmplane read-resource fs.readme
-warmplane get-prompt prompt.code-review \
-  --arguments '{"code":"fn main() {}"}'</code></pre>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <section class="section fade" id="changelog">
-                <h2>Recent Releases</h2>
-                <p class="section-intro">Warmplane ships focused, production-ready feature increments.</p>
-
-                <div class="changelog">
-                    <div class="release">
-                        <span class="release-tag">v0.7.1</span>
-                        <div class="release-body">
-                            <h4>MCP Specification Parity</h4>
-                            <p>
-                                <code>POST /v1/completion/complete</code> autocompletion API for prompt and resource arguments.
-                                <code>GET /v1/resources/updates</code> real-time Server-Sent Events (SSE) notification stream.
-                                <code>POST /v1/sampling/create_message</code> LLM completion delegation reverse proxy endpoint.
-                                Synthetic <code>completion_complete</code> tool in stdio MCP server mode.
-                                Structured detail payloads in <code>CatalogEventStore</code>.
-                            </p>
-                        </div>
-                    </div>
-                    <div class="release">
-                        <span class="release-tag">v0.7.0</span>
-                        <div class="release-body">
-                            <h4>Pragmatic Rust Modernization &amp; Builder Patterns</h4>
-                            <p>
-                                Full adoption of Microsoft's Pragmatic Rust Guidelines (<code>AGENTS.md</code>).
-                                Fluent Builder pattern (<code>M-INIT-BUILDER</code>) for core state (<code>AppStateBuilder</code>),
-                                search filters (<code>SearchFilterBuilder</code>), and request context (<code>RequestContextBuilder</code>).
-                                Enhanced panic safety (<code>M-PANIC-IS-STOP</code>), structured logging (<code>M-LOG-STRUCTURED</code>),
-                                canonical API documentation (<code>M-CANONICAL-DOCS</code>), and flexible trait interop (<code>M-IMPL-ASREF</code>).
-                            </p>
-                        </div>
-                    </div>
-                    <div class="release">
-                        <span class="release-tag">v0.6.0</span>
-                        <div class="release-body">
-                            <h4>Idempotency, Cancellation &amp; Retry Metadata</h4>
-                            <p>
-                                In-memory idempotency store with broadcast deduplication for concurrent tool calls.
-                                Per-request <code>CancellationToken</code> registry with <code>POST /v1/operations/:id/cancel</code>.
-                                Structured <code>"retry"</code> envelope field on all execution responses classifying
-                                safety (<code>safe</code>, <code>unsafe</code>, <code>idempotent</code>) and state.
-                                <code>--idempotency-key</code> CLI flag and <code>cancel-operation</code> subcommand.
-                            </p>
-                        </div>
-                    </div>
-                    <div class="release">
-                        <span class="release-tag">v0.5.0</span>
-                        <div class="release-body">
-                            <h4>Request Context &amp; Correlation</h4>
-                            <p>
-                                Structured <code>RequestContext</code> (<code>operation_id</code>, <code>work_item_id</code>,
-                                <code>actor_id</code>, <code>grant_id</code>) in all execution envelopes.
-                                HTTP header fallback resolution (<code>X-Request-ID</code>, <code>X-Operation-ID</code>,
-                                <code>X-Actor-ID</code>, <code>X-Grant-ID</code>). Context propagated to tracing spans
-                                and MCP <code>_meta</code> fields. Correlation CLI flags added.
-                            </p>
-                        </div>
-                    </div>
-                    <div class="release">
-                        <span class="release-tag">v0.4.0</span>
-                        <div class="release-body">
-                            <h4>Catalog Versioning &amp; Cache Validation</h4>
-                            <p>
-                                SHA-256 catalog version computed from the full capability/resource/prompt index.
-                                <code>ETag</code> headers on all catalog reads, <code>If-None-Match</code> conditional
-                                request support returning <code>304 Not Modified</code>. New
-                                <code>GET /v1/catalog/events</code> change feed with cursor-based pagination for
-                                incremental consumers.
-                            </p>
-                        </div>
-                    </div>
-                    <div class="release">
-                        <span class="release-tag">v0.3.0</span>
-                        <div class="release-body">
-                            <h4>Hybrid Capability Search</h4>
-                            <p>
-                                <code>POST /v1/capabilities/search</code> with BM25 lexical scoring, optional
-                                ONNX vector embeddings (FastEmbed), tag filters, server-ID filters, and mode selectors.
-                                Score-ranked, configurable limit results.
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <section class="section fade" id="use-cases">
-                <h2>Use Cases</h2>
-                <p class="section-intro">
-                    The system is useful wherever multiple agents or teams need controlled access to a growing capability
-                    graph without paying linear complexity costs.
-                </p>
-
-                <div class="grid">
-                    <article class="panel span-6">
-                        <h3>Agent Platform Teams</h3>
-                        <p>
-                            Publish one stable tool plane to all internal agents while swapping and upgrading upstream MCP
-                            servers independently.
-                        </p>
-                        <ul class="list">
-                            <li>Minimize prompt-level integration details.</li>
-                            <li>Ship org-wide policy defaults once.</li>
-                            <li>Track capability changes at one control point.</li>
-                        </ul>
-                    </article>
-                    <article class="panel span-6">
-                        <h3>Enterprise Governance</h3>
-                        <p>
-                            Separate safe discovery and high-impact actions with profile-based controls and explicit alias
-                            contracts.
-                        </p>
-                        <ul class="list">
-                            <li>Role-specific exposure of tools/resources/prompts.</li>
-                            <li>Auditable routing from alias to backend.</li>
-                            <li>Constrained write paths for regulated workflows.</li>
-                        </ul>
-                    </article>
-                    <article class="panel span-6">
-                        <h3>LLM Cost and Latency Optimization</h3>
-                        <p>
-                            Keep the default interface compact and move heavy schema payloads to just-in-time lookups,
-                            reducing recurring context load in iterative loops.
-                        </p>
-                        <ul class="list">
-                            <li>Smaller baseline tool manifests.</li>
-                            <li>Reduced repetitive metadata transfer.</li>
-                            <li>Faster first-turn actionability for agents.</li>
-                        </ul>
-                    </article>
-                    <article class="panel span-6">
-                        <h3>Reliable Autonomous Workflows</h3>
-                        <p>
-                            Idempotent tool calls, in-flight cancellation, and structured retry metadata let
-                            orchestrators build resilient multi-step pipelines without duplicate side-effects.
-                        </p>
-                        <ul class="list">
-                            <li>Deduplication prevents double-execution on retries.</li>
-                            <li>Cancel stale operations from supervisor logic.</li>
-                            <li>Retry metadata drives smart backoff decisions.</li>
-                        </ul>
-                    </article>
-                </div>
-            </section>
-
-            <section class="section fade" id="how">
-                <h2>How Teams Deploy It</h2>
-                <div class="steps">
-                    <article class="step">
-                        <span class="step-num">01</span>
-                        <h4>Attach Servers</h4>
-                        <p>Register MCP backends and map their tools/resources/prompts into a shared alias namespace.</p>
-                    </article>
-                    <article class="step">
-                        <span class="step-num">02</span>
-                        <h4>Define Policy</h4>
-                        <p>Apply profile rules that control which aliases are visible and executable for each caller class.</p>
-                    </article>
-                    <article class="step">
-                        <span class="step-num">03</span>
-                        <h4>Expose Clients</h4>
-                        <p>Serve the same compact plane over CLI, HTTP, and MCP-native server mode for mixed ecosystems.</p>
-                    </article>
-                    <article class="step">
-                        <span class="step-num">04</span>
-                        <h4>Observe + Iterate</h4>
-                        <p>Use catalog events, request correlation, and OTLP traces to tune alias design and token economics.</p>
-                    </article>
-                </div>
-            </section>
-
-            <section class="section fade" id="ecosystem-fit">
-                <h2>Why This Matters Now</h2>
-                <div class="grid">
-                    <article class="panel span-7 accent-panel">
-                        <h3>MCP Is Growing Fast; Integration Debt Grows Faster</h3>
-                        <p>
-                            As organizations add more MCP servers, direct client integration becomes expensive to maintain.
-                            A managed capability plane decouples agent ergonomics from backend sprawl and creates a
-                            scalable path for long-lived systems.
-                        </p>
-                    </article>
-                    <article class="panel span-5">
-                        <h3>Built for Real Deployment Constraints</h3>
-                        <p>
-                            Warmplane focuses on practical needs: small interfaces, explicit contracts, runtime policy,
-                            idempotent operations, and transport compatibility. It is not a demo wrapper; it is a control
-                            layer for production agent operations.
-                        </p>
-                    </article>
-                </div>
-            </section>
-
-            <section class="bottom-cta fade" aria-label="GitHub call to action">
-                <div>
-                    <h3>Build your MCP capability plane with Warmplane.</h3>
-                    <p>Explore the repository, architecture docs, and implementation details.</p>
-                </div>
-                <a class="btn" href="https://github.com/Warmplane/warmplane">Visit github.com/Warmplane/warmplane</a>
-            </section>
-
-            <footer class="fade">
-                <span>Warmplane v0.7.1 | The local control plane that keeps MCP sessions warm</span>
-                <span><a href="https://github.com/Warmplane/warmplane">github.com/Warmplane/warmplane</a></span>
-            </footer>
-        </main>
-
-        <script>
-            const observer = new IntersectionObserver(
-                (entries) => {
-                    entries.forEach((entry) => {
-                        if (entry.isIntersecting) {
-                            entry.target.classList.add("show");
-                        }
-                    });
-                },
-                {
-                    threshold: 0.1,
-                    rootMargin: "0px 0px -25px 0px",
-                }
-            );
-
-            document.querySelectorAll(".fade").forEach((el) => observer.observe(el));
-        </script>
-    </body>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Warmplane — The Hot Local Control Plane for MCP Sessions</title>
+  <meta name="description" content="Warmplane keeps MCP sessions warm. A Rust-native local control plane that cuts token overhead by up to 96%, with persistent sessions, hybrid vector search, fine-grained RBAC policy governance, and deterministic execution envelopes.">
+  <meta name="keywords" content="MCP, Model Context Protocol, control plane, AI agents, tool calling, Rust, token efficiency, enterprise, vector search, SSE">
+  <meta name="author" content="Warmplane">
+  <meta property="og:title" content="Warmplane — The Hot Local Control Plane for MCP Sessions">
+  <meta property="og:description" content="Cut AI agent token costs by up to 96%. Persistent MCP sessions, hybrid BM25/vector search, policy governance, and deterministic execution envelopes.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://warmplane.github.io/warmplane/">
+  <link rel="canonical" href="https://warmplane.github.io/warmplane/">
+
+  <!-- Fonts: Instrument Serif for warm authority, Plus Jakarta Sans for refined body, JetBrains Mono & DM Mono for engineering precision -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Instrument+Serif:ital@0;1&family=Plus+Jakarta+Sans:ital,wght@0,300..800;1,300..800&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap" rel="stylesheet">
+
+  <style>
+    /* ============================================================
+       DESIGN TOKENS & RESPONSIVE CORE (OKLCH PERCEPTUAL PALETTE)
+       ============================================================ */
+    :root {
+      /* Warm Amber/Ember Accent System */
+      --amber-50:  oklch(98% 0.02 75);
+      --amber-100: oklch(93% 0.04 75);
+      --amber-200: oklch(85% 0.08 72);
+      --amber-300: oklch(76% 0.13 65);
+      --amber-400: oklch(70% 0.18 55); /* Primary Ember Highlight */
+      --amber-500: oklch(62% 0.19 48);
+      --amber-glow: oklch(70% 0.18 55 / 0.25);
+
+      /* High-Tech Cyan & Terminal Green Accents */
+      --cyan-glow: oklch(78% 0.16 195);
+      --green-glow: oklch(78% 0.18 145);
+
+      /* Dark Surface Spectrum */
+      --n-0:   oklch(6% 0.006 260);    /* Deepest backdrop */
+      --n-50:  oklch(10% 0.01 260);    /* Primary Surface */
+      --n-100: oklch(14% 0.012 260);   /* Card / Panel fill */
+      --n-150: oklch(18% 0.014 260);   /* Elevated Surface */
+      --n-200: oklch(24% 0.016 260);   /* Border default */
+      --n-300: oklch(34% 0.015 260);   /* Border active */
+      --n-400: oklch(48% 0.012 260);   /* Text dim */
+      --n-500: oklch(62% 0.008 260);   /* Text muted */
+      --n-700: oklch(82% 0.004 260);   /* Text secondary */
+      --n-800: oklch(92% 0.002 260);   /* Text primary */
+      --n-900: oklch(98% 0.001 260);   /* Pure crisp text */
+
+      /* Semantic Token Mappings */
+      --bg:            var(--n-0);
+      --surface:       var(--n-50);
+      --surface-alt:   var(--n-100);
+      --surface-hover: var(--n-150);
+      --border:        var(--n-200);
+      --border-subtle: var(--n-150);
+      --border-glow:   var(--amber-glow);
+      --text:          var(--n-800);
+      --text-muted:    var(--n-500);
+      --text-dim:      var(--n-400);
+      --accent:        var(--amber-400);
+      --accent-muted:  var(--amber-500);
+
+      /* Typography Stack */
+      --ff-display: 'Instrument Serif', Georgia, serif;
+      --ff-sans:    'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      --ff-mono:    'JetBrains Mono', 'DM Mono', monospace;
+
+      /* Fluid Type Scale */
+      --fs-xs:   clamp(0.72rem, 0.65rem + 0.3vw, 0.82rem);
+      --fs-sm:   clamp(0.82rem, 0.74rem + 0.35vw, 0.92rem);
+      --fs-base: clamp(0.92rem, 0.85rem + 0.4vw, 1.02rem);
+      --fs-md:   clamp(1.05rem, 0.92rem + 0.6vw, 1.25rem);
+      --fs-lg:   clamp(1.35rem, 1.1rem + 1.1vw, 1.85rem);
+      --fs-xl:   clamp(1.85rem, 1.3rem + 2.2vw, 3.1rem);
+      --fs-2xl:  clamp(2.45rem, 1.5rem + 3.8vw, 4.6rem);
+      --fs-3xl:  clamp(3.1rem, 1.8rem + 5.5vw, 6.6rem);
+
+      /* Spacing Scale */
+      --sp-1: 0.25rem;
+      --sp-2: 0.5rem;
+      --sp-3: 0.75rem;
+      --sp-4: 1rem;
+      --sp-6: 1.5rem;
+      --sp-8: 2rem;
+      --sp-12: 3rem;
+      --sp-16: 4rem;
+      --sp-24: 6rem;
+      --sp-32: 8rem;
+
+      /* Layout */
+      --max-width: 1240px;
+      --radius-sm: 8px;
+      --radius-md: 14px;
+      --radius-lg: 22px;
+
+      --transition-fast: 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+      --transition-smooth: 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    /* Reset & Base Setup */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      color-scheme: dark;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--ff-sans);
+      font-size: var(--fs-base);
+      line-height: 1.6;
+      overflow-x: hidden;
+      min-height: 100vh;
+    }
+
+    ::selection {
+      background: oklch(70% 0.18 55 / 0.35);
+      color: #fff;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    button {
+      font: inherit;
+      cursor: pointer;
+      border: none;
+      background: none;
+    }
+
+    /* ============================================================
+       ATMOSPHERIC BACKGROUND & GRAIN TEXTURE
+       ============================================================ */
+    .bg-canvas {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: -2;
+      overflow: hidden;
+    }
+
+    .bg-canvas::before {
+      content: '';
+      position: absolute;
+      top: -15%;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 1100px;
+      height: 700px;
+      background: radial-gradient(ellipse at center, oklch(70% 0.18 55 / 0.12) 0%, oklch(62% 0.19 48 / 0.03) 45%, transparent 75%);
+      filter: blur(90px);
+    }
+
+    .bg-canvas::after {
+      content: '';
+      position: absolute;
+      bottom: -10%;
+      right: -10%;
+      width: 800px;
+      height: 600px;
+      background: radial-gradient(circle at center, oklch(78% 0.16 195 / 0.05) 0%, transparent 70%);
+      filter: blur(110px);
+    }
+
+    .grid-overlay {
+      position: fixed;
+      inset: 0;
+      background-image: 
+        linear-gradient(to right, oklch(24% 0.016 260 / 0.22) 1px, transparent 1px),
+        linear-gradient(to bottom, oklch(24% 0.016 260 / 0.22) 1px, transparent 1px);
+      background-size: 64px 64px;
+      mask-image: radial-gradient(ellipse at center, black 35%, transparent 80%);
+      pointer-events: none;
+      z-index: -1;
+    }
+
+    /* Tactile Grain Texture Overlay */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 9999;
+      opacity: 0.032;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-repeat: repeat;
+      background-size: 256px 256px;
+    }
+
+    .container {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      padding: 0 var(--sp-6);
+    }
+
+    /* ============================================================
+       NAVIGATION BAR
+       ============================================================ */
+    header.nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      padding: var(--sp-4) var(--sp-6);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      background: oklch(6% 0.006 260 / 0.75);
+      border-bottom: 1px solid var(--border-subtle);
+      transition: all var(--transition-fast);
+    }
+
+    header.nav.scrolled {
+      background: oklch(6% 0.006 260 / 0.92);
+      border-bottom-color: var(--border);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    }
+
+    .nav-wrapper {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      max-width: var(--max-width);
+      margin: 0 auto;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-family: var(--ff-mono);
+      font-size: var(--fs-md);
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .logo-mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--accent), var(--amber-500));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 14px var(--amber-glow);
+    }
+
+    .logo-mark svg {
+      width: 16px;
+      height: 16px;
+      color: var(--n-0);
+    }
+
+    .nav-heat-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 8px var(--accent), 0 0 20px var(--amber-glow);
+      animation: pulse-heat 2.2s ease-in-out infinite;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: var(--sp-6);
+      align-items: center;
+      list-style: none;
+    }
+
+    .nav-links a {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      transition: color var(--transition-fast);
+    }
+
+    .nav-links a:hover {
+      color: var(--accent);
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .version-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 100px;
+      background: oklch(70% 0.18 55 / 0.12);
+      border: 1px solid oklch(70% 0.18 55 / 0.3);
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      color: var(--accent);
+      font-weight: 500;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.65rem 1.3rem;
+      border-radius: var(--radius-sm);
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: var(--n-0);
+      border-color: var(--accent);
+      box-shadow: 0 4px 20px var(--amber-glow);
+    }
+
+    .btn-primary:hover {
+      background: color-mix(in oklch, var(--accent), white 12%);
+      border-color: color-mix(in oklch, var(--accent), white 12%);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 24px oklch(70% 0.18 55 / 0.4);
+    }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-muted);
+      border-color: var(--border);
+    }
+
+    .btn-ghost:hover {
+      background: var(--surface-hover);
+      border-color: var(--text-muted);
+      color: var(--text);
+      transform: translateY(-1px);
+    }
+
+    .btn-code {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      background: var(--n-100);
+      border: 1px solid var(--border);
+      color: var(--cyan-glow);
+      padding: 0.65rem 1.1rem;
+    }
+
+    .btn-code:hover {
+      border-color: var(--cyan-glow);
+      background: var(--n-150);
+    }
+
+    /* ============================================================
+       HERO SECTION
+       ============================================================ */
+    .hero {
+      min-height: 100vh;
+      min-height: 100dvh;
+      padding: var(--sp-32) var(--sp-6) var(--sp-12);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      position: relative;
+    }
+
+    .hero-content {
+      max-width: 960px;
+      margin-bottom: var(--sp-12);
+    }
+
+    .hero-eyebrow {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--accent);
+      margin-bottom: var(--sp-6);
+      display: flex;
+      align-items: center;
+      gap: var(--sp-3);
+    }
+
+    .hero-title {
+      font-family: var(--ff-display);
+      font-size: var(--fs-3xl);
+      line-height: 1.0;
+      font-weight: 400;
+      color: var(--n-900);
+      margin-bottom: var(--sp-8);
+      text-wrap: balance;
+      letter-spacing: -0.02em;
+    }
+
+    .hero-title em {
+      font-style: italic;
+      color: var(--accent);
+      background: linear-gradient(135deg, #ffffff 30%, var(--accent) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero-subtitle {
+      font-size: var(--fs-lg);
+      line-height: 1.55;
+      color: var(--text-muted);
+      max-width: 680px;
+      margin-bottom: var(--sp-12);
+      text-wrap: pretty;
+      font-weight: 400;
+    }
+
+    .hero-subtitle strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .hero-cta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--sp-4);
+      align-items: center;
+    }
+
+    /* KPI Stats Bar */
+    .hero-stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: var(--sp-4);
+      padding-top: var(--sp-8);
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    .hero-stat-card {
+      border: 1px solid var(--border-subtle);
+      background: var(--surface);
+      border-radius: var(--radius-sm);
+      padding: var(--sp-5) var(--sp-6);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      transition: border-color var(--transition-fast);
+    }
+
+    .hero-stat-card:hover {
+      border-color: var(--border);
+    }
+
+    .hero-stat-val {
+      font-family: var(--ff-display);
+      font-size: var(--fs-2xl);
+      line-height: 1;
+      color: var(--accent);
+    }
+
+    .hero-stat-lbl {
+      font-family: var(--ff-mono);
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-top: var(--sp-2);
+      line-height: 1.3;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* ============================================================
+       INTERACTIVE DECK / ARCHITECTURE FLOW DEMO
+       ============================================================ */
+    .hero-demo-wrapper {
+      margin-top: var(--sp-16);
+      margin-bottom: var(--sp-16);
+    }
+
+    .demo-deck {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+    }
+
+    .demo-header {
+      background: oklch(10% 0.01 260);
+      padding: 0.85rem 1.25rem;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .window-dots {
+      display: flex;
+      gap: 0.45rem;
+    }
+
+    .dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+    }
+
+    .dot-red { background: #ff5f56; }
+    .dot-yellow { background: #ffbd2e; }
+    .dot-green { background: #27c93f; }
+
+    .demo-tabs {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .demo-tab {
+      padding: 0.35rem 0.85rem;
+      border-radius: 6px;
+      font-size: var(--fs-xs);
+      font-family: var(--ff-mono);
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      background: transparent;
+      border: none;
+    }
+
+    .demo-tab.active {
+      background: var(--surface-hover);
+      color: var(--text);
+    }
+
+    .demo-body {
+      display: grid;
+      grid-template-columns: 1fr 1.2fr;
+      min-height: 400px;
+    }
+
+    .demo-pane-left {
+      padding: 1.75rem;
+      border-right: 1px solid var(--border-subtle);
+      background: oklch(8% 0.01 260);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .demo-pane-right {
+      padding: 1.75rem;
+      background: oklch(6% 0.008 260);
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      line-height: 1.65;
+      overflow-x: auto;
+    }
+
+    .arch-flow {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .flow-node {
+      background: var(--surface);
+      border: 1px solid var(--border-subtle);
+      padding: 0.9rem 1.1rem;
+      border-radius: var(--radius-sm);
+      transition: all var(--transition-fast);
+    }
+
+    .flow-node.highlight {
+      border-color: var(--accent);
+      box-shadow: 0 0 16px var(--amber-glow);
+    }
+
+    .node-title {
+      font-size: var(--fs-xs);
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.2rem;
+    }
+
+    .node-desc {
+      font-size: var(--fs-sm);
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .flow-arrow {
+      text-align: center;
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 1.1rem;
+      margin: -0.4rem 0;
+    }
+
+    .code-output {
+      color: var(--text-muted);
+      white-space: pre-wrap;
+    }
+
+    .code-key { color: var(--accent); }
+    .code-str { color: var(--green-glow); }
+    .code-num { color: var(--cyan-glow); }
+    .code-comment { color: var(--text-dim); font-style: italic; }
+
+    /* ============================================================
+       SECTION FRAMEWORK & DIVIDERS
+       ============================================================ */
+    .section {
+      padding: var(--sp-24) var(--sp-6);
+      position: relative;
+    }
+
+    .section-inner {
+      max-width: var(--max-width);
+      margin: 0 auto;
+    }
+
+    .section-label {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--accent-muted);
+      margin-bottom: var(--sp-4);
+    }
+
+    .section-heading {
+      font-family: var(--ff-display);
+      font-size: var(--fs-xl);
+      font-weight: 400;
+      line-height: 1.12;
+      color: var(--n-900);
+      margin-bottom: var(--sp-4);
+      text-wrap: balance;
+    }
+
+    .section-desc {
+      font-size: var(--fs-md);
+      color: var(--text-muted);
+      max-width: 680px;
+      margin-bottom: var(--sp-12);
+      text-wrap: pretty;
+    }
+
+    .divider {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      border: none;
+      border-top: 1px solid var(--border-subtle);
+    }
+
+    /* ============================================================
+       THE PROBLEM — SIDE BY SIDE COMPARISON
+       ============================================================ */
+    .problem-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--sp-6);
+    }
+
+    .problem-card {
+      padding: var(--sp-8);
+      border: 1px solid var(--border-subtle);
+      background: var(--surface);
+      border-radius: var(--radius-md);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .problem-card-bad::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: oklch(60% 0.2 25);
+    }
+
+    .problem-card-good::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: var(--accent);
+    }
+
+    .problem-card-tag {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: var(--sp-6);
+    }
+
+    .problem-card-bad .problem-card-tag { color: oklch(60% 0.2 25); }
+    .problem-card-good .problem-card-tag { color: var(--accent); }
+
+    .problem-card-title {
+      font-family: var(--ff-display);
+      font-size: var(--fs-lg);
+      margin-bottom: var(--sp-4);
+      color: var(--text);
+    }
+
+    .problem-card-body {
+      color: var(--text-muted);
+      font-size: var(--fs-sm);
+      line-height: 1.7;
+    }
+
+    .problem-card-items {
+      margin-top: var(--sp-6);
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-3);
+    }
+
+    .problem-card-item {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      padding: var(--sp-3) var(--sp-4);
+      border: 1px solid var(--border-subtle);
+      background: var(--n-100);
+      border-radius: var(--radius-sm);
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: var(--sp-3);
+    }
+
+    .problem-card-bad .item-icon { color: oklch(60% 0.2 25); }
+    .problem-card-good .item-icon { color: var(--green-glow); }
+
+    /* ============================================================
+       TOKEN SAVINGS EVALUATION DATA
+       ============================================================ */
+    .savings-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--sp-6);
+    }
+
+    .savings-card {
+      border: 1px solid var(--border);
+      background: var(--surface);
+      border-radius: var(--radius-md);
+      padding: var(--sp-8);
+    }
+
+    .savings-card-suite {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--accent);
+      margin-bottom: var(--sp-4);
+    }
+
+    .savings-card-big {
+      font-family: var(--ff-display);
+      font-size: var(--fs-2xl);
+      color: var(--text);
+      line-height: 1;
+      margin-bottom: var(--sp-2);
+    }
+
+    .savings-card-context {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      color: var(--text-dim);
+      margin-bottom: var(--sp-8);
+    }
+
+    .savings-bar {
+      margin-bottom: var(--sp-4);
+    }
+
+    .savings-bar-header {
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--ff-mono);
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      margin-bottom: var(--sp-1);
+    }
+
+    .savings-bar-track {
+      height: 6px;
+      background: var(--n-200);
+      border-radius: 3px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .savings-bar-fill {
+      position: absolute;
+      top: 0; left: 0;
+      height: 100%;
+      background: var(--accent);
+      border-radius: 3px;
+      transition: width 1.5s cubic-bezier(0.16, 1, 0.3, 1);
+      width: 0;
+    }
+
+    .savings-bar-fill-alt {
+      background: oklch(60% 0.2 25 / 0.4);
+    }
+
+    /* Terminal eval snippet overlay */
+    .terminal-box {
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border);
+      overflow: hidden;
+      background: oklch(7% 0.01 260);
+      color: #eee6d7;
+      box-shadow: 0 16px 28px rgba(0, 0, 0, 0.4);
+      font-family: var(--ff-mono);
+      margin-top: var(--sp-12);
+    }
+
+    .terminal-head {
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 14px 24px;
+      background: oklch(11% 0.01 260);
+      color: var(--text-muted);
+      font-size: var(--fs-xs);
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .terminal-box pre {
+      margin: 0;
+      padding: 24px 28px !important;
+      white-space: pre-wrap;
+      line-height: 1.7;
+      font-size: 0.88rem;
+    }
+
+    .terminal-box pre code {
+      display: block;
+      padding: 0;
+    }
+
+    /* ============================================================
+       CORE CAPABILITIES BENTO GRID
+       ============================================================ */
+    .bento-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: var(--sp-4);
+    }
+
+    .bento-cell {
+      background: var(--surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: var(--sp-6);
+      transition: all var(--transition-smooth);
+      position: relative;
+      overflow: hidden;
+
+      &:hover {
+        border-color: var(--border);
+        background: var(--surface-hover);
+        transform: translateY(-2px);
+      }
+    }
+
+    .bento-cell-wide {
+      grid-column: span 2;
+      background: linear-gradient(135deg, var(--surface) 50%, oklch(14% 0.03 55 / 0.3) 100%);
+    }
+
+    .bento-icon {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-lg);
+      color: var(--accent);
+      margin-bottom: var(--sp-4);
+    }
+
+    .bento-tag {
+      display: inline-block;
+      font-family: var(--ff-mono);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 2px 8px;
+      border-radius: 100px;
+      border: 1px solid var(--border);
+      color: var(--accent);
+      background: oklch(70% 0.18 55 / 0.08);
+      margin-bottom: var(--sp-3);
+    }
+
+    .bento-title {
+      font-family: var(--ff-display);
+      font-size: var(--fs-md);
+      color: var(--text);
+      margin-bottom: var(--sp-2);
+    }
+
+    .bento-body {
+      font-size: var(--fs-sm);
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    .pill-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: var(--sp-4);
+    }
+
+    .pill {
+      font-family: var(--ff-mono);
+      font-size: 0.72rem;
+      padding: 4px 10px;
+      border-radius: 100px;
+      border: 1px solid var(--border-subtle);
+      background: var(--n-100);
+      color: var(--text-muted);
+    }
+
+    /* ============================================================
+       ACCESS MODES & CLI DEMO
+       ============================================================ */
+    .modes-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: var(--sp-6);
+    }
+
+    .mode-card {
+      border: 1px solid var(--border-subtle);
+      padding: var(--sp-8) var(--sp-6);
+      background: var(--surface);
+      border-radius: var(--radius-md);
+      transition: border-color 0.3s;
+
+      &:hover { border-color: var(--accent-muted); }
+    }
+
+    .mode-card-icon {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xl);
+      color: var(--accent);
+      margin-bottom: var(--sp-4);
+    }
+
+    .mode-card-title {
+      font-family: var(--ff-display);
+      font-size: var(--fs-lg);
+      color: var(--text);
+      margin-bottom: var(--sp-3);
+    }
+
+    .mode-card-body {
+      font-size: var(--fs-sm);
+      color: var(--text-muted);
+      line-height: 1.6;
+      margin-bottom: var(--sp-4);
+    }
+
+    .mode-card-code {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      color: var(--text-dim);
+      padding: var(--sp-3) var(--sp-4);
+      background: var(--n-100);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      white-space: nowrap;
+      overflow-x: auto;
+    }
+
+    /* Playground / Interactive Spec Section */
+    .playground-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      overflow: hidden;
+    }
+
+    .playground-sidebar {
+      background: oklch(8% 0.01 260);
+      border-right: 1px solid var(--border-subtle);
+      padding: 1.5rem;
+    }
+
+    .pg-item {
+      padding: 0.85rem 1rem;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-size: var(--fs-xs);
+      font-family: var(--ff-mono);
+      font-weight: 500;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+      transition: all var(--transition-fast);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .pg-item:hover, .pg-item.active {
+      background: var(--surface);
+      color: var(--text);
+    }
+
+    .pg-item.active {
+      border-left: 3px solid var(--accent);
+    }
+
+    .pg-tag {
+      font-size: 0.7rem;
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      background: var(--n-150);
+      color: var(--cyan-glow);
+    }
+
+    .playground-content {
+      padding: 1.75rem;
+      background: oklch(5% 0.008 260);
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      line-height: 1.65;
+      white-space: pre-wrap;
+      overflow-x: auto;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      align-items: stretch;
+    }
+
+    .playground-content .code-output {
+      margin: 0;
+      align-self: flex-start;
+      width: 100%;
+    }
+
+    /* ============================================================
+       CODE SHOWCASE (CONFIG & QUICKSTART)
+       ============================================================ */
+    .code-showcase {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--sp-6);
+    }
+
+    .code-block {
+      border: 1px solid var(--border-subtle);
+      background: var(--surface);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+    }
+
+    .code-block-header {
+      padding: var(--sp-3) var(--sp-4);
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--n-100);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .code-block-filename {
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      color: var(--text-muted);
+    }
+
+    .code-block-lang {
+      font-family: var(--ff-mono);
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+      padding: 2px 6px;
+      border: 1px solid var(--border-subtle);
+      border-radius: 4px;
+    }
+
+    .code-block pre {
+      padding: var(--sp-4) var(--sp-6);
+      overflow-x: auto;
+      font-family: var(--ff-mono);
+      font-size: var(--fs-xs);
+      line-height: 1.7;
+      color: var(--n-700);
+    }
+
+    .code-block pre .kw  { color: var(--amber-300); }
+    .code-block pre .str { color: var(--green-glow); }
+    .code-block pre .cmt { color: var(--n-400); font-style: italic; }
+    .code-block pre .num { color: var(--cyan-glow); }
+
+    /* ============================================================
+       FINAL CTA & FOOTER
+       ============================================================ */
+    .cta-section {
+      text-align: center;
+      padding: var(--sp-32) var(--sp-6);
+      position: relative;
+    }
+
+    .cta-glow {
+      position: absolute;
+      bottom: -20%;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 60vw;
+      height: 60vw;
+      max-width: 600px;
+      max-height: 600px;
+      border-radius: 50%;
+      background: radial-gradient(ellipse at center, oklch(70% 0.18 55 / 0.08) 0%, transparent 65%);
+      filter: blur(80px);
+      pointer-events: none;
+    }
+
+    .cta-title {
+      font-family: var(--ff-display);
+      font-size: var(--fs-2xl);
+      font-weight: 400;
+      color: var(--n-900);
+      margin-bottom: var(--sp-4);
+      text-wrap: balance;
+    }
+
+    .cta-title em {
+      font-style: italic;
+      color: var(--accent);
+    }
+
+    .cta-sub {
+      font-size: var(--fs-md);
+      color: var(--text-muted);
+      margin-bottom: var(--sp-8);
+    }
+
+    footer.footer {
+      padding: var(--sp-8) var(--sp-6);
+      border-top: 1px solid var(--border-subtle);
+      background: oklch(5% 0.006 260);
+      font-size: var(--fs-xs);
+      color: var(--text-dim);
+    }
+
+    .footer-wrapper {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: var(--sp-4);
+    }
+
+    .footer-links {
+      display: flex;
+      gap: var(--sp-6);
+      list-style: none;
+    }
+
+    .footer-links a:hover {
+      color: var(--accent);
+    }
+
+    /* Toast Notification */
+    .copied-toast {
+      position: fixed;
+      bottom: 2rem; right: 2rem;
+      background: var(--accent);
+      color: var(--n-0);
+      padding: 0.75rem 1.25rem;
+      border-radius: var(--radius-sm);
+      font-family: var(--ff-mono);
+      font-weight: 700;
+      font-size: var(--fs-xs);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      transform: translateY(100px);
+      opacity: 0;
+      transition: all var(--transition-smooth);
+      z-index: 10000;
+    }
+
+    .copied-toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+
+    /* ============================================================
+       SCROLL REVEAL ANIMATIONS (PROGRESSIVE ENHANCEMENT)
+       ============================================================ */
+    .reveal {
+      animation: reveal-up linear both;
+      animation-timeline: view();
+      animation-range: entry 0% cover 18%;
+    }
+
+    @keyframes reveal-up {
+      from { opacity: 0; transform: translateY(30px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes pulse-heat {
+      0%, 100% { opacity: 1; box-shadow: 0 0 8px var(--accent), 0 0 20px var(--amber-glow); }
+      50%      { opacity: 0.5; box-shadow: 0 0 4px var(--accent), 0 0 10px oklch(70% 0.18 55 / 0.15); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .reveal { animation: none; }
+      .nav-heat-dot { animation: none; }
+    }
+
+    /* Responsive Breakdown */
+    @media (max-width: 960px) {
+      .hero-stats { grid-template-columns: repeat(2, 1fr); }
+      .problem-grid, .savings-grid, .code-showcase { grid-template-columns: 1fr; }
+      .bento-grid, .modes-grid { grid-template-columns: 1fr; }
+      .bento-cell-wide { grid-column: span 1; }
+      .demo-body { grid-template-columns: 1fr; }
+      .playground-box { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 640px) {
+      .nav-links { display: none; }
+      .hero-stats { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Atmospheric Background Canvas -->
+  <div class="bg-canvas"></div>
+  <div class="grid-overlay"></div>
+
+  <!-- Header Navigation -->
+  <header class="nav" id="nav">
+    <div class="nav-wrapper">
+      <a href="#" class="logo">
+        <div class="logo-mark">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          </svg>
+        </div>
+        <span>warmplane</span>
+        <span class="nav-heat-dot"></span>
+      </a>
+
+      <ul class="nav-links">
+        <li><a href="#why">Why</a></li>
+        <li><a href="#architecture">Architecture</a></li>
+        <li><a href="#capabilities">Capabilities</a></li>
+        <li><a href="#savings">Savings</a></li>
+        <li><a href="#playground">Spec</a></li>
+        <li><a href="integrators.html">Integrators Guide</a></li>
+      </ul>
+
+      <div class="nav-actions">
+        <span class="version-badge">v0.7.1</span>
+        <a href="https://github.com/Warmplane/warmplane" target="_blank" rel="noopener" class="btn btn-ghost">GitHub ↗</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero container">
+    <div class="hero-content">
+      <div class="hero-eyebrow">
+        <span>Open Source · Rust-Native Runtime</span>
+        <span class="version-badge">v0.7.1 Pragmatic Rust</span>
+      </div>
+
+      <h1 class="hero-title">
+        Keep your MCP<br>sessions <em>warm &amp; hot</em>
+      </h1>
+
+      <p class="hero-subtitle">
+        Warmplane is the <strong>local control plane</strong> that multiplexes upstream Model Context Protocol (MCP) servers behind one hot, policyable runtime. Cut token overhead by up to <strong>96%</strong> with lazy capability indexes, hybrid vector search, fine-grained RBAC governance, and deterministic execution envelopes.
+      </p>
+
+      <div class="hero-cta">
+        <button class="btn btn-code" onclick="copyInstall()">
+          <span>$ cargo install warmplane</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+        </button>
+        <a href="https://github.com/Warmplane/warmplane" class="btn btn-primary" target="_blank" rel="noopener">View on GitHub</a>
+        <a href="https://github.com/Warmplane/warmplane/blob/main/docs/USER-GUIDE.md" class="btn btn-ghost" target="_blank" rel="noopener">Read User Guide →</a>
+      </div>
+    </div>
+
+    <!-- KPIs -->
+    <div class="hero-stats">
+      <div class="hero-stat-card">
+        <div class="hero-stat-val">95.8%</div>
+        <div class="hero-stat-lbl">Copilot MCP Token Savings</div>
+      </div>
+      <div class="hero-stat-card">
+        <div class="hero-stat-val">3</div>
+        <div class="hero-stat-lbl">Client Modes (HTTP/CLI/MCP)</div>
+      </div>
+      <div class="hero-stat-card">
+        <div class="hero-stat-val">0</div>
+        <div class="hero-stat-lbl">Tokens on ETag Cache Hit</div>
+      </div>
+      <div class="hero-stat-card">
+        <div class="hero-stat-val">v0.7.1</div>
+        <div class="hero-stat-lbl">Spec &amp; SSE Stream Parity</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Interactive Architecture Flow Deck -->
+  <section class="container hero-demo-wrapper" id="architecture">
+    <div class="demo-deck">
+      <div class="demo-header">
+        <div class="window-dots">
+          <div class="dot dot-red"></div>
+          <div class="dot dot-yellow"></div>
+          <div class="dot dot-green"></div>
+        </div>
+        <div class="demo-tabs">
+          <button class="demo-tab active" onclick="switchDemoTab('flow', this)">Architecture Flow</button>
+          <button class="demo-tab" onclick="switchDemoTab('config', this)">mcp_servers.json</button>
+          <button class="demo-tab" onclick="switchDemoTab('envelope', this)">Response Envelope</button>
+        </div>
+      </div>
+
+      <div class="demo-body">
+        <div class="demo-pane-left">
+          <div class="arch-flow">
+            <div class="flow-node highlight">
+              <div class="node-title">AI Client (Claude / Cursor / CLI)</div>
+              <div class="node-desc">Single Gateway Endpoint</div>
+            </div>
+            <div class="flow-arrow">↓</div>
+            <div class="flow-node" style="border-color: var(--accent);">
+              <div class="node-title">Warmplane Runtime</div>
+              <div class="node-desc">Policy • Hybrid Search • Idempotency • ETag</div>
+            </div>
+            <div class="flow-arrow">↓</div>
+            <div class="flow-node">
+              <div class="node-title">Upstream MCP Sessions (Hot)</div>
+              <div class="node-desc">SQLite • Filesystem • GitHub • Postgres</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="demo-pane-right">
+          <div id="tab-flow" class="code-output">
+<span class="code-comment">// High-Performance Local Control Plane</span>
+Warmplane manages the lifecycle of upstream MCP servers.
+- Maintains warm sub-process stdio & HTTP/SSE sessions
+- Eliminates startup penalties on tool invocations
+- Enforces fine-grained allow/deny rules & key redaction
+- Exposes BM25 + ONNX vector embedding search
+- Provides standardized execution envelopes & OTLP tracing
+          </div>
+
+          <div id="tab-config" class="code-output" style="display:none;">
+{
+  <span class="code-key">"port"</span>: <span class="code-num">9090</span>,
+  <span class="code-key">"capabilityAliases"</span>: { 
+    <span class="code-key">"sqlite.read_query"</span>: <span class="code-str">"db.query"</span> 
+  },
+  <span class="code-key">"policy"</span>: {
+    <span class="code-key">"allow"</span>: [<span class="code-str">"db.*"</span>, <span class="code-str">"fs.*"</span>],
+    <span class="code-key">"deny"</span>: [<span class="code-str">"fs.secret"</span>],
+    <span class="code-key">"redactKeys"</span>: [<span class="code-str">"token"</span>, <span class="code-str">"api_key"</span>]
+  },
+  <span class="code-key">"mcpServers"</span>: {
+    <span class="code-key">"sqlite"</span>: {
+      <span class="code-key">"command"</span>: <span class="code-str">"npx"</span>,
+      <span class="code-key">"args"</span>: [<span class="code-str">"-y"</span>, <span class="code-str">"@modelcontextprotocol/server-sqlite"</span>, <span class="code-str">"./db"</span>]
+    }
+  }
+}
+          </div>
+
+          <div id="tab-envelope" class="code-output" style="display:none;">
+{
+  <span class="code-key">"request_id"</span>: <span class="code-str">"req_984372a"</span>,
+  <span class="code-key">"status"</span>: <span class="code-str">"success"</span>,
+  <span class="code-key">"retry_metadata"</span>: {
+    <span class="code-key">"classification"</span>: <span class="code-str">"idempotent"</span>,
+    <span class="code-key">"attempt"</span>: <span class="code-num">1</span>
+  },
+  <span class="code-key">"result"</span>: {
+    <span class="code-key">"rows"</span>: [<span class="code-str">"{\"id\": 1, \"status\": \"active\"}"</span>]
+  }
+}
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Problem Section -->
+  <section class="section" id="why">
+    <div class="section-inner">
+      <div class="section-label reveal">01 — The Problem</div>
+      <h2 class="section-heading reveal">The description tax is real</h2>
+      <p class="section-desc reveal">
+        Before an LLM agent executes a single tool call, it ingests the full schema catalog of every connected MCP server on every turn. As server count grows, prompt tokens balloon rapidly—adding cost, latency, and context distraction.
+      </p>
+
+      <div class="problem-grid reveal">
+        <div class="problem-card problem-card-bad">
+          <div class="problem-card-tag">Direct MCP Pattern</div>
+          <div class="problem-card-title">Uncontrolled Overhead</div>
+          <div class="problem-card-body">
+            Every turn re-transmits full JSON schemas, detailed descriptions, resource trees, and prompt definitions from every upstream server.
+          </div>
+          <div class="problem-card-items">
+            <div class="problem-card-item">
+              <span class="item-icon">✕</span>
+              54,715 tokens per discovery pull (GitHub Copilot MCP)
+            </div>
+            <div class="problem-card-item">
+              <span class="item-icon">✕</span>
+              547,150 tokens over a 10-turn mixed agent loop
+            </div>
+            <div class="problem-card-item">
+              <span class="item-icon">✕</span>
+              No cross-server caching, no search, no policy profile
+            </div>
+          </div>
+        </div>
+
+        <div class="problem-card problem-card-good">
+          <div class="problem-card-tag">With Warmplane</div>
+          <div class="problem-card-title">Compact Control Plane</div>
+          <div class="problem-card-body">
+            Index-first discovery with lazy schema expansion. Agents pull compact alias indices and query expanded schemas on demand.
+          </div>
+          <div class="problem-card-items">
+            <div class="problem-card-item">
+              <span class="item-icon">✓</span>
+              2,386 tokens per discovery pull (95.6% reduction)
+            </div>
+            <div class="problem-card-item">
+              <span class="item-icon">✓</span>
+              22,895 tokens over same 10-turn mixed loop
+            </div>
+            <div class="problem-card-item">
+              <span class="item-icon">✓</span>
+              SHA-256 ETag caching → 0 tokens on 304 Not Modified
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Measured Token Savings Section -->
+  <section class="section" id="savings">
+    <div class="section-inner">
+      <div class="section-label reveal">02 — Empirical Measurement</div>
+      <h2 class="section-heading reveal">Proven Token Savings</h2>
+      <p class="section-desc reveal">
+        Reproducible evaluation measured with the <code style="font-family:var(--ff-mono);color:var(--text)">cl100k_base</code> tokenizer. Run the evaluation suite in <code style="font-family:var(--ff-mono);color:var(--text)">eval/token-efficiency/</code> to verify on your own workloads.
+      </p>
+
+      <div class="savings-grid reveal" id="savings-cards">
+        <div class="savings-card">
+          <div class="savings-card-suite">GitHub Copilot MCP Suite</div>
+          <div class="savings-card-big">95.8%</div>
+          <div class="savings-card-context">Token Savings · 10-turn mixed loop</div>
+
+          <div class="savings-bar">
+            <div class="savings-bar-header">
+              <span>Discovery pull</span>
+              <span>54,715 → 2,386 tokens</span>
+            </div>
+            <div class="savings-bar-track">
+              <div class="savings-bar-fill savings-bar-fill-alt" data-width="100"></div>
+              <div class="savings-bar-fill" data-width="4.4"></div>
+            </div>
+          </div>
+
+          <div class="savings-bar">
+            <div class="savings-bar-header">
+              <span>5-turn tool loop</span>
+              <span>260,005 → 11,173 tokens</span>
+            </div>
+            <div class="savings-bar-track">
+              <div class="savings-bar-fill savings-bar-fill-alt" data-width="100"></div>
+              <div class="savings-bar-fill" data-width="4.3"></div>
+            </div>
+          </div>
+
+          <div class="savings-bar">
+            <div class="savings-bar-header">
+              <span>10-turn mixed loop</span>
+              <span>547,150 → 22,895 tokens</span>
+            </div>
+            <div class="savings-bar-track">
+              <div class="savings-bar-fill savings-bar-fill-alt" data-width="100"></div>
+              <div class="savings-bar-fill" data-width="4.2"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="savings-card">
+          <div class="savings-card-suite">Filesystem Control Suite</div>
+          <div class="savings-card-big">58.2%</div>
+          <div class="savings-card-context">Token Savings · 10-turn mixed loop</div>
+
+          <div class="savings-bar">
+            <div class="savings-bar-header">
+              <span>Discovery pull</span>
+              <span>2,552 → 1,066 tokens</span>
+            </div>
+            <div class="savings-bar-track">
+              <div class="savings-bar-fill savings-bar-fill-alt" data-width="100"></div>
+              <div class="savings-bar-fill" data-width="41.8"></div>
+            </div>
+          </div>
+
+          <div class="savings-bar">
+            <div class="savings-bar-header">
+              <span>5-turn tool loop</span>
+              <span>12,760 → 5,349 tokens</span>
+            </div>
+            <div class="savings-bar-track">
+              <div class="savings-bar-fill savings-bar-fill-alt" data-width="100"></div>
+              <div class="savings-bar-fill" data-width="41.9"></div>
+            </div>
+          </div>
+
+          <div class="savings-bar">
+            <div class="savings-bar-header">
+              <span>10-turn mixed loop</span>
+              <span>25,520 → 10,669 tokens</span>
+            </div>
+            <div class="savings-bar-track">
+              <div class="savings-bar-fill savings-bar-fill-alt" data-width="100"></div>
+              <div class="savings-bar-fill" data-width="41.8"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Real terminal output embed from index.html -->
+      <div class="terminal-box reveal">
+        <div class="terminal-head">
+          <span>Token Efficiency Benchmark | Measured Eval Harness Output</span>
+          <span>Tokenizer: cl100k_base</span>
+        </div>
+        <pre><code><span style="color:#7a7264">Suite: github_copilot_only</span>
+Discovery      <span style="color:#e6b85c">54,715</span> -&gt; <span style="color:#7ac98a">2,386</span>   <span style="color:#7ac98a">(95.6% savings)</span>
+5-turn loop   <span style="color:#e6b85c">260,005</span> -&gt; <span style="color:#7ac98a">11,173</span>  <span style="color:#7ac98a">(95.7% savings)</span>
+10-turn mixed <span style="color:#e6b85c">547,150</span> -&gt; <span style="color:#7ac98a">22,895</span>  <span style="color:#7ac98a">(95.8% savings)</span>
+
+<span style="color:#7a7264">Control: public_filesystem_only</span>
+Discovery       <span style="color:#e6b85c">2,552</span> -&gt; <span style="color:#7ac98a">1,066</span>   <span style="color:#7ac98a">(58.2% savings)</span>
+5-turn loop    <span style="color:#e6b85c">12,760</span> -&gt; <span style="color:#7ac98a">5,349</span>   <span style="color:#7ac98a">(58.1% savings)</span>
+10-turn mixed  <span style="color:#e6b85c">25,520</span> -&gt; <span style="color:#7ac98a">10,669</span>  <span style="color:#7ac98a">(58.2% savings)</span></code></pre>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Core Capabilities Bento Grid -->
+  <section class="section" id="capabilities">
+    <div class="section-inner">
+      <div class="section-label reveal">03 — Capability Matrix</div>
+      <h2 class="section-heading reveal">Built for Hot Production Stacks</h2>
+      <p class="section-desc reveal">
+        Everything ships in a single zero-dependency Rust binary compliant with Microsoft Pragmatic Rust guidelines.
+      </p>
+
+      <div class="bento-grid reveal">
+        <div class="bento-cell bento-cell-wide">
+          <span class="bento-tag">Unified Control Plane</span>
+          <div class="bento-icon">⊞</div>
+          <div class="bento-title">Unified Facade for Tools, Resources &amp; Prompts</div>
+          <div class="bento-body">
+            Build a clean, stable contract across heterogeneous upstream MCP servers. Enumerate compact aliases, fetch full schemas lazily, and route standard invocations with complete correlation.
+          </div>
+          <div class="pill-list">
+            <span class="pill">Alias Registry</span>
+            <span class="pill">Compact Schemas</span>
+            <span class="pill">On-demand Expansion</span>
+            <span class="pill">MCP Native Exposure</span>
+            <span class="pill">Hybrid Search</span>
+          </div>
+        </div>
+
+        <div class="bento-cell">
+          <span class="bento-tag">v0.7.1 Spec Parity</span>
+          <div class="bento-icon">⚡</div>
+          <div class="bento-title">Completion &amp; SSE Real-Time Updates</div>
+          <div class="bento-body">
+            Full compliance with MCP spec: <code>POST /v1/completion/complete</code> for prompt autocompletion, real-time <code>GET /v1/resources/updates</code> SSE streams, and LLM delegation sampling.
+          </div>
+        </div>
+
+        <div class="bento-cell">
+          <span class="bento-tag">Vector &amp; Lexical</span>
+          <div class="bento-icon">◎</div>
+          <div class="bento-title">Hybrid BM25 + Vector Search</div>
+          <div class="bento-body">
+            Find the right tool by name or natural language intention using BM25 keyword matching plus optional ONNX vector embeddings.
+          </div>
+        </div>
+
+        <div class="bento-cell">
+          <span class="bento-tag">v0.6.0 Resiliency</span>
+          <div class="bento-icon">⇌</div>
+          <div class="bento-title">Idempotency &amp; Operation Cancel</div>
+          <div class="bento-body">
+            Pass <code>Idempotency-Key</code> to share in-flight calls and avoid duplicate side-effects. Abort stuck calls instantly via <code>POST /v1/operations/cancel</code>.
+          </div>
+        </div>
+
+        <div class="bento-cell">
+          <span class="bento-tag">Governance</span>
+          <div class="bento-icon">⊘</div>
+          <div class="bento-title">Fine-Grained RBAC &amp; Policy Profiles</div>
+          <div class="bento-body">
+            Centralized policy rules for read-only, constrained write, and privileged paths with automated argument key redaction.
+          </div>
+        </div>
+
+        <div class="bento-cell">
+          <span class="bento-tag">Observability</span>
+          <div class="bento-icon">⊙</div>
+          <div class="bento-title">OTLP Traces &amp; Request Context</div>
+          <div class="bento-body">
+            Propagate <code>operation_id</code>, <code>actor_id</code>, and <code>grant_id</code> across execution envelopes, structured JSON logs, and OpenTelemetry spans.
+          </div>
+        </div>
+
+        <div class="bento-cell">
+          <span class="bento-tag">v0.7.0 Pragmatic Rust</span>
+          <div class="bento-icon">🦀</div>
+          <div class="bento-title">Pragmatic Rust &amp; Builder Pattern</div>
+          <div class="bento-body">
+            Strict Microsoft Pragmatic Rust adherence. Fluent Builder pattern for <code>AppState</code>, <code>SearchFilter</code>, and <code>RequestContext</code> with zero panic paths.
+          </div>
+        </div>
+
+        <div class="bento-cell">
+          <span class="bento-tag">Enterprise Auth</span>
+          <div class="bento-icon">⊕</div>
+          <div class="bento-title">OAuth 2.1 &amp; OIDC Client Infrastructure</div>
+          <div class="bento-body">
+            Complete OAuth 2.1 authorization code flow with PKCE, dynamic discovery, scope accumulation, and silent background token refresh with rotation for HTTP upstreams.
+          </div>
+        </div>
+
+        <div class="bento-cell">
+          <span class="bento-tag">Catalog Engine</span>
+          <div class="bento-icon">⌗</div>
+          <div class="bento-title">Catalog Versioning &amp; ETag Validation</div>
+          <div class="bento-body">
+            SHA-256 state hashing with conditional 304 Not Modified responses and cursor-based event feeds for zero-token client revalidation.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Interactive Spec Playground Section -->
+  <section class="section" id="playground">
+    <div class="section-inner">
+      <div class="section-label reveal">04 — API &amp; Protocol Spec</div>
+      <h2 class="section-heading reveal">Interactive Control Plane Endpoints</h2>
+      <p class="section-desc reveal">
+        Explore the primary RESTful HTTP/v1 endpoints exposed by Warmplane daemon.
+      </p>
+
+      <div class="playground-box reveal">
+        <div class="playground-sidebar">
+          <div class="pg-item active" onclick="switchPg('caps', this)">
+            <span>GET /v1/capabilities</span>
+            <span class="pg-tag">INDEX</span>
+          </div>
+          <div class="pg-item" onclick="switchPg('search', this)">
+            <span>POST /v1/capabilities/search</span>
+            <span class="pg-tag">SEARCH</span>
+          </div>
+          <div class="pg-item" onclick="switchPg('call', this)">
+            <span>POST /v1/tools/call</span>
+            <span class="pg-tag">EXEC</span>
+          </div>
+          <div class="pg-item" onclick="switchPg('sse', this)">
+            <span>GET /v1/resources/updates</span>
+            <span class="pg-tag">SSE</span>
+          </div>
+          <div class="pg-item" onclick="switchPg('complete', this)">
+            <span>POST /v1/completion/complete</span>
+            <span class="pg-tag">AUTO</span>
+          </div>
+        </div>
+
+        <div class="playground-content">
+          <div id="pg-caps" class="code-output">
+<span class="code-comment">// HTTP GET /v1/capabilities</span>
+<span class="code-comment">// ETag header matching yields HTTP 304 Not Modified (0 tokens)</span>
+
+{
+  <span class="code-key">"etag"</span>: <span class="code-str">"\"3a8f9c1b-cl100k\""</span>,
+  <span class="code-key">"capabilities"</span>: [
+    {
+      <span class="code-key">"alias"</span>: <span class="code-str">"db.query"</span>,
+      <span class="code-key">"upstream_id"</span>: <span class="code-str">"sqlite.read_query"</span>,
+      <span class="code-key">"summary"</span>: <span class="code-str">"Execute a read-only SQL query against SQLite"</span>,
+      <span class="code-key">"policy_group"</span>: <span class="code-str">"read_only"</span>
+    },
+    {
+      <span class="code-key">"alias"</span>: <span class="code-str">"fs.read"</span>,
+      <span class="code-key">"upstream_id"</span>: <span class="code-str">"filesystem.read_file"</span>,
+      <span class="code-key">"summary"</span>: <span class="code-str">"Read text contents of a file"</span>,
+      <span class="code-key">"policy_group"</span>: <span class="code-str">"read_only"</span>
+    }
+  ]
+}
+          </div>
+
+          <div id="pg-search" class="code-output" style="display:none;">
+<span class="code-comment">// HTTP POST /v1/capabilities/search</span>
+<span class="code-comment">// Body: {"query": "database sql query", "limit": 2}</span>
+
+{
+  <span class="code-key">"matches"</span>: [
+    {
+      <span class="code-key">"alias"</span>: <span class="code-str">"db.query"</span>,
+      <span class="code-key">"score"</span>: <span class="code-num">0.942</span>,
+      <span class="code-key">"match_type"</span>: <span class="code-str">"hybrid_bm25_vector"</span>,
+      <span class="code-key">"description"</span>: <span class="code-str">"Run parameterized SELECT query on configured SQLite database"</span>
+    }
+  ]
+}
+          </div>
+
+          <div id="pg-call" class="code-output" style="display:none;">
+<span class="code-comment">// HTTP POST /v1/tools/call</span>
+<span class="code-comment">// Header: Idempotency-Key: op-9481-run1</span>
+
+{
+  <span class="code-key">"request_id"</span>: <span class="code-str">"req_01HJ8Z"</span>,
+  <span class="code-key">"status"</span>: <span class="code-str">"success"</span>,
+  <span class="code-key">"execution_time_ms"</span>: <span class="code-num">12</span>,
+  <span class="code-key">"retry_metadata"</span>: {
+    <span class="code-key">"classification"</span>: <span class="code-str">"idempotent"</span>,
+    <span class="code-key">"attempt"</span>: <span class="code-num">1</span>
+  },
+  <span class="code-key">"content"</span>: [
+    { <span class="code-key">"type"</span>: <span class="code-str">"text"</span>, <span class="code-key">"text"</span>: <span class="code-str">"[{\"id\":101, \"name\":\"warmplane\"}]"</span> }
+  ]
+}
+          </div>
+
+          <div id="pg-sse" class="code-output" style="display:none;">
+<span class="code-comment">// HTTP GET /v1/resources/updates (Server-Sent Events)</span>
+<span class="code-comment">// Streams real-time catalog changes and resource update notifications</span>
+
+event: catalog_change
+data: {"event_id": 42, "type": "capability_registered", "alias": "github.search_issues"}
+
+event: resource_update
+data: {"uri": "file:///workspace/logs/app.log", "timestamp": 1770982800}
+          </div>
+
+          <div id="pg-complete" class="code-output" style="display:none;">
+<span class="code-comment">// HTTP POST /v1/completion/complete (MCP Autocompletion API)</span>
+<span class="code-comment">// Body: {"ref": {"type": "ref/prompt", "name": "sql_query"}, "argument": {"name": "table", "value": "us"}}</span>
+
+{
+  <span class="code-key">"completion"</span>: {
+    <span class="code-key">"values"</span>: [<span class="code-str">"users"</span>, <span class="code-str">"user_permissions"</span>, <span class="code-str">"user_sessions"</span>],
+    <span class="code-key">"total"</span>: <span class="code-num">3</span>,
+    <span class="code-key">"has_more"</span>: <span class="code-num">false</span>
+  }
+}
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Access Modes Section -->
+  <section class="section" id="modes">
+    <div class="section-inner">
+      <div class="section-label reveal">05 — Access Modes</div>
+      <h2 class="section-heading reveal">Three Client Modes, One Engine</h2>
+      <p class="section-desc reveal">
+        All interfaces share identical policy rules, session warmers, idempotency layers, and execution envelopes.
+      </p>
+
+      <div class="modes-grid reveal">
+        <div class="mode-card">
+          <div class="mode-card-icon">⌁</div>
+          <div class="mode-card-title">HTTP Daemon</div>
+          <div class="mode-card-body">
+            RESTful <code>/v1/</code> API exposing capability indices, hybrid search, resource updates via SSE streams, and operation cancellation.
+          </div>
+          <div class="mode-card-code">warmplane daemon --config mcp_servers.json</div>
+        </div>
+
+        <div class="mode-card">
+          <div class="mode-card-icon">⊞</div>
+          <div class="mode-card-title">MCP Server</div>
+          <div class="mode-card-body">
+            Standard stdio MCP interface. Point Claude Desktop, Cursor, or any agent framework directly at Warmplane as a unified MCP server.
+          </div>
+          <div class="mode-card-code">warmplane mcp-server --config mcp_servers.json</div>
+        </div>
+
+        <div class="mode-card">
+          <div class="mode-card-icon">⊳</div>
+          <div class="mode-card-title">CLI Interface</div>
+          <div class="mode-card-body">
+            Direct terminal commands for scripting, manual tool execution, catalog inspection, and config validation.
+          </div>
+          <div class="mode-card-code">warmplane search-capabilities "query db"</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Quick Start & Code Showcase -->
+  <section class="section" id="quickstart">
+    <div class="section-inner">
+      <div class="section-label reveal">06 — Quick Start</div>
+      <h2 class="section-heading reveal">Running in Three Minutes</h2>
+      <p class="section-desc reveal">
+        Configure your upstreams, validate your profile, and start serving warm sessions.
+      </p>
+
+      <div class="code-showcase reveal">
+        <div class="code-block">
+          <div class="code-block-header">
+            <span class="code-block-filename">mcp_servers.json</span>
+            <span class="code-block-lang">json</span>
+          </div>
+          <pre>{
+  <span class="kw">"port"</span>: <span class="num">9090</span>,
+  <span class="kw">"toolTimeoutMs"</span>: <span class="num">15000</span>,
+  <span class="kw">"capabilityAliases"</span>: {
+    <span class="kw">"sqlite.read_query"</span>: <span class="str">"db.query"</span>
+  },
+  <span class="kw">"policy"</span>: {
+    <span class="kw">"allow"</span>: [<span class="str">"db.*"</span>, <span class="str">"fs.*"</span>],
+    <span class="kw">"deny"</span>:  [<span class="str">"fs.secret"</span>],
+    <span class="kw">"redactKeys"</span>: [<span class="str">"token"</span>, <span class="str">"api_key"</span>]
+  },
+  <span class="kw">"mcpServers"</span>: {
+    <span class="kw">"sqlite"</span>: {
+      <span class="kw">"command"</span>: <span class="str">"npx"</span>,
+      <span class="kw">"args"</span>: [<span class="str">"-y"</span>, <span class="str">"@modelcontextprotocol/server-sqlite"</span>, <span class="str">"./db"</span>]
+    }
+  }
+}</pre>
+        </div>
+
+        <div class="code-block">
+          <div class="code-block-header">
+            <span class="code-block-filename">Terminal Commands</span>
+            <span class="code-block-lang">shell</span>
+          </div>
+          <pre><span class="cmt"># Install binary from source or crates.io</span>
+<span class="kw">$</span> cargo install warmplane
+
+<span class="cmt"># Validate configuration file</span>
+<span class="kw">$</span> warmplane validate-config --config mcp_servers.json
+
+<span class="cmt"># Start the local control plane daemon</span>
+<span class="kw">$</span> warmplane daemon --config mcp_servers.json
+
+<span class="cmt"># Perform vector/keyword hybrid tool search</span>
+<span class="kw">$</span> warmplane search-capabilities <span class="str">"query database"</span> --limit 5
+
+<span class="cmt"># Execute tool through control plane</span>
+<span class="kw">$</span> warmplane call-capability db.query \
+    --params <span class="str">'{"query":"SELECT 1"}'</span> \
+    --idempotency-key op-42-run-1</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Final CTA Section -->
+  <section class="cta-section container" id="get-started">
+    <div class="cta-glow"></div>
+    <div class="section-label reveal">Open Source · MIT License</div>
+    <h2 class="cta-title reveal">
+      The cheapest token is<br>the one <em>never sent</em>
+    </h2>
+    <p class="cta-sub reveal">
+      Start cutting AI agent token overhead while adding enterprise policy control.
+    </p>
+    <div class="hero-cta" style="justify-content: center;">
+      <a href="https://github.com/Warmplane/warmplane" class="btn btn-primary" target="_blank" rel="noopener">GitHub Repository ↗</a>
+      <a href="https://github.com/Warmplane/warmplane/blob/main/docs/USER-GUIDE.md" class="btn btn-ghost" target="_blank" rel="noopener">User Guide</a>
+      <a href="https://github.com/Warmplane/warmplane/blob/main/docs/WHITEPAPER.md" class="btn btn-ghost" target="_blank" rel="noopener">Read Whitepaper</a>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-wrapper">
+      <div>
+        © 2026 Warmplane · MIT License · Local Control Plane for MCP Sessions
+      </div>
+      <ul class="footer-links">
+        <li><a href="https://github.com/Warmplane/warmplane" target="_blank" rel="noopener">GitHub</a></li>
+        <li><a href="USER-GUIDE.html" target="_blank" rel="noopener">User Guide</a></li>
+        <li><a href="integrators.html">Integrators Guide</a></li>
+        <li><a href="NEXT_LEVEL_TOOL_CALLING.html">Next-Level Tooling</a></li>
+        <li><a href="WHITEPAPER.html">Whitepaper</a></li>
+      </ul>
+    </div>
+  </footer>
+
+  <!-- Toast Element -->
+  <div id="toast" class="copied-toast">Copied to clipboard!</div>
+
+  <!-- Interactive JavaScript -->
+  <script>
+    // Header Scroll Effect
+    const nav = document.getElementById('nav');
+    let ticking = false;
+    window.addEventListener('scroll', () => {
+      if (!ticking) {
+        requestAnimationFrame(() => {
+          nav.classList.toggle('scrolled', window.scrollY > 40);
+          ticking = false;
+        });
+        ticking = true;
+      }
+    });
+
+    // Animate Savings Bars on Viewport Scroll
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const fills = entry.target.querySelectorAll('.savings-bar-fill');
+          fills.forEach(fill => {
+            const width = fill.dataset.width;
+            if (width) {
+              setTimeout(() => { fill.style.width = width + '%'; }, 200);
+            }
+          });
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.25 });
+
+    const savingsSection = document.getElementById('savings-cards');
+    if (savingsSection) observer.observe(savingsSection);
+
+    // Switch Architecture Demo Deck Tabs
+    function switchDemoTab(tabName, btn) {
+      document.querySelectorAll('.demo-tab').forEach(t => t.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-flow').style.display = tabName === 'flow' ? 'block' : 'none';
+      document.getElementById('tab-config').style.display = tabName === 'config' ? 'block' : 'none';
+      document.getElementById('tab-envelope').style.display = tabName === 'envelope' ? 'block' : 'none';
+    }
+
+    // Switch Interactive Spec Playground Tabs
+    function switchPg(pgId, btn) {
+      document.querySelectorAll('.pg-item').forEach(item => item.classList.remove('active'));
+      btn.classList.add('active');
+      ['caps', 'search', 'call', 'sse', 'complete'].forEach(id => {
+        const el = document.getElementById('pg-' + id);
+        if (el) el.style.display = (id === pgId) ? 'block' : 'none';
+      });
+    }
+
+    // Copy Command to Clipboard Toast
+    function copyInstall() {
+      navigator.clipboard.writeText('cargo install warmplane');
+      const toast = document.getElementById('toast');
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2600);
+    }
+  </script>
+</body>
 </html>
