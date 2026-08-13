@@ -644,7 +644,7 @@
                 </div>
                 <div class="topbar-right">
                     <a class="integrators-link" href="integrators.html">Integrators Guide</a>
-                    <a class="version-tag" href="https://github.com/Warmplane/warmplane/releases/tag/v0.6.0" aria-label="Release v0.6.0">v0.6.0</a>
+                    <a class="version-tag" href="https://github.com/Warmplane/warmplane/releases/tag/v0.7.1" aria-label="Release v0.7.1">v0.7.1</a>
                     <div class="status"><i class="dot"></i> local control plane runtime</div>
                 </div>
             </header>
@@ -767,7 +767,25 @@
                     </article>
 
                     <article class="panel span-4">
-                        <div class="eyebrow new">v0.6.0</div>
+                        <div class="eyebrow new">v0.7.1</div>
+                        <h3>MCP Spec Parity &amp; SSE Stream</h3>
+                        <p>
+                            Full compliance with latest MCP specs: <code>POST /v1/completion/complete</code> autocompletion API,
+                            real-time <code>GET /v1/resources/updates</code> Server-Sent Events (SSE) stream, and
+                            <code>POST /v1/sampling/create_message</code> LLM delegation.
+                        </p>
+                    </article>
+                    <article class="panel span-4">
+                        <div class="eyebrow new">v0.7.0</div>
+                        <h3>Pragmatic Rust &amp; Builders</h3>
+                        <p>
+                            Full adoption of Microsoft's Pragmatic Rust Guidelines (<code>AGENTS.md</code>).
+                            Fluent Builder pattern for <code>AppState</code>, <code>SearchFilter</code>, and <code>RequestContext</code>,
+                            zero-panic contract, and canonical API docs.
+                        </p>
+                    </article>
+                    <article class="panel span-4">
+                        <div class="eyebrow">v0.6.0</div>
                         <h3>Idempotency &amp; Deduplication</h3>
                         <p>
                             Pass an <code>idempotency_key</code> or <code>Idempotency-Key</code> header. Concurrent or
@@ -776,7 +794,7 @@
                         </p>
                     </article>
                     <article class="panel span-4">
-                        <div class="eyebrow new">v0.6.0</div>
+                        <div class="eyebrow">v0.6.0</div>
                         <h3>Operation Cancellation</h3>
                         <p>
                             Abort any in-flight operation by request ID via
@@ -785,7 +803,7 @@
                         </p>
                     </article>
                     <article class="panel span-4">
-                        <div class="eyebrow new">v0.6.0</div>
+                        <div class="eyebrow">v0.6.0</div>
                         <h3>Retry Metadata Envelope</h3>
                         <p>
                             Every response includes a structured <code>"retry"</code> field classifying
@@ -915,6 +933,32 @@ warmplane get-prompt prompt.code-review \
                 <p class="section-intro">Warmplane ships focused, production-ready feature increments.</p>
 
                 <div class="changelog">
+                    <div class="release">
+                        <span class="release-tag">v0.7.1</span>
+                        <div class="release-body">
+                            <h4>MCP Specification Parity</h4>
+                            <p>
+                                <code>POST /v1/completion/complete</code> autocompletion API for prompt and resource arguments.
+                                <code>GET /v1/resources/updates</code> real-time Server-Sent Events (SSE) notification stream.
+                                <code>POST /v1/sampling/create_message</code> LLM completion delegation reverse proxy endpoint.
+                                Synthetic <code>completion_complete</code> tool in stdio MCP server mode.
+                                Structured detail payloads in <code>CatalogEventStore</code>.
+                            </p>
+                        </div>
+                    </div>
+                    <div class="release">
+                        <span class="release-tag">v0.7.0</span>
+                        <div class="release-body">
+                            <h4>Pragmatic Rust Modernization &amp; Builder Patterns</h4>
+                            <p>
+                                Full adoption of Microsoft's Pragmatic Rust Guidelines (<code>AGENTS.md</code>).
+                                Fluent Builder pattern (<code>M-INIT-BUILDER</code>) for core state (<code>AppStateBuilder</code>),
+                                search filters (<code>SearchFilterBuilder</code>), and request context (<code>RequestContextBuilder</code>).
+                                Enhanced panic safety (<code>M-PANIC-IS-STOP</code>), structured logging (<code>M-LOG-STRUCTURED</code>),
+                                canonical API documentation (<code>M-CANONICAL-DOCS</code>), and flexible trait interop (<code>M-IMPL-ASREF</code>).
+                            </p>
+                        </div>
+                    </div>
                     <div class="release">
                         <span class="release-tag">v0.6.0</span>
                         <div class="release-body">
@@ -1084,7 +1128,7 @@ warmplane get-prompt prompt.code-review \
             </section>
 
             <footer class="fade">
-                <span>Warmplane v0.6.0 | The local control plane that keeps MCP sessions warm</span>
+                <span>Warmplane v0.7.1 | The local control plane that keeps MCP sessions warm</span>
                 <span><a href="https://github.com/Warmplane/warmplane">github.com/Warmplane/warmplane</a></span>
             </footer>
         </main>
