@@ -1,7 +1,7 @@
 # Warmplane
 
 > **The local control plane that keeps MCP sessions warm.**  
-> v0.6.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [OpenAPI](docs/openapi.yaml) · [Spec](docs/spec.md)
+> v0.7.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [OpenAPI](docs/openapi.yaml) · [Spec](docs/spec.md)
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
 
@@ -135,6 +135,9 @@ warmplane cancel-operation req-101
 ---
 
 ## Changelog
+
+### v0.7.0 — Pragmatic Rust Modernization & Builder Patterns
+Full adoption of Microsoft's Pragmatic Rust Guidelines (`AGENTS.md`). Implemented `Builder Pattern` (`M-INIT-BUILDER`) for core state (`AppStateBuilder`), search filters (`SearchFilterBuilder`), and request context (`RequestContextBuilder`). Enhanced error safety (`M-PANIC-IS-STOP`), structured logging (`M-LOG-STRUCTURED`), canonical documentation (`M-CANONICAL-DOCS`), and flexible trait interop (`M-IMPL-ASREF`).
 
 ### v0.6.0 — Idempotency, Cancellation & Retry Metadata
 Pass `Idempotency-Key` / `X-Idempotency-Key` to deduplicate concurrent tool calls. Abort any in-flight request via cancel endpoint or CLI. Every response envelope now includes structured `"retry"` metadata (`classification` + `state`) for orchestrator-aware retry logic.
