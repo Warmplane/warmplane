@@ -1,3 +1,7 @@
+// Rust guideline compliant 2026-08-13
+
+//! Main entrypoint for Warmplane local MCP control plane CLI and daemon executable.
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use serde_json::{json, Value};
@@ -19,6 +23,10 @@ use config::{load_config, resolve_client_port, DEFAULT_PORT};
 use context::RequestContext;
 use models::{Cli, Commands};
 
+/// Warmplane CLI binary entrypoint parsing arguments and dispatching commands.
+///
+/// # Errors
+/// Returns an error if command execution or daemon startup fails.
 #[tokio::main]
 async fn main() -> Result<()> {
     let _telemetry = telemetry::init()?;

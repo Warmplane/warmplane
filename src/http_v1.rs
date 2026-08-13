@@ -1,3 +1,7 @@
+// Rust guideline compliant 2026-08-13
+
+//! HTTP v1 facade API handlers for capabilities, resources, prompts, events, and operations.
+
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -15,38 +19,61 @@ use crate::daemon::{AppState, CapabilityMeta, ServerMsg, UpstreamCallError};
 
 static TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-pub fn check_if_none_match(req_headers: &HeaderMap, catalog_version: &str) -> bool {
+/// Validates whether HTTP `If-None-Match` header matches catalog version for HTTP 304 response.
+///
+/// # Arguments
+/// * `req_headers` - Incoming request HTTP headers.
+/// * `catalog_version` - Current active catalog ETag version string.
+///
+/// # Returns
+/// `true` if catalog version matches `If-None-Match` header, `false` otherwise.
+pub fn check_if_none_match(req_headers: &HeaderMap, catalog_version: impl AsRef<str>) -> bool {
+    let version_ref = catalog_version.as_ref();
     if let Some(if_none_match) = req_headers.get(header::IF_NONE_MATCH) {
         if let Ok(val) = if_none_match.to_str() {
             let val_clean = val.trim();
-            let version_quoted = format!("\"{}\"", catalog_version);
-            return val_clean == catalog_version || val_clean == version_quoted || val_clean == "*";
+            let version_quoted = format!("\"{}\"", version_ref);
+            return val_clean == version_ref || val_clean == version_quoted || val_clean == "*";
         }
     }
     false
 }
 
-pub fn make_etag_header(catalog_version: &str) -> HeaderMap {
+/// Constructs HTTP `ETag` response headers matching catalog version.
+///
+/// # Arguments
+/// * `catalog_version` - Current active catalog ETag version string.
+///
+/// # Returns
+/// HeaderMap containing formatted `ETag` header.
+pub fn make_etag_header(catalog_version: impl AsRef<str>) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    let etag_val = format!("\"{}\"", catalog_version);
+    let etag_val = format!("\"{}\"", catalog_version.as_ref());
     if let Ok(hv) = HeaderValue::from_str(&etag_val) {
         headers.insert(header::ETAG, hv);
     }
     headers
 }
 
+/// Query parameters for listing catalog events.
 #[derive(Deserialize)]
 pub struct CatalogEventsQuery {
+    /// Optional cursor ID to fetch events after.
     pub after: Option<String>,
 }
 
+/// Response envelope for catalog event change feed.
 #[derive(serde::Serialize)]
 pub struct CatalogEventsResponse {
+    /// Current catalog version ETag.
     pub catalog_version: String,
+    /// Next cursor ID for event pagination.
     pub cursor: String,
+    /// List of catalog mutation events.
     pub events: Vec<crate::catalog::CatalogEvent>,
 }
 
+/// Handles HTTP GET `/v1/catalog/events` change feed endpoint.
 pub async fn handle_catalog_events(
     State(state): State<AppState>,
     Query(query): Query<CatalogEventsQuery>,
@@ -62,38 +89,55 @@ pub async fn handle_catalog_events(
     )
 }
 
+/// Request body for capability execution.
 #[derive(Deserialize)]
 pub struct CallCapabilityRequest {
+    /// Identifier or alias of capability to execute.
     pub capability_id: String,
+    /// JSON arguments for capability execution.
     pub args: Value,
+    /// Optional request trace identifier.
     #[serde(default)]
     pub request_id: Option<String>,
+    /// Optional request context metadata envelope.
     #[serde(default)]
     pub context: Option<crate::context::RequestContext>,
+    /// Optional key for idempotent request deduplication.
     #[serde(default)]
     pub idempotency_key: Option<String>,
 }
 
+/// Request body for reading a resource.
 #[derive(Deserialize)]
 pub struct ReadResourceRequest {
+    /// Identifier or alias of resource URI to read.
     pub resource_id: String,
+    /// Optional request trace identifier.
     #[serde(default)]
     pub request_id: Option<String>,
+    /// Optional request context metadata envelope.
     #[serde(default)]
     pub context: Option<crate::context::RequestContext>,
+    /// Optional key for idempotent request deduplication.
     #[serde(default)]
     pub idempotency_key: Option<String>,
 }
 
+/// Request body for fetching a prompt template.
 #[derive(Deserialize)]
 pub struct GetPromptRequest {
+    /// Identifier or alias of prompt name to get.
     pub prompt_id: String,
+    /// Optional arguments map for prompt rendering.
     #[serde(default)]
     pub arguments: Option<Value>,
+    /// Optional request trace identifier.
     #[serde(default)]
     pub request_id: Option<String>,
+    /// Optional request context metadata envelope.
     #[serde(default)]
     pub context: Option<crate::context::RequestContext>,
+    /// Optional key for idempotent request deduplication.
     #[serde(default)]
     pub idempotency_key: Option<String>,
 }
@@ -102,15 +146,21 @@ fn default_search_limit() -> usize {
     8
 }
 
+/// Request body for hybrid capability search.
 #[derive(Deserialize)]
 pub struct SearchCapabilitiesRequest {
+    /// Optional plain-text search query string.
     pub query: Option<String>,
+    /// Maximum number of search results to return (default 8).
     #[serde(default = "default_search_limit")]
     pub limit: usize,
+    /// Filter results to specified server IDs.
     #[serde(default)]
     pub server_ids: Vec<String>,
+    /// Filter results to specified tags.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Filter results to specified execution modes.
     #[serde(default)]
     pub modes: Vec<String>,
 }

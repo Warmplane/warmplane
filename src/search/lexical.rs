@@ -1,18 +1,32 @@
+// Rust guideline compliant 2026-08-13
+
 use crate::daemon::CapabilityMeta;
 use std::collections::HashSet;
 
+/// Represents a single lexical search match result.
 #[derive(Debug, Clone)]
 pub struct LexicalMatchResult {
+    /// Unique identifier of matched capability.
     pub id: String,
+    /// Lexical relevance score.
     pub score: f32,
+    /// Match categories triggering this result.
     pub match_types: Vec<String>,
 }
 
+/// Scores registered capabilities against a plain-text lexical query.
+///
+/// # Arguments
+/// * `query` - Search query string.
+/// * `capabilities` - Slice of capability identifier and metadata pairs.
+///
+/// # Returns
+/// Sorted vector of `LexicalMatchResult` items ordered by score descending.
 pub fn score_lexical(
-    query: &str,
+    query: impl AsRef<str>,
     capabilities: &[(String, CapabilityMeta)],
 ) -> Vec<LexicalMatchResult> {
-    let query_clean = query.trim().to_lowercase();
+    let query_clean = query.as_ref().trim().to_lowercase();
     if query_clean.is_empty() {
         return capabilities
             .iter()

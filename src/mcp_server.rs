@@ -1,3 +1,7 @@
+// Rust guideline compliant 2026-08-13
+
+//! MCP stdio server facade interface exposing compact tools/resources/prompts endpoints.
+
 use std::{
     sync::atomic::{AtomicU64, Ordering},
     sync::Arc,
@@ -867,6 +871,13 @@ fn error_envelope(
     })
 }
 
+/// Runs the Warmplane stdio MCP server proxy interface.
+///
+/// # Arguments
+/// * `config` - Loaded `McpConfig` configuration struct.
+///
+/// # Errors
+/// Returns an error if initializing upstream state or stdio transport fails.
 pub async fn run_mcp_server(config: McpConfig) -> Result<()> {
     let state = initialize_state(config).await?;
     let server = FacadeMcpServer { state };

@@ -1,3 +1,7 @@
+// Rust guideline compliant 2026-08-13
+
+//! OAuth2 PKCE authorization code flow and local proxy server handler.
+
 use anyhow::{anyhow, Context, Result};
 use axum::{
     extract::{Path, Query, State},
@@ -20,17 +24,25 @@ use std::{
 use tokio::sync::{oneshot, RwLock};
 use tracing::{error, info, warn};
 
+/// OpenID Connect / OAuth2 server discovery metadata endpoints.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveryMetadata {
+    /// Authorization code endpoint URL.
     pub authorization_endpoint: String,
+    /// Token issuance endpoint URL.
     pub token_endpoint: String,
+    /// Issuer URL.
     pub issuer: String,
 }
 
+/// Active OAuth2 access and refresh token state.
 #[derive(Debug, Clone)]
 pub struct OAuth2TokenState {
+    /// Bearer access token string.
     pub access_token: String,
+    /// Optional refresh token string.
     pub refresh_token: Option<String>,
+    /// Granted scope set.
     pub scopes: HashSet<String>,
 }
 

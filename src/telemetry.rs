@@ -1,9 +1,12 @@
+// Rust guideline compliant 2026-08-13
+
 use anyhow::Result;
 use opentelemetry::{global, trace::TracerProvider as _, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{runtime::Tokio, trace::TracerProvider, Resource};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+/// Resource guard managing OpenTelemetry tracer provider shutdown on drop.
 pub struct TelemetryGuard {
     tracer_provider: Option<TracerProvider>,
 }
@@ -16,6 +19,13 @@ impl Drop for TelemetryGuard {
     }
 }
 
+/// Initializes structured logging subscriber and optional OpenTelemetry OTLP tracing pipeline.
+///
+/// # Returns
+/// A `TelemetryGuard` ensuring provider shutdown on drop.
+///
+/// # Errors
+/// Returns an error if OTLP exporter initialization fails.
 pub fn init() -> Result<TelemetryGuard> {
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,warmplane=debug"));

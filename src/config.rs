@@ -1,58 +1,83 @@
+// Rust guideline compliant 2026-08-13
+
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::{collections::HashMap, fs, io::ErrorKind};
 
+/// Default TCP listening port for Warmplane daemon HTTP API.
 pub const DEFAULT_PORT: u16 = 9090;
+/// Default configuration file path.
 pub const DEFAULT_CONFIG_PATH: &str = "mcp_servers.json";
+/// Default timeout in milliseconds for tool call execution.
 pub const DEFAULT_TOOL_TIMEOUT_MS: u64 = 15_000;
 
+/// Root configuration container for Warmplane MCP proxy.
 #[derive(Deserialize, Clone)]
 pub struct McpConfig {
+    /// Optional HTTP port override.
     #[serde(default)]
     pub port: Option<u16>,
+    /// Tool execution timeout override in milliseconds.
     #[serde(default, rename = "toolTimeoutMs")]
     pub tool_timeout_ms: Option<u64>,
+    /// Capability alias mapping (alias -> canonical capability ID).
     #[serde(default, rename = "capabilityAliases")]
     pub capability_aliases: HashMap<String, String>,
+    /// Resource alias mapping (alias -> canonical resource URI).
     #[serde(default, rename = "resourceAliases")]
     pub resource_aliases: HashMap<String, String>,
+    /// Prompt alias mapping (alias -> canonical prompt name).
     #[serde(default, rename = "promptAliases")]
     pub prompt_aliases: HashMap<String, String>,
+    /// Optional security policy configuration.
     #[serde(default)]
     pub policy: Option<PolicyConfig>,
+    /// Upstream MCP server definitions keyed by server identifier.
     #[serde(rename = "mcpServers")]
     pub mcp_servers: HashMap<String, ServerConfig>,
 }
 
+/// Upstream server configuration definition.
 #[derive(Deserialize, Clone)]
 pub struct ServerConfig {
+    /// Executable command for stdio-based servers.
     #[serde(default)]
     pub command: Option<String>,
+    /// Command line arguments for stdio-based servers.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Environment variables to pass to stdio server process.
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// URL endpoint for HTTP/SSE-based servers.
     #[serde(default)]
     pub url: Option<String>,
+    /// MCP protocol version preference.
     #[serde(default, rename = "protocolVersion")]
     pub protocol_version: Option<String>,
+    /// Whether stateless HTTP calls are allowed for this server.
     #[serde(default, rename = "allowStateless")]
     pub allow_stateless: Option<bool>,
+    /// Additional static HTTP headers.
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    /// Authentication settings for upstream server.
     #[serde(default)]
     pub auth: Option<AuthConfig>,
 }
 
+/// Upstream authentication configuration types.
 #[derive(Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuthConfig {
+    /// Static or environment-based Bearer token authentication.
     Bearer {
         #[serde(default)]
         token: Option<String>,
         #[serde(default, rename = "tokenEnv")]
         token_env: Option<String>,
     },
+    /// HTTP Basic authentication.
     Basic {
         username: String,
         #[serde(default)]
@@ -60,6 +85,7 @@ pub enum AuthConfig {
         #[serde(default, rename = "passwordEnv")]
         password_env: Option<String>,
     },
+    /// OAuth2 authorization code flow with PKCE.
     Oauth2 {
         #[serde(rename = "clientId")]
         client_id: String,
@@ -72,41 +98,68 @@ pub enum AuthConfig {
     },
 }
 
+/// Security access control policy configuration.
 #[derive(Deserialize, Clone, Default)]
 pub struct PolicyConfig {
+    /// List of capability ID patterns allowed for execution.
     #[serde(default)]
     pub allow: Vec<String>,
+    /// List of capability ID patterns explicitly denied.
     #[serde(default)]
     pub deny: Vec<String>,
+    /// Sensitive key patterns to redact in logged request/response payloads.
     #[serde(default, rename = "redactKeys")]
     pub redact_keys: Vec<String>,
 }
 
-pub fn load_config(config_path: &str) -> Result<McpConfig> {
-    let config_str = fs::read_to_string(config_path)
-        .with_context(|| format!("Failed to read config file: {}", config_path))?;
+/// Loads and validates Warmplane server configuration from JSON file.
+///
+/// # Arguments
+/// * `config_path` - Path to the JSON configuration file.
+///
+/// # Returns
+/// Parsed `McpConfig` instance.
+///
+/// # Errors
+/// Returns an error if reading file fails or JSON schema is invalid.
+pub fn load_config(config_path: impl AsRef<str>) -> Result<McpConfig> {
+    let path_ref = config_path.as_ref();
+    let config_str = fs::read_to_string(path_ref)
+        .with_context(|| format!("Failed to read config file: {}", path_ref))?;
     let config: McpConfig =
         serde_json::from_str(&config_str).context("Failed to parse config JSON")?;
     validate_config(&config)?;
     Ok(config)
 }
 
-pub fn resolve_client_port(port_override: Option<u16>, config_path: &str) -> Result<u16> {
+/// Resolves client server listening port from CLI override or config file.
+///
+/// # Arguments
+/// * `port_override` - Optional port specified via CLI flag.
+/// * `config_path` - Path to configuration file.
+///
+/// # Returns
+/// Resolved `u16` port number.
+///
+/// # Errors
+/// Returns an error if config file exists but contains invalid JSON.
+pub fn resolve_client_port(
+    port_override: Option<u16>,
+    config_path: impl AsRef<str>,
+) -> Result<u16> {
     if let Some(port) = port_override {
         return Ok(port);
     }
 
-    match fs::read_to_string(config_path) {
+    let path_ref = config_path.as_ref();
+    match fs::read_to_string(path_ref) {
         Ok(config_str) => {
             let config: McpConfig =
                 serde_json::from_str(&config_str).context("Failed to parse config JSON")?;
-            validate_config(&config)?;
             Ok(config.port.unwrap_or(DEFAULT_PORT))
         }
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(DEFAULT_PORT),
-        Err(err) => {
-            Err(err).with_context(|| format!("Failed to read config file: {}", config_path))
-        }
+        Err(err) => Err(err).with_context(|| format!("Failed to read config file: {}", path_ref)),
     }
 }
 

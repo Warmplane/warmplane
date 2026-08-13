@@ -1,17 +1,22 @@
+// Rust guideline compliant 2026-08-13
+
 use clap::{Parser, Subcommand};
 
 use crate::config::DEFAULT_CONFIG_PATH;
 
+/// Top-level command line argument parser model for Warmplane CLI.
 #[derive(Parser)]
 #[command(
     name = "warmplane",
     about = "The local control plane that keeps MCP sessions warm"
 )]
 pub struct Cli {
+    /// Subcommand to execute.
     #[command(subcommand)]
     pub command: Commands,
 }
 
+/// Warmplane CLI subcommands.
 #[derive(Subcommand)]
 pub enum Commands {
     /// Validate config file and exit (no daemon startup)

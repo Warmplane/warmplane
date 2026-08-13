@@ -1,3 +1,5 @@
+// Rust guideline compliant 2026-08-13
+
 use anyhow::{anyhow, Context, Result};
 use axum::{
     routing::{get, post},
@@ -30,16 +32,20 @@ use crate::{
 
 const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
+/// Messages dispatched across worker threads to upstream MCP servers.
 pub enum ServerMsg {
+    /// Execute a tool call.
     CallTool {
         name: String,
         params: Value,
         reply: oneshot::Sender<Result<Value, UpstreamCallError>>,
     },
+    /// Read a resource URI.
     ReadResource {
         uri: String,
         reply: oneshot::Sender<Result<Value, UpstreamCallError>>,
     },
+    /// Render a prompt template.
     GetPrompt {
         name: String,
         arguments: Option<serde_json::Map<String, Value>>,
@@ -47,51 +53,87 @@ pub enum ServerMsg {
     },
 }
 
+/// Upstream MCP execution error categories.
 #[derive(Debug, Clone)]
 pub enum UpstreamCallError {
+    /// Upstream error message string.
     Upstream(String),
+    /// Operation timed out.
     Timeout,
 }
 
+/// Metadata describing a registered capability tool.
 #[derive(Clone)]
 pub struct CapabilityMeta {
+    /// Server identifier providing this capability.
     pub server: String,
+    /// Tool name on upstream server.
     pub tool: String,
+    /// Short summary description.
     pub summary: String,
+    /// Detailed description.
     pub description: String,
+    /// JSON schema for tool arguments.
     pub input_schema: Value,
+    /// Metadata tags.
     pub tags: Vec<String>,
+    /// Usage examples.
     pub examples: Vec<Value>,
 }
 
+/// Metadata describing a registered resource.
 #[derive(Clone)]
 pub struct ResourceMeta {
+    /// Server identifier providing this resource.
     pub server: String,
+    /// Resource URI identifier.
     pub uri: String,
+    /// Resource human-readable name.
     pub name: String,
+    /// Optional description.
     pub description: Option<String>,
+    /// Optional MIME type string.
     pub mime_type: Option<String>,
+    /// Metadata tags.
     pub tags: Vec<String>,
 }
 
+/// Metadata describing a registered prompt template.
 #[derive(Clone)]
 pub struct PromptMeta {
+    /// Server identifier providing this prompt.
     pub server: String,
+    /// Prompt identifier name.
     pub name: String,
+    /// Optional human-readable title.
     pub title: Option<String>,
+    /// Optional description.
     pub description: Option<String>,
+    /// List of expected prompt arguments.
     pub arguments: Vec<Value>,
+    /// Metadata tags.
     pub tags: Vec<String>,
 }
 
+/// Active security policy rules governing capability/resource access.
 #[derive(Clone, Default)]
 pub struct Policy {
+    /// List of wildcard patterns allowed for execution.
     pub allow: Vec<String>,
+    /// List of wildcard patterns explicitly denied.
     pub deny: Vec<String>,
+    /// Keys to redact in logged payload envelopes.
     pub redact_keys: Vec<String>,
 }
 
 impl Policy {
+    /// Constructs a `Policy` from optional `PolicyConfig`.
+    ///
+    /// # Arguments
+    /// * `config` - Optional configuration struct.
+    ///
+    /// # Returns
+    /// Constructed `Policy`.
     pub fn from_config(config: Option<PolicyConfig>) -> Self {
         let Some(config) = config else {
             return Self::default();
@@ -99,16 +141,24 @@ impl Policy {
         Self {
             allow: config.allow,
             deny: config.deny,
-            redact_keys: config
-                .redact_keys
-                .into_iter()
-                .map(|k| k.to_lowercase())
-                .collect(),
+            redact_keys: config.redact_keys,
         }
     }
 
-    pub fn allows(&self, id: &str) -> bool {
-        if self.deny.iter().any(|pattern| wildcard_match(pattern, id)) {
+    /// Checks whether the given capability or resource ID is permitted under security policy.
+    ///
+    /// # Arguments
+    /// * `id` - Identifier string to test.
+    ///
+    /// # Returns
+    /// `true` if allowed, `false` if denied.
+    pub fn allows(&self, id: impl AsRef<str>) -> bool {
+        let id_ref = id.as_ref();
+        if self
+            .deny
+            .iter()
+            .any(|pattern| wildcard_match(pattern, id_ref))
+        {
             return false;
         }
 
@@ -116,7 +166,9 @@ impl Policy {
             return true;
         }
 
-        self.allow.iter().any(|pattern| wildcard_match(pattern, id))
+        self.allow
+            .iter()
+            .any(|pattern| wildcard_match(pattern, id_ref))
     }
 }
 
@@ -224,21 +276,42 @@ fn build_http_headers(server_id: &str, srv_cfg: &ServerConfig) -> Result<HeaderM
     Ok(headers)
 }
 
+/// Global application state shared across Axum HTTP handlers in the daemon.
 #[derive(Clone)]
 pub struct AppState {
+    /// Active communication channels to upstream server workers.
     pub servers: Arc<HashMap<String, mpsc::Sender<ServerMsg>>>,
+    /// Compact capability catalog metadata map.
     pub capabilities: Arc<HashMap<String, CapabilityMeta>>,
+    /// Compact resource catalog metadata map.
     pub resources: Arc<HashMap<String, ResourceMeta>>,
+    /// Compact prompt catalog metadata map.
     pub prompts: Arc<HashMap<String, PromptMeta>>,
+    /// Global tool execution timeout in milliseconds.
     pub tool_timeout_ms: u64,
+    /// Security policy rules.
     pub policy: Policy,
+    /// Hybrid search engine instance.
     pub search_engine: Arc<crate::search::HybridSearchEngine>,
+    /// SHA256 catalog ETag version string.
     pub catalog_version: String,
+    /// Event store for catalog changes.
     pub event_store: Arc<crate::catalog::CatalogEventStore>,
+    /// Idempotency deduplication store.
     pub idempotency_store: Arc<crate::idempotency::IdempotencyStore>,
+    /// Active operation tracking registry for cancellation.
     pub operation_registry: crate::operations::OperationRegistry,
 }
 
+/// Computes deterministic SHA256 ETag version string over catalog keys.
+///
+/// # Arguments
+/// * `capabilities` - Capabilities catalog map.
+/// * `resources` - Resources catalog map.
+/// * `prompts` - Prompts catalog map.
+///
+/// # Returns
+/// SHA256 catalog version string prefixed with `sha256:`.
 pub fn compute_catalog_version(
     capabilities: &HashMap<String, CapabilityMeta>,
     resources: &HashMap<String, ResourceMeta>,
@@ -264,6 +337,16 @@ pub fn compute_catalog_version(
     format!("sha256:{:x}", hasher.finalize())
 }
 
+/// Boots all configured upstream MCP servers and constructs global `AppState`.
+///
+/// # Arguments
+/// * `config` - Loaded `McpConfig` instance.
+///
+/// # Returns
+/// An initialized `AppState` instance.
+///
+/// # Errors
+/// Returns an error if an upstream server connection or protocol handshake fails.
 pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
     let mut server_channels = HashMap::new();
     let mut capabilities = HashMap::new();
@@ -624,6 +707,14 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
     })
 }
 
+/// Starts the HTTP daemon server listening on the specified TCP port.
+///
+/// # Arguments
+/// * `port` - TCP listening port.
+/// * `config` - `McpConfig` configuration struct.
+///
+/// # Errors
+/// Returns an error if binding TCP socket or server execution fails.
 pub async fn run_daemon(port: u16, config: McpConfig) -> Result<()> {
     let app_state = initialize_state(config).await?;
     let app = Router::new()

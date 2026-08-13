@@ -1,27 +1,57 @@
+// Rust guideline compliant 2026-08-13
+
 use serde::{Deserialize, Serialize};
 use std::sync::RwLock;
 
+/// Represents a single catalog mutation event for capabilities, resources, or prompts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogEvent {
+    /// Unique identifier for the catalog event.
     pub id: String,
+    /// Unix timestamp when the event occurred.
     pub timestamp: String,
+    /// Object type affected (e.g. `capability`, `resource`, `prompt`).
     pub object_type: String,
+    /// Identifier of the object affected.
     pub object_id: String,
+    /// Type of change performed (e.g. `added`, `updated`, `removed`).
     pub change_type: String,
 }
 
+/// In-memory thread-safe event store recording catalog state changes.
 pub struct CatalogEventStore {
     events: RwLock<Vec<CatalogEvent>>,
 }
 
+impl Default for CatalogEventStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CatalogEventStore {
+    /// Creates a new empty `CatalogEventStore`.
+    ///
+    /// # Returns
+    /// An empty `CatalogEventStore` instance.
     pub fn new() -> Self {
         Self {
             events: RwLock::new(Vec::new()),
         }
     }
 
-    pub fn record(&self, object_type: &str, object_id: &str, change_type: &str) {
+    /// Records a catalog mutation event.
+    ///
+    /// # Arguments
+    /// * `object_type` - Type of object mutated.
+    /// * `object_id` - Unique identifier of mutated object.
+    /// * `change_type` - Mutation classification.
+    pub fn record(
+        &self,
+        object_type: impl AsRef<str>,
+        object_id: impl AsRef<str>,
+        change_type: impl AsRef<str>,
+    ) {
         let mut guard = self.events.write().unwrap_or_else(|e| e.into_inner());
         let event_id = format!("evt_{}", guard.len() + 1);
         let timestamp = std::time::SystemTime::now()
@@ -32,12 +62,19 @@ impl CatalogEventStore {
         guard.push(CatalogEvent {
             id: event_id,
             timestamp,
-            object_type: object_type.to_string(),
-            object_id: object_id.to_string(),
-            change_type: change_type.to_string(),
+            object_type: object_type.as_ref().to_string(),
+            object_id: object_id.as_ref().to_string(),
+            change_type: change_type.as_ref().to_string(),
         });
     }
 
+    /// Retrieves events occurring after an optional cursor position.
+    ///
+    /// # Arguments
+    /// * `after_cursor` - Optional cursor ID pointing to last processed event.
+    ///
+    /// # Returns
+    /// A tuple containing matching `CatalogEvent` items and the latest cursor ID string.
     pub fn get_events_after(&self, after_cursor: Option<&str>) -> (Vec<CatalogEvent>, String) {
         let guard = self.events.read().unwrap_or_else(|e| e.into_inner());
         let start_index = match after_cursor {

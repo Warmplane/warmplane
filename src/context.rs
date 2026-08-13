@@ -1,30 +1,54 @@
+// Rust guideline compliant 2026-08-13
+
 use axum::http::HeaderMap;
 use serde::{Deserialize, Serialize};
 
+/// Request tracing context metadata passed across HTTP envelopes.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct RequestContext {
+    /// Operation identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<String>,
+    /// Work item identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work_item_id: Option<String>,
+    /// Actor or user identity identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_id: Option<String>,
+    /// Grant or authorization token identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grant_id: Option<String>,
 }
 
-pub fn extract_header_str(headers: &HeaderMap, key: &str) -> Option<String> {
+/// Helper function to extract and trim string values from HTTP headers.
+///
+/// # Arguments
+/// * `headers` - Reference to HTTP HeaderMap.
+/// * `key` - Header field key name.
+///
+/// # Returns
+/// `Option<String>` containing non-empty header string value if present.
+pub fn extract_header_str(headers: &HeaderMap, key: impl AsRef<str>) -> Option<String> {
     headers
-        .get(key)
+        .get(key.as_ref())
         .and_then(|v| v.to_str().ok())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
 
+/// Resolves request identifier prioritizing payload ID, HTTP header, or fallback trace ID.
+///
+/// # Arguments
+/// * `payload_id` - Optional ID from request payload envelope.
+/// * `headers` - HTTP headers.
+/// * `fallback_trace_id` - Fallback trace ID string.
+///
+/// # Returns
+/// Resolved request ID string.
 pub fn resolve_request_id(
     payload_id: Option<String>,
     headers: &HeaderMap,
-    fallback_trace_id: String,
+    fallback_trace_id: impl Into<String>,
 ) -> String {
     if let Some(id) = payload_id.filter(|s| !s.trim().is_empty()) {
         return id;
@@ -34,9 +58,17 @@ pub fn resolve_request_id(
     {
         return id;
     }
-    fallback_trace_id
+    fallback_trace_id.into()
 }
 
+/// Merges context fields from payload envelope and HTTP headers.
+///
+/// # Arguments
+/// * `payload_context` - Optional context from payload envelope.
+/// * `headers` - HTTP headers.
+///
+/// # Returns
+/// Merged `RequestContext` instance.
 pub fn resolve_request_context(
     payload_context: Option<RequestContext>,
     headers: &HeaderMap,

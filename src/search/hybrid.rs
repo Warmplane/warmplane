@@ -1,3 +1,5 @@
+// Rust guideline compliant 2026-08-13
+
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -5,37 +7,71 @@ use super::lexical::score_lexical;
 use super::vector::VectorSearchIndex;
 use crate::daemon::{CapabilityMeta, Policy};
 
+/// Ranked result item returned by hybrid capability search.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilitySearchResult {
+    /// Unique identifier of matched capability.
     pub id: String,
+    /// Short summary description.
     pub summary: String,
+    /// Server identifier providing this capability.
     pub server: String,
+    /// Metadata tags associated with capability.
     pub tags: Vec<String>,
+    /// Execution mode (e.g. `read`, `write`, `execute`).
     pub mode: String,
+    /// Combined hybrid relevance score.
     pub score: f32,
+    /// Match signals contributing to ranking.
     pub match_types: Vec<String>,
 }
 
+/// Deterministic query filter criteria for capability search.
 #[derive(Debug, Clone, Default)]
 pub struct SearchFilter {
+    /// Optional server ID filter list.
     pub server_ids: Vec<String>,
+    /// Optional tag filter list.
     pub tags: Vec<String>,
+    /// Optional execution mode filter list.
     pub modes: Vec<String>,
 }
 
+/// Hybrid search engine combining lexical and vector scores with reciprocal rank fusion (RRF).
 pub struct HybridSearchEngine {
     vector_index: Option<VectorSearchIndex>,
 }
 
+impl Default for HybridSearchEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HybridSearchEngine {
+    /// Creates a new `HybridSearchEngine` initializing vector index if available.
+    ///
+    /// # Returns
+    /// An initialized `HybridSearchEngine`.
     pub fn new() -> Self {
         let vector_index = VectorSearchIndex::new().ok();
         Self { vector_index }
     }
 
+    /// Performs hybrid reciprocal rank fusion search over capabilities.
+    ///
+    /// # Arguments
+    /// * `query` - Search query string.
+    /// * `limit` - Maximum number of results to return.
+    /// * `filter` - Deterministic search filter parameters.
+    /// * `capabilities` - Registered capabilities map.
+    /// * `policy` - Access control policy.
+    ///
+    /// # Returns
+    /// Sorted vector of `CapabilitySearchResult` items.
     pub fn search(
         &self,
-        query: &str,
+        query: impl AsRef<str>,
         limit: usize,
         filter: &SearchFilter,
         capabilities: &HashMap<String, CapabilityMeta>,
@@ -71,12 +107,14 @@ impl HybridSearchEngine {
             return vec![];
         }
 
+        let q_str = query.as_ref();
+
         // 2. Perform Lexical Search
-        let lexical_results = score_lexical(query, &candidates);
+        let lexical_results = score_lexical(q_str, &candidates);
 
         // 3. Perform Vector Search (if index available)
         let vector_results = match &self.vector_index {
-            Some(idx) => idx.search(query, &candidates),
+            Some(idx) => idx.search(q_str, &candidates),
             None => vec![],
         };
 
