@@ -284,6 +284,41 @@ warmplane mcp-server --config mcp_servers.json
 
 ---
 
+### 5.3 CLI Facade Mode
+
+Run single-shot CLI commands for administration, debugging, and automation scripts.
+
+#### CLI Command Reference
+
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `validate-config` | Validates syntax and transport requirements of configuration file. | `warmplane validate-config --config mcp_servers.json` |
+| `daemon` | Starts the HTTP daemon process. | `warmplane daemon --port 9090 --config mcp_servers.json` |
+| `mcp-server` | Starts stdio MCP proxy server interface. | `warmplane mcp-server --config mcp_servers.json` |
+| `list-capabilities` | Lists discovered tools from daemon or config. | `warmplane list-capabilities --port 9090` |
+| `search-capabilities` | Performs hybrid search over capabilities. | `warmplane search-capabilities "triage logs" --limit 5` |
+| `describe-capability` | Displays full JSON Schema for a capability ID. | `warmplane describe-capability github.issues.search` |
+| `call-capability` | Executes a capability tool with JSON parameters. | `warmplane call-capability db.query --params '{"query":"SELECT 1"}'` |
+| `list-resources` | Lists registered resources. | `warmplane list-resources --port 9090` |
+| `read-resource` | Reads resource contents by resource ID. | `warmplane read-resource fs.readme` |
+| `list-prompts` | Lists registered prompt templates. | `warmplane list-prompts --port 9090` |
+| `get-prompt` | Renders a prompt template with arguments. | `warmplane get-prompt prompt.review --arguments '{"file":"main.rs"}'` |
+| `list-catalog-events` | Reads catalog mutation event log. | `warmplane list-catalog-events --after evt_1` |
+| `cancel-operation` | Cancels an in-flight operation by request ID. | `warmplane cancel-operation req-trace-99` |
+
+#### Request Tracing & Idempotency CLI Flags
+
+When invoking `call-capability`, `read-resource`, or `get-prompt`, pass optional context flags for correlation and deduplication:
+
+```bash
+warmplane call-capability payments.charge \
+  --params '{"amount":100}' \
+  --request-id "req-tx-881" \
+  --actor-id "user-449" \
+  --grant-id "grant-scope-read" \
+  --idempotency-key "idem-tx-881"
+```
+
 ## 6. HTTP API Specification
 
 All HTTP API endpoints return standard JSON response envelopes.
