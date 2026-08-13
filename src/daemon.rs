@@ -839,6 +839,7 @@ pub async fn run_daemon(port: u16, config: McpConfig) -> Result<()> {
             "/v1/operations/:id/cancel",
             post(http_v1::handle_cancel_operation),
         )
+        .route("/v1/completion/complete", post(http_v1::handle_completion))
         .with_state(app_state);
 
     info!(port, "all upstream servers connected; daemon listening");

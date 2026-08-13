@@ -189,9 +189,73 @@ pub async fn handle_search_capabilities(
         Json(json!({
             "version": "v1",
             "catalog_version": state.catalog_version,
-            "capabilities": results,
+            "capabilities": results
         })),
     )
+}
+
+/// Request body for prompt/resource argument autocompletion.
+#[derive(Deserialize)]
+pub struct CompletionRequest {
+    /// Reference type (`"prompt"` or `"resource"`).
+    pub ref_type: String,
+    /// Identifier or name of the prompt or resource.
+    pub ref_name: String,
+    /// Name of argument to autocomplete.
+    pub argument_name: String,
+    /// Current prefix value typed by user/agent.
+    #[serde(default)]
+    pub argument_value: String,
+}
+
+/// Handles HTTP POST `/v1/completion/complete` autocompletion endpoint.
+pub async fn handle_completion(
+    State(state): State<AppState>,
+    Json(payload): Json<CompletionRequest>,
+) -> impl IntoResponse {
+    let trace_id = format!("trc_{}", TRACE_COUNTER.fetch_add(1, Ordering::Relaxed));
+
+    let found = match payload.ref_type.as_str() {
+        "prompt" => state.prompts.contains_key(&payload.ref_name),
+        "resource" => state.resources.contains_key(&payload.ref_name),
+        _ => false,
+    };
+
+    if !found {
+        return (
+            StatusCode::NOT_FOUND,
+            make_etag_header(&state.catalog_version),
+            Json(json!({
+                "ok": false,
+                "trace_id": trace_id,
+                "data": null,
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": format!("Reference '{}' of type '{}' not found", payload.ref_name, payload.ref_type)
+                }
+            })),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        make_etag_header(&state.catalog_version),
+        Json(json!({
+            "ok": true,
+            "trace_id": trace_id,
+            "data": {
+                "ref_type": payload.ref_type,
+                "ref_name": payload.ref_name,
+                "argument_name": payload.argument_name,
+                "argument_value": payload.argument_value,
+                "values": [],
+                "total": 0,
+                "has_more": false
+            }
+        })),
+    )
+        .into_response()
 }
 
 pub async fn handle_list_capabilities(
@@ -1137,9 +1201,9 @@ fn redact_value(value: Value, redact_keys: &[String]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        handle_catalog_events, handle_get_prompt, handle_list_capabilities, handle_list_prompts,
-        handle_list_resources, handle_read_resource, redact_value, AppState, CatalogEventsQuery,
-        GetPromptRequest, ReadResourceRequest,
+        handle_catalog_events, handle_completion, handle_get_prompt, handle_list_capabilities,
+        handle_list_prompts, handle_list_resources, handle_read_resource, redact_value, AppState,
+        CatalogEventsQuery, CompletionRequest, GetPromptRequest, ReadResourceRequest,
     };
     use crate::daemon::{CapabilityMeta, Policy, PromptMeta, ResourceMeta};
     use axum::{
@@ -1168,6 +1232,36 @@ mod tests {
         assert_eq!(redacted["token"], "<redacted>");
         assert_eq!(redacted["nested"]["Api_Key"], "<redacted>");
         assert_eq!(redacted["nested"]["safe"], 1);
+    }
+
+    #[tokio::test]
+    async fn test_completion_endpoint() {
+        let mut prompts = HashMap::new();
+        prompts.insert(
+            "prompt.test".to_string(),
+            PromptMeta {
+                server: "srv".to_string(),
+                name: "test".to_string(),
+                title: None,
+                description: None,
+                arguments: vec![],
+                tags: vec![],
+            },
+        );
+
+        let state = AppState::builder().prompts(Arc::new(prompts)).build();
+
+        let req = CompletionRequest {
+            ref_type: "prompt".to_string(),
+            ref_name: "prompt.test".to_string(),
+            argument_name: "file".to_string(),
+            argument_value: "main".to_string(),
+        };
+
+        let response = handle_completion(State(state), Json(req))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]

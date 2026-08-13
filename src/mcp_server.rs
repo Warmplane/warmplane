@@ -32,6 +32,7 @@ const TOOL_RESOURCES_LIST: &str = "resources_list";
 const TOOL_RESOURCE_READ: &str = "resource_read";
 const TOOL_PROMPTS_LIST: &str = "prompts_list";
 const TOOL_PROMPT_GET: &str = "prompt_get";
+const TOOL_COMPLETION_COMPLETE: &str = "completion_complete";
 
 static TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -150,6 +151,30 @@ impl ServerHandler for FacadeMcpServer {
                 let arguments = args.get("arguments").cloned();
                 self.get_prompt_value(prompt_id.to_string(), arguments, request_id, context)
                     .await
+            }
+            TOOL_COMPLETION_COMPLETE => {
+                let ref_type = args.get("ref_type").and_then(|v| v.as_str()).unwrap_or("");
+                let ref_name = args.get("ref_name").and_then(|v| v.as_str()).unwrap_or("");
+                let arg_name = args
+                    .get("argument_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let arg_val = args
+                    .get("argument_value")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                Ok(json!({
+                    "ok": true,
+                    "trace_id": next_trace_id(),
+                    "data": {
+                        "ref_type": ref_type,
+                        "ref_name": ref_name,
+                        "argument_name": arg_name,
+                        "argument_value": arg_val,
+                        "values": [],
+                        "total": 0
+                    }
+                }))
             }
             _ => {
                 return Err(McpError::invalid_params(
@@ -835,6 +860,21 @@ fn facade_tools() -> Vec<Tool> {
                 "additionalProperties":false
             })),
         ),
+        Tool::new(
+            TOOL_COMPLETION_COMPLETE,
+            "Request argument autocompletion for a prompt or resource",
+            schema_object(json!({
+                "type":"object",
+                "properties":{
+                    "ref_type":{"type":"string"},
+                    "ref_name":{"type":"string"},
+                    "argument_name":{"type":"string"},
+                    "argument_value":{"type":"string"}
+                },
+                "required":["ref_type","ref_name","argument_name"],
+                "additionalProperties":false
+            })),
+        ),
     ]
 }
 
@@ -896,7 +936,7 @@ mod tests {
             .into_iter()
             .map(|t| t.name.to_string())
             .collect::<Vec<_>>();
-        assert_eq!(names.len(), 7);
+        assert_eq!(names.len(), 8);
         assert!(names.contains(&"capabilities_list".to_string()));
         assert!(names.contains(&"capability_describe".to_string()));
         assert!(names.contains(&"capability_call".to_string()));
@@ -904,6 +944,7 @@ mod tests {
         assert!(names.contains(&"resource_read".to_string()));
         assert!(names.contains(&"prompts_list".to_string()));
         assert!(names.contains(&"prompt_get".to_string()));
+        assert!(names.contains(&"completion_complete".to_string()));
     }
 
     #[test]
