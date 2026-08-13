@@ -1,0 +1,845 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Warmplane for Integrators | The House-Guest Benchmark & Control Plane</title>
+        <meta
+            name="description"
+            content="Embed Warmplane into your AI agent application. Cut prompt context bloat by 95%+, enforce policy, trace request correlation, and eliminate MCP onboarding monologues."
+        />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+            rel="stylesheet"
+        />
+        <style>
+            :root {
+                --bg: oklch(98.5% 0.01 75);
+                --paper: oklch(99.5% 0.005 75);
+                --ink: oklch(16% 0.02 60);
+                --ink-muted: oklch(40% 0.03 60);
+                --line: oklch(88% 0.02 75);
+                --line-strong: oklch(75% 0.04 75);
+                
+                --accent: oklch(54% 0.22 32); /* Terracotta */
+                --accent-light: oklch(93% 0.06 35);
+                --ok: oklch(52% 0.16 150); /* Emerald Green */
+                --ok-light: oklch(95% 0.05 150);
+                --warn: oklch(58% 0.18 70); /* Amber */
+                --warn-light: oklch(95% 0.06 70);
+                --tech: oklch(48% 0.18 250); /* Deep Sapphire */
+                --tech-light: oklch(94% 0.05 250);
+
+                --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+                --font-serif: "Instrument Serif", Georgia, serif;
+                --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+                --radius-sm: 8px;
+                --radius-md: 14px;
+                --radius-lg: 24px;
+                --shadow-subtle: 0 4px 20px -2px rgba(28, 24, 20, 0.05);
+                --shadow-elevated: 0 16px 40px -8px rgba(28, 24, 20, 0.08);
+            }
+
+            * {
+                box-sizing: border-box;
+            }
+
+            html, body {
+                margin: 0;
+                padding: 0;
+                background: var(--bg);
+                color: var(--ink);
+                font-family: var(--font-sans);
+                line-height: 1.6;
+                -webkit-font-smoothing: antialiased;
+            }
+
+            /* Grain overlay for tactile atmosphere */
+            body::before {
+                content: "";
+                position: fixed;
+                inset: 0;
+                background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.035'/%3E%3C/svg%3E");
+                pointer-events: none;
+                z-index: 999;
+            }
+
+            .shell {
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 24px 24px 96px;
+            }
+
+            /* Navigation Bar */
+            .topbar {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 16px 24px;
+                background: rgba(255, 253, 248, 0.85);
+                backdrop-filter: blur(12px);
+                border: 1px solid var(--line);
+                border-radius: 999px;
+                margin-bottom: 40px;
+            }
+
+            .brand {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                text-decoration: none;
+                color: var(--ink);
+                font-weight: 700;
+                font-size: 1.1rem;
+                letter-spacing: -0.01em;
+            }
+
+            .brand-icon {
+                width: 28px;
+                height: 28px;
+                background: var(--accent);
+                border-radius: var(--radius-sm);
+                display: grid;
+                place-items: center;
+                color: white;
+                font-family: var(--font-mono);
+                font-size: 0.85rem;
+                font-weight: 700;
+            }
+
+            .nav-links {
+                display: flex;
+                align-items: center;
+                gap: 20px;
+            }
+
+            .nav-link {
+                color: var(--ink-muted);
+                text-decoration: none;
+                font-size: 0.9rem;
+                font-weight: 500;
+                transition: color 0.15s ease;
+            }
+
+            .nav-link:hover {
+                color: var(--ink);
+            }
+
+            .badge {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                padding: 4px 12px;
+                border-radius: 999px;
+                font-family: var(--font-mono);
+                font-size: 0.78rem;
+                font-weight: 500;
+            }
+
+            .badge-accent {
+                background: var(--accent-light);
+                color: var(--accent);
+                border: 1px solid oklch(85% 0.08 35);
+            }
+
+            .badge-ok {
+                background: var(--ok-light);
+                color: var(--ok);
+                border: 1px solid oklch(88% 0.08 150);
+            }
+
+            /* Hero Section */
+            .hero {
+                text-align: center;
+                max-width: 920px;
+                margin: 0 auto 64px;
+            }
+
+            .hero-eyebrow {
+                font-family: var(--font-mono);
+                font-size: 0.85rem;
+                color: var(--accent);
+                text-transform: uppercase;
+                letter-spacing: 0.1em;
+                font-weight: 700;
+                margin-bottom: 16px;
+            }
+
+            .hero-title {
+                font-family: var(--font-serif);
+                font-size: clamp(2.8rem, 5vw, 4.5rem);
+                line-height: 1.08;
+                font-weight: 400;
+                letter-spacing: -0.02em;
+                margin: 0 0 24px;
+                color: var(--ink);
+            }
+
+            .hero-title em {
+                font-style: italic;
+                color: var(--accent);
+                font-family: var(--font-serif);
+            }
+
+            .hero-subtitle {
+                font-size: 1.2rem;
+                color: var(--ink-muted);
+                max-width: 720px;
+                margin: 0 auto 36px;
+                line-height: 1.5;
+            }
+
+            .cta-group {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 16px;
+                flex-wrap: wrap;
+            }
+
+            .btn {
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                padding: 12px 24px;
+                border-radius: var(--radius-md);
+                font-size: 0.95rem;
+                font-weight: 600;
+                text-decoration: none;
+                transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+                cursor: pointer;
+            }
+
+            .btn-primary {
+                background: var(--ink);
+                color: var(--paper);
+                box-shadow: var(--shadow-subtle);
+            }
+
+            .btn-primary:hover {
+                transform: translateY(-2px);
+                box-shadow: var(--shadow-elevated);
+                background: oklch(25% 0.02 60);
+            }
+
+            .btn-secondary {
+                background: var(--paper);
+                color: var(--ink);
+                border: 1px solid var(--line-strong);
+            }
+
+            .btn-secondary:hover {
+                background: var(--bg);
+                border-color: var(--ink);
+            }
+
+            /* Stats Highlight Ribbon */
+            .metrics-ribbon {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+                gap: 20px;
+                margin-bottom: 80px;
+            }
+
+            .metric-card {
+                background: var(--paper);
+                border: 1px solid var(--line);
+                border-radius: var(--radius-md);
+                padding: 24px;
+                box-shadow: var(--shadow-subtle);
+                position: relative;
+                overflow: hidden;
+            }
+
+            .metric-card::before {
+                content: "";
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 4px;
+                height: 100%;
+                background: var(--accent);
+            }
+
+            .metric-val {
+                font-family: var(--font-serif);
+                font-size: 2.8rem;
+                font-weight: 400;
+                line-height: 1;
+                color: var(--ink);
+                margin-bottom: 8px;
+            }
+
+            .metric-label {
+                font-size: 0.9rem;
+                color: var(--ink-muted);
+                font-weight: 500;
+            }
+
+            /* The House Guest Storytelling Section */
+            .section-story {
+                background: var(--paper);
+                border: 1px solid var(--line);
+                border-radius: var(--radius-lg);
+                padding: 48px;
+                box-shadow: var(--shadow-elevated);
+                margin-bottom: 80px;
+            }
+
+            .story-grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 40px;
+                margin-top: 32px;
+            }
+
+            @media (max-width: 840px) {
+                .story-grid {
+                    grid-template-columns: 1fr;
+                }
+            }
+
+            .story-card {
+                border: 1px solid var(--line);
+                border-radius: var(--radius-md);
+                padding: 28px;
+                position: relative;
+            }
+
+            .story-card.bad {
+                background: oklch(98.5% 0.01 35);
+                border-color: oklch(88% 0.06 35);
+            }
+
+            .story-card.good {
+                background: oklch(98.5% 0.01 150);
+                border-color: oklch(88% 0.06 150);
+            }
+
+            .story-tag {
+                font-family: var(--font-mono);
+                font-size: 0.75rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                margin-bottom: 12px;
+                display: block;
+            }
+
+            .bad .story-tag { color: var(--accent); }
+            .good .story-tag { color: var(--ok); }
+
+            .story-card h3 {
+                margin: 0 0 12px;
+                font-size: 1.25rem;
+            }
+
+            .story-card p {
+                margin: 0 0 16px;
+                font-size: 0.95rem;
+                color: var(--ink-muted);
+                line-height: 1.5;
+            }
+
+            .token-pill {
+                font-family: var(--font-mono);
+                font-size: 0.85rem;
+                padding: 6px 12px;
+                border-radius: var(--radius-sm);
+                display: inline-block;
+            }
+
+            .bad .token-pill {
+                background: var(--accent-light);
+                color: var(--accent);
+            }
+
+            .good .token-pill {
+                background: var(--ok-light);
+                color: var(--ok);
+                font-weight: 700;
+            }
+
+            /* Interactive House-Guest Simulator */
+            .simulator-box {
+                background: oklch(20% 0.02 60);
+                color: oklch(95% 0.01 75);
+                border-radius: var(--radius-lg);
+                padding: 40px;
+                margin-bottom: 80px;
+                box-shadow: var(--shadow-elevated);
+            }
+
+            .simulator-header {
+                max-width: 600px;
+                margin-bottom: 32px;
+            }
+
+            .simulator-header h2 {
+                font-family: var(--font-serif);
+                font-size: 2.2rem;
+                font-weight: 400;
+                margin: 0 0 12px;
+                color: white;
+            }
+
+            .simulator-controls {
+                margin-bottom: 32px;
+            }
+
+            .slider-group {
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
+            }
+
+            .slider-label {
+                display: flex;
+                justify-content: space-between;
+                font-family: var(--font-mono);
+                font-size: 0.9rem;
+            }
+
+            input[type=range] {
+                width: 100%;
+                accent-color: var(--accent);
+            }
+
+            .sim-comparison {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 24px;
+            }
+
+            @media (max-width: 700px) {
+                .sim-comparison {
+                    grid-template-columns: 1fr;
+                }
+            }
+
+            .sim-metric {
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: var(--radius-md);
+                padding: 24px;
+            }
+
+            .sim-metric-val {
+                font-family: var(--font-mono);
+                font-size: 2rem;
+                font-weight: 700;
+                margin-bottom: 4px;
+            }
+
+            .sim-metric-sub {
+                font-size: 0.85rem;
+                color: oklch(75% 0.01 75);
+            }
+
+            /* Integrator Feature Matrix Grid */
+            .section-features {
+                margin-bottom: 80px;
+            }
+
+            .section-header {
+                text-align: center;
+                max-width: 650px;
+                margin: 0 auto 48px;
+            }
+
+            .section-header h2 {
+                font-family: var(--font-serif);
+                font-size: 2.5rem;
+                font-weight: 400;
+                margin: 0 0 12px;
+            }
+
+            .feature-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+                gap: 24px;
+            }
+
+            .feature-card {
+                background: var(--paper);
+                border: 1px solid var(--line);
+                border-radius: var(--radius-md);
+                padding: 28px;
+                box-shadow: var(--shadow-subtle);
+                transition: transform 0.2s ease, border-color 0.2s ease;
+            }
+
+            .feature-card:hover {
+                transform: translateY(-3px);
+                border-color: var(--line-strong);
+            }
+
+            .feature-badge {
+                font-family: var(--font-mono);
+                font-size: 0.72rem;
+                padding: 2px 8px;
+                border-radius: 4px;
+                background: var(--tech-light);
+                color: var(--tech);
+                font-weight: 700;
+                margin-bottom: 16px;
+                display: inline-block;
+            }
+
+            .feature-card h3 {
+                margin: 0 0 10px;
+                font-size: 1.15rem;
+                font-weight: 700;
+            }
+
+            .feature-card p {
+                margin: 0;
+                font-size: 0.92rem;
+                color: var(--ink-muted);
+                line-height: 1.55;
+            }
+
+            /* Code Showcase Tabs */
+            .section-code {
+                background: var(--paper);
+                border: 1px solid var(--line);
+                border-radius: var(--radius-lg);
+                padding: 40px;
+                box-shadow: var(--shadow-elevated);
+                margin-bottom: 80px;
+            }
+
+            .code-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 24px;
+                flex-wrap: wrap;
+                gap: 16px;
+            }
+
+            .code-tabs {
+                display: flex;
+                gap: 8px;
+            }
+
+            .tab-btn {
+                background: transparent;
+                border: 1px solid var(--line);
+                padding: 8px 16px;
+                border-radius: var(--radius-sm);
+                font-family: var(--font-mono);
+                font-size: 0.85rem;
+                cursor: pointer;
+                color: var(--ink-muted);
+                transition: all 0.15s ease;
+            }
+
+            .tab-btn.active {
+                background: var(--ink);
+                color: var(--paper);
+                border-color: var(--ink);
+            }
+
+            .code-block {
+                background: oklch(14% 0.02 60);
+                color: oklch(92% 0.01 75);
+                border-radius: var(--radius-md);
+                padding: 24px;
+                font-family: var(--font-mono);
+                font-size: 0.88rem;
+                overflow-x: auto;
+                line-height: 1.6;
+                display: none;
+            }
+
+            .code-block.active {
+                display: block;
+            }
+
+            /* Footer */
+            .footer {
+                border-top: 1px solid var(--line);
+                padding-top: 40px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                color: var(--ink-muted);
+                font-size: 0.88rem;
+                flex-wrap: wrap;
+                gap: 20px;
+            }
+
+            .footer-links {
+                display: flex;
+                gap: 20px;
+            }
+
+            .footer-links a {
+                color: var(--ink-muted);
+                text-decoration: none;
+            }
+
+            .footer-links a:hover {
+                color: var(--ink);
+            }
+        </style>
+    </head>
+    <body>
+        <div class="shell">
+            <!-- Navigation -->
+            <header class="topbar">
+                <a href="index.html" class="brand">
+                    <div class="brand-icon">W</div>
+                    <span>Warmplane</span>
+                </a>
+                <div class="nav-links">
+                    <a href="index.html" class="nav-link">Main Specs</a>
+                    <a href="WHITEPAPER.md" class="nav-link">Whitepaper</a>
+                    <span class="badge badge-accent">Integrator Edition</span>
+                </div>
+            </header>
+
+            <!-- Hero Section -->
+            <section class="hero">
+                <div class="hero-eyebrow">The House-Guest Benchmark</div>
+                <h1 class="hero-title">
+                    Stop making your AI model sit through a <em>30-minute onboarding monologue</em>.
+                </h1>
+                <p class="hero-subtitle">
+                    Raw MCP forces models to read giant schema encylopedias before fetching a single file. Warmplane is the polite control plane that serves a compact menu first.
+                </p>
+                <div class="cta-group">
+                    <a href="#simulator" class="btn btn-primary">Try Savings Simulator</a>
+                    <a href="#features" class="btn btn-secondary">Explore Integrator APIs</a>
+                </div>
+            </section>
+
+            <!-- Key Metrics Ribbon -->
+            <section class="metrics-ribbon">
+                <div class="metric-card">
+                    <div class="metric-val">95.8%</div>
+                    <div class="metric-label">Token Savings on GitHub Copilot MCP Scenarios</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-val">58.2%</div>
+                    <div class="metric-label">Token Savings on Filesystem Control Workloads</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-val">&lt; 1ms</div>
+                    <div class="metric-label">Session Reuse Latency (Warm Daemon Connections)</div>
+                </div>
+            </section>
+
+            <!-- Storytelling Card Section -->
+            <section class="section-story">
+                <h2 style="font-family: var(--font-serif); font-size: 2.2rem; margin: 0 0 8px;">The Protocol Design Lesson</h2>
+                <p style="color: var(--ink-muted); margin: 0;">Imagine trapping a guest in your hallway to detail every spice, appliance, and Wi-Fi router firmware history before asking if they want coffee.</p>
+                
+                <div class="story-grid">
+                    <div class="story-card bad">
+                        <span class="story-tag">Raw MCP (Unfiltered)</span>
+                        <h3>The Monologue Host</h3>
+                        <p>Injects 200+ raw JSON tool schemas directly into every prompt turn. Causes severe context bloat, slow time-to-first-token, high API bills, and random hallucinations into irrelevant tool definitions.</p>
+                        <span class="token-pill">~38,500 Tokens / Prompt Turn</span>
+                    </div>
+
+                    <div class="story-card good">
+                        <span class="story-tag">Warmplane (Control Plane)</span>
+                        <h3>The Polite Host</h3>
+                        <p>Exposes a fast capability menu (`/v1/capabilities/search`). Model picks what it needs, Warmplane fetches details on demand and executes safely within policy boundaries.</p>
+                        <span class="token-pill">~1,600 Tokens / Prompt Turn</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Interactive Token Savings Simulator -->
+            <section class="simulator-box" id="simulator">
+                <div class="simulator-header">
+                    <h2>Interactive Context Bloat Calculator</h2>
+                    <p style="color: oklch(80% 0.01 75); margin: 0;">See how much context window tax you save per turn as your catalog of integrated MCP tools grows.</p>
+                </div>
+
+                <div class="simulator-controls">
+                    <div class="slider-group">
+                        <div class="slider-label">
+                            <span>Registered MCP Capabilities (Tools):</span>
+                            <span id="tool-count-display" style="color: var(--accent); font-weight: 700;">85 tools</span>
+                        </div>
+                        <input type="range" id="tool-slider" min="10" max="300" value="85" step="5" />
+                    </div>
+                </div>
+
+                <div class="sim-comparison">
+                    <div class="sim-metric">
+                        <div class="sim-metric-val" id="raw-tokens-val" style="color: oklch(75% 0.15 35);">25,500 tok</div>
+                        <div class="sim-metric-sub">Raw MCP Prompt Monologue Overhead</div>
+                    </div>
+                    <div class="sim-metric" style="border-color: rgba(70, 200, 120, 0.3);">
+                        <div class="sim-metric-val" id="warm-tokens-val" style="color: oklch(85% 0.18 150);">1,150 tok</div>
+                        <div class="sim-metric-sub">Warmplane Compact Facade (~95.5% Saved)</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Integrator Core Features Grid -->
+            <section class="section-features" id="features">
+                <div class="section-header">
+                    <h2>Built for Application Integrators</h2>
+                    <p style="color: var(--ink-muted); margin: 0;">Warmplane keeps MCP logic decoupled from your application code, user auth, and agent loop orchestration.</p>
+                </div>
+
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <span class="feature-badge">P0 • SEARCH</span>
+                        <h3>Hybrid Capability Search</h3>
+                        <p>Execute fast BM25 + ONNX vector queries over registered tools with natural language intent matching without exposing raw schemas to the model.</p>
+                    </div>
+
+                    <div class="feature-card">
+                        <span class="feature-badge">P0 • CATALOG</span>
+                        <h3>SHA-256 Catalog Versioning</h3>
+                        <p>Clients safely cache index descriptions and validate state consistency using HTTP ETag headers and monotonic event feeds.</p>
+                    </div>
+
+                    <div class="feature-card">
+                        <span class="feature-badge">P0 • OBSERVABILITY</span>
+                        <h3>Request Correlation</h3>
+                        <p>Attach arbitrary application operation IDs (`x-correlation-id`) to trace exact Warmplane execution trees in OpenTelemetry.</p>
+                    </div>
+
+                    <div class="feature-card">
+                        <span class="feature-badge">P1 • RECOVERY</span>
+                        <h3>Idempotency & Retries</h3>
+                        <p>Safely replay external tool writes after network hiccups using client-provided `idempotency_key` headers and explicit cancellation endpoints.</p>
+                    </div>
+
+                    <div class="feature-card">
+                        <span class="feature-badge">P1 • SHAPING</span>
+                        <h3>Result Shaping & Redaction</h3>
+                        <p>Filter tool output payloads with JSONPath allowlists, clip giant responses, and automatically redact sensitive secrets before model insertion.</p>
+                    </div>
+
+                    <div class="feature-card">
+                        <span class="feature-badge">P2 • SECURITY</span>
+                        <h3>Scoped Policy Overlays</h3>
+                        <p>Dynamically restrict execution scope per request turn without mutating global system security policies.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Code Integration Examples -->
+            <section class="section-code">
+                <div class="code-header">
+                    <div>
+                        <h2 style="font-family: var(--font-serif); font-size: 2rem; margin: 0 0 4px;">Embedding API Reference</h2>
+                        <p style="color: var(--ink-muted); margin: 0; font-size: 0.9rem;">Integrate via HTTP REST API or command-line IPC.</p>
+                    </div>
+                    <div class="code-tabs">
+                        <button class="tab-btn active" onclick="showTab('http')">HTTP REST</button>
+                        <button class="tab-btn" onclick="showTab('rust')">Rust SDK</button>
+                        <button class="tab-btn" onclick="showTab('cli')">CLI IPC</button>
+                    </div>
+                </div>
+
+                <pre class="code-block active" id="tab-http"><code>POST /v1/capabilities/search HTTP/1.1
+Host: localhost:9870
+Content-Type: application/json
+X-Correlation-ID: op_9f82a1b73c
+
+{
+  "query": "triage production errors in logs",
+  "limit": 5,
+  "tags": ["observability", "read_only"]
+}
+
+/* Response: SHA-256 catalog validated compact facade */
+HTTP/1.1 200 OK
+ETag: "sha256:8f2a938c..."
+
+{
+  "catalog_version": "sha256:8f2a938c...",
+  "capabilities": [
+    {
+      "id": "observability.logs.search",
+      "summary": "Search structured application logs.",
+      "score": 0.94
+    }
+  ]
+}</code></pre>
+
+                <pre class="code-block" id="tab-rust"><code>use warmplane_client::WarmplaneClient;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = WarmplaneClient::connect("http://localhost:9870")?;
+    
+    // Search compact catalog without schema injection
+    let results = client.search_capabilities()
+        .query("triage production errors")
+        .limit(5)
+        .send()
+        .await?;
+
+    println!("Found {} candidate capabilities", results.capabilities.len());
+    Ok(())
+}</code></pre>
+
+                <pre class="code-block" id="tab-cli"><code># Search capability catalog via CLI JSON stream
+warmplane capabilities search "triage production errors" --limit 5 --json
+
+# Execute capability with context correlation header
+warmplane exec observability.logs.search \
+  --param query="error 500" \
+  --correlation-id "task_8812"</code></pre>
+            </section>
+
+            <!-- Footer -->
+            <footer class="footer">
+                <div>© 2026 Warmplane Authors. Built for local-first agent control planes.</div>
+                <div class="footer-links">
+                    <a href="index.html">Main Specs</a>
+                    <a href="TAKE_TWO.md">Take Two Document</a>
+                    <a href="INTEGRATOR_WISHLIST.md">Integrator Wishlist</a>
+                </div>
+            </footer>
+        </div>
+
+        <script>
+            // Simulator Script
+            const slider = document.getElementById('tool-slider');
+            const display = document.getElementById('tool-count-display');
+            const rawTokensVal = document.getElementById('raw-tokens-val');
+            const warmTokensVal = document.getElementById('warm-tokens-val');
+
+            function updateSimulator() {
+                const tools = parseInt(slider.value, 10);
+                display.textContent = `${tools} tools`;
+
+                // Approx 300 tokens per full JSON tool schema in raw MCP
+                const rawTokens = tools * 300;
+                // Warmplane menu search remains compact (~800 base prompt + 4 tokens per item result)
+                const warmTokens = Math.round(800 + (tools * 4));
+                const savingsPct = ((1 - (warmTokens / rawTokens)) * 100).toFixed(1);
+
+                rawTokensVal.textContent = `${rawTokens.toLocaleString()} tok`;
+                warmTokensVal.textContent = `${warmTokens.toLocaleString()} tok (~${savingsPct}% Saved)`;
+            }
+
+            slider.addEventListener('input', updateSimulator);
+            updateSimulator();
+
+            // Tabs script
+            function showTab(tabId) {
+                document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+                document.querySelectorAll('.code-block').forEach(blk => blk.classList.remove('active'));
+                
+                event.target.classList.add('active');
+                document.getElementById(`tab-${tabId}`).classList.add('active');
+            }
+        </script>
+    </body>
+</html>

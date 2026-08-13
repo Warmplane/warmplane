@@ -120,6 +120,26 @@
                 gap: 10px;
             }
 
+            .integrators-link {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                border: 1px solid var(--accent);
+                border-radius: 999px;
+                padding: 7px 14px;
+                background: rgba(199, 74, 32, 0.1);
+                font-family: "IBM Plex Mono", ui-monospace, monospace;
+                font-size: 0.78rem;
+                color: var(--accent);
+                font-weight: 600;
+                text-decoration: none;
+                transition: background 0.15s ease;
+            }
+
+            .integrators-link:hover {
+                background: rgba(199, 74, 32, 0.2);
+            }
+
             .status {
                 display: inline-flex;
                 align-items: center;
@@ -623,6 +643,7 @@
                     Warmplane
                 </div>
                 <div class="topbar-right">
+                    <a class="integrators-link" href="integrators.html">Integrators Guide</a>
                     <a class="version-tag" href="https://github.com/Warmplane/warmplane/releases/tag/v0.6.0" aria-label="Release v0.6.0">v0.6.0</a>
                     <div class="status"><i class="dot"></i> local control plane runtime</div>
                 </div>

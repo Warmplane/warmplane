@@ -6,9 +6,9 @@
 
 Modern Model Context Protocol (MCP) deployments increasingly suffer from a structural inefficiency: repeated transmission and processing of large capability surfaces, even when only a small subset of tools/resources/prompts are used per task. This paper introduces **Warmplane**, a local control plane that maintains persistent upstream MCP sessions while exposing a compact, deterministic, policy-governed interface to clients.
 
-Warmplane separates backend protocol richness from frontend interaction cost by presenting index-first capability discovery and on-demand schema expansion. In measured scenarios from the project evaluation harness, this approach reduced token footprint by **58.1%–58.2%** in a public filesystem control suite and **95.6%–95.8%** in an authenticated GitHub Copilot MCP suite. These improvements were achieved without sacrificing MCP compatibility or multi-transport interoperability.
+Warmplane separates backend protocol richness from frontend interaction cost by presenting index-first capability discovery, hybrid lexical/vector search, SHA-256 catalog cache validation (`304 Not Modified`), and on-demand schema expansion. In measured scenarios from the project evaluation harness, this approach reduced token footprint by **58.1%–58.2%** in a public filesystem control suite and **95.6%–95.8%** in an authenticated GitHub Copilot MCP suite. These improvements were achieved while introducing deterministic execution governance, including request context propagation (`operation_id`, `actor_id`, `grant_id`), idempotency deduplication (`Idempotency-Key`), safe/unsafe retry classification, and active operation cancellation.
 
-We present the system architecture, transport model, policy/governance controls, error determinism model, and empirical evaluation methodology. We also discuss enterprise implications for latency, cost, reliability, and auditability, and outline future research directions for adaptive schema compaction and workload-aware orchestration.
+We present the system architecture, transport model, policy/governance controls, error determinism model, hybrid capability search engine, catalog versioning model, and empirical evaluation methodology. We also discuss enterprise implications for latency, cost, reliability, security, and auditability, and outline future research directions for adaptive schema compaction and workload-aware orchestration.
 
 ## 1. Introduction
 
@@ -17,7 +17,7 @@ We present the system architecture, transport model, policy/governance controls,
 As organizations operationalize AI agents, tool connectivity moves from demonstration to infrastructure. MCP has become a useful substrate for standardizing tool/resource/prompt access. However, in direct MCP client-server patterns, agent loops frequently overpay in two dimensions:
 
 1. **Context overhead**: large metadata payloads are delivered repeatedly.
-2. **Control fragmentation**: policy, retries, and error handling are inconsistently implemented across clients.
+2. **Control fragmentation**: policy, context tracking, retries, and error handling are inconsistently implemented across clients.
 
 The result is avoidable token spend, higher startup latency, and reduced operational predictability.
 
@@ -30,9 +30,10 @@ The central thesis of this whitepaper is:
 Warmplane implements this thesis by:
 
 - keeping upstream MCP sessions warm and stateful,
-- exposing a compact, stable interface for tools/resources/prompts,
-- normalizing invocation and error envelopes,
-- centralizing policy and redaction controls.
+- exposing a compact, stable interface for tools/resources/prompts alongside hybrid lexical/semantic search,
+- providing zero-token catalog revalidation via SHA-256 state digests and change event streams,
+- normalizing invocation, request context, and error envelopes with explicit retry governance,
+- centralizing policy, redaction, idempotency deduplication, and operation cancellation controls.
 
 ### 1.3 Contributions
 
@@ -42,6 +43,9 @@ This paper contributes:
 2. A deterministic execution model across CLI, HTTP, and MCP-native client modes.
 3. A reproducible token-efficiency evaluation harness and measured baselines.
 4. A governance model suitable for enterprise policy, observability, and risk controls.
+5. A hybrid BM25 and ONNX vector search engine for sub-linear capability discovery over dense catalogs.
+6. A deterministic catalog digest model for conditional cache revalidation (`304 Not Modified`) and cursor-based event feeds.
+7. An execution governance framework providing multi-tenant request context propagation, idempotency deduplication, safe retry safety classification, and active in-flight operation cancellation.
 
 ## 2. Background and Motivation
 
@@ -71,25 +75,31 @@ Warmplane addresses this by introducing a local control plane that standardizes 
 
 ### 3.1 Architectural Overview
 
-Warmplane consists of four major components:
+Warmplane consists of five major components:
 
 1. **Upstream Session Layer**
    - Connects to multiple MCP upstreams.
    - Supports stdio and streamable HTTP/SSE transports.
    - Keeps negotiated sessions persistent.
 
-2. **Registry Layer**
+2. **Registry and Search Layer**
    - Builds in-memory registries for capabilities, resources, prompts.
    - Applies alias mapping (`capabilityAliases`, `resourceAliases`, `promptAliases`).
+   - Implements **Hybrid Capability Search** (v0.3) combining BM25 lexical scoring with optional FastEmbed ONNX vector embeddings.
+   - Computes SHA-256 state digests for **Catalog Versioning & Change Event Feeds** (v0.4).
 
-3. **Policy and Envelope Layer**
+3. **Policy, Governance, and Envelope Layer**
    - Enforces allow/deny patterns across capability types.
    - Applies payload redaction keys in logs.
-   - Standardizes response envelopes and error codes.
+   - Standardizes response envelopes with **Request Context** (`operation_id`, `actor_id`, `grant_id`, `work_item_id`) (v0.5) and **Retry Governance** (`safe|unsafe|idempotent` classification) (v0.6).
 
-4. **Access Modes**
-   - HTTP `/v1` facade.
-   - CLI facade.
+4. **Idempotency and Operations Manager**
+   - Deduplicates concurrent or replayed invocations via `Idempotency-Key` (v0.6).
+   - Manages active task handle lifetimes and provides in-flight operation cancellation (`POST /v1/operations/:id/cancel`) (v0.6).
+
+5. **Access Modes**
+   - HTTP `/v1` facade (exposing capabilities, hybrid search, catalog events, operation cancellation, resources, and prompts).
+   - CLI facade (`warmplane search-capabilities`, `list-catalog-events`, `cancel-operation`, etc.).
    - MCP server mode exposing lightweight synthetic tools and native resources/prompts methods.
 
 ### 3.2 Transport Model
@@ -108,19 +118,21 @@ For HTTP/SSE upstreams, Warmplane supports:
 - custom headers,
 - authentication schemas: static credentials (`bearer`, `basic`) and dynamic `oauth2` (OAuth 2.1 / OIDC) flows featuring PKCE (`S256`), dynamic server discovery (RFC 9728 & RFC 8414), scope accumulation during step-up challenges, and silent token refreshing via rotated refresh tokens.
 
-### 3.3 Deterministic Call Model
+### 3.3 Deterministic Call and Governance Model
 
 Warmplane normalizes execution/read/get results to a stable envelope:
 
-- `ok`
-- `request_id`
-- `trace_id`
-- `data`
-- `error`
+- `ok`: boolean success flag
+- `request_id`: unique server-generated request identifier
+- `trace_id`: OpenTelemetry trace correlation identifier
+- `context`: structured request context (`operation_id`, `work_item_id`, `actor_id`, `grant_id`)
+- `retry`: execution governance metadata (`classification`: `safe` | `unsafe` | `idempotent`, `state`: `fresh` | `deduplicated` | `replayed`)
+- `data`: payload output upon success
+- `error`: structured error classification envelope upon failure
 
-Error classes are explicit and bounded (e.g., `UPSTREAM_TIMEOUT`, `UPSTREAM_ERROR`, `SERVER_UNREACHABLE`).
+Error classes are explicit and bounded (e.g., `UPSTREAM_TIMEOUT`, `UPSTREAM_ERROR`, `SERVER_UNREACHABLE`, `OPERATION_CANCELLED`, `POLICY_DENIED`).
 
-This deterministic contract is central to robust orchestration loops and reliable fallback behavior.
+When an orchestrator issues concurrent requests with an identical `Idempotency-Key` (or `X-Idempotency-Key` header), Warmplane joins the secondary requests to the active in-flight worker, returning a single cached execution outcome to all callers without re-executing the upstream capability.
 
 ### 3.4 Observability Architecture
 
@@ -128,7 +140,7 @@ Warmplane implements observability as a first-class control-plane concern rather
 
 1. **Structured audit logs**
    - JSON-formatted runtime logs across daemon lifecycle and capability/resource/prompt operations.
-   - Event records include contextual fields (e.g., server ID, capability/resource/prompt IDs, trace IDs).
+   - Event records include contextual fields (e.g., server ID, capability/resource/prompt IDs, trace IDs, `actor_id`, `grant_id`, `operation_id`).
 
 2. **OpenTelemetry tracing**
    - Optional OTLP export path for enterprise trace backends.
@@ -136,10 +148,28 @@ Warmplane implements observability as a first-class control-plane concern rather
    - Local structured logs remain enabled even when OTEL export is active.
 
 3. **Cross-surface correlation**
-   - HTTP execution envelopes expose `trace_id`.
-   - The same identifier can be used to correlate user-facing responses, logs, and distributed traces.
+   - HTTP execution envelopes and logs expose matching `trace_id` and `RequestContext` attributes.
+   - HTTP header fallbacks (`X-Request-ID`, `X-Operation-ID`, `X-Actor-ID`, `X-Grant-ID`) ensure trace context propagation even across non-native HTTP clients.
 
 This design provides auditable and machine-parsable operational evidence while preserving deterministic API behavior.
+
+### 3.5 Hybrid Capability Discovery Architecture
+
+In high-density environments featuring hundreds of upstream tools, even compact index listings can accumulate token context. Warmplane introduces a **Hybrid Capability Search Engine** (`POST /v1/capabilities/search`):
+
+- **Lexical BM25 Scoring**: Evaluates keyword frequency across tool names, aliases, and description tokens.
+- **Semantic ONNX Vector Embeddings**: Uses local FastEmbed vector embeddings to evaluate semantic similarity against natural language intent.
+- **Structured Metadata Filtering**: Filters query candidates by tag facets, upstream server IDs, and policy permissions.
+
+Agents query this search surface to discover top-$k$ candidate tools without ingesting full schema catalogs.
+
+### 3.6 Catalog Digest, Conditional Cache Validation, and Change Feed
+
+To eliminate redundant metadata pulls entirely when catalog schemas have not changed, Warmplane implements a **Deterministic Catalog Digest Model**:
+
+1. **State Digest Hashing**: Computes a SHA-256 hash over the combined capability, resource, and prompt registry state.
+2. **HTTP `ETag` & Conditional Revalidation**: Catalog endpoints (`/v1/capabilities`, `/v1/resources`, `/v1/prompts`) emit an `ETag` header containing the catalog digest. Subsequent requests providing `If-None-Match: <etag>` receive an empty `304 Not Modified` response (0 tokens spent on context).
+3. **Cursor-Based Change Feed (`/v1/catalog/events`)**: Long-running agents subscribe to change feed event streams (`capability_added`, `capability_removed`, `capability_updated`) using cursor pagination to track upstream catalog mutation incrementally.
 
 ## 4. Formalizing the Efficiency Hypothesis
 
@@ -172,7 +202,25 @@ $$
 
 As $n \to \infty $, $\eta(n) \to 1 - I/R_t $.
 
-Warmplane’s measured results fit this behavior: large $R_t/I$ ratios produce very high sustained savings.
+### 4.1 Search-Augmented and Cache-Validated Efficiency
+
+Warmplane v0.3+ and v0.4+ extend this model in two dimensions:
+
+1. **Search-Augmented Discovery ($Q_k$)**: In ultra-dense tool catalogs, rather than ingesting full index $I$, the agent issues a query returning top-$k$ candidate schema details ($Q_k \ll I \ll R_t$). The facade cost per query cycle becomes:
+
+$$
+C_{search}(n) = n \cdot Q_k + D
+$$
+
+2. **Zero-Token Conditional Revalidation ($V = 0$)**: When catalog state is unchanged, an agent validating state via `If-None-Match: <etag>` receives HTTP `304 Not Modified`, yielding:
+
+$$
+C_{cached}(n) = 0 \text{ tokens}
+$$
+
+Thus, total context spend across $n$ turns with zero schema changes collapses to only execution payloads, driving asymptotic savings $\eta(n) \to 100\%$ for non-mutating turns.
+
+Warmplane’s measured results fit this behavior: large $R_t/I$ and $R_t/Q_k$ ratios produce very high sustained savings.
 
 ## 5. Evaluation Methodology
 
@@ -260,20 +308,19 @@ This validates the hypothesis that description-heavy ecosystems benefit most fro
 
 ### 7.1 Cost Engineering
 
-Token reductions in the 58%–96% range materially affect operating budgets for high-frequency agent workflows, especially where context windows are repeatedly consumed by metadata.
+Token reductions in the 58%–96% range materially affect operating budgets for high-frequency agent workflows, especially where context windows are repeatedly consumed by metadata. Hybrid capability search and SHA-256 ETag caching reduce context ingestion further toward asymptotic minimums.
 
 ### 7.2 Latency and Time-to-Action
 
 Persistent upstream sessions reduce cold-start behavior and repeated negotiations. Compact indexes reduce frontend payload parsing overhead, shortening time to first useful action.
 
-### 7.3 Reliability and Determinism
+### 7.3 Reliability, Retry & Idempotency Governance
 
-Normalized envelopes and bounded error classes simplify:
+Normalized envelopes and explicit execution governance simplify agent retry policies:
 
-- retry policy,
-- fallback branches,
-- incident diagnosis,
-- automation confidence.
+- **Idempotency Deduplication**: Passing an `Idempotency-Key` ensures concurrent or retried identical requests attach to the same background execution worker, preventing duplicate side-effects (e.g. double database writes or duplicate API charges).
+- **Retry Safety Classification**: Every response envelope contains explicit `"retry"` metadata (`classification`: `safe` | `unsafe` | `idempotent`), empowering orchestrators to retry network blips safely while halting dangerous duplicate side-effecting operations.
+- **In-flight Operation Cancellation**: Malfunctioning or runaway agent loops can be aborted immediately via `POST /v1/operations/:id/cancel`.
 
 ### 7.4 Governance and Risk Posture
 
@@ -281,12 +328,12 @@ Centralized policy and redaction controls enable consistent enforcement across h
 
 For regulated environments, this reduces policy drift and improves auditability.
 
-### 7.5 Observability and Compliance Operations
+### 7.5 Observability, Auditability & Tenant Context
 
-Enterprise operations require verifiable evidence chains for agent actions. Warmplane supports this with:
+Enterprise operations require verifiable evidence chains for agent actions across complex multi-tenant environments. Warmplane supports this with:
 
-- structured JSON logs suitable for SIEM ingestion,
-- trace export into existing OTEL pipelines,
+- structured JSON logs suitable for SIEM ingestion, carrying explicit `actor_id`, `grant_id`, `work_item_id`, and `operation_id` attributes,
+- trace export into existing OTEL pipelines linked across HTTP headers and execution envelopes,
 - stable error classes and trace-linked envelopes for post-incident reconstruction.
 
 This reduces mean-time-to-understand during incidents and supports policy/compliance reviews with concrete telemetry artifacts.
@@ -295,11 +342,13 @@ This reduces mean-time-to-understand during incidents and supports policy/compli
 
 Warmplane does not eliminate upstream risk; it concentrates control points. 
 
-By upgrading to standard OAuth 2.1 authentication patterns, Warmplane achieves major architectural security bounds:
+By upgrading to standard OAuth 2.1 authentication patterns and multi-tenant request context headers, Warmplane achieves major architectural security bounds:
 
 - **Mitigation of Confused Deputy Attacks**: Employs Resource Indicators (RFC 8707) to bound issued access tokens to the exact canonical target server URI, preventing token replay attacks across services.
 - **Defending against Authorization Mix-Ups**: Implements exact string-match issuer parameter verification (RFC 9207 / SEP-2468) during loopback redirects to eliminate session hijack risks.
 - **Securing Public Clients (PKCE)**: Uses S256 PKCE verification to safeguard temporary redirect authorization codes from interception.
+- **Tenant Context Isolation**: Threads `actor_id` and `grant_id` context through execution policies and audit trails, preventing cross-tenant request spoofing.
+- **Idempotency Key Scope Boundaries**: Scopes deduplication state by caller identity and target operation to prevent cache pollution attacks across tenants.
 - **Egress Filtering and SSRF Defenses**: Discovery and token requests utilize strict hostname and scheme validations to avoid server-side request forgery (SSRF).
 
 Recommended deployment posture:
@@ -308,7 +357,7 @@ Recommended deployment posture:
 - use env-backed secrets or OAuth2 dynamic verification,
 - enforce deny-by-default for destructive operations,
 - separate read/write policy profiles by workload class,
-- audit call paths via trace IDs.
+- audit call paths via trace IDs and request context keys.
 
 For HTTP/SSE upstreams, protocol versioning and auth headers should be explicit, verified, and monitored.
 
@@ -317,7 +366,7 @@ For HTTP/SSE upstreams, protocol versioning and auth headers should be explicit,
 Warmplane differs from generic “gateway/proxy/router/mesh” framing by emphasizing two explicit properties:
 
 1. **Warm sessions** (persistent upstream state)
-2. **Control-plane compactness** (index-first, lazy detail expansion)
+2. **Control-plane compactness** (index-first, lazy detail expansion, hybrid search)
 
 This pairing is what drives the empirical efficiency gains and deterministic behavior model.
 
@@ -351,20 +400,20 @@ These do not negate findings but define scope.
 
 ## 12. Future Research Directions
 
-1. **Adaptive Schema Compression**
-   - Dynamic index detail levels based on prior turn usage.
+1. **Streamable Tool Call Envelopes**
+   - Extending normalized envelopes to support chunked streaming outputs for long-running capability operations.
 
 2. **Profile-Aware Prompting Contracts**
    - Distinct compact surfaces for planner, executor, and auditor roles.
 
-3. **Cross-Provider Token Model Calibration**
-   - Evaluate savings under multiple tokenizer regimes.
+3. **Dynamic Policy Synthesis & Token Budget Enforcement**
+   - Adaptive client-level token budget enforcement and dynamic allow/deny policy evaluation based on real-time agent spend.
 
-4. **Queueing and Concurrency Analysis**
-   - Quantify warm-session behavior under high parallel workloads.
+4. **Cross-Provider Token Model Calibration**
+   - Evaluate savings under multiple tokenizer regimes (e.g. tiktoken vs Llama/Claude tokenizers).
 
-5. **Policy Explainability**
-   - Formal proofs or machine-checkable traces for allow/deny decisions.
+5. **Queueing and Concurrency Analysis**
+   - Quantify warm-session behavior and idempotency deduplication under high parallel workloads.
 
 ## 13. Conclusion
 
@@ -400,3 +449,8 @@ Primary artifacts:
 - **Control plane**: the policy/contract layer that governs how clients access capabilities.
 - **Data plane**: the execution path of actual tool/resource/prompt operations.
 - **Index-first interface**: compact listing surface with deferred detail retrieval.
+- **Hybrid search**: discovery engine combining BM25 lexical matching and FastEmbed vector embeddings.
+- **Catalog digest**: SHA-256 state hash used for `ETag` conditional revalidation (`304 Not Modified`).
+- **Request context**: structured execution tracking context (`operation_id`, `actor_id`, `grant_id`, `work_item_id`).
+- **Idempotency key**: unique token passed by clients to deduplicate concurrent or replayed executions.
+- **Retry classification**: structured classification (`safe`, `unsafe`, `idempotent`) returned in envelopes to guide orchestrator retry behavior.
