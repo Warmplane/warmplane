@@ -21,6 +21,17 @@ pub struct CatalogEvent {
     pub detail: Option<String>,
 }
 
+/// Represents a real-time resource update notification event emitted by an upstream MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceUpdateEvent {
+    /// Resource URI that was updated.
+    pub uri: String,
+    /// Timestamp of update event.
+    pub timestamp: String,
+    /// Originating server identifier.
+    pub server: String,
+}
+
 /// In-memory thread-safe event store recording catalog state changes.
 pub struct CatalogEventStore {
     events: RwLock<Vec<CatalogEvent>>,

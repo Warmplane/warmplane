@@ -4,4 +4,4 @@
 
 pub mod events;
 
-pub use events::{CatalogEvent, CatalogEventStore};
+pub use events::{CatalogEvent, CatalogEventStore, ResourceUpdateEvent};

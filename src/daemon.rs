@@ -301,6 +301,8 @@ pub struct AppState {
     pub idempotency_store: Arc<crate::idempotency::IdempotencyStore>,
     /// Active operation tracking registry for cancellation.
     pub operation_registry: crate::operations::OperationRegistry,
+    /// Real-time broadcast channel for resource update notifications.
+    pub resource_update_tx: tokio::sync::broadcast::Sender<crate::catalog::ResourceUpdateEvent>,
 }
 
 impl AppState {
@@ -324,6 +326,7 @@ pub struct AppStateBuilder {
     event_store: Option<Arc<crate::catalog::CatalogEventStore>>,
     idempotency_store: Option<Arc<crate::idempotency::IdempotencyStore>>,
     operation_registry: Option<crate::operations::OperationRegistry>,
+    resource_update_tx: Option<tokio::sync::broadcast::Sender<crate::catalog::ResourceUpdateEvent>>,
 }
 
 impl AppStateBuilder {
@@ -401,6 +404,9 @@ impl AppStateBuilder {
                 .idempotency_store
                 .unwrap_or_else(|| Arc::new(crate::idempotency::IdempotencyStore::default())),
             operation_registry: self.operation_registry.unwrap_or_default(),
+            resource_update_tx: self
+                .resource_update_tx
+                .unwrap_or_else(|| tokio::sync::broadcast::channel(64).0),
         }
     }
 }
@@ -840,6 +846,14 @@ pub async fn run_daemon(port: u16, config: McpConfig) -> Result<()> {
             post(http_v1::handle_cancel_operation),
         )
         .route("/v1/completion/complete", post(http_v1::handle_completion))
+        .route(
+            "/v1/resources/updates",
+            get(http_v1::handle_resource_updates),
+        )
+        .route(
+            "/v1/sampling/create_message",
+            post(http_v1::handle_sampling_create_message),
+        )
         .with_state(app_state);
 
     info!(port, "all upstream servers connected; daemon listening");

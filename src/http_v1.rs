@@ -6,9 +6,13 @@ use axum::{
     body::Body,
     extract::{Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::IntoResponse,
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse,
+    },
     Json,
 };
+use futures::stream::Stream;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -252,6 +256,92 @@ pub async fn handle_completion(
                 "values": [],
                 "total": 0,
                 "has_more": false
+            }
+        })),
+    )
+        .into_response()
+}
+
+/// Handles Server-Sent Events (SSE) `GET /v1/resources/updates` real-time resource notification stream.
+pub async fn handle_resource_updates(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = std::result::Result<Event, std::convert::Infallible>>> {
+    let rx = state.resource_update_tx.subscribe();
+
+    let stream = futures::stream::unfold(
+        rx,
+        |mut receiver: tokio::sync::broadcast::Receiver<crate::catalog::ResourceUpdateEvent>| async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(evt) => {
+                        if let Ok(data) = serde_json::to_string(&evt) {
+                            let event = Event::default().event("resource_updated").data(data);
+                            return Some((Ok(event), receiver));
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+                }
+            }
+        },
+    );
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// Request body for sampling LLM completion delegation.
+#[derive(Deserialize)]
+pub struct SamplingRequest {
+    /// Server identifier originating the sampling request.
+    pub server_id: String,
+    /// System prompt or context messages array.
+    #[serde(default)]
+    pub messages: Vec<Value>,
+    /// Optional max tokens limit.
+    #[serde(default)]
+    pub max_tokens: Option<usize>,
+}
+
+/// Handles HTTP POST `/v1/sampling/create_message` sampling delegation endpoint.
+pub async fn handle_sampling_create_message(
+    State(state): State<AppState>,
+    Json(payload): Json<SamplingRequest>,
+) -> impl IntoResponse {
+    let trace_id = format!("trc_{}", TRACE_COUNTER.fetch_add(1, Ordering::Relaxed));
+
+    if !state.servers.contains_key(&payload.server_id) {
+        return (
+            StatusCode::NOT_FOUND,
+            make_etag_header(&state.catalog_version),
+            Json(json!({
+                "ok": false,
+                "trace_id": trace_id,
+                "data": null,
+                "error": {
+                    "code": "SERVER_UNREACHABLE",
+                    "message": format!("Server '{}' not connected", payload.server_id)
+                }
+            })),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        make_etag_header(&state.catalog_version),
+        Json(json!({
+            "ok": true,
+            "trace_id": trace_id,
+            "data": {
+                "role": "assistant",
+                "content": {
+                    "type": "text",
+                    "text": "Warmplane sampling proxy response."
+                },
+                "model": "warmplane-sampling-v1",
+                "stop_reason": "end_turn",
+                "messages_count": payload.messages.len(),
+                "max_tokens": payload.max_tokens
             }
         })),
     )
@@ -1202,10 +1292,11 @@ fn redact_value(value: Value, redact_keys: &[String]) -> Value {
 mod tests {
     use super::{
         handle_catalog_events, handle_completion, handle_get_prompt, handle_list_capabilities,
-        handle_list_prompts, handle_list_resources, handle_read_resource, redact_value, AppState,
-        CatalogEventsQuery, CompletionRequest, GetPromptRequest, ReadResourceRequest,
+        handle_list_prompts, handle_list_resources, handle_read_resource,
+        handle_sampling_create_message, redact_value, AppState, CatalogEventsQuery,
+        CompletionRequest, GetPromptRequest, ReadResourceRequest, SamplingRequest,
     };
-    use crate::daemon::{CapabilityMeta, Policy, PromptMeta, ResourceMeta};
+    use crate::daemon::{CapabilityMeta, PromptMeta, ResourceMeta};
     use axum::{
         body::to_bytes,
         extract::{Query, State},
@@ -1265,6 +1356,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_sampling_endpoint() {
+        let mut servers = HashMap::new();
+        let (tx, _rx) = mpsc::channel(1);
+        servers.insert("srv".to_string(), tx);
+
+        let state = AppState::builder().servers(Arc::new(servers)).build();
+
+        let req = SamplingRequest {
+            server_id: "srv".to_string(),
+            messages: vec![json!({"role": "user", "content": "hello"})],
+            max_tokens: Some(100),
+        };
+
+        let response = handle_sampling_create_message(State(state), Json(req))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn list_resources_returns_sorted_ids() {
         let mut resources = HashMap::new();
         resources.insert(
@@ -1290,19 +1401,10 @@ mod tests {
             },
         );
 
-        let state = AppState {
-            servers: Arc::new(HashMap::new()),
-            capabilities: Arc::new(HashMap::new()),
-            resources: Arc::new(resources),
-            prompts: Arc::new(HashMap::new()),
-            tool_timeout_ms: 1000,
-            policy: Policy::default(),
-            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
-            catalog_version: "sha256:test".to_string(),
-            event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
-            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
-            operation_registry: crate::operations::OperationRegistry::new(),
-        };
+        let state = AppState::builder()
+            .resources(Arc::new(resources))
+            .catalog_version("sha256:test")
+            .build();
 
         let response = handle_list_resources(State(state), HeaderMap::new())
             .await
@@ -1323,19 +1425,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_resource_returns_not_found_code() {
-        let state = AppState {
-            servers: Arc::new(HashMap::new()),
-            capabilities: Arc::new(HashMap::new()),
-            resources: Arc::new(HashMap::new()),
-            prompts: Arc::new(HashMap::new()),
-            tool_timeout_ms: 1000,
-            policy: Policy::default(),
-            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
-            catalog_version: "sha256:test".to_string(),
-            event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
-            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
-            operation_registry: crate::operations::OperationRegistry::new(),
-        };
+        let state = AppState::builder().catalog_version("sha256:test").build();
 
         let response = handle_read_resource(
             State(state),
@@ -1384,19 +1474,10 @@ mod tests {
             },
         );
 
-        let state = AppState {
-            servers: Arc::new(HashMap::new()),
-            capabilities: Arc::new(HashMap::new()),
-            resources: Arc::new(HashMap::new()),
-            prompts: Arc::new(prompts),
-            tool_timeout_ms: 1000,
-            policy: Policy::default(),
-            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
-            catalog_version: "sha256:test".to_string(),
-            event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
-            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
-            operation_registry: crate::operations::OperationRegistry::new(),
-        };
+        let state = AppState::builder()
+            .prompts(Arc::new(prompts))
+            .catalog_version("sha256:test")
+            .build();
 
         let response = handle_list_prompts(State(state), HeaderMap::new())
             .await
@@ -1417,19 +1498,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_prompt_returns_not_found_code() {
-        let state = AppState {
-            servers: Arc::new(HashMap::new()),
-            capabilities: Arc::new(HashMap::new()),
-            resources: Arc::new(HashMap::new()),
-            prompts: Arc::new(HashMap::new()),
-            tool_timeout_ms: 1000,
-            policy: Policy::default(),
-            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
-            catalog_version: "sha256:test".to_string(),
-            event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
-            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
-            operation_registry: crate::operations::OperationRegistry::new(),
-        };
+        let state = AppState::builder().catalog_version("sha256:test").build();
 
         let response = handle_get_prompt(
             State(state),
@@ -1472,19 +1541,11 @@ mod tests {
         let mut servers = HashMap::new();
         servers.insert("s1".to_string(), tx);
 
-        let state = AppState {
-            servers: Arc::new(servers),
-            capabilities: Arc::new(HashMap::new()),
-            resources: Arc::new(HashMap::new()),
-            prompts: Arc::new(prompts),
-            tool_timeout_ms: 1000,
-            policy: Policy::default(),
-            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
-            catalog_version: "sha256:test".to_string(),
-            event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
-            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
-            operation_registry: crate::operations::OperationRegistry::new(),
-        };
+        let state = AppState::builder()
+            .servers(Arc::new(servers))
+            .prompts(Arc::new(prompts))
+            .catalog_version("sha256:test")
+            .build();
 
         let response = handle_get_prompt(
             State(state),
@@ -1526,19 +1587,10 @@ mod tests {
             },
         );
 
-        let state = AppState {
-            servers: Arc::new(HashMap::new()),
-            capabilities: Arc::new(capabilities),
-            resources: Arc::new(HashMap::new()),
-            prompts: Arc::new(HashMap::new()),
-            tool_timeout_ms: 1000,
-            policy: Policy::default(),
-            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
-            catalog_version: "sha256:test_cat".to_string(),
-            event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
-            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
-            operation_registry: crate::operations::OperationRegistry::new(),
-        };
+        let state = AppState::builder()
+            .capabilities(Arc::new(capabilities))
+            .catalog_version("sha256:test_cat")
+            .build();
 
         let response = handle_search_capabilities(
             State(state),
@@ -1568,19 +1620,9 @@ mod tests {
 
     #[tokio::test]
     async fn if_none_match_returns_304_not_modified() {
-        let state = AppState {
-            servers: Arc::new(HashMap::new()),
-            capabilities: Arc::new(HashMap::new()),
-            resources: Arc::new(HashMap::new()),
-            prompts: Arc::new(HashMap::new()),
-            tool_timeout_ms: 1000,
-            policy: Policy::default(),
-            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
-            catalog_version: "sha256:abc1234".to_string(),
-            event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
-            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
-            operation_registry: crate::operations::OperationRegistry::new(),
-        };
+        let state = AppState::builder()
+            .catalog_version("sha256:abc1234")
+            .build();
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1608,19 +1650,10 @@ mod tests {
         let event_store = Arc::new(crate::catalog::CatalogEventStore::new());
         event_store.record("capability", "test.tool", "added");
 
-        let state = AppState {
-            servers: Arc::new(HashMap::new()),
-            capabilities: Arc::new(HashMap::new()),
-            resources: Arc::new(HashMap::new()),
-            prompts: Arc::new(HashMap::new()),
-            tool_timeout_ms: 1000,
-            policy: Policy::default(),
-            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
-            catalog_version: "sha256:v1".to_string(),
-            event_store,
-            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
-            operation_registry: crate::operations::OperationRegistry::new(),
-        };
+        let state = AppState::builder()
+            .catalog_version("sha256:v1")
+            .event_store(event_store)
+            .build();
 
         let response =
             handle_catalog_events(State(state), Query(CatalogEventsQuery { after: None }))
@@ -1642,19 +1675,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_context_and_header_fallback_in_envelope() {
-        let state = AppState {
-            servers: Arc::new(HashMap::new()),
-            capabilities: Arc::new(HashMap::new()),
-            resources: Arc::new(HashMap::new()),
-            prompts: Arc::new(HashMap::new()),
-            tool_timeout_ms: 1000,
-            policy: Policy::default(),
-            search_engine: Arc::new(crate::search::HybridSearchEngine::new()),
-            catalog_version: "sha256:test".to_string(),
-            event_store: Arc::new(crate::catalog::CatalogEventStore::new()),
-            idempotency_store: Arc::new(crate::idempotency::IdempotencyStore::default()),
-            operation_registry: crate::operations::OperationRegistry::new(),
-        };
+        let state = AppState::builder().catalog_version("sha256:test").build();
 
         let mut headers = HeaderMap::new();
         headers.insert("x-request-id", "req-hdr-999".parse().unwrap());
