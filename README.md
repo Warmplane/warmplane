@@ -1,252 +1,93 @@
 # Warmplane
 
-`Warmplane` is the local control plane that keeps MCP sessions warm.
+> **The local control plane that keeps MCP sessions warm.**  
+> v0.6.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [OpenAPI](docs/openapi.yaml) · [Spec](docs/spec.md)
 
-It runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact interaction surface for tools/resources/prompts. The goal is concrete and measurable: reduce startup latency, reduce payload size, and keep behavior deterministic.
+Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
 
-## Why This Exists
+---
 
-Most agent stacks overpay in tokens and latency by eagerly surfacing large tool catalogs and detailed schemas that are never used.
+## Quick Start
 
-`Warmplane` shifts that model to lazy, compact interaction:
-
-- Discover compact indexes first.
-- Fetch detail only when needed.
-- Execute through normalized envelopes.
-
-This improves:
-
-- token efficiency
-- time-to-first-useful-tool-call
-- cross-client consistency
-- observability and policy control
-
-## What It Provides
-
-One runtime, three access modes:
-
-1. HTTP facade (`/v1/...`)
-2. CLI facade commands
-3. MCP facade server mode (`mcp-server`) for MCP-native clients
-
-All three modes share the same backend state, aliases, policy checks, and timeout behavior.
-
-## Core Facade Surface
-
-### Capabilities
-- list: compact capability index
-- search: hybrid lexical + semantic capability search with filters
-- describe: on-demand detail for one capability
-- call: normalized execution envelope
-
-### Resources
-- list: compact resource index
-- read: normalized read envelope
-
-### Prompts
-- list: compact prompt index
-- get: normalized prompt rendering envelope
-
-## Install
+**1. Build**
 
 ```bash
-# Standard build (hybrid search with BM25 lexical engine)
 cargo install --path .
 
-# Build with local ONNX vector embeddings support (FastEmbed)
+# Optional: local ONNX vector embeddings (FastEmbed)
 cargo install --path . --features semantic-search
 ```
 
-`cargo install warmplane` is not available yet because the crate has not been published to crates.io.
-
-## Validate Config
-
-Validate and lint configuration before startup:
-
-```bash
-warmplane validate-config --config mcp_servers.json
-```
-
-Example success output:
-
-```json
-{"ok":true,"config":"mcp_servers.json","servers":3}
-```
-
-## Configuration
-
-Create `mcp_servers.json`:
+**2. Configure** — create `mcp_servers.json`:
 
 ```json
 {
   "port": 9090,
   "toolTimeoutMs": 15000,
-  "capabilityAliases": {
-    "sqlite.read_query": "db.query"
-  },
-  "resourceAliases": {
-    "filesystem.file:///tmp/readme.txt": "fs.readme"
-  },
-  "promptAliases": {
-    "github.code_review": "prompt.code-review"
-  },
+  "capabilityAliases": { "sqlite.read_query": "db.query" },
+  "resourceAliases":  { "filesystem.file:///tmp/readme.txt": "fs.readme" },
+  "promptAliases":    { "github.code_review": "prompt.code-review" },
   "policy": {
     "allow": ["db.*", "fs.*", "prompt.*"],
-    "deny": ["fs.secret"],
+    "deny":  ["fs.secret"],
     "redactKeys": ["token", "api_key", "password"]
   },
   "mcpServers": {
-    "sqlite": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-sqlite", "./test.db"]
-    },
-    "remote_docs": {
-      "url": "https://mcp.example.com/mcp",
-      "protocolVersion": "2025-11-25",
-      "allowStateless": false,
-      "headers": {
-        "X-Tenant": "acme"
-      },
-      "auth": {
-        "type": "bearer",
-        "tokenEnv": "REMOTE_DOCS_MCP_TOKEN"
-      }
-    },
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-    }
+    "sqlite":     { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-sqlite", "./test.db"] },
+    "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"] }
   }
 }
 ```
 
-Per `mcpServers.<id>`, transport selection is strict and inferred:
-
-- stdio upstream: set `command` (plus optional `args`, `env`)
-- HTTP/SSE upstream: set `url` (plus optional `protocolVersion`, `allowStateless`, `headers`, `auth`)
-- exactly one of `command` or `url` must be set
-
-No legacy config fallback is supported.
-
-For bearer/basic, exactly one direct secret (`token`/`password`) or env-backed secret (`tokenEnv`/`passwordEnv`) is required.
-
-`auth.type = "oauth2"`:
-
-```json
-{
-  "type": "oauth2",
-  "clientId": "client-id-here",
-  "authorizationServerUrl": "https://auth.example.com",
-  "scopes": ["read", "write"],
-  "clientMetadataUrl": "https://example.com/metadata.json"
-}
-```
-
-For OAuth2 configurations:
-- Both `clientId` and `authorizationServerUrl` are required.
-- Warmplane spins up a local background proxy that handles server discovery (RFC 9728 & RFC 8414), PKCE code exchanges, callback redirect handling with issuer validation (RFC 9207 / SEP-2468), scope accumulation on step-ups (`403 insufficient_scope`), and silent access token refreshes.
-
-## Run Modes
-
-### 1) HTTP Daemon
+**3. Validate, then start**
 
 ```bash
+warmplane validate-config --config mcp_servers.json
 warmplane daemon --config mcp_servers.json
 ```
 
-Endpoints:
+---
 
-- `GET /v1/capabilities`
-- `POST /v1/capabilities/search`
-- `GET /v1/capabilities/:id`
-- `POST /v1/tools/call`
-- `GET /v1/resources`
-- `POST /v1/resources/read`
-- `GET /v1/prompts`
-- `POST /v1/prompts/get`
-- `GET /v1/catalog/events`
-- `POST /v1/operations/:id/cancel`
+## Run Modes
 
-### Idempotency, Cancellation & Retry Metadata
+All three modes share the same backend state, aliases, policy checks, and timeout behaviour.
 
-Warmplane standardizes execution safety for clients and autonomous agents:
+### HTTP Daemon
 
-- **Idempotency Deduplication**: Pass `--idempotency-key` or `Idempotency-Key` / `X-Idempotency-Key` HTTP headers on tool calls. Concurrent or duplicate requests wait on the in-flight operation and receive cached execution results without re-executing upstream tools.
-- **Operation Cancellation**: In-flight calls can be safely aborted via `POST /v1/operations/:id/cancel` or `warmplane cancel-operation <request_id>`.
-- **Retry Metadata**: Every response envelope contains a `"retry"` field classifying execution safety:
-  ```json
-  "retry": {
-    "classification": "safe" | "unsafe" | "idempotent",
-    "state": "not_started" | "in_progress" | "completed" | "unknown"
-  }
-  ```
+```bash
+warmplane daemon --config mcp_servers.json
+# Serves /v1/... on the configured port (default 9090)
+```
 
+Key endpoints:
 
-### 2) MCP Server (stdio)
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/v1/capabilities` | Compact capability index |
+| `POST` | `/v1/capabilities/search` | Hybrid lexical + semantic search |
+| `GET` | `/v1/capabilities/:id` | On-demand capability detail |
+| `POST` | `/v1/tools/call` | Normalized execution envelope |
+| `GET` | `/v1/resources` | Resource index |
+| `POST` | `/v1/resources/read` | Read resource |
+| `GET` | `/v1/prompts` | Prompt index |
+| `POST` | `/v1/prompts/get` | Render prompt |
+| `GET` | `/v1/catalog/events` | Catalog change event feed |
+| `POST` | `/v1/operations/:id/cancel` | Cancel an in-flight operation |
+
+### MCP Server (stdio)
 
 ```bash
 warmplane mcp-server --config mcp_servers.json
 ```
 
-MCP clients can point directly to this process.
+Point any MCP-native client at this process. It exposes lightweight facade tools (`capabilities_list`, `capability_call`, `resource_read`, `prompt_get`, …) alongside native `resources/*` and `prompts/*` methods.
 
-Synthetic lightweight tools exposed:
-
-- `capabilities_list`
-- `capability_describe`
-- `capability_call`
-- `resources_list`
-- `resource_read`
-- `prompts_list`
-- `prompt_get`
-
-Native MCP methods also supported:
-
-- resources: `resources/list`, `resources/read`
-- prompts: `prompts/list`, `prompts/get`
-
-### 3) CLI Facade
-
-```bash
-# capabilities
-warmplane list-capabilities
-warmplane search-capabilities "triage logs" --limit 5
-warmplane describe-capability db.query
-# execution with correlation context
-warmplane call-capability db.query --params '{"query":"SELECT 1"}' --request-id req-101 --operation-id op-20 --actor-id user-7
-warmplane read-resource fs.readme --request-id req-102 --actor-id user-7
-warmplane get-prompt prompt.code-review --arguments '{"code":"fn main() {}"}' --request-id req-103
-
-# catalog change events feed
-warmplane list-catalog-events [--after evt_1]
-```
-
-### Request Context & Correlation
-
-All execution envelopes (`/v1/tools/call`, `/v1/resources/read`, `/v1/prompts/get`) accept and reflect `request_id` and structured `context`:
-
-```json
-{
-  "capability_id": "github.issues.search",
-  "args": {"query": "is:open"},
-  "request_id": "req-client-8819",
-  "context": {
-    "operation_id": "op-4412",
-    "work_item_id": "task-990",
-    "actor_id": "agent-user-12",
-    "grant_id": "grant-771"
-  }
-}
-```
-
-HTTP correlation headers (`X-Request-ID`, `X-Operation-ID`, `X-Work-Item-ID`, `X-Actor-ID`, `X-Grant-ID`) serve as automatic fallbacks when request body fields are omitted.
-
-## MCP Client Example
+Claude Desktop / Cursor config:
 
 ```json
 {
   "mcpServers": {
-    "fast-facade": {
+    "warmplane": {
       "command": "warmplane",
       "args": ["mcp-server", "--config", "mcp_servers.json"]
     }
@@ -254,53 +95,69 @@ HTTP correlation headers (`X-Request-ID`, `X-Operation-ID`, `X-Work-Item-ID`, `X
 }
 ```
 
-## Smoke Test
-
-Run an end-to-end stdio MCP smoke test:
+### CLI
 
 ```bash
-./scripts/smoke_mcp_server.sh
+warmplane list-capabilities
+warmplane search-capabilities "triage logs" --limit 5
+warmplane describe-capability db.query
+
+warmplane call-capability db.query \
+  --params '{"query":"SELECT 1"}' \
+  --request-id req-101 --actor-id user-7 \
+  --idempotency-key op-20-run-1
+
+warmplane read-resource fs.readme
+warmplane get-prompt prompt.code-review --arguments '{"code":"fn main() {}"}'
+
+warmplane list-catalog-events --after evt_3
+warmplane cancel-operation req-101
 ```
 
-It validates:
+---
 
-- MCP `initialize`
-- `tools/list` includes all synthetic lightweight facade tools
-- `resources/list` and `prompts/list` return valid responses
+## Feature Overview
 
-## Design Notes
+| Feature | Since | Summary |
+|---------|-------|---------|
+| **Alias registry** | v0.1 | Short stable aliases over upstream capability IDs |
+| **Compact indexes** | v0.1 | Lazy, token-efficient catalog — detail only on demand |
+| **Policy profiles** | v0.1 | Allow/deny lists, redact keys, role-scoped exposure |
+| **Normalized envelopes** | v0.1 | Consistent result, timeout, and error format across all modes |
+| **Hybrid search** | v0.3 | BM25 lexical + optional ONNX vector search with filters |
+| **Catalog versioning** | v0.4 | SHA-256 `ETag`, `If-None-Match` → `304`, change event feed |
+| **Request context** | v0.5 | `operation_id`, `actor_id`, `grant_id` in envelopes + HTTP header fallback |
+| **Idempotency** | v0.6 | `Idempotency-Key` deduplication — concurrent duplicates share one result |
+| **Cancellation** | v0.6 | `POST /v1/operations/:id/cancel` / `cancel-operation` CLI |
+| **Retry metadata** | v0.6 | `"retry": { "classification": "safe\|unsafe\|idempotent", "state": "…" }` |
+| **OTLP traces** | v0.1 | OpenTelemetry export, `trace_id` reflected in envelopes |
 
-- Upstream MCP compatibility remains intact.
-- Client-facing schemas are intentionally small and stable.
-- Policy and aliasing are enforced consistently across modes.
-- Timeout and error envelopes are normalized for deterministic orchestration.
-- Runtime logs are structured JSON for auditability.
-- OpenTelemetry trace export is supported via OTLP.
+---
 
-## Observability
+## Changelog
 
-Warmplane emits structured JSON logs by default (`tracing` + `tracing-subscriber`).
+### v0.6.0 — Idempotency, Cancellation & Retry Metadata
+Pass `Idempotency-Key` / `X-Idempotency-Key` to deduplicate concurrent tool calls. Abort any in-flight request via cancel endpoint or CLI. Every response envelope now includes structured `"retry"` metadata (`classification` + `state`) for orchestrator-aware retry logic.
 
-Example controls:
+### v0.5.0 — Request Context & Correlation
+Structured `RequestContext` (`operation_id`, `work_item_id`, `actor_id`, `grant_id`) threaded through all execution envelopes and tracing spans. HTTP header fallback (`X-Request-ID`, `X-Operation-ID`, `X-Actor-ID`, `X-Grant-ID`).
 
-- `RUST_LOG=info,warmplane=debug` set verbosity
-- `WARMPLANE_OTEL_ENABLED=true` enable OpenTelemetry export
-- `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317` set OTLP collector endpoint
-- `WARMPLANE_OTEL_ENDPOINT=http://127.0.0.1:4317` fallback OTLP endpoint if `OTEL_EXPORTER_OTLP_ENDPOINT` is unset
-- `WARMPLANE_SERVICE_NAME=warmplane-prod` override service name
+### v0.4.0 — Catalog Versioning & Cache Validation
+SHA-256 catalog version. `ETag` headers on all catalog reads, `If-None-Match` conditional requests returning `304 Not Modified`. `GET /v1/catalog/events` change feed with cursor-based pagination.
 
-Operational notes:
+### v0.3.0 — Hybrid Search
+`POST /v1/capabilities/search` with BM25 scoring, optional FastEmbed vector embeddings, tag/server-ID filters, and ranked results.
 
-- Logs include structured request/capability/resource/prompt fields for audit trails.
-- `trace_id` in execution envelopes can be correlated with logs and distributed traces.
-- When OTEL is enabled, traces are exported via OTLP gRPC and local structured logs remain active.
+---
 
-For detailed request/response contracts, see [docs/spec.md](docs/spec.md).
+## Docs
 
-Additional references:
-
-- OpenAPI: [openapi.yaml](docs/openapi.yaml)
-- Config schema: [config.schema.json](docs/config.schema.json)
-- Install/distribution: [INSTALL.md](docs/INSTALL.md)
-- Deployment runbook: [DEPLOYMENT.md](docs/DEPLOYMENT.md)
-- Observability: [OBSERVABILITY.md](docs/OBSERVABILITY.md)
+| Document | Description |
+|----------|-------------|
+| [docs/USER-GUIDE.md](docs/USER-GUIDE.md) | Complete usage guide: config, modes, all CLI commands, auth, policy |
+| [docs/spec.md](docs/spec.md) | HTTP request/response contracts |
+| [docs/openapi.yaml](docs/openapi.yaml) | OpenAPI 3.1 spec |
+| [docs/config.schema.json](docs/config.schema.json) | JSON Schema for `mcp_servers.json` |
+| [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) | Structured logs, OTLP config, trace correlation |
+| [docs/INSTALL.md](docs/INSTALL.md) | Build variants, distribution notes |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production deployment runbook |

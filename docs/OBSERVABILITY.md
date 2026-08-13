@@ -1,35 +1,77 @@
 # Observability Guide
 
-Warmplane emits structured JSON logs by default and can export distributed traces via OpenTelemetry (OTLP).
+Warmplane emits structured JSON logs by default, supports distributed trace correlation, and exports distributed traces via OpenTelemetry (OTLP).
 
-This guide covers practical setup and operations.
+This guide covers practical setup, request correlation features (introduced in v0.5.0), idempotency/cancellation observability (v0.6.0), catalog change feeds (v0.4.0), and operations.
 
-## 1) Logging Defaults
+---
+
+## 1) Logging & Context Defaults
 
 Warmplane uses `tracing` + JSON output by default.
 
-Key properties:
+### Key Properties
 
-- machine-parseable log lines (JSON)
-- stable event names for startup and operation flow
-- contextual fields for audit (server IDs, capability/resource/prompt IDs)
-- response `trace_id` correlation with runtime events
+- Machine-parseable log lines (JSON)
+- Stable event names for startup, capability execution, catalog versioning, and operation lifecycle
+- Contextual fields for audit:
+  - `server_id`, `capability_id`, `resource_id`, `prompt_id`
+  - **Request Context (v0.5.0)**: `request_id`, `operation_id`, `work_item_id`, `actor_id`, `grant_id`
+  - **Idempotency & Retry (v0.6.0)**: `idempotency_key`, retry classification (`safe` | `unsafe` | `idempotent`), retry state
+- `trace_id` correlation across HTTP response envelopes, stdio logs, and OTLP spans
 
-Set verbosity:
+### Verbosity Controls
 
 ```bash
 export RUST_LOG=info,warmplane=debug
 ```
 
-## 2) OpenTelemetry Export
+---
 
-OTEL export is optional and controlled by env vars.
+## 2) Request Correlation & Propagation (v0.5.0+)
 
-Enable OTEL:
+All execution endpoints (`/v1/tools/call`, `/v1/resources/read`, `/v1/prompts/get`) automatically capture request context from:
+
+1. Request body fields (`request_id`, `context.operation_id`, `context.actor_id`, etc.)
+2. HTTP correlation headers (when body fields are omitted):
+   - `X-Request-ID`
+   - `X-Operation-ID`
+   - `X-Work-Item-ID`
+   - `X-Actor-ID`
+   - `X-Grant-ID`
+
+These attributes are injected into `tracing` spans and exported in OTLP trace context, enabling end-to-end tracing across orchestrator, Warmplane, and upstream MCP servers.
+
+---
+
+## 3) Idempotency, Cancellation & Catalog Observability (v0.4.0–v0.6.0)
+
+### 3.1 Idempotency & Deduplication (v0.6.0)
+When duplicate or concurrent execution requests pass an `Idempotency-Key` or `X-Idempotency-Key`:
+- In-flight execution logs record `idempotency_key` and state (`in_progress` vs deduplicated cache hit).
+- Duplicated callers receive identical execution response envelopes without duplicating upstream calls.
+
+### 3.2 Operation Cancellation (v0.6.0)
+- Operation registration and cancellation events emit explicit structured audit events with `request_id` and `cancellation_reason`.
+- In-flight cancellations via `POST /v1/operations/:id/cancel` log `operation_cancelled` events.
+
+### 3.3 Catalog Versioning & Change Events (v0.4.0)
+- SHA-256 catalog checksums are recorded on catalog updates.
+- `GET /v1/catalog/events` emits structured change events (`evt_1`, `evt_2`, …) capturing incremental catalog updates for event consumers.
+
+---
+
+## 4) OpenTelemetry Export
+
+OTEL export is optional and controlled by environment variables.
+
+### Enable OTEL
 
 ```bash
 export WARMPLANE_OTEL_ENABLED=true
 ```
+
+### Collector Endpoints
 
 Set collector endpoint (preferred):
 
@@ -55,19 +97,20 @@ Run:
 warmplane daemon --config mcp_servers.json
 ```
 
-## 3) Recommended Production Baseline
+---
 
-- Use structured log ingestion into SIEM/ELK/Loki.
-- Export OTLP traces to a central collector.
-- Standardize `WARMPLANE_SERVICE_NAME` by environment:
-  - `warmplane-dev`
-  - `warmplane-staging`
-  - `warmplane-prod`
-- Include deployment metadata at orchestrator layer (k8s labels, host, region) for filtering.
+## 5) Recommended Production Baseline
 
-## 4) Collector Patterns
+- Ingest structured JSON logs into your SIEM / Loki / ELK pipeline.
+- Export OTLP traces to a central collector (e.g. Tempo, Jaeger, Datadog).
+- Standardize `WARMPLANE_SERVICE_NAME` by environment (`warmplane-dev`, `warmplane-staging`, `warmplane-prod`).
+- Pass HTTP correlation headers (`X-Request-ID`, `X-Operation-ID`, `X-Actor-ID`) from your API gateway or agent orchestrator to track full request lineages.
 
-## 4.1 Local OpenTelemetry Collector
+---
+
+## 6) Collector Patterns
+
+### 6.1 Local OpenTelemetry Collector
 
 `otel-collector-config.yaml` example:
 
@@ -95,43 +138,27 @@ service:
 
 Run collector and point Warmplane to `http://127.0.0.1:4317`.
 
-## 4.2 Grafana/Tempo-style pipeline
+### 6.2 Grafana / Tempo Pipeline
 
-- Warmplane -> OTLP collector -> Tempo
-- Logs -> Loki (or equivalent)
-- Correlate by `trace_id` and request metadata fields
+- **Warmplane** -> OTLP collector -> Tempo
+- **Logs** -> Loki (or equivalent)
+- Correlate logs and traces by `trace_id`, `request_id`, and `operation_id`.
 
-## 4.3 Datadog/Honeycomb/New Relic style pipeline
+---
 
-- Warmplane -> OTLP collector (or vendor OTLP endpoint)
-- Map `service.name` from `WARMPLANE_SERVICE_NAME`
-- Keep log + trace retention policies aligned for investigation windows
+## 7) Correlation Triage Workflow
 
-## 5) Correlation Workflow
+When an HTTP response or execution error returns a `trace_id` or `request_id`:
 
-When an HTTP call returns a `trace_id`:
+1. Look up `trace_id` in your distributed tracing backend (Tempo/Jaeger).
+2. Filter structured logs by `request_id` or `operation_id`.
+3. Inspect upstream server responses, idempotency deduplication status, and retry classification (`safe` vs `unsafe`).
 
-1. Find that `trace_id` in trace backend.
-2. Pull related structured log lines.
-3. Inspect upstream server events and error envelope outcome.
+---
 
-This is the fastest path for incident triage and postmortem reconstruction.
-
-## 6) Security and Compliance Notes
+## 8) Security and Compliance Notes
 
 - Prefer env-backed secrets for upstream auth (`tokenEnv`, `passwordEnv`).
-- Keep daemon on localhost unless fronted by a trusted boundary.
-- Use policy deny rules for destructive operations by default.
-- Retain logs/traces according to regulatory requirements.
-
-## 7) Known Limits (Current)
-
-- Metrics export (counters/histograms) is not implemented yet.
-- Trace sampling is controlled by downstream collector strategy, not warmplane config.
-- Per-tenant telemetry partitioning is currently deployment-layer concern.
-
-## 8) Suggested Next Enhancements
-
-1. Add Prometheus/OTEL metrics (`request_count`, `latency_ms`, `timeouts`, `upstream_errors`).
-2. Add explicit span attributes for capability IDs and upstream server IDs.
-3. Add configurable log redaction policy for additional compliance regimes.
+- Keep daemon on localhost unless fronted by an authenticated reverse proxy or API gateway.
+- Utilize policy deny/allow rules for write actions by default.
+- Header redacting cleans key fields (`token`, `api_key`, `password`) automatically from logs and response envelopes.
