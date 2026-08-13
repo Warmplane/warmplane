@@ -104,7 +104,9 @@ pub fn resolve_client_port(port_override: Option<u16>, config_path: &str) -> Res
             Ok(config.port.unwrap_or(DEFAULT_PORT))
         }
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(DEFAULT_PORT),
-        Err(err) => Err(err).with_context(|| format!("Failed to read config file: {}", config_path)),
+        Err(err) => {
+            Err(err).with_context(|| format!("Failed to read config file: {}", config_path))
+        }
     }
 }
 
@@ -229,7 +231,7 @@ fn validate_config(config: &McpConfig) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuthConfig, McpConfig, ServerConfig, validate_config};
+    use super::{validate_config, AuthConfig, McpConfig, ServerConfig};
     use std::collections::HashMap;
 
     fn empty_server() -> ServerConfig {
@@ -347,7 +349,9 @@ mod tests {
             client_metadata_url: None,
         });
         let err = validate_config(&config_with_server(server.clone())).unwrap_err();
-        assert!(err.to_string().contains("requires non-empty 'authorizationServerUrl'"));
+        assert!(err
+            .to_string()
+            .contains("requires non-empty 'authorizationServerUrl'"));
 
         server.auth = Some(AuthConfig::Oauth2 {
             client_id: "client1".to_string(),

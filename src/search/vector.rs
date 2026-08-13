@@ -29,7 +29,11 @@ impl VectorSearchIndex {
         }
     }
 
-    pub fn search(&self, query: &str, capabilities: &[(String, CapabilityMeta)]) -> Vec<VectorMatchResult> {
+    pub fn search(
+        &self,
+        query: &str,
+        capabilities: &[(String, CapabilityMeta)],
+    ) -> Vec<VectorMatchResult> {
         if capabilities.is_empty() || query.trim().is_empty() {
             return vec![];
         }
@@ -62,7 +66,11 @@ impl VectorSearchIndex {
             }
         }
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results
     }
 }
@@ -76,7 +84,11 @@ impl VectorSearchIndex {
         Ok(Self)
     }
 
-    pub fn search(&self, _query: &str, _capabilities: &[(String, CapabilityMeta)]) -> Vec<VectorMatchResult> {
+    pub fn search(
+        &self,
+        _query: &str,
+        _capabilities: &[(String, CapabilityMeta)],
+    ) -> Vec<VectorMatchResult> {
         vec![]
     }
 }
@@ -133,8 +145,14 @@ mod tests {
         )];
 
         let results = index.search("find git bugs", &caps);
-        assert!(!results.is_empty(), "FastEmbed ONNX inference returned empty results");
+        assert!(
+            !results.is_empty(),
+            "FastEmbed ONNX inference returned empty results"
+        );
         assert_eq!(results[0].id, "github.issues.search");
-        assert!(results[0].score > 0.3, "Expected high semantic similarity score");
+        assert!(
+            results[0].score > 0.3,
+            "Expected high semantic similarity score"
+        );
     }
 }

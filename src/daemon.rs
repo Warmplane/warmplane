@@ -4,12 +4,15 @@ use axum::{
     Router,
 };
 use base64::Engine as _;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use rmcp::{
     model::{CallToolRequestParams, GetPromptRequestParams, ReadResourceRequestParams},
-    transport::{streamable_http_client::StreamableHttpClientTransportConfig, StreamableHttpClientTransport, TokioChildProcess},
+    transport::{
+        streamable_http_client::StreamableHttpClientTransportConfig, StreamableHttpClientTransport,
+        TokioChildProcess,
+    },
     ServiceExt,
 };
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{json, Value};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
@@ -105,11 +108,7 @@ impl Policy {
     }
 
     pub fn allows(&self, id: &str) -> bool {
-        if self
-            .deny
-            .iter()
-            .any(|pattern| wildcard_match(pattern, id))
-        {
+        if self.deny.iter().any(|pattern| wildcard_match(pattern, id)) {
             return false;
         }
 
@@ -117,9 +116,7 @@ impl Policy {
             return true;
         }
 
-        self.allow
-            .iter()
-            .any(|pattern| wildcard_match(pattern, id))
+        self.allow.iter().any(|pattern| wildcard_match(pattern, id))
     }
 }
 
@@ -172,7 +169,10 @@ fn build_http_headers(server_id: &str, srv_cfg: &ServerConfig) -> Result<HeaderM
 
     for (raw_name, raw_value) in &srv_cfg.headers {
         let name = HeaderName::from_bytes(raw_name.as_bytes()).with_context(|| {
-            format!("Server '{}' has invalid HTTP header name '{}'", server_id, raw_name)
+            format!(
+                "Server '{}' has invalid HTTP header name '{}'",
+                server_id, raw_name
+            )
         })?;
         let value = HeaderValue::from_str(raw_value).with_context(|| {
             format!(
@@ -273,15 +273,19 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
     let policy = Policy::from_config(config.policy.clone());
     let event_store = Arc::new(crate::catalog::CatalogEventStore::new());
 
-    info!(server_count = config.mcp_servers.len(), "booting upstream MCP servers");
+    info!(
+        server_count = config.mcp_servers.len(),
+        "booting upstream MCP servers"
+    );
 
     // Initialize central OAuth registry and proxy server if any server uses OAuth2
     let oauth_registry = crate::oauth2::OAuthRegistry::default();
     let mut oauth_proxy_port = None;
 
-    let has_oauth2 = config.mcp_servers.values().any(|s| {
-        matches!(s.auth, Some(AuthConfig::Oauth2 { .. }))
-    });
+    let has_oauth2 = config
+        .mcp_servers
+        .values()
+        .any(|s| matches!(s.auth, Some(AuthConfig::Oauth2 { .. })));
 
     if has_oauth2 {
         let port = crate::oauth2::start_oauth_proxy_server(oauth_registry.clone()).await?;
@@ -304,11 +308,20 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
         } else if let Some(url) = &srv_cfg.url {
             let mut target_url = url.clone();
 
-            if let Some(AuthConfig::Oauth2 { client_id, authorization_server_url, scopes, client_metadata_url }) = &srv_cfg.auth {
-                let proxy_port = oauth_proxy_port.ok_or_else(|| anyhow!("OAuth proxy server failed to initialize"))?;
+            if let Some(AuthConfig::Oauth2 {
+                client_id,
+                authorization_server_url,
+                scopes,
+                client_metadata_url,
+            }) = &srv_cfg.auth
+            {
+                let proxy_port = oauth_proxy_port
+                    .ok_or_else(|| anyhow!("OAuth proxy server failed to initialize"))?;
 
                 // Discover the OAuth authorization server metadata
-                let discovery = crate::oauth2::discover_auth_server(url, Some(authorization_server_url)).await?;
+                let discovery =
+                    crate::oauth2::discover_auth_server(url, Some(authorization_server_url))
+                        .await?;
 
                 let client_state = crate::oauth2::OAuth2ClientState {
                     server_id: server_id.clone(),
@@ -322,7 +335,9 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                 };
 
                 // Perform the initial browser-based PKCE auth flow
-                let initial_token = crate::oauth2::run_oauth2_flow(&client_state, &oauth_registry, proxy_port).await?;
+                let initial_token =
+                    crate::oauth2::run_oauth2_flow(&client_state, &oauth_registry, proxy_port)
+                        .await?;
                 {
                     let mut guard = client_state.token_state.write().await;
                     *guard = Some(initial_token);
@@ -348,7 +363,8 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
             if let Some(allow_stateless) = srv_cfg.allow_stateless {
                 transport_config.allow_stateless = allow_stateless;
             }
-            let transport = StreamableHttpClientTransport::with_client(http_client, transport_config);
+            let transport =
+                StreamableHttpClientTransport::with_client(http_client, transport_config);
             ().serve(transport).await.with_context(|| {
                 format!(
                     "Failed to negotiate streamable HTTP MCP connection for {}",
@@ -389,8 +405,10 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                                 .unwrap_or("No summary available")
                                 .to_string();
                             let description = summary.clone();
-                            let input_schema =
-                                tool.get("inputSchema").cloned().unwrap_or_else(|| json!({}));
+                            let input_schema = tool
+                                .get("inputSchema")
+                                .cloned()
+                                .unwrap_or_else(|| json!({}));
 
                             capabilities.insert(
                                 capability_id.clone(),
@@ -413,7 +431,9 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
 
         if let Ok(listed_resources) = mcp_client.list_resources(Default::default()).await {
             if let Ok(resources_json) = serde_json::to_value(&listed_resources) {
-                if let Some(resource_array) = resources_json.get("resources").and_then(|r| r.as_array()) {
+                if let Some(resource_array) =
+                    resources_json.get("resources").and_then(|r| r.as_array())
+                {
                     for resource in resource_array {
                         let Some(uri) = resource.get("uri").and_then(|v| v.as_str()) else {
                             continue;
@@ -524,7 +544,11 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
                 match msg {
-                    ServerMsg::CallTool { name, params, reply } => {
+                    ServerMsg::CallTool {
+                        name,
+                        params,
+                        reply,
+                    } => {
                         let req = CallToolRequestParams {
                             name: name.into(),
                             arguments: params.as_object().cloned(),
@@ -544,7 +568,8 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                     }
                     ServerMsg::ReadResource { uri, reply } => {
                         let req = ReadResourceRequestParams { meta: None, uri };
-                        let result = timeout(per_server_timeout, mcp_client.read_resource(req)).await;
+                        let result =
+                            timeout(per_server_timeout, mcp_client.read_resource(req)).await;
                         let res = match result {
                             Ok(Ok(read_res)) => {
                                 Ok(serde_json::to_value(read_res).unwrap_or(Value::Null))

@@ -1,9 +1,9 @@
-use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
-use crate::daemon::{CapabilityMeta, Policy};
 use super::lexical::score_lexical;
 use super::vector::VectorSearchIndex;
+use crate::daemon::{CapabilityMeta, Policy};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilitySearchResult {
@@ -88,7 +88,9 @@ impl HybridSearchEngine {
 
         for (rank, lex) in lexical_results.iter().enumerate() {
             let rrf_score = 1.0 / (k + rank as f32 + 1.0);
-            let entry = score_map.entry(lex.id.clone()).or_insert((0.0, HashSet::new()));
+            let entry = score_map
+                .entry(lex.id.clone())
+                .or_insert((0.0, HashSet::new()));
             entry.0 += rrf_score + (lex.score * 0.5);
             for m in &lex.match_types {
                 entry.1.insert(m.clone());
@@ -97,7 +99,9 @@ impl HybridSearchEngine {
 
         for (rank, vec_res) in vector_results.iter().enumerate() {
             let rrf_score = 1.0 / (k + rank as f32 + 1.0);
-            let entry = score_map.entry(vec_res.id.clone()).or_insert((0.0, HashSet::new()));
+            let entry = score_map
+                .entry(vec_res.id.clone())
+                .or_insert((0.0, HashSet::new()));
             entry.0 += rrf_score + (vec_res.score * 0.5);
             entry.1.insert("semantic".to_string());
         }
@@ -131,7 +135,11 @@ impl HybridSearchEngine {
             }
         }
 
-        final_results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        final_results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         final_results.truncate(limit);
         final_results
     }
@@ -141,7 +149,12 @@ impl HybridSearchEngine {
 mod tests {
     use super::*;
 
-    fn dummy_capability(server: &str, tool: &str, summary: &str, tags: Vec<&str>) -> CapabilityMeta {
+    fn dummy_capability(
+        server: &str,
+        tool: &str,
+        summary: &str,
+        tags: Vec<&str>,
+    ) -> CapabilityMeta {
         CapabilityMeta {
             server: server.to_string(),
             tool: tool.to_string(),
@@ -158,11 +171,21 @@ mod tests {
         let mut caps = HashMap::new();
         caps.insert(
             "github.issues.search".to_string(),
-            dummy_capability("github", "issues.search", "Search GitHub issues", vec!["git", "issues"]),
+            dummy_capability(
+                "github",
+                "issues.search",
+                "Search GitHub issues",
+                vec!["git", "issues"],
+            ),
         );
         caps.insert(
             "obs.logs.search".to_string(),
-            dummy_capability("obs", "logs.search", "Search application logs", vec!["logs", "read"]),
+            dummy_capability(
+                "obs",
+                "logs.search",
+                "Search application logs",
+                vec!["logs", "read"],
+            ),
         );
 
         let engine = HybridSearchEngine::new();
@@ -192,13 +215,7 @@ mod tests {
         let mut policy = Policy::default();
         policy.deny = vec!["db.delete".to_string()];
 
-        let results = engine.search(
-            "delete",
-            10,
-            &SearchFilter::default(),
-            &caps,
-            &policy,
-        );
+        let results = engine.search("delete", 10, &SearchFilter::default(), &caps, &policy);
 
         assert!(results.is_empty());
     }

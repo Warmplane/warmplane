@@ -41,9 +41,11 @@ impl CatalogEventStore {
     pub fn get_events_after(&self, after_cursor: Option<&str>) -> (Vec<CatalogEvent>, String) {
         let guard = self.events.read().unwrap_or_else(|e| e.into_inner());
         let start_index = match after_cursor {
-            Some(cursor) if !cursor.is_empty() => {
-                guard.iter().position(|e| e.id == cursor).map(|idx| idx + 1).unwrap_or(0)
-            }
+            Some(cursor) if !cursor.is_empty() => guard
+                .iter()
+                .position(|e| e.id == cursor)
+                .map(|idx| idx + 1)
+                .unwrap_or(0),
             _ => 0,
         };
 

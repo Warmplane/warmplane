@@ -1,13 +1,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, RwLock};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RetryMetadata {
-    pub classification: String,        // "safe", "unsafe", "idempotent"
+    pub classification: String,           // "safe", "unsafe", "idempotent"
     pub upstream_execution_state: String, // "not_started", "completed", "unknown"
 }
 
@@ -113,6 +112,7 @@ impl Default for IdempotencyStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_idempotency_deduplication_lifecycle() {

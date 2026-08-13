@@ -1,5 +1,5 @@
-use std::collections::HashSet;
 use crate::daemon::CapabilityMeta;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct LexicalMatchResult {
@@ -8,7 +8,10 @@ pub struct LexicalMatchResult {
     pub match_types: Vec<String>,
 }
 
-pub fn score_lexical(query: &str, capabilities: &[(String, CapabilityMeta)]) -> Vec<LexicalMatchResult> {
+pub fn score_lexical(
+    query: &str,
+    capabilities: &[(String, CapabilityMeta)],
+) -> Vec<LexicalMatchResult> {
     let query_clean = query.trim().to_lowercase();
     if query_clean.is_empty() {
         return capabilities
@@ -102,7 +105,11 @@ pub fn score_lexical(query: &str, capabilities: &[(String, CapabilityMeta)]) -> 
         }
     }
 
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results
 }
 
@@ -110,7 +117,12 @@ pub fn score_lexical(query: &str, capabilities: &[(String, CapabilityMeta)]) -> 
 mod tests {
     use super::*;
 
-    fn dummy_capability(server: &str, tool: &str, summary: &str, tags: Vec<&str>) -> CapabilityMeta {
+    fn dummy_capability(
+        server: &str,
+        tool: &str,
+        summary: &str,
+        tags: Vec<&str>,
+    ) -> CapabilityMeta {
         CapabilityMeta {
             server: server.to_string(),
             tool: tool.to_string(),
@@ -126,7 +138,12 @@ mod tests {
     fn exact_id_returns_top_score() {
         let caps = vec![(
             "github.issues.search".to_string(),
-            dummy_capability("github", "issues.search", "Search GitHub issues", vec!["git", "issues"]),
+            dummy_capability(
+                "github",
+                "issues.search",
+                "Search GitHub issues",
+                vec!["git", "issues"],
+            ),
         )];
 
         let matches = score_lexical("github.issues.search", &caps);
@@ -139,7 +156,12 @@ mod tests {
     fn tag_match_finds_item() {
         let caps = vec![(
             "obs.logs.search".to_string(),
-            dummy_capability("obs", "logs.search", "Search structured app logs", vec!["logs", "read"]),
+            dummy_capability(
+                "obs",
+                "logs.search",
+                "Search structured app logs",
+                vec!["logs", "read"],
+            ),
         )];
 
         let matches = score_lexical("logs", &caps);

@@ -44,7 +44,8 @@ pub fn init() -> Result<TelemetryGuard> {
         });
     }
 
-    let service_name = std::env::var("WARMPLANE_SERVICE_NAME").unwrap_or_else(|_| "warmplane".to_string());
+    let service_name =
+        std::env::var("WARMPLANE_SERVICE_NAME").unwrap_or_else(|_| "warmplane".to_string());
     let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
         .or_else(|_| std::env::var("WARMPLANE_OTEL_ENDPOINT"))
         .unwrap_or_else(|_| "http://127.0.0.1:4317".to_string());

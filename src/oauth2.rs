@@ -76,8 +76,10 @@ pub struct CallbackPayload {
 pub fn construct_prm_url(resource_url: &str) -> Result<String> {
     let parsed = reqwest::Url::parse(resource_url)
         .with_context(|| format!("Invalid resource URL: {}", resource_url))?;
-    
-    let host = parsed.host_str().ok_or_else(|| anyhow!("Missing host in resource URL"))?;
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| anyhow!("Missing host in resource URL"))?;
     let scheme = parsed.scheme();
     let port = parsed.port();
 
@@ -88,10 +90,13 @@ pub fn construct_prm_url(resource_url: &str) -> Result<String> {
     };
 
     let path = parsed.path();
-    
+
     // According to RFC 9728, insert .well-known/oauth-protected-resource between host and path
     let prm_url = if path == "/" || path.is_empty() {
-        format!("{}://{}/.well-known/oauth-protected-resource", scheme, host_with_port)
+        format!(
+            "{}://{}/.well-known/oauth-protected-resource",
+            scheme, host_with_port
+        )
     } else {
         format!(
             "{}://{}/.well-known/oauth-protected-resource{}",
@@ -114,7 +119,10 @@ struct AuthorizationServerMetadata {
     issuer: String,
 }
 
-pub async fn discover_auth_server(resource_url: &str, configured_as_url: Option<&str>) -> Result<DiscoveryMetadata> {
+pub async fn discover_auth_server(
+    resource_url: &str,
+    configured_as_url: Option<&str>,
+) -> Result<DiscoveryMetadata> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()?;
@@ -141,7 +149,10 @@ pub async fn discover_auth_server(resource_url: &str, configured_as_url: Option<
     }
 
     if auth_servers.is_empty() {
-        return Err(anyhow!("No authorization servers discovered or configured for resource {}", resource_url));
+        return Err(anyhow!(
+            "No authorization servers discovered or configured for resource {}",
+            resource_url
+        ));
     }
 
     // Probe the discovered authorization servers in sequence using RFC 8414
@@ -151,7 +162,9 @@ pub async fn discover_auth_server(resource_url: &str, configured_as_url: Option<
         // Priority 2: OIDC configuration /.well-known/openid-configuration
         // Priority 3: Root configuration
         let parsed_as = reqwest::Url::parse(&as_url)?;
-        let host = parsed_as.host_str().ok_or_else(|| anyhow!("AS missing host"))?;
+        let host = parsed_as
+            .host_str()
+            .ok_or_else(|| anyhow!("AS missing host"))?;
         let scheme = parsed_as.scheme();
         let port = parsed_as.port();
         let host_with_port = if let Some(p) = port {
@@ -163,14 +176,29 @@ pub async fn discover_auth_server(resource_url: &str, configured_as_url: Option<
 
         let urls_to_try = if path == "/" || path.is_empty() {
             vec![
-                format!("{}://{}/.well-known/oauth-authorization-server", scheme, host_with_port),
-                format!("{}://{}/.well-known/openid-configuration", scheme, host_with_port),
+                format!(
+                    "{}://{}/.well-known/oauth-authorization-server",
+                    scheme, host_with_port
+                ),
+                format!(
+                    "{}://{}/.well-known/openid-configuration",
+                    scheme, host_with_port
+                ),
             ]
         } else {
             vec![
-                format!("{}://{}/.well-known/oauth-authorization-server{}", scheme, host_with_port, path),
-                format!("{}://{}{}/.well-known/openid-configuration", scheme, host_with_port, path),
-                format!("{}://{}/.well-known/oauth-authorization-server", scheme, host_with_port),
+                format!(
+                    "{}://{}/.well-known/oauth-authorization-server{}",
+                    scheme, host_with_port, path
+                ),
+                format!(
+                    "{}://{}{}/.well-known/openid-configuration",
+                    scheme, host_with_port, path
+                ),
+                format!(
+                    "{}://{}/.well-known/oauth-authorization-server",
+                    scheme, host_with_port
+                ),
             ]
         };
 
@@ -178,7 +206,11 @@ pub async fn discover_auth_server(resource_url: &str, configured_as_url: Option<
             info!(%probe_url, "probing AS metadata");
             if let Ok(resp) = client.get(&probe_url).send().await {
                 if resp.status().is_success() {
-                    let content_type = resp.headers().get(CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
+                    let content_type = resp
+                        .headers()
+                        .get(CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("");
                     // Fall back if reverse proxy returns non-JSON HTML payload
                     if !content_type.contains("json") && !content_type.is_empty() {
                         warn!(%probe_url, "non-JSON response received, skipping");
@@ -186,7 +218,10 @@ pub async fn discover_auth_server(resource_url: &str, configured_as_url: Option<
                     }
                     if let Ok(meta) = resp.json::<AuthorizationServerMetadata>().await {
                         // Validate issuer claim matches the AS base URL
-                        if !meta.issuer.starts_with(&format!("{}://{}", scheme, host_with_port)) {
+                        if !meta
+                            .issuer
+                            .starts_with(&format!("{}://{}", scheme, host_with_port))
+                        {
                             warn!(issuer = %meta.issuer, as_url = %as_url, "issuer verification failed, mismatch");
                             continue;
                         }
@@ -201,7 +236,10 @@ pub async fn discover_auth_server(resource_url: &str, configured_as_url: Option<
         }
     }
 
-    Err(anyhow!("Failed to discover valid Authorization Server metadata for resource {}", resource_url))
+    Err(anyhow!(
+        "Failed to discover valid Authorization Server metadata for resource {}",
+        resource_url
+    ))
 }
 
 // ----------------------------------------------------
@@ -226,7 +264,10 @@ pub fn generate_pkce() -> Pkce {
 
     let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash);
 
-    Pkce { verifier, challenge }
+    Pkce {
+        verifier,
+        challenge,
+    }
 }
 
 // ----------------------------------------------------
@@ -275,11 +316,11 @@ pub async fn run_oauth2_flow(
     }
 
     let auth_url_str = auth_url.to_string();
-    eprintln!("\n======================================================================");
-    eprintln!("Warmplane: Authorization required for server '{}'", client_state.server_id);
-    eprintln!("Please visit this URL in your browser to authorize access:\n");
-    eprintln!("{}", auth_url_str);
-    eprintln!("======================================================================\n");
+    tracing::warn!(
+        server_id = %client_state.server_id,
+        auth_url = %auth_url_str,
+        "Warmplane authorization required for server. Please visit URL in browser to authorize access."
+    );
 
     // Open browser securely
     #[cfg(target_os = "macos")]
@@ -357,9 +398,7 @@ pub async fn run_oauth2_flow(
 // Phase 6: Silent token refresh
 // ----------------------------------------------------
 
-pub async fn refresh_access_token(
-    client_state: &OAuth2ClientState,
-) -> Result<OAuth2TokenState> {
+pub async fn refresh_access_token(client_state: &OAuth2ClientState) -> Result<OAuth2TokenState> {
     let current_token_state = {
         let guard = client_state.token_state.read().await;
         guard.clone()
@@ -443,11 +482,17 @@ async fn handle_callback(
     }
 
     let Some(code) = query.code else {
-        return (StatusCode::BAD_REQUEST, "Missing code parameter".to_string());
+        return (
+            StatusCode::BAD_REQUEST,
+            "Missing code parameter".to_string(),
+        );
     };
 
     let Some(state) = query.state else {
-        return (StatusCode::BAD_REQUEST, "Missing state parameter".to_string());
+        return (
+            StatusCode::BAD_REQUEST,
+            "Missing state parameter".to_string(),
+        );
     };
 
     let mut pendings = registry.pending_auths.write().await;
@@ -458,10 +503,14 @@ async fn handle_callback(
         });
         (
             StatusCode::OK,
-            "Authorization successful! You can close this window and return to the terminal.".to_string(),
+            "Authorization successful! You can close this window and return to the terminal."
+                .to_string(),
         )
     } else {
-        (StatusCode::NOT_FOUND, "State mismatch or expired request".to_string())
+        (
+            StatusCode::NOT_FOUND,
+            "State mismatch or expired request".to_string(),
+        )
     }
 }
 
@@ -481,7 +530,8 @@ async fn handle_client_metadata(
         "client_id": client_state.client_metadata_url.as_ref().cloned().unwrap_or_default(),
         "client_name": client_name,
         "redirect_uris": [ redirect_uri ]
-    })).into_response()
+    }))
+    .into_response()
 }
 
 async fn handle_proxy_request(
@@ -536,7 +586,19 @@ async fn handle_proxy_request(
                 }
             }
         }
-        forward_headers.insert(AUTHORIZATION, HeaderValue::from_str(&format!("Bearer {}", token)).unwrap());
+        match HeaderValue::from_str(&format!("Bearer {}", token)) {
+            Ok(val) => {
+                forward_headers.insert(AUTHORIZATION, val);
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Invalid token header value");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Invalid token header value".to_string(),
+                )
+                    .into_response();
+            }
+        }
 
         let client = reqwest::Client::new();
         let resp = match client
@@ -568,7 +630,10 @@ async fn handle_proxy_request(
 
         // Phase 4: Dynamic scope negotiation on 403 Forbidden with insufficient_scope
         if status == StatusCode::FORBIDDEN && attempt < max_attempts {
-            let www_auth = resp.headers().get("www-authenticate").and_then(|v| v.to_str().ok());
+            let www_auth = resp
+                .headers()
+                .get("www-authenticate")
+                .and_then(|v| v.to_str().ok());
             if let Some(header_str) = www_auth {
                 if header_str.contains("insufficient_scope") {
                     // Extract scope
@@ -592,9 +657,12 @@ async fn handle_proxy_request(
                                 info!("received 403 insufficient_scope. Triggering Step-Up authorization...");
                                 // Trigger interactive flow for accumulated scopes
                                 // Temporary local port to fetch callback
-                                let ephemeral_port = local_port_from_url(&upstream_url).unwrap_or(9095);
+                                let ephemeral_port =
+                                    local_port_from_url(&upstream_url).unwrap_or(9095);
                                 drop(current_scopes); // Release write lock before flow
-                                if let Ok(new_token) = run_oauth2_flow(&client_state, &registry, ephemeral_port).await {
+                                if let Ok(new_token) =
+                                    run_oauth2_flow(&client_state, &registry, ephemeral_port).await
+                                {
                                     let mut guard = client_state.token_state.write().await;
                                     *guard = Some(new_token);
                                     continue;
