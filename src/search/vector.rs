@@ -1,11 +1,17 @@
+// Rust guideline compliant 2026-08-13
+
 use crate::daemon::CapabilityMeta;
 
+/// Represents a single vector semantic search match result.
 #[derive(Debug, Clone)]
 pub struct VectorMatchResult {
+    /// Unique identifier of matched capability.
     pub id: String,
+    /// Cosine similarity semantic score.
     pub score: f32,
 }
 
+/// Semantic vector search index wrapping embedding models when enabled.
 #[cfg(feature = "semantic-search")]
 pub struct VectorSearchIndex {
     model: fastembed::TextEmbedding,
@@ -13,6 +19,10 @@ pub struct VectorSearchIndex {
 
 #[cfg(feature = "semantic-search")]
 impl VectorSearchIndex {
+    /// Creates a new `VectorSearchIndex` initializing FastEmbed models.
+    ///
+    /// # Errors
+    /// Returns an error if the model failed to initialize after 5 attempts.
     pub fn new() -> anyhow::Result<Self> {
         let mut attempts = 0;
         loop {
@@ -29,8 +39,21 @@ impl VectorSearchIndex {
         }
     }
 
-    pub fn search(&self, query: &str, capabilities: &[(String, CapabilityMeta)]) -> Vec<VectorMatchResult> {
-        if capabilities.is_empty() || query.trim().is_empty() {
+    /// Performs semantic vector search over registered capabilities.
+    ///
+    /// # Arguments
+    /// * `query` - Search query string.
+    /// * `capabilities` - Capability identifier and metadata pairs.
+    ///
+    /// # Returns
+    /// Sorted vector of `VectorMatchResult` items ordered by semantic score descending.
+    pub fn search(
+        &self,
+        query: impl AsRef<str>,
+        capabilities: &[(String, CapabilityMeta)],
+    ) -> Vec<VectorMatchResult> {
+        let q_str = query.as_ref();
+        if capabilities.is_empty() || q_str.trim().is_empty() {
             return vec![];
         }
 
@@ -39,48 +62,69 @@ impl VectorSearchIndex {
             .map(|(id, meta)| format!("{}: {}. {}", id, meta.summary, meta.description))
             .collect();
 
-        let doc_embeddings = match self.model.embed(doc_texts, None) {
-            Ok(embeds) => embeds,
-            Err(_) => return vec![],
-        };
+        let mut all_texts = vec![q_str.to_string()];
+        all_texts.extend(doc_texts);
 
-        let query_embeddings = match self.model.embed(vec![query.to_string()], None) {
-            Ok(embeds) if !embeds.is_empty() => embeds[0].clone(),
+        let embeddings = match self.model.embed(all_texts, None) {
+            Ok(emb) if emb.len() == capabilities.len() + 1 => emb,
             _ => return vec![],
         };
 
+        let query_emb = &embeddings[0];
         let mut results = Vec::new();
-        for (idx, (id, _)) in capabilities.iter().enumerate() {
-            if let Some(doc_vec) = doc_embeddings.get(idx) {
-                let similarity = cosine_similarity(&query_embeddings, doc_vec);
-                if similarity > 0.1 {
-                    results.push(VectorMatchResult {
-                        id: id.clone(),
-                        score: similarity,
-                    });
-                }
+
+        for (i, (id, _)) in capabilities.iter().enumerate() {
+            let doc_emb = &embeddings[i + 1];
+            let sim = cosine_similarity(query_emb, doc_emb);
+            if sim > 0.15 {
+                results.push(VectorMatchResult {
+                    id: id.clone(),
+                    score: sim,
+                });
             }
         }
 
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results
     }
 }
 
+/// Fallback dummy vector index when semantic search feature is disabled.
 #[cfg(not(feature = "semantic-search"))]
 pub struct VectorSearchIndex;
 
 #[cfg(not(feature = "semantic-search"))]
 impl VectorSearchIndex {
+    /// Creates a dummy fallback vector search index.
+    ///
+    /// # Errors
+    /// Never returns an error in dummy implementation.
     pub fn new() -> anyhow::Result<Self> {
         Ok(Self)
     }
 
-    pub fn search(&self, _query: &str, _capabilities: &[(String, CapabilityMeta)]) -> Vec<VectorMatchResult> {
+    /// Performs no-op vector search returning an empty result set.
+    pub fn search(
+        &self,
+        _query: impl AsRef<str>,
+        _capabilities: &[(String, CapabilityMeta)],
+    ) -> Vec<VectorMatchResult> {
         vec![]
     }
 }
 
+/// Computes cosine similarity between two numeric feature vectors.
+///
+/// # Arguments
+/// * `a` - First vector.
+/// * `b` - Second vector.
+///
+/// # Returns
+/// Cosine similarity value between 0.0 and 1.0 (or 0.0 if empty or zero norm).
 #[cfg(any(feature = "semantic-search", test))]
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
@@ -133,8 +177,14 @@ mod tests {
         )];
 
         let results = index.search("find git bugs", &caps);
-        assert!(!results.is_empty(), "FastEmbed ONNX inference returned empty results");
+        assert!(
+            !results.is_empty(),
+            "FastEmbed ONNX inference returned empty results"
+        );
         assert_eq!(results[0].id, "github.issues.search");
-        assert!(results[0].score > 0.3, "Expected high semantic similarity score");
+        assert!(
+            results[0].score > 0.3,
+            "Expected high semantic similarity score"
+        );
     }
 }

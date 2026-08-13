@@ -1,3 +1,7 @@
+// Rust guideline compliant 2026-08-13
+
+//! HTTP v1 facade API handlers for capabilities, resources, prompts, events, and operations.
+
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -15,38 +19,61 @@ use crate::daemon::{AppState, CapabilityMeta, ServerMsg, UpstreamCallError};
 
 static TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-pub fn check_if_none_match(req_headers: &HeaderMap, catalog_version: &str) -> bool {
+/// Validates whether HTTP `If-None-Match` header matches catalog version for HTTP 304 response.
+///
+/// # Arguments
+/// * `req_headers` - Incoming request HTTP headers.
+/// * `catalog_version` - Current active catalog ETag version string.
+///
+/// # Returns
+/// `true` if catalog version matches `If-None-Match` header, `false` otherwise.
+pub fn check_if_none_match(req_headers: &HeaderMap, catalog_version: impl AsRef<str>) -> bool {
+    let version_ref = catalog_version.as_ref();
     if let Some(if_none_match) = req_headers.get(header::IF_NONE_MATCH) {
         if let Ok(val) = if_none_match.to_str() {
             let val_clean = val.trim();
-            let version_quoted = format!("\"{}\"", catalog_version);
-            return val_clean == catalog_version || val_clean == version_quoted || val_clean == "*";
+            let version_quoted = format!("\"{}\"", version_ref);
+            return val_clean == version_ref || val_clean == version_quoted || val_clean == "*";
         }
     }
     false
 }
 
-pub fn make_etag_header(catalog_version: &str) -> HeaderMap {
+/// Constructs HTTP `ETag` response headers matching catalog version.
+///
+/// # Arguments
+/// * `catalog_version` - Current active catalog ETag version string.
+///
+/// # Returns
+/// HeaderMap containing formatted `ETag` header.
+pub fn make_etag_header(catalog_version: impl AsRef<str>) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    let etag_val = format!("\"{}\"", catalog_version);
+    let etag_val = format!("\"{}\"", catalog_version.as_ref());
     if let Ok(hv) = HeaderValue::from_str(&etag_val) {
         headers.insert(header::ETAG, hv);
     }
     headers
 }
 
+/// Query parameters for listing catalog events.
 #[derive(Deserialize)]
 pub struct CatalogEventsQuery {
+    /// Optional cursor ID to fetch events after.
     pub after: Option<String>,
 }
 
+/// Response envelope for catalog event change feed.
 #[derive(serde::Serialize)]
 pub struct CatalogEventsResponse {
+    /// Current catalog version ETag.
     pub catalog_version: String,
+    /// Next cursor ID for event pagination.
     pub cursor: String,
+    /// List of catalog mutation events.
     pub events: Vec<crate::catalog::CatalogEvent>,
 }
 
+/// Handles HTTP GET `/v1/catalog/events` change feed endpoint.
 pub async fn handle_catalog_events(
     State(state): State<AppState>,
     Query(query): Query<CatalogEventsQuery>,
@@ -62,38 +89,55 @@ pub async fn handle_catalog_events(
     )
 }
 
+/// Request body for capability execution.
 #[derive(Deserialize)]
 pub struct CallCapabilityRequest {
+    /// Identifier or alias of capability to execute.
     pub capability_id: String,
+    /// JSON arguments for capability execution.
     pub args: Value,
+    /// Optional request trace identifier.
     #[serde(default)]
     pub request_id: Option<String>,
+    /// Optional request context metadata envelope.
     #[serde(default)]
     pub context: Option<crate::context::RequestContext>,
+    /// Optional key for idempotent request deduplication.
     #[serde(default)]
     pub idempotency_key: Option<String>,
 }
 
+/// Request body for reading a resource.
 #[derive(Deserialize)]
 pub struct ReadResourceRequest {
+    /// Identifier or alias of resource URI to read.
     pub resource_id: String,
+    /// Optional request trace identifier.
     #[serde(default)]
     pub request_id: Option<String>,
+    /// Optional request context metadata envelope.
     #[serde(default)]
     pub context: Option<crate::context::RequestContext>,
+    /// Optional key for idempotent request deduplication.
     #[serde(default)]
     pub idempotency_key: Option<String>,
 }
 
+/// Request body for fetching a prompt template.
 #[derive(Deserialize)]
 pub struct GetPromptRequest {
+    /// Identifier or alias of prompt name to get.
     pub prompt_id: String,
+    /// Optional arguments map for prompt rendering.
     #[serde(default)]
     pub arguments: Option<Value>,
+    /// Optional request trace identifier.
     #[serde(default)]
     pub request_id: Option<String>,
+    /// Optional request context metadata envelope.
     #[serde(default)]
     pub context: Option<crate::context::RequestContext>,
+    /// Optional key for idempotent request deduplication.
     #[serde(default)]
     pub idempotency_key: Option<String>,
 }
@@ -102,15 +146,21 @@ fn default_search_limit() -> usize {
     8
 }
 
+/// Request body for hybrid capability search.
 #[derive(Deserialize)]
 pub struct SearchCapabilitiesRequest {
+    /// Optional plain-text search query string.
     pub query: Option<String>,
+    /// Maximum number of search results to return (default 8).
     #[serde(default = "default_search_limit")]
     pub limit: usize,
+    /// Filter results to specified server IDs.
     #[serde(default)]
     pub server_ids: Vec<String>,
+    /// Filter results to specified tags.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Filter results to specified execution modes.
     #[serde(default)]
     pub modes: Vec<String>,
 }
@@ -120,11 +170,11 @@ pub async fn handle_search_capabilities(
     Json(payload): Json<SearchCapabilitiesRequest>,
 ) -> impl IntoResponse {
     let query_str = payload.query.as_deref().unwrap_or("");
-    let filter = crate::search::SearchFilter {
-        server_ids: payload.server_ids,
-        tags: payload.tags,
-        modes: payload.modes,
-    };
+    let filter = crate::search::SearchFilter::builder()
+        .server_ids(payload.server_ids)
+        .tags(payload.tags)
+        .modes(payload.modes)
+        .build();
 
     let results = state.search_engine.search(
         query_str,
@@ -149,7 +199,12 @@ pub async fn handle_list_capabilities(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     if check_if_none_match(&headers, &state.catalog_version) {
-        return (StatusCode::NOT_MODIFIED, make_etag_header(&state.catalog_version), Body::empty()).into_response();
+        return (
+            StatusCode::NOT_MODIFIED,
+            make_etag_header(&state.catalog_version),
+            Body::empty(),
+        )
+            .into_response();
     }
 
     let mut capabilities = state
@@ -190,7 +245,12 @@ pub async fn handle_describe_capability(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     if check_if_none_match(&headers, &state.catalog_version) {
-        return (StatusCode::NOT_MODIFIED, make_etag_header(&state.catalog_version), Body::empty()).into_response();
+        return (
+            StatusCode::NOT_MODIFIED,
+            make_etag_header(&state.catalog_version),
+            Body::empty(),
+        )
+            .into_response();
     }
 
     match state.capabilities.get(&id) {
@@ -241,7 +301,12 @@ pub async fn handle_list_resources(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     if check_if_none_match(&headers, &state.catalog_version) {
-        return (StatusCode::NOT_MODIFIED, make_etag_header(&state.catalog_version), Body::empty()).into_response();
+        return (
+            StatusCode::NOT_MODIFIED,
+            make_etag_header(&state.catalog_version),
+            Body::empty(),
+        )
+            .into_response();
     }
 
     let mut resources = state
@@ -283,7 +348,12 @@ pub async fn handle_list_prompts(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     if check_if_none_match(&headers, &state.catalog_version) {
-        return (StatusCode::NOT_MODIFIED, make_etag_header(&state.catalog_version), Body::empty()).into_response();
+        return (
+            StatusCode::NOT_MODIFIED,
+            make_etag_header(&state.catalog_version),
+            Body::empty(),
+        )
+            .into_response();
     }
 
     let mut prompts = state
@@ -326,10 +396,12 @@ pub async fn handle_read_resource(
     Json(payload): Json<ReadResourceRequest>,
 ) -> impl IntoResponse {
     let trace_id = next_trace_id();
-    let request_id = crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
+    let request_id =
+        crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
     let req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
     let _idempotency_key = resolve_idempotency_key(payload.idempotency_key.clone(), &headers);
-    let cancel_token: tokio_util::sync::CancellationToken = state.operation_registry.register(&request_id).await;
+    let cancel_token: tokio_util::sync::CancellationToken =
+        state.operation_registry.register(&request_id).await;
 
     if !state.policy.allows(&payload.resource_id) {
         state.operation_registry.unregister(&request_id).await;
@@ -512,10 +584,12 @@ pub async fn handle_get_prompt(
     Json(payload): Json<GetPromptRequest>,
 ) -> impl IntoResponse {
     let trace_id = next_trace_id();
-    let request_id = crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
+    let request_id =
+        crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
     let req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
     let _idempotency_key = resolve_idempotency_key(payload.idempotency_key.clone(), &headers);
-    let cancel_token: tokio_util::sync::CancellationToken = state.operation_registry.register(&request_id).await;
+    let cancel_token: tokio_util::sync::CancellationToken =
+        state.operation_registry.register(&request_id).await;
 
     if !state.policy.allows(&payload.prompt_id) {
         state.operation_registry.unregister(&request_id).await;
@@ -589,8 +663,10 @@ pub async fn handle_get_prompt(
         None => None,
     };
 
-    let redacted_input =
-        redact_value(serde_json::to_value(&arguments).unwrap_or(Value::Null), &state.policy.redact_keys);
+    let redacted_input = redact_value(
+        serde_json::to_value(&arguments).unwrap_or(Value::Null),
+        &state.policy.redact_keys,
+    );
     info!(
         trace_id = %trace_id,
         request_id = %request_id,
@@ -730,7 +806,8 @@ pub async fn handle_call_capability(
     Json(payload): Json<CallCapabilityRequest>,
 ) -> impl IntoResponse {
     let trace_id = next_trace_id();
-    let request_id = crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
+    let request_id =
+        crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
     let req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
     let idempotency_key = resolve_idempotency_key(payload.idempotency_key.clone(), &headers);
 
@@ -754,7 +831,8 @@ pub async fn handle_call_capability(
         }
     }
 
-    let cancel_token: tokio_util::sync::CancellationToken = state.operation_registry.register(&request_id).await;
+    let cancel_token: tokio_util::sync::CancellationToken =
+        state.operation_registry.register(&request_id).await;
 
     if !payload.args.is_object() {
         state.operation_registry.unregister(&request_id).await;
@@ -789,10 +867,7 @@ pub async fn handle_call_capability(
                 Some(req_context),
                 retry_base("not_started"),
                 "INVALID_ARGS",
-                format!(
-                    "Capability '{}' blocked by policy",
-                    payload.capability_id
-                ),
+                format!("Capability '{}' blocked by policy", payload.capability_id),
                 false,
             )),
         )
@@ -926,7 +1001,10 @@ pub async fn handle_call_capability(
             });
 
             if let Some(ref key) = idempotency_key {
-                state.idempotency_store.complete(key, response_json.clone()).await;
+                state
+                    .idempotency_store
+                    .complete(key, response_json.clone())
+                    .await;
             }
 
             (StatusCode::OK, Json(response_json)).into_response()
@@ -1132,9 +1210,13 @@ mod tests {
             operation_registry: crate::operations::OperationRegistry::new(),
         };
 
-        let response = handle_list_resources(State(state), HeaderMap::new()).await.into_response();
+        let response = handle_list_resources(State(state), HeaderMap::new())
+            .await
+            .into_response();
         assert_eq!(response.status(), StatusCode::OK);
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let body: Value = serde_json::from_slice(&bytes).expect("json");
         let entries = body
             .get("resources")
@@ -1222,9 +1304,13 @@ mod tests {
             operation_registry: crate::operations::OperationRegistry::new(),
         };
 
-        let response = handle_list_prompts(State(state), HeaderMap::new()).await.into_response();
+        let response = handle_list_prompts(State(state), HeaderMap::new())
+            .await
+            .into_response();
         assert_eq!(response.status(), StatusCode::OK);
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let body: Value = serde_json::from_slice(&bytes).expect("json");
         let entries = body
             .get("prompts")
@@ -1374,7 +1460,9 @@ mod tests {
         .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let res: Value = serde_json::from_slice(&bytes).expect("json");
 
         assert_eq!(res["version"], "v1");
@@ -1401,12 +1489,22 @@ mod tests {
         };
 
         let mut headers = HeaderMap::new();
-        headers.insert(header::IF_NONE_MATCH, HeaderValue::from_static("\"sha256:abc1234\""));
+        headers.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_static("\"sha256:abc1234\""),
+        );
 
-        let response = handle_list_capabilities(State(state), headers).await.into_response();
+        let response = handle_list_capabilities(State(state), headers)
+            .await
+            .into_response();
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(
-            response.headers().get(header::ETAG).unwrap().to_str().unwrap(),
+            response
+                .headers()
+                .get(header::ETAG)
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "\"sha256:abc1234\""
         );
     }
@@ -1430,15 +1528,15 @@ mod tests {
             operation_registry: crate::operations::OperationRegistry::new(),
         };
 
-        let response = handle_catalog_events(
-            State(state),
-            Query(CatalogEventsQuery { after: None }),
-        )
-        .await
-        .into_response();
+        let response =
+            handle_catalog_events(State(state), Query(CatalogEventsQuery { after: None }))
+                .await
+                .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let payload: Value = serde_json::from_slice(&bytes).expect("json");
 
         assert_eq!(payload["catalog_version"], "sha256:v1");
@@ -1486,7 +1584,9 @@ mod tests {
         .into_response();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
         let payload: Value = serde_json::from_slice(&bytes).expect("json");
 
         assert_eq!(payload["request_id"], "req-hdr-999");

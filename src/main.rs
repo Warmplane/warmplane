@@ -1,3 +1,7 @@
+// Rust guideline compliant 2026-08-13
+
+//! Main entrypoint for Warmplane local MCP control plane CLI and daemon executable.
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use serde_json::{json, Value};
@@ -19,6 +23,10 @@ use config::{load_config, resolve_client_port, DEFAULT_PORT};
 use context::RequestContext;
 use models::{Cli, Commands};
 
+/// Warmplane CLI binary entrypoint parsing arguments and dispatching commands.
+///
+/// # Errors
+/// Returns an error if command execution or daemon startup fails.
 #[tokio::main]
 async fn main() -> Result<()> {
     let _telemetry = telemetry::init()?;
@@ -44,8 +52,11 @@ async fn main() -> Result<()> {
         }
         Commands::ListCapabilities { port, config } => {
             let resolved_port = resolve_client_port(port, &config)?;
-            let res =
-                reqwest::get(format!("http://127.0.0.1:{}/v1/capabilities", resolved_port)).await?;
+            let res = reqwest::get(format!(
+                "http://127.0.0.1:{}/v1/capabilities",
+                resolved_port
+            ))
+            .await?;
             println!("{}", res.text().await?);
         }
         Commands::SearchCapabilities {
@@ -155,7 +166,10 @@ async fn main() -> Result<()> {
 
             let client = reqwest::Client::new();
             let res = client
-                .post(format!("http://127.0.0.1:{}/v1/resources/read", resolved_port))
+                .post(format!(
+                    "http://127.0.0.1:{}/v1/resources/read",
+                    resolved_port
+                ))
                 .json(&payload)
                 .send()
                 .await?;
@@ -204,7 +218,11 @@ async fn main() -> Result<()> {
                 .await?;
             println!("{}", res.text().await?);
         }
-        Commands::ListCatalogEvents { port, config, after } => {
+        Commands::ListCatalogEvents {
+            port,
+            config,
+            after,
+        } => {
             let resolved_port = resolve_client_port(port, &config)?;
             let mut url = format!("http://127.0.0.1:{}/v1/catalog/events", resolved_port);
             if let Some(cursor) = after {
@@ -217,7 +235,10 @@ async fn main() -> Result<()> {
             let resolved_port = resolve_client_port(port, &config)?;
             let client = reqwest::Client::new();
             let res = client
-                .post(format!("http://127.0.0.1:{}/v1/operations/{}/cancel", resolved_port, id))
+                .post(format!(
+                    "http://127.0.0.1:{}/v1/operations/{}/cancel",
+                    resolved_port, id
+                ))
                 .send()
                 .await?;
             println!("{}", res.text().await?);

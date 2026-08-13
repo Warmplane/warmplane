@@ -1,35 +1,42 @@
+// Rust guideline compliant 2026-08-13
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, RwLock};
 
+/// Metadata attached to responses indicating retry safety and upstream execution status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RetryMetadata {
-    pub classification: String,        // "safe", "unsafe", "idempotent"
-    pub upstream_execution_state: String, // "not_started", "completed", "unknown"
+    /// Classification of operation safety (`"safe"`, `"unsafe"`, or `"idempotent"`).
+    pub classification: String,
+    /// Upstream execution state (`"not_started"`, `"completed"`, or `"unknown"`).
+    pub upstream_execution_state: String,
 }
 
 impl RetryMetadata {
-    pub fn safe(state: &str) -> Self {
+    /// Helper constructor for safe read-only operations.
+    pub fn safe(state: impl AsRef<str>) -> Self {
         Self {
             classification: "safe".to_string(),
-            upstream_execution_state: state.to_string(),
+            upstream_execution_state: state.as_ref().to_string(),
         }
     }
 
-    pub fn unsafe_op(state: &str) -> Self {
+    /// Helper constructor for non-idempotent unsafe operations.
+    pub fn unsafe_op(state: impl AsRef<str>) -> Self {
         Self {
             classification: "unsafe".to_string(),
-            upstream_execution_state: state.to_string(),
+            upstream_execution_state: state.as_ref().to_string(),
         }
     }
 
-    pub fn idempotent(state: &str) -> Self {
+    /// Helper constructor for explicitly idempotent write operations.
+    pub fn idempotent(state: impl AsRef<str>) -> Self {
         Self {
             classification: "idempotent".to_string(),
-            upstream_execution_state: state.to_string(),
+            upstream_execution_state: state.as_ref().to_string(),
         }
     }
 }
@@ -44,18 +51,30 @@ struct IdempotencyEntry {
     created_at: Instant,
 }
 
+/// In-memory idempotency deduplication store with configurable time-to-live TTL.
 pub struct IdempotencyStore {
     ttl: Duration,
     entries: RwLock<HashMap<String, IdempotencyEntry>>,
 }
 
+/// Result of checking or starting an idempotent request execution.
 pub enum DeduplicateResult {
+    /// Request is new; caller must execute the underlying operation.
     New,
+    /// Request is already in progress; receiver yields completed payload.
     InProgress(broadcast::Receiver<Value>),
+    /// Request was already completed; contains cached payload.
     Completed(Value),
 }
 
 impl IdempotencyStore {
+    /// Creates a new `IdempotencyStore` with specified entry TTL duration.
+    ///
+    /// # Arguments
+    /// * `ttl` - Entry expiry duration.
+    ///
+    /// # Returns
+    /// An empty `IdempotencyStore`.
     pub fn new(ttl: Duration) -> Self {
         Self {
             ttl,
@@ -63,14 +82,22 @@ impl IdempotencyStore {
         }
     }
 
-    pub async fn check_or_start(&self, key: &str) -> DeduplicateResult {
+    /// Checks existing idempotency state or marks a new key as in-progress.
+    ///
+    /// # Arguments
+    /// * `key` - Unique idempotency key string.
+    ///
+    /// # Returns
+    /// `DeduplicateResult` enum variant indicating execution state.
+    pub async fn check_or_start(&self, key: impl AsRef<str>) -> DeduplicateResult {
+        let key_ref = key.as_ref();
         let mut map = self.entries.write().await;
         let now = Instant::now();
 
         // Evict expired entries
         map.retain(|_, entry| now.duration_since(entry.created_at) < self.ttl);
 
-        if let Some(entry) = map.get(key) {
+        if let Some(entry) = map.get(key_ref) {
             match &entry.state {
                 EntryState::Completed(val) => DeduplicateResult::Completed(val.clone()),
                 EntryState::InProgress(tx) => DeduplicateResult::InProgress(tx.subscribe()),
@@ -78,7 +105,7 @@ impl IdempotencyStore {
         } else {
             let (tx, _) = broadcast::channel(1);
             map.insert(
-                key.to_string(),
+                key_ref.to_string(),
                 IdempotencyEntry {
                     state: EntryState::InProgress(tx),
                     created_at: now,
@@ -88,9 +115,15 @@ impl IdempotencyStore {
         }
     }
 
-    pub async fn complete(&self, key: &str, result: Value) {
+    /// Completes an in-progress idempotency entry and broadcasts the final JSON payload.
+    ///
+    /// # Arguments
+    /// * `key` - Unique idempotency key string.
+    /// * `result` - Completed JSON payload.
+    pub async fn complete(&self, key: impl AsRef<str>, result: Value) {
+        let key_ref = key.as_ref();
         let mut map = self.entries.write().await;
-        if let Some(entry) = map.get_mut(key) {
+        if let Some(entry) = map.get_mut(key_ref) {
             if let EntryState::InProgress(tx) = &entry.state {
                 let _ = tx.send(result.clone());
             }
@@ -113,6 +146,7 @@ impl Default for IdempotencyStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_idempotency_deduplication_lifecycle() {
