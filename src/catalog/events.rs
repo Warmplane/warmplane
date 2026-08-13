@@ -3,19 +3,33 @@
 use serde::{Deserialize, Serialize};
 use std::sync::RwLock;
 
-/// Represents a single catalog mutation event for capabilities, resources, or prompts.
+/// Represents a single catalog mutation event for capabilities, resources, prompts, or server logs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogEvent {
     /// Unique identifier for the catalog event.
     pub id: String,
     /// Unix timestamp when the event occurred.
     pub timestamp: String,
-    /// Object type affected (e.g. `capability`, `resource`, `prompt`).
+    /// Object type affected (e.g. `capability`, `resource`, `prompt`, `server_log`, `catalog_reindex`).
     pub object_type: String,
     /// Identifier of the object affected.
     pub object_id: String,
-    /// Type of change performed (e.g. `added`, `updated`, `removed`).
+    /// Type of change performed (e.g. `added`, `updated`, `removed`, `log`, `reindexed`).
     pub change_type: String,
+    /// Optional detail string payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// Represents a real-time resource update notification event emitted by an upstream MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceUpdateEvent {
+    /// Resource URI that was updated.
+    pub uri: String,
+    /// Timestamp of update event.
+    pub timestamp: String,
+    /// Originating server identifier.
+    pub server: String,
 }
 
 /// In-memory thread-safe event store recording catalog state changes.
@@ -40,17 +54,19 @@ impl CatalogEventStore {
         }
     }
 
-    /// Records a catalog mutation event.
+    /// Records a catalog mutation event with an optional detail string.
     ///
     /// # Arguments
     /// * `object_type` - Type of object mutated.
     /// * `object_id` - Unique identifier of mutated object.
     /// * `change_type` - Mutation classification.
-    pub fn record(
+    /// * `detail` - Optional detail string payload.
+    pub fn record_with_detail(
         &self,
         object_type: impl AsRef<str>,
         object_id: impl AsRef<str>,
         change_type: impl AsRef<str>,
+        detail: Option<impl Into<String>>,
     ) {
         let mut guard = self.events.write().unwrap_or_else(|e| e.into_inner());
         let event_id = format!("evt_{}", guard.len() + 1);
@@ -65,7 +81,23 @@ impl CatalogEventStore {
             object_type: object_type.as_ref().to_string(),
             object_id: object_id.as_ref().to_string(),
             change_type: change_type.as_ref().to_string(),
+            detail: detail.map(|d| d.into()),
         });
+    }
+
+    /// Records a catalog mutation event.
+    ///
+    /// # Arguments
+    /// * `object_type` - Type of object mutated.
+    /// * `object_id` - Unique identifier of mutated object.
+    /// * `change_type` - Mutation classification.
+    pub fn record(
+        &self,
+        object_type: impl AsRef<str>,
+        object_id: impl AsRef<str>,
+        change_type: impl AsRef<str>,
+    ) {
+        self.record_with_detail(object_type, object_id, change_type, None::<String>);
     }
 
     /// Retrieves events occurring after an optional cursor position.
