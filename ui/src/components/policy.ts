@@ -6,7 +6,7 @@ export function renderPolicy(): string {
   const policy = state.config.policy || {};
   const allow = policy.allow || [];
   const deny = policy.deny || [];
-  const redact = policy.redact_keys || [];
+  const redact = policy.redact_keys || policy.redactKeys || [];
 
   const allowHtml = allow.length === 0 ? `
     <div style="color: var(--text-dim); font-size: 12px;">No allow list (all non-denied operations permitted)</div>
@@ -53,8 +53,8 @@ export function renderPolicy(): string {
           ${allowHtml}
         </div>
         <div style="display: flex; gap: 8px; margin-top: 14px;">
-          <input type="text" class="form-input" id="policy-new-allow" placeholder="e.g. github.*, db.read_*">
-          <button class="btn btn-ghost" onclick="window.app.addPolicyRule('allow', document.getElementById('policy-new-allow').value)">Add Allow</button>
+          <input type="text" class="form-input" id="policy-new-allow" placeholder="e.g. github.*, db.read_*" onkeydown="if(event.key==='Enter') window.app.submitPolicyRule('allow')">
+          <button class="btn btn-ghost" onclick="window.app.submitPolicyRule('allow')">Add Allow</button>
         </div>
       </div>
 
@@ -67,8 +67,8 @@ export function renderPolicy(): string {
           ${denyHtml}
         </div>
         <div style="display: flex; gap: 8px; margin-top: 14px;">
-          <input type="text" class="form-input" id="policy-new-deny" placeholder="e.g. *.drop_*, filesystem.write_*">
-          <button class="btn btn-ghost" onclick="window.app.addPolicyRule('deny', document.getElementById('policy-new-deny').value)">Add Deny</button>
+          <input type="text" class="form-input" id="policy-new-deny" placeholder="e.g. *.drop_*, filesystem.write_*" onkeydown="if(event.key==='Enter') window.app.submitPolicyRule('deny')">
+          <button class="btn btn-ghost" onclick="window.app.submitPolicyRule('deny')">Add Deny</button>
         </div>
       </div>
 
@@ -82,8 +82,8 @@ export function renderPolicy(): string {
           ${redactHtml}
         </div>
         <div style="display: flex; gap: 8px; margin-top: 14px; max-width: 420px;">
-          <input type="text" class="form-input" id="policy-new-redact" placeholder="e.g. token, api_key, password, secret">
-          <button class="btn btn-ghost" onclick="window.app.addPolicyRule('redact', document.getElementById('policy-new-redact').value)">Add Key</button>
+          <input type="text" class="form-input" id="policy-new-redact" placeholder="e.g. token, api_key, password, secret" onkeydown="if(event.key==='Enter') window.app.submitPolicyRule('redact')">
+          <button class="btn btn-ghost" onclick="window.app.submitPolicyRule('redact')">Add Key</button>
         </div>
       </div>
 

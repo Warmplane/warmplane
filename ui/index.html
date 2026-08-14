@@ -154,7 +154,7 @@
         <div style="font-weight: 800; font-size: 13px; letter-spacing: 0.5px;">WARMPLANE</div>
         <div style="font-size: 10px; color: var(--text-dim);">CONTROL DECK</div>
       </div>
-      <span class="brand-badge" style="margin-left: auto;">v0.11.1</span>
+      <span class="brand-badge" style="margin-left: auto;">v0.11.2</span>
     </div>
 
     <div class="nav-group-label">Mission Control</div>
@@ -199,9 +199,12 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
           Import Config
         </button>
-        <button class="btn btn-primary" onclick="window.app.openAddServerModal()">
+        <button class="btn btn-ghost" onclick="window.app.openAddServerModal()">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-          Add Server
+          Add Custom
+        </button>
+        <button class="btn btn-primary" onclick="window.app.openTemplateCatalog()">
+          ✨ Browse Templates
         </button>
       </div>
     </header>
@@ -217,6 +220,10 @@
       <div class="modal-header">
         <div class="modal-title">Add Upstream MCP Server</div>
         <button class="btn btn-ghost" onclick="window.app.closeModals()" style="padding: 2px 6px;">✕</button>
+      </div>
+      <div style="background: var(--surface-card); border: 1px dashed var(--border); border-radius: var(--radius-sm); padding: 10px 14px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center;">
+        <div style="font-size: 11.5px; color: var(--text-muted);">Looking for popular pre-configured servers (Postgres, GitHub, Playwright, etc.)?</div>
+        <button class="btn btn-primary" style="font-size: 11px; padding: 3px 8px;" onclick="window.app.openTemplateCatalog()">Browse 25 Templates →</button>
       </div>
       <div class="form-group">
         <label class="form-label">Server Identifier</label>
@@ -260,6 +267,69 @@
       <div style="display: flex; justify-content: flex-end; gap: 8px;">
         <button class="btn btn-ghost" onclick="window.app.closeModals()">Cancel</button>
         <button class="btn btn-primary" onclick="window.app.submitImport()">Import Discovered Servers</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: TEMPLATE CATALOG -->
+  <div class="modal-backdrop" id="modal-templates" onclick="if(event.target === this) window.app.closeModals()">
+    <div class="modal-box" style="width: 820px; max-width: 95vw; max-height: 88vh; display: flex; flex-direction: column;">
+      <div class="modal-header" style="margin-bottom: 12px;">
+        <div>
+          <div class="modal-title" style="display: flex; align-items: center; gap: 8px;">
+            <span>✨ MCP Server Template Catalog</span>
+            <span class="brand-badge">25 Curated Servers</span>
+          </div>
+          <div style="font-size: 11.5px; color: var(--text-dim); margin-top: 2px;">
+            1-Click configurations for the most popular tools, browsers, databases, and services in the MCP ecosystem.
+          </div>
+        </div>
+        <button class="btn btn-ghost" onclick="window.app.closeModals()" style="padding: 2px 6px;">✕</button>
+      </div>
+
+      <!-- Filters & Search -->
+      <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 14px;">
+        <input type="text" class="form-input" id="tmpl-search-input" placeholder="Search templates (e.g. postgres, github, playwright, redis)..." oninput="window.app.filterTemplates(this.value)" style="flex: 1;">
+        <div style="display: flex; gap: 4px;" id="tmpl-category-tabs">
+          <button class="btn btn-ghost tmpl-cat-btn active" data-category="all" onclick="window.app.setTemplateCategory('all')">All</button>
+          <button class="btn btn-ghost tmpl-cat-btn" data-category="devtools" onclick="window.app.setTemplateCategory('devtools')">DevTools</button>
+          <button class="btn btn-ghost tmpl-cat-btn" data-category="browser" onclick="window.app.setTemplateCategory('browser')">Browser &amp; Search</button>
+          <button class="btn btn-ghost tmpl-cat-btn" data-category="database" onclick="window.app.setTemplateCategory('database')">Databases</button>
+          <button class="btn btn-ghost tmpl-cat-btn" data-category="productivity" onclick="window.app.setTemplateCategory('productivity')">Productivity</button>
+          <button class="btn btn-ghost tmpl-cat-btn" data-category="cloud" onclick="window.app.setTemplateCategory('cloud')">Cloud &amp; Infra</button>
+        </div>
+      </div>
+
+      <!-- Template Grid List -->
+      <div style="flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; padding-right: 4px;" id="tmpl-grid">
+        <!-- Rendered dynamically -->
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim);">
+        <div>Need a custom MCP command or SSE URL?</div>
+        <button class="btn btn-ghost" onclick="window.app.openAddServerModal()">+ Custom Manual Server</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: CONFIGURE TEMPLATE -->
+  <div class="modal-backdrop" id="modal-configure-template" onclick="if(event.target === this) window.app.closeModals()">
+    <div class="modal-box" style="width: 580px;">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title" id="cfg-tmpl-title">Configure Server Template</div>
+          <div style="font-size: 11px; color: var(--text-dim);" id="cfg-tmpl-desc">Fill in required credentials and launch.</div>
+        </div>
+        <button class="btn btn-ghost" onclick="window.app.closeModals()" style="padding: 2px 6px;">✕</button>
+      </div>
+
+      <div id="cfg-tmpl-form">
+        <!-- Dynamic fields rendered here -->
+      </div>
+
+      <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px;">
+        <button class="btn btn-ghost" onclick="window.app.openTemplateCatalog()">← Back to Catalog</button>
+        <button class="btn btn-primary" onclick="window.app.submitTemplateServer()">Save &amp; Connect Server</button>
       </div>
     </div>
   </div>

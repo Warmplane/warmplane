@@ -8,6 +8,7 @@ export interface AppState {
   selectedCapabilityId: string | null;
   activeTab: 'overview' | 'servers' | 'playground' | 'policy' | 'aliases';
   eventLogs: Array<{ time: string; method: string; target: string; status: string; latency: string }>;
+  executionResult: { status: number; durationMs: number; data: any } | null;
   metrics: {
     totalCatalogRequests: number;
     totalEtagHits: number;
@@ -27,6 +28,7 @@ class Store {
     selectedCapabilityId: null,
     activeTab: 'overview',
     eventLogs: [],
+    executionResult: null,
     metrics: {
       totalCatalogRequests: 0,
       totalEtagHits: 0,

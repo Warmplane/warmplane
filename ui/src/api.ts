@@ -11,6 +11,7 @@ export interface PolicyConfig {
   allow?: string[];
   deny?: string[];
   redact_keys?: string[];
+  redactKeys?: string[];
 }
 
 export interface McpConfig {
@@ -133,10 +134,15 @@ export class WarmplaneClient {
   }
 
   async savePolicy(policy: PolicyConfig): Promise<{ ok: boolean; error?: string }> {
+    const payload = {
+      allow: policy.allow || [],
+      deny: policy.deny || [],
+      redactKeys: policy.redact_keys || policy.redactKeys || []
+    };
     const res = await fetch(`${this.baseUrl}/v1/config/policy`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(policy)
+      body: JSON.stringify(payload)
     });
     return res.json();
   }

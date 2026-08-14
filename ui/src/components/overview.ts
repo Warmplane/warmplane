@@ -13,7 +13,8 @@ export function renderOverview(): string {
         <div style="font-size: 14px; color: var(--text-main); font-weight: 600; margin-bottom: 6px;">No Upstream MCP Servers Connected</div>
         <div style="font-size: 12px; margin-bottom: 16px;">Initialize connections by adding a server or syncing existing IDE configurations.</div>
         <div style="display: flex; gap: 8px; justify-content: center;">
-          <button class="btn btn-primary" onclick="window.app.openAddServerModal()">+ Add Server</button>
+          <button class="btn btn-primary" onclick="window.app.openTemplateCatalog()">✨ Browse Templates</button>
+          <button class="btn btn-ghost" onclick="window.app.openAddServerModal()">+ Add Custom</button>
           <button class="btn btn-ghost" onclick="window.app.openImportModal()">Sync from IDEs</button>
         </div>
       </div>

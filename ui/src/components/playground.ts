@@ -38,7 +38,7 @@ export function renderPlayground(): string {
         <div style="padding: 12px; border-bottom: 1px solid var(--border);">
           <input type="text" class="form-input" placeholder="Search ${caps.length} capabilities..." oninput="window.app.filterCapabilities(this.value)">
         </div>
-        <div style="flex: 1; overflow-y: auto; padding: 8px;">
+        <div style="flex: 1; overflow-y: auto; padding: 8px;" id="pg-cap-list">
           ${capListHtml}
         </div>
       </div>
@@ -83,9 +83,11 @@ export function renderPlayground(): string {
           <div style="padding: 16px; background: var(--bg-app); display: flex; flex-direction: column; overflow: hidden;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
               <span style="font-size: 11px; font-weight: 600; color: var(--text-dim);">NORMALIZED EXECUTION ENVELOPE</span>
-              <span id="pg-status-badge" style="font-size: 11px; font-weight: 600; color: var(--text-dim); font-family: var(--ff-mono);">READY</span>
+              <span id="pg-status-badge" style="font-size: 11px; font-weight: 600; color: ${state.executionResult ? (state.executionResult.status === 200 ? 'var(--green-400)' : 'var(--red-400)') : 'var(--text-dim)'}; font-family: var(--ff-mono);">
+                ${state.executionResult ? `HTTP ${state.executionResult.status} · ${state.executionResult.durationMs.toFixed(1)}ms` : 'READY'}
+              </span>
             </div>
-            <pre id="pg-response-json" style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: var(--amber-300); font-size: 11.5px; overflow-y: auto; margin: 0;">// Response envelope output will be formatted here</pre>
+            <pre id="pg-response-json" style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: var(--amber-300); font-size: 11.5px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-word;">${state.executionResult ? escapeHtml(JSON.stringify(state.executionResult.data, null, 2)) : '// Response envelope output will be formatted here'}</pre>
           </div>
         </div>
       </div>

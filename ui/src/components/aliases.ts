@@ -63,18 +63,21 @@ export function renderAliases(): string {
     </div>
 
     <!-- Quick Add Form -->
-    <div class="bento-card" style="margin-bottom: 20px;">
+    <div class="bento-card" style="margin-bottom: 20px; overflow: visible;">
       <div class="stat-header" style="margin-bottom: 12px;">
         <span class="stat-label">Create New Alias</span>
       </div>
-      <div style="display: grid; grid-template-columns: 140px 1fr 1fr 100px; gap: 10px; align-items: center;">
+      <div style="display: grid; grid-template-columns: 140px 1fr 1fr 100px; gap: 10px; align-items: center; position: relative;">
         <select class="form-input" id="alias-kind">
           <option value="tool">Tool / Capability</option>
           <option value="resource">Resource</option>
           <option value="prompt">Prompt</option>
         </select>
-        <input type="text" class="form-input" id="alias-name" placeholder="Public alias (e.g. db.query)">
-        <input type="text" class="form-input" id="alias-target" placeholder="Target ID (e.g. sqlite.read_query)">
+        <input type="text" class="form-input" id="alias-name" placeholder="Public alias (e.g. db.query)" onkeydown="if(event.key==='Enter') window.app.createAlias()">
+        <div style="position: relative; width: 100%;">
+          <input type="text" class="form-input" id="alias-target" autocomplete="off" placeholder="Target ID (e.g. docker.list_containers)" style="width: 100%;" oninput="window.app.handleAliasTargetInput(this.value)" onkeydown="if(event.key==='Enter') window.app.createAlias()" onfocus="window.app.handleAliasTargetInput(this.value)" onblur="setTimeout(() => window.app.hideAliasDropdown(), 200)">
+          <div id="alias-suggestions-dropdown" style="display: none; position: absolute; top: calc(100% + 4px); left: 0; right: 0; max-height: 240px; overflow-y: auto; background: var(--surface-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 1000; font-family: var(--ff-mono); font-size: 11.5px;"></div>
+        </div>
         <button class="btn btn-primary" onclick="window.app.createAlias()">+ Save</button>
       </div>
     </div>
