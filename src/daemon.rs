@@ -30,7 +30,7 @@ use crate::{
     http_v1,
 };
 
-const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-11-25";
+const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2026-07-28";
 
 /// Messages dispatched across worker threads to upstream MCP servers.
 pub enum ServerMsg {

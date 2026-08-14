@@ -387,6 +387,8 @@ pub async fn handle_list_capabilities(
         Json(json!({
             "version": "v1",
             "catalog_version": state.catalog_version,
+            "ttl_ms": 300000,
+            "cache_scope": "public",
             "capabilities": capabilities,
         })),
     )
@@ -491,6 +493,8 @@ pub async fn handle_list_resources(
         Json(json!({
             "version": "v1",
             "catalog_version": state.catalog_version,
+            "ttl_ms": 300000,
+            "cache_scope": "public",
             "resources": resources,
         })),
     )
@@ -538,6 +542,8 @@ pub async fn handle_list_prompts(
         Json(json!({
             "version": "v1",
             "catalog_version": state.catalog_version,
+            "ttl_ms": 300000,
+            "cache_scope": "public",
             "prompts": prompts,
         })),
     )

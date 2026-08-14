@@ -374,7 +374,7 @@ mod tests {
     fn valid_http_server_passes_validation() {
         let mut server = empty_server();
         server.url = Some("https://example.com/mcp".to_string());
-        server.protocol_version = Some("2025-11-25".to_string());
+        server.protocol_version = Some("2026-07-28".to_string());
         server.auth = Some(AuthConfig::Bearer {
             token: None,
             token_env: Some("MCP_TOKEN".to_string()),

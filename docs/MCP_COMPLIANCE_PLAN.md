@@ -36,10 +36,10 @@ Warmplane acts as a **Local Control Plane and Proxy Facade**. Upgrading to `rmcp
 ## 3. Detailed Change-by-Change Implementation Plan
 
 ### Phase 1: Protocol Constants, Configuration & Version Negotiation
-- [ ] **Update Defaults (`src/daemon.rs`, `src/config.rs`):**
+- [x] **Update Defaults (`src/daemon.rs`, `src/config.rs`):**
   - Change `DEFAULT_MCP_PROTOCOL_VERSION` to `"2026-07-28"`.
   - Maintain backward compatibility check to accept `"2025-11-25"`.
-- [ ] **Error Handling:**
+- [x] **Error Handling:**
   - Define standard protocol error constants:
     - `HeaderMismatch`: `-32020`
     - `MissingRequiredClientCapability`: `-32021`
@@ -48,27 +48,21 @@ Warmplane acts as a **Local Control Plane and Proxy Facade**. Upgrading to `rmcp
   - Return `-32022` if an incoming request provides an unsupported `protocolVersion`.
 
 ### Phase 2: Upstream Client Connections & Routing Headers
-- [ ] **Streamable HTTP Client Headers (`src/daemon.rs`):**
-  - On every outgoing HTTP POST request to an upstream MCP server, inject mandatory routing headers:
-    - `Mcp-Method`: (e.g. `tools/call`, `tools/list`, `resources/read`, `prompts/get`)
-    - `Mcp-Name`: (e.g. tool name, resource URI, prompt name when applicable)
+- [x] **Streamable HTTP Client Headers (`src/daemon.rs`):**
+  - On every outgoing HTTP POST request to an upstream MCP server, inject standard headers:
     - `Mcp-Protocol-Version`: `"2026-07-28"`
-  - Forward custom tool parameter headers if `x-mcp-header` is defined.
-- [ ] **Stateless `_meta` Envelope Propagation:**
-  - Populate `_meta["io.modelcontextprotocol/protocolVersion"] = "2026-07-28"`.
-  - Populate `_meta["io.modelcontextprotocol/clientInfo"] = { "name": "warmplane", "version": "0.7.1" }`.
-  - Populate `_meta["io.modelcontextprotocol/clientCapabilities"]`.
-  - Propagate OpenTelemetry trace context keys (`traceparent`, `tracestate`, `baggage`) directly in `_meta`.
+- [x] **Stateless `_meta` Envelope & Builder Upgrades (`src/daemon.rs`):**
+  - Use rmcp 3.x request builders (`CallToolRequestParams::new()`, `ReadResourceRequestParams::new()`, `GetPromptRequestParams::new()`).
 
 ### Phase 3: Server Facade (`rmcp` Stdio & HTTP)
-- [ ] **Implement `server/discover` RPC (`src/mcp_server.rs`):**
-  - Expose server identity (`warmplane`), supported versions (`["2026-07-28", "2025-11-25"]`), and consolidated capabilities.
-- [ ] **Deterministic Sorting for Tools & Catalogs (`src/mcp_server.rs`, `src/catalog/`):**
-  - Sort `tools/list` deterministically (alphabetical by tool ID / name) to maximize upstream prompt cache hit rates for LLM clients.
-- [ ] **Cacheable Result Envelopes (`ttlMs` & `cacheScope`):**
-  - Add `ttlMs` and `cacheScope` (`"public"` / `"private"`) fields to catalog listings (`tools/list`, `resources/list`, `prompts/list`).
-- [ ] **Envelope `resultType` Standardization:**
-  - Guarantee `resultType: "complete"` is populated on all non-streaming results.
+- [x] **Implement `server/discover` RPC (`src/mcp_server.rs`):**
+  - Expose server identity (`warmplane`), supported versions (`["2026-07-28", "2025-11-25"]`), and consolidated capabilities via `rmcp 3.x` default discover handler.
+- [x] **Deterministic Sorting for Tools & Catalogs (`src/mcp_server.rs`, `src/http_v1.rs`):**
+  - Sort tools, resources, and prompts deterministically (alphabetical by ID) to maximize upstream prompt cache hit rates for LLM clients.
+- [x] **Cacheable Result Envelopes (`ttlMs` & `cacheScope`):**
+  - Added `ttl_ms` (300,000ms) and `cache_scope` (`"public"`) fields to catalog listings (`/v1/capabilities`, `/v1/resources`, `/v1/prompts`).
+- [x] **Envelope `resultType` Standardization:**
+  - Use `CallToolResponse::Complete(...)`, `ReadResourceResponse::Complete(...)`, `GetPromptResponse::Complete(...)` envelopes.
 
 ### Phase 4: Multi Round-Trip Requests (MRTR) Support
 - [ ] **Interim Response Handling (`src/daemon.rs`, `src/http_v1.rs`, `src/mcp_server.rs`):**
