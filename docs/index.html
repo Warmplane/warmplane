@@ -1280,11 +1280,12 @@
         <li><a href="#capabilities">Capabilities</a></li>
         <li><a href="#savings">Savings</a></li>
         <li><a href="#playground">Spec</a></li>
-        <li><a href="integrators.html">Integrators Guide</a></li>
+        <li><a href="integrators.html">Integrators</a></li>
+        <li><a href="PERFORMANCE.html">Performance</a></li>
       </ul>
 
       <div class="nav-actions">
-        <span class="version-badge">v0.11.0</span>
+        <span class="version-badge">v0.11.1</span>
         <a href="https://github.com/Warmplane/warmplane" target="_blank" rel="noopener" class="btn btn-ghost">GitHub ↗</a>
       </div>
     </div>
@@ -1295,7 +1296,7 @@
     <div class="hero-content">
       <div class="hero-eyebrow">
         <span>Open Source · Rust-Native Runtime</span>
-        <span class="version-badge">v0.11.0 · Control Deck &amp; Dynamic Mounting</span>
+        <span class="version-badge">v0.11.1 · Criterion Benchmarks &amp; Hot-Path Optimization</span>
       </div>
 
       <h1 class="hero-title">
@@ -1323,16 +1324,16 @@
         <div class="hero-stat-lbl">Copilot MCP Token Savings</div>
       </div>
       <div class="hero-stat-card">
+        <div class="hero-stat-val">&lt; 1 ms</div>
+        <div class="hero-stat-lbl">Warm Session Reuse Latency</div>
+      </div>
+      <div class="hero-stat-card">
         <div class="hero-stat-val">4</div>
-        <div class="hero-stat-lbl">Client Modes (UI/HTTP/CLI/MCP)</div>
+        <div class="hero-stat-lbl">Client Modes (HTTP / CLI / MCP / UI)</div>
       </div>
       <div class="hero-stat-card">
         <div class="hero-stat-val">0</div>
-        <div class="hero-stat-lbl">Tokens on ETag Cache Hit</div>
-      </div>
-      <div class="hero-stat-card">
-        <div class="hero-stat-val">v0.11.0</div>
-        <div class="hero-stat-lbl">Control Deck &amp; Hot-Reload</div>
+        <div class="hero-stat-lbl">Tokens on ETag 304 Cache Hit</div>
       </div>
     </div>
   </section>
@@ -1620,7 +1621,7 @@ Discovery       <span style="color:#e6b85c">2,552</span> -&gt; <span style="colo
         </div>
 
         <div class="bento-cell">
-          <span class="bento-tag">v0.9.0 Spec Parity</span>
+          <span class="bento-tag">v0.11.1 Spec Parity</span>
           <div class="bento-icon">⚡</div>
           <div class="bento-title">MCP 2026-07-28, MRTR &amp; Subscriptions</div>
           <div class="bento-body">
@@ -1665,11 +1666,11 @@ Discovery       <span style="color:#e6b85c">2,552</span> -&gt; <span style="colo
         </div>
 
         <div class="bento-cell">
-          <span class="bento-tag">v0.7.0 Pragmatic Rust</span>
+          <span class="bento-tag">v0.11.1 Benchmarks</span>
           <div class="bento-icon">🦀</div>
-          <div class="bento-title">Pragmatic Rust &amp; Builder Pattern</div>
+          <div class="bento-title">Criterion Micro-Benchmarks &amp; Hot-Path Optimization</div>
           <div class="bento-body">
-            Strict Microsoft Pragmatic Rust adherence. Fluent Builder pattern for <code>AppState</code>, <code>SearchFilter</code>, and <code>RequestContext</code> with zero panic paths.
+            56% faster tag search, 83% faster idempotency under concurrency, and 66% faster zero-copy ETag validation — all verified with a full Criterion benchmark suite.
           </div>
         </div>
 
@@ -1934,7 +1935,7 @@ data: {"uri": "file:///workspace/logs/app.log", "timestamp": 1770982800}
     <div class="hero-cta" style="justify-content: center;">
       <a href="https://github.com/Warmplane/warmplane" class="btn btn-primary" target="_blank" rel="noopener">GitHub Repository ↗</a>
       <a href="https://github.com/Warmplane/warmplane/blob/main/docs/USER-GUIDE.md" class="btn btn-ghost" target="_blank" rel="noopener">User Guide</a>
-      <a href="https://github.com/Warmplane/warmplane/blob/main/docs/WHITEPAPER.md" class="btn btn-ghost" target="_blank" rel="noopener">Read Whitepaper</a>
+      <a href="PERFORMANCE.html" class="btn btn-ghost">Performance Guide</a>
     </div>
   </section>
 
@@ -1948,6 +1949,7 @@ data: {"uri": "file:///workspace/logs/app.log", "timestamp": 1770982800}
         <li><a href="https://github.com/Warmplane/warmplane" target="_blank" rel="noopener">GitHub</a></li>
         <li><a href="USER-GUIDE.html" target="_blank" rel="noopener">User Guide</a></li>
         <li><a href="integrators.html">Integrators Guide</a></li>
+        <li><a href="PERFORMANCE.html">Performance</a></li>
         <li><a href="NEXT_LEVEL_TOOL_CALLING.html">Next-Level Tooling</a></li>
         <li><a href="WHITEPAPER.html">Whitepaper</a></li>
       </ul>

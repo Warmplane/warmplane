@@ -1,7 +1,7 @@
 # Warmplane
 
 > **The local control plane that keeps MCP sessions warm.**  
-> v0.11.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml) · [Spec](docs/spec.md)
+> v0.11.1 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml) · [Spec](docs/spec.md)
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
 
@@ -152,6 +152,20 @@ warmplane cancel-operation req-101
 
 ---
 
+## Performance Highlights
+
+Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loops snappy:
+
+- **50.4 ns** ETag Cache Validation (`If-None-Match` $\rightarrow$ `304 Not Modified`)
+- **159.8 ns** Idempotent Cache-Hit Deduplication
+- **1.58 µs** SHA-256 Incremental Catalog Version Hashing ($N=10$)
+- **15.9 µs** Filtered Hybrid Capability Search ($N=50$)
+- **371 µs** In-Memory Zero-Allocation Lexical Tag Search across 1,000 Tools
+
+👉 See the complete benchmarks and profiling methodology in [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+
+---
+
 ## Feature Overview
 
 | Feature | Since | Summary |
@@ -220,6 +234,7 @@ SHA-256 catalog version. `ETag` headers on all catalog reads, `If-None-Match` co
 | Document | Description |
 |----------|-------------|
 | [docs/USER-GUIDE.md](docs/USER-GUIDE.md) | Complete usage guide: config, modes, all CLI commands, auth, policy |
+| [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | Benchmark methodology, latency percentiles, and profiling results |
 | [docs/spec.md](docs/spec.md) | HTTP request/response contracts |
 | [docs/openapi.yaml](docs/openapi.yaml) | OpenAPI 3.1 spec |
 | [docs/config.schema.json](docs/config.schema.json) | JSON Schema for `mcp_servers.json` |

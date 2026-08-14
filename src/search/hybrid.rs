@@ -1,7 +1,7 @@
 // Rust guideline compliant 2026-08-13
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use super::lexical::score_lexical;
 use super::vector::VectorSearchIndex;
@@ -183,41 +183,55 @@ impl HybridSearchEngine {
         };
 
         // 4. Combine via Reciprocal Rank Fusion (RRF) & Weighted Score
-        let mut score_map: HashMap<String, (f32, HashSet<String>)> = HashMap::new();
+        // Structure: id -> (combined_score, match_types_vec)
+        let mut score_map: HashMap<String, (f32, Vec<String>)> =
+            HashMap::with_capacity(candidates.len());
 
         // RRF constant k
         let k = 60.0f32;
 
-        for (rank, lex) in lexical_results.iter().enumerate() {
+        for (rank, lex) in lexical_results.into_iter().enumerate() {
             let rrf_score = 1.0 / (k + rank as f32 + 1.0);
             let entry = score_map
-                .entry(lex.id.clone())
-                .or_insert((0.0, HashSet::new()));
+                .entry(lex.id)
+                .or_insert_with(|| (0.0, Vec::with_capacity(4)));
             entry.0 += rrf_score + (lex.score * 0.5);
-            for m in &lex.match_types {
-                entry.1.insert(m.clone());
+            for m in lex.match_types {
+                if !entry.1.contains(&m) {
+                    entry.1.push(m);
+                }
             }
         }
 
-        for (rank, vec_res) in vector_results.iter().enumerate() {
+        for (rank, vec_res) in vector_results.into_iter().enumerate() {
             let rrf_score = 1.0 / (k + rank as f32 + 1.0);
             let entry = score_map
-                .entry(vec_res.id.clone())
-                .or_insert((0.0, HashSet::new()));
+                .entry(vec_res.id)
+                .or_insert_with(|| (0.0, Vec::with_capacity(4)));
             entry.0 += rrf_score + (vec_res.score * 0.5);
-            entry.1.insert("semantic".to_string());
+            let sem = "semantic".to_string();
+            if !entry.1.contains(&sem) {
+                entry.1.push(sem);
+            }
         }
 
-        // 5. Convert to final response list
+        // 5. Convert to candidate list for sorting
         let candidate_map: HashMap<String, CapabilityMeta> = candidates.into_iter().collect();
-        let mut final_results = Vec::new();
+        let mut scored_items: Vec<(String, f32, Vec<String>)> = score_map
+            .into_iter()
+            .map(|(id, (score, matches))| (id, score, matches))
+            .collect();
 
-        for (id, (raw_score, match_types)) in score_map {
+        // Sort descending by score
+        scored_items.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Truncate to limit before building detailed objects
+        scored_items.truncate(limit);
+
+        let mut final_results = Vec::with_capacity(scored_items.len());
+        for (id, raw_score, mut match_types) in scored_items {
             if let Some(meta) = candidate_map.get(&id) {
-                let mut match_vec: Vec<String> = match_types.into_iter().collect();
-                match_vec.sort();
-
-                // Normalize score to 0.0 .. 1.0
+                match_types.sort();
                 let normalized_score = (raw_score * 0.1).min(1.0);
                 let mode = if meta.tags.contains(&"write".to_string()) {
                     "write".to_string()
@@ -232,17 +246,11 @@ impl HybridSearchEngine {
                     tags: meta.tags.clone(),
                     mode,
                     score: (normalized_score * 100.0).round() / 100.0,
-                    match_types: match_vec,
+                    match_types,
                 });
             }
         }
 
-        final_results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        final_results.truncate(limit);
         final_results
     }
 }
@@ -314,8 +322,10 @@ mod tests {
         );
 
         let engine = HybridSearchEngine::new();
-        let mut policy = Policy::default();
-        policy.deny = vec!["db.delete".to_string()];
+        let policy = Policy {
+            deny: vec!["db.delete".to_string()],
+            ..Default::default()
+        };
 
         let results = engine.search("delete", 10, &SearchFilter::default(), &caps, &policy);
 
