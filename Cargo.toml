@@ -13,13 +13,13 @@ categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
 # MCP protocol
-rmcp = { version = "0.15.0", features = ["client", "server", "transport-child-process", "transport-io", "transport-streamable-http-client-reqwest"] }
+rmcp = { version = "3.1.2", features = ["client", "server", "transport-child-process", "transport-io", "transport-streamable-http-client-reqwest"] }
 
 # Async runtime & HTTP
 tokio = { version = "1.40", features = ["full"] }
 tokio-util = "0.7"
 axum = "0.7"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "form"] }
 futures = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

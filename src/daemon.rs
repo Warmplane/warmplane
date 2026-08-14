@@ -740,12 +740,10 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                         params,
                         reply,
                     } => {
-                        let req = CallToolRequestParams {
-                            name: name.into(),
-                            arguments: params.as_object().cloned(),
-                            meta: None,
-                            task: None,
-                        };
+                        let mut req = CallToolRequestParams::new(name);
+                        if let Some(obj) = params.as_object().cloned() {
+                            req = req.with_arguments(obj);
+                        }
 
                         let result = timeout(per_server_timeout, mcp_client.call_tool(req)).await;
                         let res = match result {
@@ -758,7 +756,7 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                         let _ = reply.send(res);
                     }
                     ServerMsg::ReadResource { uri, reply } => {
-                        let req = ReadResourceRequestParams { meta: None, uri };
+                        let req = ReadResourceRequestParams::new(uri);
                         let result =
                             timeout(per_server_timeout, mcp_client.read_resource(req)).await;
                         let res = match result {
@@ -775,11 +773,10 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                         arguments,
                         reply,
                     } => {
-                        let req = GetPromptRequestParams {
-                            meta: None,
-                            name,
-                            arguments,
-                        };
+                        let mut req = GetPromptRequestParams::new(name);
+                        if let Some(args) = arguments {
+                            req = req.with_arguments(args);
+                        }
                         let result = timeout(per_server_timeout, mcp_client.get_prompt(req)).await;
                         let res = match result {
                             Ok(Ok(prompt_res)) => {
