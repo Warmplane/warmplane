@@ -1,3 +1,4 @@
 /target
 eval/token-efficiency/output
 .fastembed_cache/
+mcp_servers.json

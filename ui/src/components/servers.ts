@@ -14,8 +14,9 @@ export function renderServers(): string {
         <p style="font-size: 12px; margin-bottom: 20px; max-width: 480px; margin-left: auto; margin-right: auto;">
           Warmplane bridges local tools and remote MCP servers into one unified facade. Add your first server or import existing configs from Claude Desktop or Cursor.
         </p>
-        <div style="display: flex; gap: 10px; justify-content: center;">
-          <button class="btn btn-primary" onclick="window.app.openAddServerModal()">+ Add New Server</button>
+        <div style="display: flex; gap: 8px; justify-content: center;">
+          <button class="btn btn-primary" onclick="window.app.openTemplateCatalog()">✨ Browse Templates</button>
+          <button class="btn btn-ghost" onclick="window.app.openAddServerModal()">+ Add Custom</button>
           <button class="btn btn-ghost" onclick="window.app.openImportModal()">Sync from IDEs</button>
         </div>
       </div>
@@ -40,7 +41,7 @@ export function renderServers(): string {
             <div style="font-family: var(--ff-mono); font-size: 12px; color: var(--text-muted); margin-top: 4px;">
               ${s.command ? 'Command: ' : 'URL: '}<code>${escapeHtml(cmd || '')}</code>
             </div>
-            ${s.env ? `<div style="font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim); margin-top: 2px;">Env: ${escapeHtml(envKeys)}</div>` : ''}
+            ${s.env && Object.keys(s.env).length > 0 ? `<div style="font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim); margin-top: 2px;">Env: ${escapeHtml(envKeys)}</div>` : ''}
           </div>
           <div style="display: flex; gap: 8px;">
             <button class="btn btn-danger" onclick="window.app.deleteServer('${escapeHtml(k)}')">Remove</button>
@@ -57,9 +58,10 @@ export function renderServers(): string {
         <div style="font-size: 11px; color: var(--text-dim);">Active configuration file: <code>${escapeHtml(state.configPath)}</code></div>
       </div>
       <div style="display: flex; gap: 8px;">
-        <button class="btn btn-ghost" onclick="window.app.reloadFromDisk()">⟳ Reload from Disk</button>
+        <button class="btn btn-ghost" onclick="window.app.reloadFromDisk()">⟳ Reload</button>
         <button class="btn btn-ghost" onclick="window.app.openImportModal()">Sync from IDEs</button>
-        <button class="btn btn-primary" onclick="window.app.openAddServerModal()">+ Add New Server</button>
+        <button class="btn btn-ghost" onclick="window.app.openAddServerModal()">+ Custom Server</button>
+        <button class="btn btn-primary" onclick="window.app.openTemplateCatalog()">✨ Browse Templates</button>
       </div>
     </div>
 

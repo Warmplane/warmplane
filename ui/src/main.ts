@@ -5,8 +5,13 @@ import { renderServers } from './components/servers';
 import { renderPlayground } from './components/playground';
 import { renderPolicy } from './components/policy';
 import { renderAliases } from './components/aliases';
+import { SERVER_TEMPLATES, ServerTemplate } from './templates';
 
 class WarmplaneApp {
+  private activeTemplateCategory: string = 'all';
+  private activeTemplateFilter: string = '';
+  private selectedTemplate: ServerTemplate | null = null;
+
   async init() {
     const port = window.location.port ? `:${window.location.port}` : '';
     const portLabel = document.getElementById('daemon-port-label');
@@ -42,9 +47,9 @@ class WarmplaneApp {
         });
       }
 
-      if (capsRes.ok) {
+      if (capsRes && Array.isArray(capsRes.capabilities)) {
         store.setState({
-          capabilities: capsRes.capabilities || []
+          capabilities: capsRes.capabilities
         });
       }
     } catch (e) {
@@ -66,6 +71,7 @@ class WarmplaneApp {
 
   switchTab(tab: 'overview' | 'servers' | 'playground' | 'policy' | 'aliases') {
     store.setState({ activeTab: tab });
+    this.refreshData();
   }
 
   render() {
@@ -126,17 +132,25 @@ class WarmplaneApp {
       (c.summary && c.summary.toLowerCase().includes(q)) ||
       (c.server && c.server.toLowerCase().includes(q))
     );
-    const listEl = document.querySelector('.playground-sidebar div:last-child');
+    const listEl = document.getElementById('pg-cap-list');
     if (listEl) {
-      listEl.innerHTML = filtered.map(c => `
-        <div class="cap-item ${c.id === store.getState().selectedCapabilityId ? 'active' : ''}" onclick="window.app.selectCapability('${c.id}')">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${c.id}</span>
-            <span style="font-size: 10px; color: var(--green-400);">${c.mode || 'read'}</span>
+      if (filtered.length === 0) {
+        listEl.innerHTML = `
+          <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
+            No capabilities match "${escapeHtml(query)}"
           </div>
-          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">server: ${c.server || 'local'}</div>
-        </div>
-      `).join('');
+        `;
+      } else {
+        listEl.innerHTML = filtered.map(c => `
+          <div class="cap-item ${c.id === store.getState().selectedCapabilityId ? 'active' : ''}" onclick="window.app.selectCapability('${escapeHtml(c.id)}')">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${escapeHtml(c.id)}</span>
+              <span style="font-size: 10px; color: var(--green-400);">${escapeHtml(c.mode || 'read')}</span>
+            </div>
+            <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">server: ${escapeHtml(c.server || 'local')}</div>
+          </div>
+        `).join('');
+      }
     }
   }
 
@@ -147,8 +161,6 @@ class WarmplaneApp {
 
     const argsText = (document.getElementById('pg-args-input') as HTMLTextAreaElement)?.value || '{}';
     const contextVal = (document.getElementById('pg-context-input') as HTMLInputElement)?.value || undefined;
-    const statusBadge = document.getElementById('pg-status-badge');
-    const responseJson = document.getElementById('pg-response-json');
 
     let parsedArgs = {};
     try {
@@ -158,6 +170,8 @@ class WarmplaneApp {
       return;
     }
 
+    const statusBadge = document.getElementById('pg-status-badge');
+    const responseJson = document.getElementById('pg-response-json');
     if (statusBadge) {
       statusBadge.textContent = 'EXECUTING...';
       statusBadge.style.color = 'var(--amber-400)';
@@ -171,13 +185,14 @@ class WarmplaneApp {
         request_id: `ui-req-${Date.now()}`
       });
 
-      if (statusBadge) {
-        statusBadge.textContent = `HTTP ${res.status} · ${res.durationMs.toFixed(1)}ms`;
-        statusBadge.style.color = res.status === 200 ? 'var(--green-400)' : 'var(--red-400)';
-      }
-      if (responseJson) {
-        responseJson.textContent = JSON.stringify(res.data, null, 2);
-      }
+      // Update store so result is preserved across re-renders
+      store.setState({
+        executionResult: {
+          status: res.status,
+          durationMs: res.durationMs,
+          data: res.data
+        }
+      });
 
       store.addEventLog('POST', `/v1/tools/call → ${capId}`, res.status === 200 ? '200 OK' : `HTTP ${res.status}`, `${res.durationMs.toFixed(1)}ms`);
     } catch (e: any) {
@@ -192,19 +207,33 @@ class WarmplaneApp {
   }
 
   // Policy Actions
+  async submitPolicyRule(type: 'allow' | 'deny' | 'redact') {
+    const inputId = type === 'allow' ? 'policy-new-allow' : type === 'deny' ? 'policy-new-deny' : 'policy-new-redact';
+    const inputEl = document.getElementById(inputId) as HTMLInputElement | null;
+    if (!inputEl) return;
+    const val = inputEl.value.trim();
+    if (!val) return;
+    await this.addPolicyRule(type, val);
+    inputEl.value = '';
+  }
+
   async addPolicyRule(type: 'allow' | 'deny' | 'redact', val: string) {
-    if (!val || !val.trim()) return;
+    const trimmed = (val || '').trim();
+    if (!trimmed) return;
     const state = store.getState();
     const current = state.config.policy || {};
     const allow = [...(current.allow || [])];
     const deny = [...(current.deny || [])];
-    const redact = [...(current.redact_keys || [])];
+    const redact = [...(current.redact_keys || current.redactKeys || [])];
 
-    if (type === 'allow' && !allow.includes(val.trim())) allow.push(val.trim());
-    if (type === 'deny' && !deny.includes(val.trim())) deny.push(val.trim());
-    if (type === 'redact' && !redact.includes(val.trim())) redact.push(val.trim());
+    if (type === 'allow' && !allow.includes(trimmed)) allow.push(trimmed);
+    if (type === 'deny' && !deny.includes(trimmed)) deny.push(trimmed);
+    if (type === 'redact' && !redact.includes(trimmed)) redact.push(trimmed);
 
-    await api.savePolicy({ allow, deny, redact_keys: redact });
+    const res = await api.savePolicy({ allow, deny, redact_keys: redact, redactKeys: redact });
+    if (!res.ok) {
+      alert(`Failed to save policy rule: ${res.error || 'Unknown error'}`);
+    }
     await this.refreshData();
   }
 
@@ -213,13 +242,16 @@ class WarmplaneApp {
     const current = state.config.policy || {};
     const allow = [...(current.allow || [])];
     const deny = [...(current.deny || [])];
-    const redact = [...(current.redact_keys || [])];
+    const redact = [...(current.redact_keys || current.redactKeys || [])];
 
     if (type === 'allow') allow.splice(index, 1);
     if (type === 'deny') deny.splice(index, 1);
     if (type === 'redact') redact.splice(index, 1);
 
-    await api.savePolicy({ allow, deny, redact_keys: redact });
+    const res = await api.savePolicy({ allow, deny, redact_keys: redact, redactKeys: redact });
+    if (!res.ok) {
+      alert(`Failed to update policy: ${res.error || 'Unknown error'}`);
+    }
     await this.refreshData();
   }
 
@@ -268,6 +300,7 @@ class WarmplaneApp {
   }
 
   openAddServerModal() {
+    this.closeModals();
     const modal = document.getElementById('modal-add-server');
     if (modal) modal.classList.add('active');
   }
@@ -308,8 +341,198 @@ class WarmplaneApp {
     }
   }
 
+  // ==========================================
+  // Template Catalog Actions
+  // ==========================================
+  openTemplateCatalog() {
+    this.closeModals();
+    const modal = document.getElementById('modal-templates');
+    if (modal) modal.classList.add('active');
+    this.renderTemplateGrid();
+  }
+
+  setTemplateCategory(cat: string) {
+    this.activeTemplateCategory = cat;
+    document.querySelectorAll('.tmpl-cat-btn').forEach(btn => {
+      if (btn.getAttribute('data-category') === cat) {
+        btn.classList.add('active');
+        (btn as HTMLElement).style.background = 'var(--surface-elevated)';
+        (btn as HTMLElement).style.color = 'var(--amber-400)';
+      } else {
+        btn.classList.remove('active');
+        (btn as HTMLElement).style.background = 'var(--surface-card)';
+        (btn as HTMLElement).style.color = 'var(--text-main)';
+      }
+    });
+    this.renderTemplateGrid();
+  }
+
+  filterTemplates(query: string) {
+    this.activeTemplateFilter = query.toLowerCase().trim();
+    this.renderTemplateGrid();
+  }
+
+  renderTemplateGrid() {
+    const gridEl = document.getElementById('tmpl-grid');
+    if (!gridEl) return;
+
+    const filtered = SERVER_TEMPLATES.filter(t => {
+      const matchesCat = this.activeTemplateCategory === 'all' || t.category === this.activeTemplateCategory;
+      const matchesFilter = !this.activeTemplateFilter ||
+        t.name.toLowerCase().includes(this.activeTemplateFilter) ||
+        t.id.toLowerCase().includes(this.activeTemplateFilter) ||
+        t.description.toLowerCase().includes(this.activeTemplateFilter) ||
+        t.command.toLowerCase().includes(this.activeTemplateFilter) ||
+        t.envFields.some(e => e.key.toLowerCase().includes(this.activeTemplateFilter));
+      return matchesCat && matchesFilter;
+    });
+
+    if (filtered.length === 0) {
+      gridEl.innerHTML = `
+        <div style="grid-column: span 2; padding: 32px; text-align: center; color: var(--text-dim);">
+          No matching MCP server templates found.
+        </div>
+      `;
+      return;
+    }
+
+    const state = store.getState();
+    const configuredServers = state.config.mcpServers || {};
+
+    gridEl.innerHTML = filtered.map(t => {
+      const isAlreadyConfigured = !!configuredServers[t.id];
+      const cmdPreview = `${t.command} ${t.defaultArgs.join(' ')}`;
+
+      return `
+        <div class="bento-card" style="display: flex; flex-direction: column; justify-content: space-between; padding: 14px; background: var(--surface); border: 1px solid var(--border); transition: transform 0.15s, border-color 0.15s;">
+          <div>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-weight: 700; font-size: 13.5px; color: var(--text-main);">${escapeHtml(t.name)}</span>
+                <span class="brand-badge" style="font-size: 9.5px; padding: 1px 6px;">${escapeHtml(t.badge)}</span>
+              </div>
+              ${isAlreadyConfigured ? '<span style="font-size: 10px; color: var(--green-400); font-weight: 600;">CONNECTED</span>' : ''}
+            </div>
+            <div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.4; margin-bottom: 8px;">
+              ${escapeHtml(t.description)}
+            </div>
+            <div style="font-family: var(--ff-mono); font-size: 10.5px; color: var(--text-dim); background: var(--surface-card); padding: 5px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+              <code>${escapeHtml(cmdPreview)}</code>
+            </div>
+            ${t.envFields.length > 0 ? `
+              <div style="font-size: 10.5px; color: var(--amber-400); margin-top: 6px; display: flex; align-items: center; gap: 4px;">
+                <span>⚡ Needs:</span>
+                <code>${t.envFields.map(e => escapeHtml(e.key)).join(', ')}</code>
+              </div>
+            ` : ''}
+          </div>
+
+          <div style="display: flex; justify-content: flex-end; margin-top: 12px; gap: 6px;">
+            <button class="btn btn-primary" style="font-size: 11.5px; padding: 4px 10px;" onclick="window.app.selectTemplate('${escapeHtml(t.id)}')">
+              ${isAlreadyConfigured ? 'Configure Another' : '✨ 1-Click Setup'}
+            </button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  selectTemplate(templateId: string) {
+    const tmpl = SERVER_TEMPLATES.find(t => t.id === templateId);
+    if (!tmpl) return;
+    this.selectedTemplate = tmpl;
+
+    this.closeModals();
+    const modal = document.getElementById('modal-configure-template');
+    if (modal) modal.classList.add('active');
+
+    const titleEl = document.getElementById('cfg-tmpl-title');
+    const descEl = document.getElementById('cfg-tmpl-desc');
+    const formEl = document.getElementById('cfg-tmpl-form');
+
+    if (titleEl) titleEl.textContent = `Configure ${tmpl.name} Server`;
+    if (descEl) descEl.textContent = tmpl.description;
+
+    if (formEl) {
+      let envHtml = '';
+      if (tmpl.envFields.length > 0) {
+        envHtml = `
+          <div style="margin-top: 14px; margin-bottom: 6px; font-weight: 700; font-size: 11px; text-transform: uppercase; color: var(--amber-400); letter-spacing: 0.5px;">
+            Environment Variables &amp; API Keys
+          </div>
+          ${tmpl.envFields.map(ef => `
+            <div class="form-group">
+              <label class="form-label">${escapeHtml(ef.label)} ${ef.required ? '<span style="color: var(--red-400);">*</span>' : '(Optional)'}</label>
+              <input type="password" class="form-input tmpl-env-input" data-key="${escapeHtml(ef.key)}" placeholder="${escapeHtml(ef.placeholder || '')}">
+              ${ef.description ? `<div style="font-size: 10.5px; color: var(--text-dim); margin-top: 3px;">${escapeHtml(ef.description)}</div>` : ''}
+            </div>
+          `).join('')}
+        `;
+      }
+
+      formEl.innerHTML = `
+        <div class="form-group">
+          <label class="form-label">Server Identifier (Name)</label>
+          <input type="text" class="form-input" id="cfg-srv-id" value="${escapeHtml(tmpl.id)}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Command Line Arguments</label>
+          <input type="text" class="form-input" id="cfg-srv-args" value="${escapeHtml(tmpl.defaultArgs.join(' '))}" placeholder="${escapeHtml(tmpl.argsPlaceholder || '')}">
+          <div style="font-size: 10.5px; color: var(--text-dim); margin-top: 3px;">Executable: <code>${escapeHtml(tmpl.command)}</code></div>
+        </div>
+        ${envHtml}
+      `;
+    }
+  }
+
+  async submitTemplateServer() {
+    if (!this.selectedTemplate) return;
+    const tmpl = this.selectedTemplate;
+    const serverId = (document.getElementById('cfg-srv-id') as HTMLInputElement)?.value.trim();
+    const argsStr = (document.getElementById('cfg-srv-args') as HTMLInputElement)?.value.trim();
+
+    if (!serverId) {
+      alert('Server identifier is required');
+      return;
+    }
+
+    const args = argsStr ? argsStr.split(/\s+/).filter(Boolean) : [];
+    const env: Record<string, string> = {};
+
+    const envInputs = document.querySelectorAll('.tmpl-env-input') as NodeListOf<HTMLInputElement>;
+    for (const inp of Array.from(envInputs)) {
+      const k = inp.getAttribute('data-key');
+      const v = inp.value.trim();
+      const def = tmpl.envFields.find(e => e.key === k);
+      if (def?.required && !v) {
+        alert(`Required field '${def.label}' is missing.`);
+        return;
+      }
+      if (k && v) {
+        env[k] = v;
+      }
+    }
+
+    const payload: any = {
+      command: tmpl.command,
+      args: args
+    };
+    if (Object.keys(env).length > 0) {
+      payload.env = env;
+    }
+
+    const res = await api.upsertServer(serverId, payload);
+    if (res.ok) {
+      this.closeModals();
+      await this.refreshData();
+    } else {
+      alert(`Failed to save server: ${res.error}`);
+    }
+  }
+
   // Ecosystem Actions
   async openImportModal() {
+    this.closeModals();
     const modal = document.getElementById('modal-import');
     if (modal) modal.classList.add('active');
     const container = document.getElementById('modal-eco-list');
@@ -353,6 +576,56 @@ class WarmplaneApp {
   }
 
   // Alias Actions
+  handleAliasTargetInput(val: string) {
+    const dropdown = document.getElementById('alias-suggestions-dropdown');
+    if (!dropdown) return;
+    const query = (val || '').trim().toLowerCase();
+    if (query.length < 2) {
+      dropdown.style.display = 'none';
+      return;
+    }
+
+    const state = store.getState();
+    const matches = state.capabilities.filter(c =>
+      c.id.toLowerCase().includes(query) ||
+      (c.summary && c.summary.toLowerCase().includes(query)) ||
+      (c.description && c.description.toLowerCase().includes(query)) ||
+      (c.server && c.server.toLowerCase().includes(query))
+    ).slice(0, 8);
+
+    if (matches.length === 0) {
+      dropdown.style.display = 'none';
+      return;
+    }
+
+    dropdown.innerHTML = matches.map(c => `
+      <div style="padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; transition: background 0.1s;"
+           onmouseover="this.style.background='var(--surface-hover)'"
+           onmouseout="this.style.background='transparent'"
+           onmousedown="window.app.selectAliasSuggestion('${escapeHtml(c.id)}')">
+        <div>
+          <div style="font-weight: 700; color: var(--text-main);">${escapeHtml(c.id)}</div>
+          <div style="font-size: 10.5px; color: var(--text-dim); margin-top: 2px;">${escapeHtml(c.summary || c.description || '')}</div>
+        </div>
+        <span style="font-size: 10px; color: var(--cyan-400);">${escapeHtml(c.server || 'local')}</span>
+      </div>
+    `).join('');
+    dropdown.style.display = 'block';
+  }
+
+  selectAliasSuggestion(id: string) {
+    const input = document.getElementById('alias-target') as HTMLInputElement | null;
+    if (input) {
+      input.value = id;
+    }
+    this.hideAliasDropdown();
+  }
+
+  hideAliasDropdown() {
+    const dropdown = document.getElementById('alias-suggestions-dropdown');
+    if (dropdown) dropdown.style.display = 'none';
+  }
+
   async createAlias() {
     const kind = (document.getElementById('alias-kind') as HTMLSelectElement)?.value;
     const name = (document.getElementById('alias-name') as HTMLInputElement)?.value.trim();
@@ -395,6 +668,11 @@ class WarmplaneApp {
   }
 }
 
+function escapeHtml(str: string): string {
+  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 const app = new WarmplaneApp();
 (window as any).app = app;
 window.addEventListener('DOMContentLoaded', () => app.init());
+
