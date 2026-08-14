@@ -305,6 +305,46 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SamplingResponse"
+  /v1/config:
+    get:
+      summary: Get active configuration and metrics
+      operationId: getConfig
+      responses:
+        "200":
+          description: Active configuration and runtime metrics
+  /v1/config/servers:
+    post:
+      summary: Upsert upstream server with hot-mounting
+      operationId: upsertServer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Server upserted and mounted
+  /v1/config/servers/{id}:
+    delete:
+      summary: Delete upstream server and unmount dynamically
+      operationId: deleteServer
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Server deleted and unmounted
+  /v1/config/reload:
+    post:
+      summary: Hot-reload daemon configuration and upstream servers from disk
+      operationId: reloadConfig
+      responses:
+        "200":
+          description: Summary of mounted, unmounted, and updated servers
   /v1/operations/{id}/cancel:
     post:
       summary: Cancel in-flight operation

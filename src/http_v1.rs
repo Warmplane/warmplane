@@ -1739,6 +1739,18 @@ pub async fn handle_update_policy(
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 
+/// Handles POST `/v1/config/reload` explicitly triggering a hot-reloading reconciliation from disk.
+pub async fn handle_reload_config(State(state): State<AppState>) -> impl IntoResponse {
+    match state.reload_from_disk().await {
+        Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 /// Serves the Warmplane Control Deck single-page web UI.
 pub async fn handle_ui_dashboard() -> impl IntoResponse {
     let html = include_str!("../ui/dist/index.html");
@@ -2372,6 +2384,12 @@ mod tests {
         // 4. Test Ecosystem Sources
         let eco_res = super::handle_get_ecosystem_sources().await.into_response();
         assert_eq!(eco_res.status(), StatusCode::OK);
+
+        // 5. Test Reload Config handler
+        let reload_res = super::handle_reload_config(State(state.clone()))
+            .await
+            .into_response();
+        assert_eq!(reload_res.status(), StatusCode::OK);
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }

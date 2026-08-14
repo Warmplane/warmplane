@@ -23,7 +23,7 @@ use tokio::{
     sync::{mpsc, oneshot, RwLock},
     time::timeout,
 };
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     config::{AuthConfig, McpConfig, PolicyConfig, ServerConfig, DEFAULT_TOOL_TIMEOUT_MS},
@@ -1028,6 +1028,75 @@ impl AppState {
                 server: server_id.to_string(),
             });
     }
+
+    /// Reconciles the runtime daemon state against the on-disk configuration file.
+    ///
+    /// # Returns
+    /// A JSON Value summary of mounted, unmounted, and updated upstream servers.
+    ///
+    /// # Errors
+    /// Returns an error if loading or parsing the config file fails.
+    pub async fn reload_from_disk(&self) -> Result<serde_json::Value> {
+        info!(config_path = %self.config_path, "reloading configuration from disk");
+
+        let config = crate::config::load_config(&self.config_path)?;
+
+        // 1. Update security policy atomically
+        {
+            let mut pol_guard = self.policy.write().await;
+            *pol_guard = Policy::from_config(config.policy.clone());
+        }
+
+        // 2. Identify active servers vs disk servers
+        let current_server_ids: Vec<String> = {
+            let srv_guard = self.servers.read().await;
+            srv_guard.keys().cloned().collect()
+        };
+
+        let mut unmounted = Vec::new();
+        let mut mounted = Vec::new();
+        let mut warnings = Vec::new();
+
+        // Unmount servers removed from disk config
+        for active_id in &current_server_ids {
+            if !config.mcp_servers.contains_key(active_id) {
+                self.unmount_upstream_server(active_id).await;
+                unmounted.push(active_id.clone());
+            }
+        }
+
+        // Mount new or updated servers
+        for (server_id, srv_cfg) in &config.mcp_servers {
+            let res = self
+                .mount_upstream_server(
+                    server_id,
+                    srv_cfg,
+                    &config.capability_aliases,
+                    &config.resource_aliases,
+                    &config.prompt_aliases,
+                )
+                .await;
+
+            match res {
+                Ok(_) => {
+                    mounted.push(server_id.clone());
+                }
+                Err(e) => {
+                    warn!(server_id = %server_id, error = %e, "server failed to mount during reload");
+                    warnings.push(format!("Server '{}': {}", server_id, e));
+                }
+            }
+        }
+
+        Ok(serde_json::json!({
+            "ok": true,
+            "mounted": mounted,
+            "unmounted": unmounted,
+            "warnings": warnings,
+            "total_active": self.servers.read().await.len(),
+            "catalog_version": self.catalog_version.read().await.clone(),
+        }))
+    }
 }
 
 /// Boots all configured upstream MCP servers and constructs global `AppState`.
@@ -1163,6 +1232,7 @@ pub async fn run_daemon(
         .route("/v1/config/import", post(http_v1::handle_import_config))
         .route("/v1/config/alias", post(http_v1::handle_update_alias))
         .route("/v1/config/policy", post(http_v1::handle_update_policy))
+        .route("/v1/config/reload", post(http_v1::handle_reload_config))
         // Web UI Control Deck
         .route("/ui", get(http_v1::handle_ui_dashboard))
         .route("/", get(http_v1::handle_ui_dashboard))

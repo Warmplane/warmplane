@@ -50,6 +50,9 @@ async fn main() -> Result<()> {
         Commands::Config { command } => {
             cli_config::handle_config_command(command).await?;
         }
+        Commands::Reload { port, config } => {
+            cli_config::trigger_daemon_reload(port, &config).await?;
+        }
         Commands::Daemon { port, config } => {
             let config_data = load_config(&config)?;
             let resolved_port = port.or(config_data.port).unwrap_or(DEFAULT_PORT);

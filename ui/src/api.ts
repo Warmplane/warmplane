@@ -149,6 +149,13 @@ export class WarmplaneClient {
     });
     return res.json();
   }
+
+  async reloadConfig(): Promise<{ ok: boolean; mounted?: string[]; unmounted?: string[]; warnings?: string[]; error?: string }> {
+    const res = await fetch(`${this.baseUrl}/v1/config/reload`, {
+      method: 'POST'
+    });
+    return res.json();
+  }
 }
 
 export const api = new WarmplaneClient();

@@ -57,6 +57,7 @@ export function renderServers(): string {
         <div style="font-size: 11px; color: var(--text-dim);">Active configuration file: <code>${escapeHtml(state.configPath)}</code></div>
       </div>
       <div style="display: flex; gap: 8px;">
+        <button class="btn btn-ghost" onclick="window.app.reloadFromDisk()">⟳ Reload from Disk</button>
         <button class="btn btn-ghost" onclick="window.app.openImportModal()">Sync from IDEs</button>
         <button class="btn btn-primary" onclick="window.app.openAddServerModal()">+ Add New Server</button>
       </div>

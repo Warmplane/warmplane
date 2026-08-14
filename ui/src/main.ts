@@ -372,6 +372,24 @@ class WarmplaneApp {
     await this.refreshData();
   }
 
+  async reloadFromDisk() {
+    try {
+      const res = await api.reloadConfig();
+      if (res.ok) {
+        let msg = 'Hot-reload completed successfully!';
+        if (res.mounted && res.mounted.length > 0) msg += `\nMounted: ${res.mounted.join(', ')}`;
+        if (res.unmounted && res.unmounted.length > 0) msg += `\nUnmounted: ${res.unmounted.join(', ')}`;
+        if (res.warnings && res.warnings.length > 0) msg += `\nWarnings:\n${res.warnings.join('\n')}`;
+        alert(msg);
+      } else {
+        alert(`Hot-reload failed: ${res.error || 'Unknown error'}`);
+      }
+    } catch (e: any) {
+      alert(`Error reaching daemon: ${e.message}`);
+    }
+    await this.refreshData();
+  }
+
   closeModals() {
     document.querySelectorAll('.modal-backdrop').forEach(el => el.classList.remove('active'));
   }

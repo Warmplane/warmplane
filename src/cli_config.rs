@@ -392,6 +392,62 @@ pub async fn handle_config_command(cmd: ConfigCommands) -> Result<()> {
         ConfigCommands::Policy { command } => {
             handle_policy_command(command)?;
         }
+        ConfigCommands::Reload { port, config } => {
+            trigger_daemon_reload(port, &config).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Triggers dynamic reload on a running daemon instance via REST API.
+pub async fn trigger_daemon_reload(port: Option<u16>, config_path: &str) -> Result<()> {
+    let resolved_port = crate::config::resolve_client_port(port, config_path)?;
+    println!(
+        "{} Triggering hot-reload on daemon at port {}...",
+        "•".cyan().bold(),
+        resolved_port
+    );
+
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!(
+            "http://127.0.0.1:{}/v1/config/reload",
+            resolved_port
+        ))
+        .send()
+        .await
+        .with_context(|| format!("Could not reach daemon at 127.0.0.1:{}", resolved_port))?;
+
+    let status = res.status();
+    let body: serde_json::Value = res.json().await.unwrap_or(serde_json::json!({}));
+
+    if status.is_success() {
+        println!("{} Hot-reload completed successfully!", "✔".green().bold());
+        if let Some(mounted) = body.get("mounted").and_then(|v| v.as_array()) {
+            if !mounted.is_empty() {
+                let names: Vec<_> = mounted.iter().filter_map(|v| v.as_str()).collect();
+                println!("  {} Mounted servers: {}", "✔".green(), names.join(", "));
+            }
+        }
+        if let Some(unmounted) = body.get("unmounted").and_then(|v| v.as_array()) {
+            if !unmounted.is_empty() {
+                let names: Vec<_> = unmounted.iter().filter_map(|v| v.as_str()).collect();
+                println!("  {} Unmounted servers: {}", "✔".yellow(), names.join(", "));
+            }
+        }
+        if let Some(warnings) = body.get("warnings").and_then(|v| v.as_array()) {
+            for w in warnings {
+                if let Some(msg) = w.as_str() {
+                    println!("  {} Warning: {}", "⚠".yellow(), msg);
+                }
+            }
+        }
+    } else {
+        let err_msg = body
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown daemon error");
+        println!("{} Hot-reload failed: {}", "✖".red().bold(), err_msg);
     }
     Ok(())
 }
