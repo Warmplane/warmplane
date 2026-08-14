@@ -53,11 +53,11 @@ async fn main() -> Result<()> {
         Commands::Daemon { port, config } => {
             let config_data = load_config(&config)?;
             let resolved_port = port.or(config_data.port).unwrap_or(DEFAULT_PORT);
-            daemon::run_daemon(resolved_port, config_data).await?;
+            daemon::run_daemon(resolved_port, config_data, config).await?;
         }
         Commands::McpServer { config } => {
             let config_data = load_config(&config)?;
-            mcp_server::run_mcp_server(config_data).await?;
+            mcp_server::run_mcp_server(config_data, config).await?;
         }
         Commands::ListCapabilities { port, config } => {
             let resolved_port = resolve_client_port(port, &config)?;

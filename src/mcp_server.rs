@@ -237,9 +237,10 @@ impl ServerHandler for FacadeMcpServer {
             TOOL_SUBSCRIPTIONS_LISTEN => {
                 let after = args.get("after").and_then(Value::as_str);
                 let (events, next_cursor) = self.state.event_store.get_events_after(after);
+                let catalog_ver = self.state.catalog_version.read().await.clone();
                 Ok(json!({
                     "ok": true,
-                    "catalog_version": self.state.catalog_version,
+                    "catalog_version": catalog_ver,
                     "cursor": next_cursor,
                     "events": events,
                 }))
@@ -267,9 +268,8 @@ impl ServerHandler for FacadeMcpServer {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<ListResourcesResult, McpError> {
-        let items = self
-            .state
-            .resources
+        let res_guard = self.state.resources.read().await;
+        let items = res_guard
             .values()
             .map(|r| {
                 let mut res = Resource::new(r.uri.clone(), r.name.clone());
@@ -290,27 +290,28 @@ impl ServerHandler for FacadeMcpServer {
         request: ReadResourceRequestParams,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<ReadResourceResponse, McpError> {
-        let Some((_, meta)) = self
-            .state
-            .resources
-            .iter()
-            .find(|(_, m)| m.uri == request.uri)
-        else {
-            return Err(McpError::invalid_params(
-                format!("Resource URI '{}' not found", request.uri),
-                None,
-            ));
+        let (server, uri) = {
+            let res_guard = self.state.resources.read().await;
+            let Some((_, meta)) = res_guard.iter().find(|(_, m)| m.uri == request.uri) else {
+                return Err(McpError::invalid_params(
+                    format!("Resource URI '{}' not found", request.uri),
+                    None,
+                ));
+            };
+            (meta.server.clone(), meta.uri.clone())
         };
 
-        let tx = self
-            .state
-            .servers
-            .get(&meta.server)
-            .ok_or_else(|| McpError::internal_error("Target server unreachable", None))?;
+        let tx = {
+            let servers_guard = self.state.servers.read().await;
+            servers_guard
+                .get(&server)
+                .cloned()
+                .ok_or_else(|| McpError::internal_error("Target server unreachable", None))?
+        };
 
         let (reply_tx, reply_rx) = oneshot::channel();
         tx.send(ServerMsg::ReadResource {
-            uri: meta.uri.clone(),
+            uri,
             input_responses: request.input_responses,
             request_state: request.request_state,
             reply: reply_tx,
@@ -338,9 +339,8 @@ impl ServerHandler for FacadeMcpServer {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<rmcp::model::ListPromptsResult, McpError> {
-        let prompts = self
-            .state
-            .prompts
+        let prompts_guard = self.state.prompts.read().await;
+        let prompts = prompts_guard
             .values()
             .map(|p| {
                 let args = serde_json::from_value(Value::Array(p.arguments.clone())).ok();
@@ -359,23 +359,25 @@ impl ServerHandler for FacadeMcpServer {
         request: GetPromptRequestParams,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<GetPromptResponse, McpError> {
-        let Some((_, prompt_meta)) = self
-            .state
-            .prompts
-            .iter()
-            .find(|(_, p)| p.name == request.name)
-        else {
-            return Err(McpError::invalid_params(
-                format!("Prompt '{}' not found", request.name),
-                None,
-            ));
+        let server = {
+            let prompts_guard = self.state.prompts.read().await;
+            let Some((_, prompt_meta)) = prompts_guard.iter().find(|(_, p)| p.name == request.name)
+            else {
+                return Err(McpError::invalid_params(
+                    format!("Prompt '{}' not found", request.name),
+                    None,
+                ));
+            };
+            prompt_meta.server.clone()
         };
 
-        let tx = self
-            .state
-            .servers
-            .get(&prompt_meta.server)
-            .ok_or_else(|| McpError::internal_error("Target server unreachable", None))?;
+        let tx = {
+            let servers_guard = self.state.servers.read().await;
+            servers_guard
+                .get(&server)
+                .cloned()
+                .ok_or_else(|| McpError::internal_error("Target server unreachable", None))?
+        };
 
         let (reply_tx, reply_rx) = oneshot::channel();
         tx.send(ServerMsg::GetPrompt {
@@ -406,9 +408,8 @@ impl ServerHandler for FacadeMcpServer {
 
 impl FacadeMcpServer {
     async fn list_capabilities_value(&self) -> std::result::Result<Value, String> {
-        let mut capabilities = self
-            .state
-            .capabilities
+        let caps_guard = self.state.capabilities.read().await;
+        let mut capabilities = caps_guard
             .iter()
             .map(|(id, meta)| {
                 json!({
@@ -434,7 +435,8 @@ impl FacadeMcpServer {
     }
 
     async fn describe_capability_value(&self, id: String) -> std::result::Result<Value, String> {
-        match self.state.capabilities.get(&id) {
+        let caps_guard = self.state.capabilities.read().await;
+        match caps_guard.get(&id) {
             Some(meta) => Ok(json!({
                 "version": "v1",
                 "capability": {
@@ -469,7 +471,7 @@ impl FacadeMcpServer {
     ) -> std::result::Result<Value, String> {
         let trace_id = next_trace_id();
         let ctx = context.unwrap_or_default();
-        if !self.state.policy.allows(&capability_id) {
+        if !self.state.policy.read().await.allows(&capability_id) {
             return Ok(error_envelope(
                 trace_id,
                 request_id,
@@ -481,34 +483,42 @@ impl FacadeMcpServer {
             ));
         }
 
-        let Some(meta) = self.state.capabilities.get(&capability_id) else {
-            return Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::unsafe_op("not_started"),
-                "TOOL_NOT_FOUND",
-                format!("Capability '{}' not found", capability_id),
-                false,
-            ));
+        let (server, tool) = {
+            let caps_guard = self.state.capabilities.read().await;
+            let Some(meta) = caps_guard.get(&capability_id) else {
+                return Ok(error_envelope(
+                    trace_id,
+                    request_id,
+                    Some(ctx),
+                    crate::idempotency::RetryMetadata::unsafe_op("not_started"),
+                    "TOOL_NOT_FOUND",
+                    format!("Capability '{}' not found", capability_id),
+                    false,
+                ));
+            };
+            (meta.server.clone(), meta.tool.clone())
         };
 
-        let Some(tx) = self.state.servers.get(&meta.server) else {
-            return Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::unsafe_op("not_started"),
-                "SERVER_UNREACHABLE",
-                format!("Server '{}' is unreachable", meta.server),
-                true,
-            ));
+        let tx = {
+            let servers_guard = self.state.servers.read().await;
+            let Some(tx) = servers_guard.get(&server).cloned() else {
+                return Ok(error_envelope(
+                    trace_id,
+                    request_id,
+                    Some(ctx),
+                    crate::idempotency::RetryMetadata::unsafe_op("not_started"),
+                    "SERVER_UNREACHABLE",
+                    format!("Server '{}' is unreachable", server),
+                    true,
+                ));
+            };
+            tx
         };
 
         let (reply_tx, reply_rx) = oneshot::channel();
         if tx
             .send(ServerMsg::CallTool {
-                name: meta.tool.clone(),
+                name: tool,
                 params: args,
                 input_responses,
                 request_state,
@@ -523,7 +533,7 @@ impl FacadeMcpServer {
                 Some(ctx),
                 crate::idempotency::RetryMetadata::unsafe_op("not_started"),
                 "SERVER_UNREACHABLE",
-                format!("Server '{}' mailbox is closed", meta.server),
+                format!("Server '{}' mailbox is closed", server),
                 true,
             ));
         }
@@ -569,9 +579,8 @@ impl FacadeMcpServer {
     }
 
     async fn list_resources_value(&self) -> std::result::Result<Value, String> {
-        let mut resources = self
-            .state
-            .resources
+        let res_guard = self.state.resources.read().await;
+        let mut resources = res_guard
             .iter()
             .map(|(id, meta)| {
                 json!({
@@ -608,7 +617,7 @@ impl FacadeMcpServer {
     ) -> std::result::Result<Value, String> {
         let trace_id = next_trace_id();
         let ctx = context.unwrap_or_default();
-        if !self.state.policy.allows(&resource_id) {
+        if !self.state.policy.read().await.allows(&resource_id) {
             return Ok(error_envelope(
                 trace_id,
                 request_id,
@@ -620,34 +629,42 @@ impl FacadeMcpServer {
             ));
         }
 
-        let Some(meta) = self.state.resources.get(&resource_id) else {
-            return Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::safe("not_started"),
-                "RESOURCE_NOT_FOUND",
-                format!("Resource '{}' not found", resource_id),
-                false,
-            ));
+        let (server, uri) = {
+            let res_guard = self.state.resources.read().await;
+            let Some(meta) = res_guard.get(&resource_id) else {
+                return Ok(error_envelope(
+                    trace_id,
+                    request_id,
+                    Some(ctx),
+                    crate::idempotency::RetryMetadata::safe("not_started"),
+                    "RESOURCE_NOT_FOUND",
+                    format!("Resource '{}' not found", resource_id),
+                    false,
+                ));
+            };
+            (meta.server.clone(), meta.uri.clone())
         };
 
-        let Some(tx) = self.state.servers.get(&meta.server) else {
-            return Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::safe("not_started"),
-                "SERVER_UNREACHABLE",
-                format!("Server '{}' is unreachable", meta.server),
-                true,
-            ));
+        let tx = {
+            let servers_guard = self.state.servers.read().await;
+            let Some(tx) = servers_guard.get(&server).cloned() else {
+                return Ok(error_envelope(
+                    trace_id,
+                    request_id,
+                    Some(ctx),
+                    crate::idempotency::RetryMetadata::safe("not_started"),
+                    "SERVER_UNREACHABLE",
+                    format!("Server '{}' is unreachable", server),
+                    true,
+                ));
+            };
+            tx
         };
 
         let (reply_tx, reply_rx) = oneshot::channel();
         if tx
             .send(ServerMsg::ReadResource {
-                uri: meta.uri.clone(),
+                uri,
                 input_responses,
                 request_state,
                 reply: reply_tx,
@@ -661,7 +678,7 @@ impl FacadeMcpServer {
                 Some(ctx),
                 crate::idempotency::RetryMetadata::safe("not_started"),
                 "SERVER_UNREACHABLE",
-                format!("Server '{}' mailbox is closed", meta.server),
+                format!("Server '{}' mailbox is closed", server),
                 true,
             ));
         }
@@ -710,9 +727,8 @@ impl FacadeMcpServer {
     }
 
     async fn list_prompts_value(&self) -> std::result::Result<Value, String> {
-        let mut prompts = self
-            .state
-            .prompts
+        let prompts_guard = self.state.prompts.read().await;
+        let mut prompts = prompts_guard
             .iter()
             .map(|(id, meta)| {
                 json!({
@@ -750,7 +766,7 @@ impl FacadeMcpServer {
     ) -> std::result::Result<Value, String> {
         let trace_id = next_trace_id();
         let ctx = context.unwrap_or_default();
-        if !self.state.policy.allows(&prompt_id) {
+        if !self.state.policy.read().await.allows(&prompt_id) {
             return Ok(error_envelope(
                 trace_id,
                 request_id,
@@ -762,16 +778,20 @@ impl FacadeMcpServer {
             ));
         }
 
-        let Some(meta) = self.state.prompts.get(&prompt_id) else {
-            return Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::safe("not_started"),
-                "PROMPT_NOT_FOUND",
-                format!("Prompt '{}' not found", prompt_id),
-                false,
-            ));
+        let (server, name) = {
+            let prompts_guard = self.state.prompts.read().await;
+            let Some(meta) = prompts_guard.get(&prompt_id) else {
+                return Ok(error_envelope(
+                    trace_id,
+                    request_id,
+                    Some(ctx),
+                    crate::idempotency::RetryMetadata::safe("not_started"),
+                    "PROMPT_NOT_FOUND",
+                    format!("Prompt '{}' not found", prompt_id),
+                    false,
+                ));
+            };
+            (meta.server.clone(), meta.name.clone())
         };
 
         let arguments = match arguments {
@@ -790,22 +810,26 @@ impl FacadeMcpServer {
             None => None,
         };
 
-        let Some(tx) = self.state.servers.get(&meta.server) else {
-            return Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::safe("not_started"),
-                "SERVER_UNREACHABLE",
-                format!("Server '{}' is unreachable", meta.server),
-                true,
-            ));
+        let tx = {
+            let servers_guard = self.state.servers.read().await;
+            let Some(tx) = servers_guard.get(&server).cloned() else {
+                return Ok(error_envelope(
+                    trace_id,
+                    request_id,
+                    Some(ctx),
+                    crate::idempotency::RetryMetadata::safe("not_started"),
+                    "SERVER_UNREACHABLE",
+                    format!("Server '{}' is unreachable", server),
+                    true,
+                ));
+            };
+            tx
         };
 
         let (reply_tx, reply_rx) = oneshot::channel();
         if tx
             .send(ServerMsg::GetPrompt {
-                name: meta.name.clone(),
+                name,
                 arguments,
                 input_responses,
                 request_state,
@@ -820,7 +844,7 @@ impl FacadeMcpServer {
                 Some(ctx),
                 crate::idempotency::RetryMetadata::safe("not_started"),
                 "SERVER_UNREACHABLE",
-                format!("Server '{}' mailbox is closed", meta.server),
+                format!("Server '{}' mailbox is closed", server),
                 true,
             ));
         }
@@ -1017,11 +1041,12 @@ fn error_envelope(
 ///
 /// # Arguments
 /// * `config` - Loaded `McpConfig` configuration struct.
+/// * `config_path` - Path to the config file.
 ///
 /// # Errors
 /// Returns an error if initializing upstream state or stdio transport fails.
-pub async fn run_mcp_server(config: McpConfig) -> Result<()> {
-    let state = initialize_state(config).await?;
+pub async fn run_mcp_server(config: McpConfig, config_path: impl Into<String>) -> Result<()> {
+    let state = initialize_state(config, config_path).await?;
     let server = FacadeMcpServer { state };
     let running = server.serve(stdio()).await?;
     let _ = running.waiting().await?;
