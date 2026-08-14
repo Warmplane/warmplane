@@ -144,7 +144,7 @@ Example:
 | Field | Type | Required | Default | Description |
 | :--- | :--- | :---: | :--- | :--- |
 | `url` | String | Yes | N/A | Remote HTTP/SSE server endpoint URL. |
-| `protocolVersion` | String | No | `"2025-11-25"` | MCP protocol version header string. |
+| `protocolVersion` | String | No | `"2026-07-28"` | MCP protocol version header string (`"2026-07-28"` or `"2025-11-25"`). |
 | `allowStateless` | Boolean | No | `false` | Enables stateless HTTP execution for supported endpoints. |
 | `headers` | Object | No | `{}` | Custom HTTP headers sent with every request. |
 | `auth` | Object | No | `null` | Authentication configuration block. |
@@ -154,7 +154,7 @@ Example:
 ```json
 "github": {
   "url": "https://api.githubcopilot.com/mcp/",
-  "protocolVersion": "2025-11-25",
+  "protocolVersion": "2026-07-28",
   "allowStateless": true,
   "headers": {
     "X-Tenant-ID": "enterprise-corp"
@@ -282,6 +282,20 @@ warmplane mcp-server --config mcp_servers.json
 }
 ```
 
+#### Exposed Synthetic MCP Tools
+
+Warmplane exposes lightweight synthetic tools to keep LLM context token usage minimal:
+
+- `capabilities_list`: List compact capability index.
+- `capability_describe`: Fetch full input JSON schema for a capability.
+- `capability_call`: Invoke a capability tool with normalized response envelopes and MRTR support.
+- `resources_list`: List compact resource index.
+- `resource_read`: Read upstream resource contents.
+- `prompts_list`: List compact prompt template index.
+- `prompt_get`: Render upstream prompt templates.
+- `completion_complete`: Request argument autocompletions for prompts or resources.
+- `subscriptions_listen`: Query or subscribe to catalog mutation change feeds.
+
 ---
 
 ### 5.3 CLI Facade Mode
@@ -327,22 +341,25 @@ All HTTP API endpoints return standard JSON response envelopes.
 
 | Method | Path | Description | ETag Support |
 | :--- | :--- | :--- | :---: |
-| `GET` | `/v1/capabilities` | List compact capability index. | Yes |
+| `GET` | `/v1/capabilities` | List compact capability index with `ttl_ms` and `cache_scope` hints. | Yes |
 | `POST` | `/v1/capabilities/search` | Search capabilities via hybrid lexical/semantic ranking. | Yes |
 | `GET` | `/v1/capabilities/:id` | Fetch full input JSON Schema for a specific capability. | Yes |
-| `POST` | `/v1/tools/call` | Execute an upstream tool call. | No |
-| `GET` | `/v1/resources` | List compact resource index. | Yes |
-| `POST` | `/v1/resources/read` | Read content of an upstream resource URI. | No |
-| `GET` | `/v1/prompts` | List compact prompt index. | Yes |
-| `POST` | `/v1/prompts/get` | Render an upstream prompt template. | No |
+| `POST` | `/v1/tools/call` | Execute an upstream tool call with MRTR retry support. | No |
+| `GET` | `/v1/resources` | List compact resource index with `ttl_ms` and `cache_scope` hints. | Yes |
+| `POST` | `/v1/resources/read` | Read content of an upstream resource URI with MRTR support. | No |
+| `GET` | `/v1/prompts` | List compact prompt index with `ttl_ms` and `cache_scope` hints. | Yes |
+| `POST` | `/v1/prompts/get` | Render an upstream prompt template with MRTR support. | No |
 | `GET` | `/v1/catalog/events` | Read catalog mutation change feed with cursor pagination. | Yes |
+| `GET` | `/v1/resources/updates` | Server-Sent Events (SSE) stream for real-time resource mutations. | No |
+| `POST` | `/v1/completion/complete` | Request prompt or resource argument completions. | Yes |
+| `POST` | `/v1/sampling/create_message` | Sample LLM completions on behalf of upstream servers. | Yes |
 | `POST` | `/v1/operations/:id/cancel` | Cancel an in-flight async operation. | No |
 
 ---
 
-### 6.1 Catalog Caching (`If-None-Match`)
+### 6.1 Catalog Caching (`If-None-Match` & Cache Hints)
 
-Catalog read endpoints (`/v1/capabilities`, `/v1/capabilities/:id`, `/v1/resources`, `/v1/prompts`) return an `ETag` header containing the SHA-256 catalog checksum.
+Catalog read endpoints (`/v1/capabilities`, `/v1/capabilities/:id`, `/v1/resources`, `/v1/prompts`) return an `ETag` header containing the SHA-256 catalog checksum alongside `ttl_ms` and `cache_scope` metadata in the response body.
 
 Pass the returned `ETag` in subsequent requests using the `If-None-Match` header. If the catalog has not changed, Warmplane returns `HTTP 304 Not Modified` with zero response body bytes.
 
@@ -408,7 +425,7 @@ curl -X POST http://127.0.0.1:9090/v1/tools/call \
 
 ---
 
-### 6.4 Response Envelope & Retry Metadata
+### 6.4 Response Envelope & Multi Round-Trip Requests (MRTR)
 
 Tool execution, resource reading, and prompt fetching return normalized execution envelopes:
 
@@ -425,6 +442,24 @@ Tool execution, resource reading, and prompt fetching return normalized executio
     "classification": "safe",
     "upstream_execution_state": "completed"
   }
+}
+```
+
+#### Multi Round-Trip Requests (MRTR) Support
+
+When an upstream MCP server requires interactive input elicitation or human approval, it returns an interim response with `input_required` and opaque state.
+
+Warmplane natively supports MRTR resumption. Clients pass `input_responses` (map of prompt ID to user input values) and `request_state` on subsequent `/v1/tools/call`, `/v1/resources/read`, or `/v1/prompts/get` requests:
+
+```json
+{
+  "capability_id": "deployments.approve_and_merge",
+  "args": { "pr_id": "42" },
+  "request_id": "req-994812",
+  "input_responses": {
+    "confirm_production_deploy": "yes"
+  },
+  "request_state": "opaque_flow_state_token_v2"
 }
 ```
 

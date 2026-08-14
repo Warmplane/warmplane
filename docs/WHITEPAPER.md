@@ -87,20 +87,22 @@ Warmplane consists of five major components:
    - Applies alias mapping (`capabilityAliases`, `resourceAliases`, `promptAliases`).
    - Implements **Hybrid Capability Search** (v0.3) combining BM25 lexical scoring with optional FastEmbed ONNX vector embeddings.
    - Computes SHA-256 state digests for **Catalog Versioning & Change Event Feeds** (v0.4).
+   - Generates deterministic catalog listings with `ttl_ms` and `cache_scope` hints (v0.9).
 
 3. **Policy, Governance, and Envelope Layer**
    - Enforces allow/deny patterns across capability types.
    - Applies payload redaction keys in logs.
    - Standardizes response envelopes with **Request Context** (`operation_id`, `actor_id`, `grant_id`, `work_item_id`) (v0.5) and **Retry Governance** (`safe|unsafe|idempotent` classification) (v0.6).
+   - Supports **Multi Round-Trip Requests (MRTR)** (v0.9) with `input_responses` and `request_state` propagation for interactive approvals and missing input elicitation.
 
 4. **Idempotency and Operations Manager**
    - Deduplicates concurrent or replayed invocations via `Idempotency-Key` (v0.6).
    - Manages active task handle lifetimes and provides in-flight operation cancellation (`POST /v1/operations/:id/cancel`) (v0.6).
 
 5. **Access Modes**
-   - HTTP `/v1` facade (exposing capabilities, hybrid search, catalog events, operation cancellation, resources, and prompts).
+   - HTTP `/v1` facade (exposing capabilities, hybrid search, catalog events, operation cancellation, SSE resource updates, argument completion, sampling, resources, and prompts).
    - CLI facade (`warmplane search-capabilities`, `list-catalog-events`, `cancel-operation`, etc.).
-   - MCP server mode exposing lightweight synthetic tools and native resources/prompts methods.
+   - MCP server mode exposing lightweight synthetic tools (`subscriptions_listen`, `completion_complete`, etc.) and native resources/prompts methods (v0.9).
 
 ### 3.2 Transport Model
 
@@ -113,10 +115,10 @@ Exactly one selector must be set; ambiguous entries fail fast at startup.
 
 For HTTP/SSE upstreams, Warmplane supports:
 
-- `protocolVersion` header control,
+- `protocolVersion` header control (defaults to `"2026-07-28"` with backward compatibility for `"2025-11-25"`),
 - `allowStateless` behavior,
 - custom headers,
-- authentication schemas: static credentials (`bearer`, `basic`) and dynamic `oauth2` (OAuth 2.1 / OIDC) flows featuring PKCE (`S256`), dynamic server discovery (RFC 9728 & RFC 8414), scope accumulation during step-up challenges, and silent token refreshing via rotated refresh tokens.
+- authentication schemas: static credentials (`bearer`, `basic`) and dynamic `oauth2` (OAuth 2.1 / OIDC) flows featuring PKCE (`S256`), dynamic server discovery (RFC 9728 & RFC 8414), RFC 9207 / SEP-2468 `iss` matching, scope accumulation during step-up challenges, and silent token refreshing via rotated refresh tokens.
 
 ### 3.3 Deterministic Call and Governance Model
 

@@ -1,7 +1,7 @@
 # Warmplane
 
 > **The local control plane that keeps MCP sessions warm.**  
-> v0.7.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [OpenAPI](docs/openapi.yaml) · [Spec](docs/spec.md)
+> v0.9.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml) · [Spec](docs/spec.md)
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
 
@@ -130,11 +130,21 @@ warmplane cancel-operation req-101
 | **Idempotency** | v0.6 | `Idempotency-Key` deduplication — concurrent duplicates share one result |
 | **Cancellation** | v0.6 | `POST /v1/operations/:id/cancel` / `cancel-operation` CLI |
 | **Retry metadata** | v0.6 | `"retry": { "classification": "safe\|unsafe\|idempotent", "state": "…" }` |
+| **MCP 2026-07-28 & MRTR**| v0.9 | Full spec compliance, `rmcp 3.1.2`, cache hints, Multi Round-Trip Requests |
+| **Subscriptions Feed** | v0.9 | `subscriptions_listen` tool & `/v1/resources/updates` SSE feed |
 | **OTLP traces** | v0.1 | OpenTelemetry export, `trace_id` reflected in envelopes |
 
 ---
 
 ## Changelog
+
+### v0.9.0 — MCP 2026-07-28 Spec Compliance, MRTR & Subscriptions
+- Upgraded to official MCP Rust SDK `rmcp 3.1.2` and `reqwest 0.13`.
+- Set default protocol version to `"2026-07-28"` with backward compatibility for `"2025-11-25"`.
+- Added Multi Round-Trip Requests (MRTR) support (`input_responses` and `request_state`) across HTTP REST, stdio facade, and upstream workers.
+- Added cache hints (`ttl_ms: 300000`, `cache_scope: "public"`) and deterministic alphabetical sorting on catalog listings.
+- Added `subscriptions_listen` tool to stdio facade and `/v1/resources/updates` SSE stream for real-time notifications.
+- Validated RFC 9207 / SEP-2468 `iss` callback verification for OAuth 2.0 flows.
 
 ### v0.7.0 — Pragmatic Rust Modernization & Builder Patterns
 Full adoption of Microsoft's Pragmatic Rust Guidelines (`AGENTS.md`). Implemented `Builder Pattern` (`M-INIT-BUILDER`) for core state (`AppStateBuilder`), search filters (`SearchFilterBuilder`), and request context (`RequestContextBuilder`). Enhanced error safety (`M-PANIC-IS-STOP`), structured logging (`M-LOG-STRUCTURED`), canonical documentation (`M-CANONICAL-DOCS`), and flexible trait interop (`M-IMPL-ASREF`).
