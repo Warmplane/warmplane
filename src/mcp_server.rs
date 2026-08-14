@@ -10,9 +10,10 @@ use std::{
 use anyhow::Result;
 use rmcp::{
     model::{
-        AnnotateAble, CallToolRequestParams, CallToolResult, Content, GetPromptRequestParams,
-        GetPromptResult, ListResourcesResult, ListToolsResult, Prompt, RawResource,
-        ReadResourceRequestParams, ReadResourceResult, ServerCapabilities, ServerInfo, Tool,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+        GetPromptRequestParams, GetPromptResponse, GetPromptResult, ListResourcesResult,
+        ListToolsResult, Prompt, ReadResourceRequestParams, ReadResourceResponse,
+        ReadResourceResult, Resource, ServerCapabilities, ServerInfo, Tool,
     },
     transport::stdio,
     ErrorData as McpError, ServerHandler, ServiceExt,
@@ -43,18 +44,17 @@ struct FacadeMcpServer {
 
 impl ServerHandler for FacadeMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .enable_resources()
-                .enable_prompts()
-                .build(),
-            instructions: Some(
-                "Warmplane MCP facade server with deterministic tools/resources/prompts surfaces"
-                    .to_string(),
-            ),
-            ..Default::default()
-        }
+        let mut info = ServerInfo::default();
+        info.capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_resources()
+            .enable_prompts()
+            .build();
+        info.instructions = Some(
+            "Warmplane MCP facade server with deterministic tools/resources/prompts surfaces"
+                .to_string(),
+        );
+        info
     }
 
     async fn list_tools(
@@ -70,34 +70,42 @@ impl ServerHandler for FacadeMcpServer {
         &self,
         request: CallToolRequestParams,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> std::result::Result<CallToolResult, McpError> {
+    ) -> std::result::Result<CallToolResponse, McpError> {
         let args = request.arguments.unwrap_or_default();
 
         let output = match request.name.as_ref() {
             TOOL_CAPABILITIES_LIST => self.list_capabilities_value().await,
             TOOL_CAPABILITY_DESCRIBE => {
                 let Some(id) = args.get("id").and_then(Value::as_str) else {
-                    return Ok(CallToolResult::structured_error(invalid_args(
-                        "Missing required field 'id'",
-                    )));
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "Missing required field 'id'",
+                        )),
+                    ));
                 };
                 self.describe_capability_value(id.to_string()).await
             }
             TOOL_CAPABILITY_CALL => {
                 let Some(capability_id) = args.get("capability_id").and_then(Value::as_str) else {
-                    return Ok(CallToolResult::structured_error(invalid_args(
-                        "Missing required field 'capability_id'",
-                    )));
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "Missing required field 'capability_id'",
+                        )),
+                    ));
                 };
                 let Some(call_args) = args.get("args") else {
-                    return Ok(CallToolResult::structured_error(invalid_args(
-                        "Missing required field 'args'",
-                    )));
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "Missing required field 'args'",
+                        )),
+                    ));
                 };
                 if !call_args.is_object() {
-                    return Ok(CallToolResult::structured_error(invalid_args(
-                        "'args' must be a JSON object",
-                    )));
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "'args' must be a JSON object",
+                        )),
+                    ));
                 }
                 let request_id = args
                     .get("request_id")
@@ -118,9 +126,11 @@ impl ServerHandler for FacadeMcpServer {
             TOOL_RESOURCES_LIST => self.list_resources_value().await,
             TOOL_RESOURCE_READ => {
                 let Some(resource_id) = args.get("resource_id").and_then(Value::as_str) else {
-                    return Ok(CallToolResult::structured_error(invalid_args(
-                        "Missing required field 'resource_id'",
-                    )));
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "Missing required field 'resource_id'",
+                        )),
+                    ));
                 };
                 let request_id = args
                     .get("request_id")
@@ -136,9 +146,11 @@ impl ServerHandler for FacadeMcpServer {
             TOOL_PROMPTS_LIST => self.list_prompts_value().await,
             TOOL_PROMPT_GET => {
                 let Some(prompt_id) = args.get("prompt_id").and_then(Value::as_str) else {
-                    return Ok(CallToolResult::structured_error(invalid_args(
-                        "Missing required field 'prompt_id'",
-                    )));
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "Missing required field 'prompt_id'",
+                        )),
+                    ));
                 };
                 let request_id = args
                     .get("request_id")
@@ -185,8 +197,12 @@ impl ServerHandler for FacadeMcpServer {
         };
 
         match output {
-            Ok(value) => Ok(CallToolResult::structured(value)),
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(e)])),
+            Ok(value) => Ok(CallToolResponse::Complete(CallToolResult::structured(
+                value,
+            ))),
+            Err(e) => Ok(CallToolResponse::Complete(CallToolResult::error(vec![
+                ContentBlock::text(e),
+            ]))),
         }
     }
 
@@ -200,17 +216,14 @@ impl ServerHandler for FacadeMcpServer {
             .resources
             .values()
             .map(|r| {
-                RawResource {
-                    uri: r.uri.clone(),
-                    name: r.name.clone(),
-                    title: None,
-                    description: r.description.clone(),
-                    mime_type: r.mime_type.clone(),
-                    size: None,
-                    icons: None,
-                    meta: None,
+                let mut res = Resource::new(r.uri.clone(), r.name.clone());
+                if let Some(desc) = &r.description {
+                    res = res.with_description(desc.clone());
                 }
-                .no_annotation()
+                if let Some(mime) = &r.mime_type {
+                    res = res.with_mime_type(mime.clone());
+                }
+                res
             })
             .collect::<Vec<_>>();
         Ok(ListResourcesResult::with_all_items(items))
@@ -220,7 +233,7 @@ impl ServerHandler for FacadeMcpServer {
         &self,
         request: ReadResourceRequestParams,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> std::result::Result<ReadResourceResult, McpError> {
+    ) -> std::result::Result<ReadResourceResponse, McpError> {
         let Some((_, meta)) = self
             .state
             .resources
@@ -248,9 +261,12 @@ impl ServerHandler for FacadeMcpServer {
         .map_err(|_| McpError::internal_error("Server mailbox closed", None))?;
 
         match reply_rx.await {
-            Ok(Ok(value)) => serde_json::from_value(value).map_err(|e| {
-                McpError::internal_error(format!("Invalid resource payload: {e}"), None)
-            }),
+            Ok(Ok(value)) => {
+                let res: ReadResourceResult = serde_json::from_value(value).map_err(|e| {
+                    McpError::internal_error(format!("Invalid resource payload: {e}"), None)
+                })?;
+                Ok(ReadResourceResponse::Complete(res))
+            }
             Ok(Err(UpstreamCallError::Timeout)) => {
                 Err(McpError::internal_error("Resource read timed out", None))
             }
@@ -268,13 +284,13 @@ impl ServerHandler for FacadeMcpServer {
             .state
             .prompts
             .values()
-            .map(|p| Prompt {
-                name: p.name.clone(),
-                title: p.title.clone(),
-                description: p.description.clone(),
-                arguments: serde_json::from_value(Value::Array(p.arguments.clone())).ok(),
-                icons: None,
-                meta: None,
+            .map(|p| {
+                let args = serde_json::from_value(Value::Array(p.arguments.clone())).ok();
+                let mut prompt = Prompt::new(p.name.clone(), p.description.clone(), args);
+                if let Some(title) = &p.title {
+                    prompt = prompt.with_title(title.clone());
+                }
+                prompt
             })
             .collect::<Vec<_>>();
         Ok(rmcp::model::ListPromptsResult::with_all_items(prompts))
@@ -284,7 +300,7 @@ impl ServerHandler for FacadeMcpServer {
         &self,
         request: GetPromptRequestParams,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> std::result::Result<GetPromptResult, McpError> {
+    ) -> std::result::Result<GetPromptResponse, McpError> {
         let Some((_, prompt_meta)) = self
             .state
             .prompts
@@ -313,9 +329,12 @@ impl ServerHandler for FacadeMcpServer {
         .map_err(|_| McpError::internal_error("Server mailbox closed", None))?;
 
         match reply_rx.await {
-            Ok(Ok(value)) => serde_json::from_value(value).map_err(|e| {
-                McpError::internal_error(format!("Invalid prompt payload: {e}"), None)
-            }),
+            Ok(Ok(value)) => {
+                let res: GetPromptResult = serde_json::from_value(value).map_err(|e| {
+                    McpError::internal_error(format!("Invalid prompt payload: {e}"), None)
+                })?;
+                Ok(GetPromptResponse::Complete(res))
+            }
             Ok(Err(UpstreamCallError::Timeout)) => {
                 Err(McpError::internal_error("Prompt get timed out", None))
             }
