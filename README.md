@@ -1,7 +1,7 @@
 # Warmplane
 
 > **The local control plane that keeps MCP sessions warm.**  
-> v0.9.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml) · [Spec](docs/spec.md)
+> v0.10.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml) · [Spec](docs/spec.md)
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
 
@@ -156,8 +156,8 @@ warmplane cancel-operation req-101
 
 | Feature | Since | Summary |
 |---------|-------|---------|
-| **CLI Config & Interactive Setup** | v0.9.1 | `warmplane server` & `warmplane config` wizards, atomic JSON writes |
-| **Ecosystem Import** | v0.9.1 | 1-click import from Claude Desktop, Cursor, and Zed settings |
+| **CLI Config & Interactive Setup** | v0.10.0 | `warmplane server` & `warmplane config` wizards, atomic JSON writes |
+| **Ecosystem Import** | v0.10.0 | 1-click import from Claude Desktop, Cursor, and Zed settings |
 | **Alias registry** | v0.1 | Short stable aliases over upstream capability IDs |
 | **Compact indexes** | v0.1 | Lazy, token-efficient catalog — detail only on demand |
 | **Policy profiles** | v0.1 | Allow/deny lists, redact keys, role-scoped exposure |
@@ -176,7 +176,7 @@ warmplane cancel-operation req-101
 
 ## Changelog
 
-### v0.9.1 — CLI Configuration Management & Ecosystem Importers
+### v0.10.0 — CLI Configuration Management & Ecosystem Importers
 - Added `warmplane server` (`add`, `remove`, `list`, `get`, `test`) commands with interactive `inquire` wizards and flag-driven headless automation.
 - Added `warmplane config` (`init`, `show`, `import`, `alias`, `policy`) for safe, transactional configuration mutations.
 - Added auto-discovery and import from Claude Desktop, Cursor, and Zed settings.

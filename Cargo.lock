@@ -4070,7 +4070,7 @@ dependencies = [
 
 [[package]]
 name = "warmplane"
-version = "0.7.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "axum",
