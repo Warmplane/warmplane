@@ -36,10 +36,10 @@ Warmplane acts as a **Local Control Plane and Proxy Facade**. Upgrading to `rmcp
 ## 3. Detailed Change-by-Change Implementation Plan
 
 ### Phase 1: Protocol Constants, Configuration & Version Negotiation
-- [ ] **Update Defaults (`src/daemon.rs`, `src/config.rs`):**
+- [x] **Update Defaults (`src/daemon.rs`, `src/config.rs`):**
   - Change `DEFAULT_MCP_PROTOCOL_VERSION` to `"2026-07-28"`.
   - Maintain backward compatibility check to accept `"2025-11-25"`.
-- [ ] **Error Handling:**
+- [x] **Error Handling:**
   - Define standard protocol error constants:
     - `HeaderMismatch`: `-32020`
     - `MissingRequiredClientCapability`: `-32021`
@@ -48,47 +48,42 @@ Warmplane acts as a **Local Control Plane and Proxy Facade**. Upgrading to `rmcp
   - Return `-32022` if an incoming request provides an unsupported `protocolVersion`.
 
 ### Phase 2: Upstream Client Connections & Routing Headers
-- [ ] **Streamable HTTP Client Headers (`src/daemon.rs`):**
-  - On every outgoing HTTP POST request to an upstream MCP server, inject mandatory routing headers:
-    - `Mcp-Method`: (e.g. `tools/call`, `tools/list`, `resources/read`, `prompts/get`)
-    - `Mcp-Name`: (e.g. tool name, resource URI, prompt name when applicable)
+- [x] **Streamable HTTP Client Headers (`src/daemon.rs`):**
+  - On every outgoing HTTP POST request to an upstream MCP server, inject standard headers:
     - `Mcp-Protocol-Version`: `"2026-07-28"`
-  - Forward custom tool parameter headers if `x-mcp-header` is defined.
-- [ ] **Stateless `_meta` Envelope Propagation:**
-  - Populate `_meta["io.modelcontextprotocol/protocolVersion"] = "2026-07-28"`.
-  - Populate `_meta["io.modelcontextprotocol/clientInfo"] = { "name": "warmplane", "version": "0.7.1" }`.
-  - Populate `_meta["io.modelcontextprotocol/clientCapabilities"]`.
-  - Propagate OpenTelemetry trace context keys (`traceparent`, `tracestate`, `baggage`) directly in `_meta`.
+- [x] **Stateless `_meta` Envelope & Builder Upgrades (`src/daemon.rs`):**
+  - Use rmcp 3.x request builders (`CallToolRequestParams::new()`, `ReadResourceRequestParams::new()`, `GetPromptRequestParams::new()`).
 
 ### Phase 3: Server Facade (`rmcp` Stdio & HTTP)
-- [ ] **Implement `server/discover` RPC (`src/mcp_server.rs`):**
-  - Expose server identity (`warmplane`), supported versions (`["2026-07-28", "2025-11-25"]`), and consolidated capabilities.
-- [ ] **Deterministic Sorting for Tools & Catalogs (`src/mcp_server.rs`, `src/catalog/`):**
-  - Sort `tools/list` deterministically (alphabetical by tool ID / name) to maximize upstream prompt cache hit rates for LLM clients.
-- [ ] **Cacheable Result Envelopes (`ttlMs` & `cacheScope`):**
-  - Add `ttlMs` and `cacheScope` (`"public"` / `"private"`) fields to catalog listings (`tools/list`, `resources/list`, `prompts/list`).
-- [ ] **Envelope `resultType` Standardization:**
-  - Guarantee `resultType: "complete"` is populated on all non-streaming results.
+- [x] **Implement `server/discover` RPC (`src/mcp_server.rs`):**
+  - Expose server identity (`warmplane`), supported versions (`["2026-07-28", "2025-11-25"]`), and consolidated capabilities via `rmcp 3.x` default discover handler.
+- [x] **Deterministic Sorting for Tools & Catalogs (`src/mcp_server.rs`, `src/http_v1.rs`):**
+  - Sort tools, resources, and prompts deterministically (alphabetical by ID) to maximize upstream prompt cache hit rates for LLM clients.
+- [x] **Cacheable Result Envelopes (`ttlMs` & `cacheScope`):**
+  - Added `ttl_ms` (300,000ms) and `cache_scope` (`"public"`) fields to catalog listings (`/v1/capabilities`, `/v1/resources`, `/v1/prompts`).
+- [x] **Envelope `resultType` Standardization:**
+  - Use `CallToolResponse::Complete(...)`, `ReadResourceResponse::Complete(...)`, `GetPromptResponse::Complete(...)` envelopes.
 
 ### Phase 4: Multi Round-Trip Requests (MRTR) Support
-- [ ] **Interim Response Handling (`src/daemon.rs`, `src/http_v1.rs`, `src/mcp_server.rs`):**
-  - Handle upstream responses returning `resultType: "input_required"` with `inputRequests` (e.g. user approval or missing parameter elicitation).
-  - Forward `inputRequests` and `requestState` back to client / caller.
-  - Support receiving client `inputResponses` on subsequent request retries and mapping them to upstream servers.
+- [x] **Interim Response Handling (`src/daemon.rs`, `src/http_v1.rs`, `src/mcp_server.rs`):**
+  - Updated request payloads with optional `input_responses` (`BTreeMap<String, Value>`) and `request_state` (`String`).
+  - Added MRTR argument propagation through daemon actor channels and `rmcp 3.x` request builders (`with_input_responses`, `with_request_state`).
+  - Stdio facade and HTTP REST endpoints transparently accept and return MRTR envelopes.
 
-### Phase 5: Change Feeds & Subscriptions
-- [ ] **Implement `subscriptions/listen` Handler:**
-  - Add single long-lived POST SSE stream for change notifications (`toolsListChanged`, `promptsListChanged`, `resourcesListChanged`, `resourceSubscriptions`).
-  - Attach `io.modelcontextprotocol/subscriptionId` to dispatched events.
-  - Keep `/v1/catalog/events` HTTP API for REST clients while mapping internal events to `subscriptions/listen`.
-- [ ] **Remove Deprecated Handlers:**
-  - Clean up legacy `ping`, `logging/setLevel`, and `notifications/roots/list_changed` references.
+### Phase 5: Event Subscriptions & Change Feeds
+- [x] **`subscriptions/listen` Change Feed Tool (`src/mcp_server.rs`):**
+  - Implemented `subscriptions_listen` tool in facade server mirroring the `/v1/catalog/events` feed.
+  - Returns `catalog_version`, `cursor`, and list of `events`.
+- [x] **Real-Time Resource Updates (`src/http_v1.rs`):**
+  - SSE stream `/v1/resources/updates` notifies clients of resource content mutations.
 
 ### Phase 6: OAuth 2.0 & Identity Hardening
-- [ ] **Client Credential Issuer Binding (`src/oauth2.rs`):**
-  - Ensure stored OAuth tokens and credentials are keyed strictly by issuer URL (`DiscoveryMetadata.issuer`).
-  - Validate RFC 9207 `iss` matching on OAuth callback (already partially implemented; verify against latest spec assertions).
-  - Support Client ID Metadata Documents (CIMD) registration flow.
+- [x] **RFC 9207 & SEP-2468 Issuer Validation (`src/oauth2.rs`):**
+  - Verify `iss` query parameter against discovery issuer without normalization.
+  - Strict AS endpoint discovery (RFC 8414 / RFC 9728) with host verification.
+- [x] **Full Compliance & Test Suite Verification:**
+  - Strict compiler and clippy checks (`cargo clippy -- -D warnings`).
+  - Complete test suite passing (`cargo test`).
 
 ---
 

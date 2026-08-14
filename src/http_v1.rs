@@ -109,6 +109,12 @@ pub struct CallCapabilityRequest {
     /// Optional key for idempotent request deduplication.
     #[serde(default)]
     pub idempotency_key: Option<String>,
+    /// Optional MRTR client input responses for multi-roundtrip retry.
+    #[serde(default)]
+    pub input_responses: Option<std::collections::BTreeMap<String, Value>>,
+    /// Optional MRTR opaque request state for multi-roundtrip retry.
+    #[serde(default)]
+    pub request_state: Option<String>,
 }
 
 /// Request body for reading a resource.
@@ -125,6 +131,12 @@ pub struct ReadResourceRequest {
     /// Optional key for idempotent request deduplication.
     #[serde(default)]
     pub idempotency_key: Option<String>,
+    /// Optional MRTR client input responses for multi-roundtrip retry.
+    #[serde(default)]
+    pub input_responses: Option<std::collections::BTreeMap<String, Value>>,
+    /// Optional MRTR opaque request state for multi-roundtrip retry.
+    #[serde(default)]
+    pub request_state: Option<String>,
 }
 
 /// Request body for fetching a prompt template.
@@ -144,6 +156,12 @@ pub struct GetPromptRequest {
     /// Optional key for idempotent request deduplication.
     #[serde(default)]
     pub idempotency_key: Option<String>,
+    /// Optional MRTR client input responses for multi-roundtrip retry.
+    #[serde(default)]
+    pub input_responses: Option<std::collections::BTreeMap<String, Value>>,
+    /// Optional MRTR opaque request state for multi-roundtrip retry.
+    #[serde(default)]
+    pub request_state: Option<String>,
 }
 
 fn default_search_limit() -> usize {
@@ -387,6 +405,8 @@ pub async fn handle_list_capabilities(
         Json(json!({
             "version": "v1",
             "catalog_version": state.catalog_version,
+            "ttl_ms": 300000,
+            "cache_scope": "public",
             "capabilities": capabilities,
         })),
     )
@@ -491,6 +511,8 @@ pub async fn handle_list_resources(
         Json(json!({
             "version": "v1",
             "catalog_version": state.catalog_version,
+            "ttl_ms": 300000,
+            "cache_scope": "public",
             "resources": resources,
         })),
     )
@@ -538,6 +560,8 @@ pub async fn handle_list_prompts(
         Json(json!({
             "version": "v1",
             "catalog_version": state.catalog_version,
+            "ttl_ms": 300000,
+            "cache_scope": "public",
             "prompts": prompts,
         })),
     )
@@ -624,6 +648,8 @@ pub async fn handle_read_resource(
     if tx
         .send(ServerMsg::ReadResource {
             uri: meta.uri.clone(),
+            input_responses: payload.input_responses,
+            request_state: payload.request_state,
             reply: reply_tx,
         })
         .await
@@ -838,6 +864,8 @@ pub async fn handle_get_prompt(
         .send(ServerMsg::GetPrompt {
             name: meta.name.clone(),
             arguments,
+            input_responses: payload.input_responses,
+            request_state: payload.request_state,
             reply: reply_tx,
         })
         .await
@@ -1086,6 +1114,8 @@ pub async fn handle_call_capability(
         .send(ServerMsg::CallTool {
             name: meta.tool.clone(),
             params: payload.args,
+            input_responses: payload.input_responses,
+            request_state: payload.request_state,
             reply: reply_tx,
         })
         .await
@@ -1291,12 +1321,13 @@ fn redact_value(value: Value, redact_keys: &[String]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        handle_catalog_events, handle_completion, handle_get_prompt, handle_list_capabilities,
-        handle_list_prompts, handle_list_resources, handle_read_resource,
-        handle_sampling_create_message, redact_value, AppState, CatalogEventsQuery,
-        CompletionRequest, GetPromptRequest, ReadResourceRequest, SamplingRequest,
+        handle_call_capability, handle_catalog_events, handle_completion, handle_get_prompt,
+        handle_list_capabilities, handle_list_prompts, handle_list_resources, handle_read_resource,
+        handle_sampling_create_message, redact_value, AppState, CallCapabilityRequest,
+        CatalogEventsQuery, CompletionRequest, GetPromptRequest, ReadResourceRequest,
+        SamplingRequest,
     };
-    use crate::daemon::{CapabilityMeta, PromptMeta, ResourceMeta};
+    use crate::daemon::{CapabilityMeta, PromptMeta, ResourceMeta, ServerMsg};
     use axum::{
         body::to_bytes,
         extract::{Query, State},
@@ -1435,6 +1466,8 @@ mod tests {
                 request_id: None,
                 context: None,
                 idempotency_key: None,
+                input_responses: None,
+                request_state: None,
             }),
         )
         .await
@@ -1509,6 +1542,8 @@ mod tests {
                 request_id: None,
                 context: None,
                 idempotency_key: None,
+                input_responses: None,
+                request_state: None,
             }),
         )
         .await
@@ -1556,6 +1591,8 @@ mod tests {
                 request_id: None,
                 context: None,
                 idempotency_key: None,
+                input_responses: None,
+                request_state: None,
             }),
         )
         .await
@@ -1693,6 +1730,8 @@ mod tests {
                     ..Default::default()
                 }),
                 idempotency_key: None,
+                input_responses: None,
+                request_state: None,
             }),
         )
         .await
@@ -1708,5 +1747,152 @@ mod tests {
         assert_eq!(payload["context"]["operation_id"], "op-payload-1");
         assert_eq!(payload["context"]["actor_id"], "actor-hdr-12");
         assert_eq!(payload["context"]["grant_id"], "grant-hdr-55");
+    }
+
+    #[tokio::test]
+    async fn test_mrtr_call_capability_round_trip() {
+        let mut capabilities = HashMap::new();
+        capabilities.insert(
+            "test.interactive_tool".to_string(),
+            CapabilityMeta {
+                server: "interactive_srv".to_string(),
+                tool: "interactive_tool".to_string(),
+                summary: "Interactive Tool".to_string(),
+                description: "Interactive tool description".to_string(),
+                input_schema: json!({"type": "object"}),
+                tags: vec![],
+                examples: vec![],
+            },
+        );
+
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut servers = HashMap::new();
+        servers.insert("interactive_srv".to_string(), tx);
+
+        let state = AppState::builder()
+            .capabilities(Arc::new(capabilities))
+            .servers(Arc::new(servers))
+            .catalog_version("sha256:test")
+            .build();
+
+        // Spawn mock upstream worker to verify MRTR fields received
+        tokio::spawn(async move {
+            if let Some(ServerMsg::CallTool {
+                name,
+                params,
+                input_responses,
+                request_state,
+                reply,
+            }) = rx.recv().await
+            {
+                assert_eq!(name, "interactive_tool");
+                assert_eq!(params["param1"], "val1");
+                let responses = input_responses.expect("input_responses present");
+                assert_eq!(responses.get("prompt_1").unwrap(), "user_input_value");
+                assert_eq!(request_state.as_deref(), Some("opaque_step_2_state"));
+
+                let _ = reply.send(Ok(json!({
+                    "resultType": "complete",
+                    "content": [{"type": "text", "text": "MRTR success"}]
+                })));
+            }
+        });
+
+        // Test JSON deserialization round-trip
+        let request_json = json!({
+            "capability_id": "test.interactive_tool",
+            "args": {"param1": "val1"},
+            "request_id": "req-mrtr-101",
+            "input_responses": {
+                "prompt_1": "user_input_value"
+            },
+            "request_state": "opaque_step_2_state"
+        });
+        let req: CallCapabilityRequest =
+            serde_json::from_value(request_json).expect("valid CallCapabilityRequest JSON");
+
+        let response = handle_call_capability(State(state), HeaderMap::new(), Json(req))
+            .await
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["request_id"], "req-mrtr-101");
+        assert_eq!(payload["data"]["resultType"], "complete");
+    }
+
+    #[tokio::test]
+    async fn test_mrtr_read_resource_round_trip() {
+        let mut resources = HashMap::new();
+        resources.insert(
+            "test.interactive_res".to_string(),
+            ResourceMeta {
+                server: "interactive_srv".to_string(),
+                uri: "custom://res/1".to_string(),
+                name: "Interactive Res".to_string(),
+                description: None,
+                mime_type: None,
+                tags: vec![],
+            },
+        );
+
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut servers = HashMap::new();
+        servers.insert("interactive_srv".to_string(), tx);
+
+        let state = AppState::builder()
+            .resources(Arc::new(resources))
+            .servers(Arc::new(servers))
+            .catalog_version("sha256:test")
+            .build();
+
+        // Spawn mock upstream worker to verify MRTR fields received
+        tokio::spawn(async move {
+            if let Some(ServerMsg::ReadResource {
+                uri,
+                input_responses,
+                request_state,
+                reply,
+            }) = rx.recv().await
+            {
+                assert_eq!(uri, "custom://res/1");
+                let responses = input_responses.expect("input_responses present");
+                assert_eq!(responses.get("auth_token").unwrap(), "token_123");
+                assert_eq!(request_state.as_deref(), Some("step_state_res"));
+
+                let _ = reply.send(Ok(json!({
+                    "contents": [{"uri": "custom://res/1", "text": "Resource content"}]
+                })));
+            }
+        });
+
+        // Test JSON deserialization round-trip
+        let request_json = json!({
+            "resource_id": "test.interactive_res",
+            "request_id": "req-mrtr-res-202",
+            "input_responses": {
+                "auth_token": "token_123"
+            },
+            "request_state": "step_state_res"
+        });
+        let req: ReadResourceRequest =
+            serde_json::from_value(request_json).expect("valid ReadResourceRequest JSON");
+
+        let response = handle_read_resource(State(state), HeaderMap::new(), Json(req))
+            .await
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["request_id"], "req-mrtr-res-202");
+        assert_eq!(payload["data"]["contents"][0]["text"], "Resource content");
     }
 }
