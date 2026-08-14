@@ -18,7 +18,23 @@ cargo install --path .
 cargo install --path . --features semantic-search
 ```
 
-**2. Configure** — create `mcp_servers.json`:
+**2. Configure Upstream Servers**
+
+Manage servers interactively or import from existing tools:
+
+```bash
+# Interactive setup wizard
+warmplane server add
+
+# Or add non-interactively
+warmplane server add filesystem --command npx --arg "-y" --arg "@modelcontextprotocol/server-filesystem" --arg "/tmp"
+warmplane server add context7 --url "https://mcp.context7.ai/sse" --bearer-env "CONTEXT7_API_KEY"
+
+# Or import directly from Claude Desktop / Cursor
+warmplane config import
+```
+
+Or manually create `mcp_servers.json`:
 
 ```json
 {
@@ -42,6 +58,7 @@ cargo install --path . --features semantic-search
 **3. Validate, then start**
 
 ```bash
+warmplane server list
 warmplane validate-config --config mcp_servers.json
 warmplane daemon --config mcp_servers.json
 ```
@@ -95,9 +112,28 @@ Claude Desktop / Cursor config:
 }
 ```
 
-### CLI
+### CLI Configuration & Operations
 
 ```bash
+# Interactive server setup wizard
+warmplane server add
+
+# Add stdio or HTTP upstream servers non-interactively
+warmplane server add github --command npx --arg "-y" --arg "@modelcontextprotocol/server-github"
+warmplane server add context7 --url "https://mcp.context7.ai/sse" --bearer-env "CONTEXT7_API_KEY"
+
+# Inspect & test servers
+warmplane server list
+warmplane server test github
+
+# Ecosystem config import (Claude Desktop, Cursor, Zed)
+warmplane config import
+
+# Aliases and Policies
+warmplane config alias set tool git-commit github.create_commit
+warmplane config policy allow "github.*" "fetch.*"
+
+# Capability and Execution CLI
 warmplane list-capabilities
 warmplane search-capabilities "triage logs" --limit 5
 warmplane describe-capability db.query
@@ -120,6 +156,8 @@ warmplane cancel-operation req-101
 
 | Feature | Since | Summary |
 |---------|-------|---------|
+| **CLI Config & Interactive Setup** | v0.9.1 | `warmplane server` & `warmplane config` wizards, atomic JSON writes |
+| **Ecosystem Import** | v0.9.1 | 1-click import from Claude Desktop, Cursor, and Zed settings |
 | **Alias registry** | v0.1 | Short stable aliases over upstream capability IDs |
 | **Compact indexes** | v0.1 | Lazy, token-efficient catalog — detail only on demand |
 | **Policy profiles** | v0.1 | Allow/deny lists, redact keys, role-scoped exposure |
@@ -137,6 +175,12 @@ warmplane cancel-operation req-101
 ---
 
 ## Changelog
+
+### v0.9.1 — CLI Configuration Management & Ecosystem Importers
+- Added `warmplane server` (`add`, `remove`, `list`, `get`, `test`) commands with interactive `inquire` wizards and flag-driven headless automation.
+- Added `warmplane config` (`init`, `show`, `import`, `alias`, `policy`) for safe, transactional configuration mutations.
+- Added auto-discovery and import from Claude Desktop, Cursor, and Zed settings.
+- Added atomic configuration file writes (`fs::rename`) preventing JSON corruption.
 
 ### v0.9.0 — MCP 2026-07-28 Spec Compliance, MRTR & Subscriptions
 - Upgraded to official MCP Rust SDK `rmcp 3.1.2` and `reqwest 0.13`.

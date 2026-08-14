@@ -1902,8 +1902,9 @@ data: {"uri": "file:///workspace/logs/app.log", "timestamp": 1770982800}
           <pre><span class="cmt"># Install binary from source or crates.io</span>
 <span class="kw">$</span> cargo install warmplane
 
-<span class="cmt"># Validate configuration file</span>
-<span class="kw">$</span> warmplane validate-config --config mcp_servers.json
+<span class="cmt"># Interactively add servers, or import from Claude Desktop / Cursor</span>
+<span class="kw">$</span> warmplane server add
+<span class="kw">$</span> warmplane config import
 
 <span class="cmt"># Start the local control plane daemon</span>
 <span class="kw">$</span> warmplane daemon --config mcp_servers.json
