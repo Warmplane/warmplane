@@ -17,11 +17,34 @@ paths:
       operationId: listCapabilities
       responses:
         "200":
-          description: Capability index
+          description: Capability index with cache hints
+          headers:
+            ETag:
+              schema:
+                type: string
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CapabilitiesListResponse"
+        "304":
+          description: Not Modified (catalog unchanged)
+  /v1/capabilities/search:
+    post:
+      summary: Search capabilities
+      operationId: searchCapabilities
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchCapabilitiesRequest"
+      responses:
+        "200":
+          description: Ranked search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchCapabilitiesResponse"
   /v1/capabilities/{id}:
     get:
       summary: Describe capability
@@ -98,11 +121,17 @@ paths:
       operationId: listResources
       responses:
         "200":
-          description: Resource index
+          description: Resource index with cache hints
+          headers:
+            ETag:
+              schema:
+                type: string
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ResourcesListResponse"
+        "304":
+          description: Not Modified (catalog unchanged)
   /v1/resources/read:
     post:
       summary: Read resource
@@ -150,17 +179,34 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
+  /v1/resources/updates:
+    get:
+      summary: Real-time resource update SSE feed
+      operationId: resourceUpdates
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
   /v1/prompts:
     get:
       summary: List prompts
       operationId: listPrompts
       responses:
         "200":
-          description: Prompt index
+          description: Prompt index with cache hints
+          headers:
+            ETag:
+              schema:
+                type: string
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/PromptsListResponse"
+        "304":
+          description: Not Modified (catalog unchanged)
   /v1/prompts/get:
     post:
       summary: Get prompt output
@@ -208,6 +254,81 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
+  /v1/catalog/events:
+    get:
+      summary: Catalog mutation events change feed
+      operationId: catalogEvents
+      parameters:
+        - in: query
+          name: after
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Event log feed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogEventsResponse"
+  /v1/completion/complete:
+    post:
+      summary: Argument completion for prompt or resource
+      operationId: completeArgument
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompletionRequest"
+      responses:
+        "200":
+          description: Completion candidate results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompletionResponse"
+  /v1/sampling/create_message:
+    post:
+      summary: Sampling completion delegation
+      operationId: samplingCreateMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SamplingRequest"
+      responses:
+        "200":
+          description: Sampling response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SamplingResponse"
+  /v1/operations/{id}/cancel:
+    post:
+      summary: Cancel in-flight operation
+      operationId: cancelOperation
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Operation cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  request_id:
+                    type: string
+                  cancelled:
+                    type: boolean
 components:
   schemas:
     CapabilityListItem:
@@ -270,11 +391,19 @@ components:
             type: string
     CapabilitiesListResponse:
       type: object
-      required: [version, capabilities]
+      required: [version, catalog_version, ttl_ms, cache_scope, capabilities]
       properties:
         version:
           type: string
           const: v1
+        catalog_version:
+          type: string
+        ttl_ms:
+          type: integer
+          example: 300000
+        cache_scope:
+          type: string
+          example: "public"
         capabilities:
           type: array
           items:
@@ -286,6 +415,8 @@ components:
         version:
           type: string
           const: v1
+        catalog_version:
+          type: string
         capability:
           type: object
           required: [id, server, tool, description, input_schema, examples]
@@ -305,26 +436,74 @@ components:
               items: {}
     ResourcesListResponse:
       type: object
-      required: [version, resources]
+      required: [version, catalog_version, ttl_ms, cache_scope, resources]
       properties:
         version:
           type: string
           const: v1
+        catalog_version:
+          type: string
+        ttl_ms:
+          type: integer
+          example: 300000
+        cache_scope:
+          type: string
+          example: "public"
         resources:
           type: array
           items:
             $ref: "#/components/schemas/ResourceListItem"
     PromptsListResponse:
       type: object
-      required: [version, prompts]
+      required: [version, catalog_version, ttl_ms, cache_scope, prompts]
       properties:
         version:
           type: string
           const: v1
+        catalog_version:
+          type: string
+        ttl_ms:
+          type: integer
+          example: 300000
+        cache_scope:
+          type: string
+          example: "public"
         prompts:
           type: array
           items:
             $ref: "#/components/schemas/PromptListItem"
+    SearchCapabilitiesRequest:
+      type: object
+      properties:
+        query:
+          type: [string, "null"]
+        limit:
+          type: integer
+          default: 8
+        server_ids:
+          type: array
+          items:
+            type: string
+        tags:
+          type: array
+          items:
+            type: string
+        modes:
+          type: array
+          items:
+            type: string
+    SearchCapabilitiesResponse:
+      type: object
+      required: [version, catalog_version, capabilities]
+      properties:
+        version:
+          type: string
+        catalog_version:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: object
     CallCapabilityRequest:
       type: object
       required: [capability_id, args]
@@ -335,6 +514,16 @@ components:
           type: object
         request_id:
           type: [string, "null"]
+        context:
+          $ref: "#/components/schemas/RequestContext"
+        idempotency_key:
+          type: [string, "null"]
+        input_responses:
+          type: [object, "null"]
+          description: MRTR client responses for interactive tool turns
+        request_state:
+          type: [string, "null"]
+          description: MRTR opaque state string
     ReadResourceRequest:
       type: object
       required: [resource_id]
@@ -342,6 +531,14 @@ components:
         resource_id:
           type: string
         request_id:
+          type: [string, "null"]
+        context:
+          $ref: "#/components/schemas/RequestContext"
+        idempotency_key:
+          type: [string, "null"]
+        input_responses:
+          type: [object, "null"]
+        request_state:
           type: [string, "null"]
     GetPromptRequest:
       type: object
@@ -353,9 +550,93 @@ components:
           type: [object, "null"]
         request_id:
           type: [string, "null"]
+        context:
+          $ref: "#/components/schemas/RequestContext"
+        idempotency_key:
+          type: [string, "null"]
+        input_responses:
+          type: [object, "null"]
+        request_state:
+          type: [string, "null"]
+    CompletionRequest:
+      type: object
+      required: [ref_type, ref_name, argument_name]
+      properties:
+        ref_type:
+          type: string
+          enum: [prompt, resource]
+        ref_name:
+          type: string
+        argument_name:
+          type: string
+        argument_value:
+          type: string
+    CompletionResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        trace_id:
+          type: string
+        data:
+          type: object
+    SamplingRequest:
+      type: object
+      required: [server_id, messages]
+      properties:
+        server_id:
+          type: string
+        messages:
+          type: array
+          items:
+            type: object
+        max_tokens:
+          type: [integer, "null"]
+    SamplingResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        trace_id:
+          type: string
+        data:
+          type: object
+    CatalogEventsResponse:
+      type: object
+      required: [catalog_version, cursor, events]
+      properties:
+        catalog_version:
+          type: string
+        cursor:
+          type: string
+        events:
+          type: array
+          items:
+            type: object
+    RequestContext:
+      type: object
+      properties:
+        operation_id:
+          type: [string, "null"]
+        work_item_id:
+          type: [string, "null"]
+        actor_id:
+          type: [string, "null"]
+        grant_id:
+          type: [string, "null"]
+    RetryMetadata:
+      type: object
+      required: [classification, upstream_execution_state]
+      properties:
+        classification:
+          type: string
+          enum: [safe, unsafe, idempotent]
+        upstream_execution_state:
+          type: string
+          enum: [not_started, completed, unknown]
     SuccessEnvelope:
       type: object
-      required: [ok, request_id, trace_id, data, error]
+      required: [ok, request_id, trace_id, data, error, retry]
       properties:
         ok:
           type: boolean
@@ -364,12 +645,16 @@ components:
           type: [string, "null"]
         trace_id:
           type: string
+        context:
+          $ref: "#/components/schemas/RequestContext"
+        retry:
+          $ref: "#/components/schemas/RetryMetadata"
         data: {}
         error:
           type: "null"
     ErrorEnvelope:
       type: object
-      required: [ok, request_id, trace_id, data, error]
+      required: [ok, request_id, trace_id, data, error, retry]
       properties:
         ok:
           type: boolean
@@ -378,6 +663,10 @@ components:
           type: [string, "null"]
         trace_id:
           type: string
+        context:
+          $ref: "#/components/schemas/RequestContext"
+        retry:
+          $ref: "#/components/schemas/RetryMetadata"
         data:
           type: "null"
         error:
@@ -394,6 +683,7 @@ components:
                 - INVALID_ARGS
                 - UPSTREAM_TIMEOUT
                 - UPSTREAM_ERROR
+                - OPERATION_CANCELLED
                 - INTERNAL_ERROR
             message:
               type: string
