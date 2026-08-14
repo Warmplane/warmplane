@@ -94,25 +94,33 @@ impl IdempotencyStore {
         let mut map = self.entries.write().await;
         let now = Instant::now();
 
-        // Evict expired entries
-        map.retain(|_, entry| now.duration_since(entry.created_at) < self.ttl);
-
+        // Check if existing key is expired before returning
         if let Some(entry) = map.get(key_ref) {
-            match &entry.state {
-                EntryState::Completed(val) => DeduplicateResult::Completed(val.clone()),
-                EntryState::InProgress(tx) => DeduplicateResult::InProgress(tx.subscribe()),
+            if now.duration_since(entry.created_at) < self.ttl {
+                return match &entry.state {
+                    EntryState::Completed(val) => DeduplicateResult::Completed(val.clone()),
+                    EntryState::InProgress(tx) => DeduplicateResult::InProgress(tx.subscribe()),
+                };
             }
-        } else {
-            let (tx, _) = broadcast::channel(1);
-            map.insert(
-                key_ref.to_string(),
-                IdempotencyEntry {
-                    state: EntryState::InProgress(tx),
-                    created_at: now,
-                },
-            );
-            DeduplicateResult::New
+            // Expired entry for this specific key, remove it
+            map.remove(key_ref);
         }
+
+        // Opportunistic batch eviction only if map size exceeds threshold (amortized O(1))
+        if map.len() > 1024 {
+            let ttl = self.ttl;
+            map.retain(|_, entry| now.duration_since(entry.created_at) < ttl);
+        }
+
+        let (tx, _) = broadcast::channel(1);
+        map.insert(
+            key_ref.to_string(),
+            IdempotencyEntry {
+                state: EntryState::InProgress(tx),
+                created_at: now,
+            },
+        );
+        DeduplicateResult::New
     }
 
     /// Completes an in-progress idempotency entry and broadcasts the final JSON payload.

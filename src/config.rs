@@ -514,12 +514,16 @@ mod tests {
         let temp_dir = std::env::temp_dir().join(format!("warmplane_test_{}", std::process::id()));
         let config_file = temp_dir.join("test_servers.json");
 
-        let mut config = McpConfig::default();
-        config.port = Some(9999);
         let mut server = empty_server();
         server.command = Some("node".to_string());
         server.args = vec!["server.js".to_string()];
-        config.mcp_servers.insert("node_server".to_string(), server);
+        let mut servers = HashMap::new();
+        servers.insert("node_server".to_string(), server);
+        let config = McpConfig {
+            port: Some(9999),
+            mcp_servers: servers,
+            ..Default::default()
+        };
 
         super::save_config(config_file.to_str().unwrap(), &config).unwrap();
         let loaded = super::load_config(config_file.to_str().unwrap()).unwrap();

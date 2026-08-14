@@ -44,3 +44,30 @@ openssl = { version = "0.10", features = ["vendored"], optional = true }
 [features]
 default = []
 semantic-search = ["dep:fastembed", "dep:openssl"]
+
+[lib]
+name = "warmplane"
+path = "src/lib.rs"
+
+[[bin]]
+name = "warmplane"
+path = "src/main.rs"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
+
+[[bench]]
+name = "search_bench"
+harness = false
+
+[[bench]]
+name = "catalog_bench"
+harness = false
+
+[[bench]]
+name = "idempotency_bench"
+harness = false
+
+[[bench]]
+name = "facade_bench"
+harness = false

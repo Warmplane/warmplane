@@ -48,26 +48,22 @@ pub fn score_lexical(
     let mut results = Vec::new();
 
     for (id, meta) in capabilities {
-        let id_lower = id.to_lowercase();
-        let server_lower = meta.server.to_lowercase();
-        let tool_lower = meta.tool.to_lowercase();
-        let summary_lower = meta.summary.to_lowercase();
-        let desc_lower = meta.description.to_lowercase();
-
         let mut match_types = HashSet::new();
         let mut score: f32 = 0.0;
 
         // 1. Exact ID / alias match
-        if id_lower == query_clean {
+        if id.eq_ignore_ascii_case(&query_clean) {
             score += 1.0;
             match_types.insert("exact_id".to_string());
-        } else if id_lower.contains(&query_clean) {
+        } else if id.to_ascii_lowercase().contains(&query_clean) {
             score += 0.7;
             match_types.insert("id".to_string());
         }
 
         // 2. Exact or substring server / tool match
-        if server_lower == query_clean || tool_lower == query_clean {
+        if meta.server.eq_ignore_ascii_case(&query_clean)
+            || meta.tool.eq_ignore_ascii_case(&query_clean)
+        {
             score += 0.6;
             match_types.insert("server_tool".to_string());
         }
@@ -75,8 +71,11 @@ pub fn score_lexical(
         // 3. Tag matching
         let mut tag_hit = false;
         for tag in &meta.tags {
-            let tag_lower = tag.to_lowercase();
-            if tag_lower == query_clean || query_tokens.contains(&tag_lower.as_str()) {
+            if tag.eq_ignore_ascii_case(&query_clean)
+                || query_token_set
+                    .iter()
+                    .any(|qt| tag.eq_ignore_ascii_case(qt))
+            {
                 tag_hit = true;
                 break;
             }
@@ -86,22 +85,26 @@ pub fn score_lexical(
             match_types.insert("tag".to_string());
         }
 
-        // 4. Token overlap scoring over summary & description
-        let full_text = format!("{} {} {}", id_lower, summary_lower, desc_lower);
-        let text_tokens: Vec<&str> = full_text
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|s| !s.is_empty())
-            .collect();
-
+        // 4. Token overlap scoring over summary & description (tokenizes text stream directly without format! allocation)
         let mut token_matches = 0;
-        for token in &query_token_set {
-            if text_tokens.contains(token) {
-                token_matches += 1;
+        let mut check_field_tokens = |text: &str| {
+            for token in text.split(|c: char| !c.is_alphanumeric()) {
+                if !token.is_empty() {
+                    for qt in &query_token_set {
+                        if token.eq_ignore_ascii_case(qt) {
+                            token_matches += 1;
+                        }
+                    }
+                }
             }
-        }
+        };
+
+        check_field_tokens(id);
+        check_field_tokens(&meta.summary);
+        check_field_tokens(&meta.description);
 
         if !query_tokens.is_empty() {
-            let overlap_ratio = token_matches as f32 / query_tokens.len() as f32;
+            let overlap_ratio = (token_matches as f32 / query_tokens.len() as f32).min(1.0);
             if overlap_ratio > 0.0 {
                 score += overlap_ratio * 0.5;
                 match_types.insert("lexical".to_string());

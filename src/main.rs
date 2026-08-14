@@ -6,25 +6,14 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde_json::{json, Value};
 
-mod catalog;
-mod cli_config;
-mod config;
-mod config_import;
-mod context;
-mod daemon;
-mod http_v1;
-mod idempotency;
-mod interactive;
-mod mcp_server;
-mod models;
-mod oauth2;
-mod operations;
-mod search;
-mod telemetry;
-
-use config::{load_config, resolve_client_port, DEFAULT_PORT};
-use context::RequestContext;
-use models::{Cli, Commands};
+use warmplane::{
+    cli_config,
+    config::{load_config, resolve_client_port, DEFAULT_PORT},
+    context::RequestContext,
+    daemon, mcp_server,
+    models::{Cli, Commands},
+    telemetry,
+};
 
 /// Warmplane CLI binary entrypoint parsing arguments and dispatching commands.
 ///

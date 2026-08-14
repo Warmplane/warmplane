@@ -36,8 +36,11 @@ pub fn check_if_none_match(req_headers: &HeaderMap, catalog_version: impl AsRef<
     if let Some(if_none_match) = req_headers.get(header::IF_NONE_MATCH) {
         if let Ok(val) = if_none_match.to_str() {
             let val_clean = val.trim();
-            let version_quoted = format!("\"{}\"", version_ref);
-            return val_clean == version_ref || val_clean == version_quoted || val_clean == "*";
+            if val_clean == "*" {
+                return true;
+            }
+            let unquoted = val_clean.trim_matches('"');
+            return unquoted == version_ref;
         }
     }
     false
@@ -2362,9 +2365,11 @@ mod tests {
         assert_eq!(get_cfg_res.status(), StatusCode::OK);
 
         // 3. Test Upsert Server
-        let mut new_server = crate::config::ServerConfig::default();
-        new_server.command = Some("node".to_string());
-        new_server.args = vec!["index.js".to_string()];
+        let new_server = crate::config::ServerConfig {
+            command: Some("node".to_string()),
+            args: vec!["index.js".to_string()],
+            ..Default::default()
+        };
 
         let upsert_res = super::handle_upsert_server(
             State(state.clone()),
