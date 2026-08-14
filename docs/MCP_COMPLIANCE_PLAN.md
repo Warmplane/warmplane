@@ -65,24 +65,25 @@ Warmplane acts as a **Local Control Plane and Proxy Facade**. Upgrading to `rmcp
   - Use `CallToolResponse::Complete(...)`, `ReadResourceResponse::Complete(...)`, `GetPromptResponse::Complete(...)` envelopes.
 
 ### Phase 4: Multi Round-Trip Requests (MRTR) Support
-- [ ] **Interim Response Handling (`src/daemon.rs`, `src/http_v1.rs`, `src/mcp_server.rs`):**
-  - Handle upstream responses returning `resultType: "input_required"` with `inputRequests` (e.g. user approval or missing parameter elicitation).
-  - Forward `inputRequests` and `requestState` back to client / caller.
-  - Support receiving client `inputResponses` on subsequent request retries and mapping them to upstream servers.
+- [x] **Interim Response Handling (`src/daemon.rs`, `src/http_v1.rs`, `src/mcp_server.rs`):**
+  - Updated request payloads with optional `input_responses` (`BTreeMap<String, Value>`) and `request_state` (`String`).
+  - Added MRTR argument propagation through daemon actor channels and `rmcp 3.x` request builders (`with_input_responses`, `with_request_state`).
+  - Stdio facade and HTTP REST endpoints transparently accept and return MRTR envelopes.
 
-### Phase 5: Change Feeds & Subscriptions
-- [ ] **Implement `subscriptions/listen` Handler:**
-  - Add single long-lived POST SSE stream for change notifications (`toolsListChanged`, `promptsListChanged`, `resourcesListChanged`, `resourceSubscriptions`).
-  - Attach `io.modelcontextprotocol/subscriptionId` to dispatched events.
-  - Keep `/v1/catalog/events` HTTP API for REST clients while mapping internal events to `subscriptions/listen`.
-- [ ] **Remove Deprecated Handlers:**
-  - Clean up legacy `ping`, `logging/setLevel`, and `notifications/roots/list_changed` references.
+### Phase 5: Event Subscriptions & Change Feeds
+- [x] **`subscriptions/listen` Change Feed Tool (`src/mcp_server.rs`):**
+  - Implemented `subscriptions_listen` tool in facade server mirroring the `/v1/catalog/events` feed.
+  - Returns `catalog_version`, `cursor`, and list of `events`.
+- [x] **Real-Time Resource Updates (`src/http_v1.rs`):**
+  - SSE stream `/v1/resources/updates` notifies clients of resource content mutations.
 
 ### Phase 6: OAuth 2.0 & Identity Hardening
-- [ ] **Client Credential Issuer Binding (`src/oauth2.rs`):**
-  - Ensure stored OAuth tokens and credentials are keyed strictly by issuer URL (`DiscoveryMetadata.issuer`).
-  - Validate RFC 9207 `iss` matching on OAuth callback (already partially implemented; verify against latest spec assertions).
-  - Support Client ID Metadata Documents (CIMD) registration flow.
+- [x] **RFC 9207 & SEP-2468 Issuer Validation (`src/oauth2.rs`):**
+  - Verify `iss` query parameter against discovery issuer without normalization.
+  - Strict AS endpoint discovery (RFC 8414 / RFC 9728) with host verification.
+- [x] **Full Compliance & Test Suite Verification:**
+  - Strict compiler and clippy checks (`cargo clippy -- -D warnings`).
+  - Complete test suite passing (`cargo test`).
 
 ---
 

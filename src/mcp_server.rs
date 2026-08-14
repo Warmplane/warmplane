@@ -34,6 +34,7 @@ const TOOL_RESOURCE_READ: &str = "resource_read";
 const TOOL_PROMPTS_LIST: &str = "prompts_list";
 const TOOL_PROMPT_GET: &str = "prompt_get";
 const TOOL_COMPLETION_COMPLETE: &str = "completion_complete";
+const TOOL_SUBSCRIPTIONS_LISTEN: &str = "subscriptions_listen";
 
 static TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -115,11 +116,23 @@ impl ServerHandler for FacadeMcpServer {
                     .get("_meta")
                     .or_else(|| args.get("context"))
                     .and_then(|v| serde_json::from_value(v.clone()).ok());
+                let input_responses: Option<std::collections::BTreeMap<String, Value>> = args
+                    .get("input_responses")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .or_else(|| request.input_responses.clone());
+                let request_state = args
+                    .get("request_state")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string)
+                    .or_else(|| request.request_state.clone());
+
                 self.call_capability_value(
                     capability_id.to_string(),
                     call_args.clone(),
                     request_id,
                     context,
+                    input_responses,
+                    request_state,
                 )
                 .await
             }
@@ -140,8 +153,24 @@ impl ServerHandler for FacadeMcpServer {
                     .get("_meta")
                     .or_else(|| args.get("context"))
                     .and_then(|v| serde_json::from_value(v.clone()).ok());
-                self.read_resource_value(resource_id.to_string(), request_id, context)
-                    .await
+                let input_responses: Option<std::collections::BTreeMap<String, Value>> = args
+                    .get("input_responses")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .or_else(|| request.input_responses.clone());
+                let request_state = args
+                    .get("request_state")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string)
+                    .or_else(|| request.request_state.clone());
+
+                self.read_resource_value(
+                    resource_id.to_string(),
+                    request_id,
+                    context,
+                    input_responses,
+                    request_state,
+                )
+                .await
             }
             TOOL_PROMPTS_LIST => self.list_prompts_value().await,
             TOOL_PROMPT_GET => {
@@ -161,8 +190,25 @@ impl ServerHandler for FacadeMcpServer {
                     .or_else(|| args.get("context"))
                     .and_then(|v| serde_json::from_value(v.clone()).ok());
                 let arguments = args.get("arguments").cloned();
-                self.get_prompt_value(prompt_id.to_string(), arguments, request_id, context)
-                    .await
+                let input_responses: Option<std::collections::BTreeMap<String, Value>> = args
+                    .get("input_responses")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .or_else(|| request.input_responses.clone());
+                let request_state = args
+                    .get("request_state")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string)
+                    .or_else(|| request.request_state.clone());
+
+                self.get_prompt_value(
+                    prompt_id.to_string(),
+                    arguments,
+                    request_id,
+                    context,
+                    input_responses,
+                    request_state,
+                )
+                .await
             }
             TOOL_COMPLETION_COMPLETE => {
                 let ref_type = args.get("ref_type").and_then(|v| v.as_str()).unwrap_or("");
@@ -186,6 +232,16 @@ impl ServerHandler for FacadeMcpServer {
                         "values": [],
                         "total": 0
                     }
+                }))
+            }
+            TOOL_SUBSCRIPTIONS_LISTEN => {
+                let after = args.get("after").and_then(Value::as_str);
+                let (events, next_cursor) = self.state.event_store.get_events_after(after);
+                Ok(json!({
+                    "ok": true,
+                    "catalog_version": self.state.catalog_version,
+                    "cursor": next_cursor,
+                    "events": events,
                 }))
             }
             _ => {
@@ -255,6 +311,8 @@ impl ServerHandler for FacadeMcpServer {
         let (reply_tx, reply_rx) = oneshot::channel();
         tx.send(ServerMsg::ReadResource {
             uri: meta.uri.clone(),
+            input_responses: request.input_responses,
+            request_state: request.request_state,
             reply: reply_tx,
         })
         .await
@@ -323,6 +381,8 @@ impl ServerHandler for FacadeMcpServer {
         tx.send(ServerMsg::GetPrompt {
             name: request.name,
             arguments: request.arguments,
+            input_responses: request.input_responses,
+            request_state: request.request_state,
             reply: reply_tx,
         })
         .await
@@ -404,6 +464,8 @@ impl FacadeMcpServer {
         args: Value,
         request_id: Option<String>,
         context: Option<crate::context::RequestContext>,
+        input_responses: Option<std::collections::BTreeMap<String, Value>>,
+        request_state: Option<String>,
     ) -> std::result::Result<Value, String> {
         let trace_id = next_trace_id();
         let ctx = context.unwrap_or_default();
@@ -448,6 +510,8 @@ impl FacadeMcpServer {
             .send(ServerMsg::CallTool {
                 name: meta.tool.clone(),
                 params: args,
+                input_responses,
+                request_state,
                 reply: reply_tx,
             })
             .await
@@ -539,6 +603,8 @@ impl FacadeMcpServer {
         resource_id: String,
         request_id: Option<String>,
         context: Option<crate::context::RequestContext>,
+        input_responses: Option<std::collections::BTreeMap<String, Value>>,
+        request_state: Option<String>,
     ) -> std::result::Result<Value, String> {
         let trace_id = next_trace_id();
         let ctx = context.unwrap_or_default();
@@ -582,6 +648,8 @@ impl FacadeMcpServer {
         if tx
             .send(ServerMsg::ReadResource {
                 uri: meta.uri.clone(),
+                input_responses,
+                request_state,
                 reply: reply_tx,
             })
             .await
@@ -677,6 +745,8 @@ impl FacadeMcpServer {
         arguments: Option<Value>,
         request_id: Option<String>,
         context: Option<crate::context::RequestContext>,
+        input_responses: Option<std::collections::BTreeMap<String, Value>>,
+        request_state: Option<String>,
     ) -> std::result::Result<Value, String> {
         let trace_id = next_trace_id();
         let ctx = context.unwrap_or_default();
@@ -737,6 +807,8 @@ impl FacadeMcpServer {
             .send(ServerMsg::GetPrompt {
                 name: meta.name.clone(),
                 arguments,
+                input_responses,
+                request_state,
                 reply: reply_tx,
             })
             .await
@@ -894,6 +966,17 @@ fn facade_tools() -> Vec<Tool> {
                 "additionalProperties":false
             })),
         ),
+        Tool::new(
+            TOOL_SUBSCRIPTIONS_LISTEN,
+            "Query or subscribe to the catalog change feed",
+            schema_object(json!({
+                "type":"object",
+                "properties":{
+                    "after":{"type":"string"}
+                },
+                "additionalProperties":false
+            })),
+        ),
     ]
 }
 
@@ -955,7 +1038,7 @@ mod tests {
             .into_iter()
             .map(|t| t.name.to_string())
             .collect::<Vec<_>>();
-        assert_eq!(names.len(), 8);
+        assert_eq!(names.len(), 9);
         assert!(names.contains(&"capabilities_list".to_string()));
         assert!(names.contains(&"capability_describe".to_string()));
         assert!(names.contains(&"capability_call".to_string()));
@@ -964,6 +1047,7 @@ mod tests {
         assert!(names.contains(&"prompts_list".to_string()));
         assert!(names.contains(&"prompt_get".to_string()));
         assert!(names.contains(&"completion_complete".to_string()));
+        assert!(names.contains(&"subscriptions_listen".to_string()));
     }
 
     #[test]

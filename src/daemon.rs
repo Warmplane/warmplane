@@ -38,17 +38,23 @@ pub enum ServerMsg {
     CallTool {
         name: String,
         params: Value,
+        input_responses: Option<std::collections::BTreeMap<String, Value>>,
+        request_state: Option<String>,
         reply: oneshot::Sender<Result<Value, UpstreamCallError>>,
     },
     /// Read a resource URI.
     ReadResource {
         uri: String,
+        input_responses: Option<std::collections::BTreeMap<String, Value>>,
+        request_state: Option<String>,
         reply: oneshot::Sender<Result<Value, UpstreamCallError>>,
     },
     /// Render a prompt template.
     GetPrompt {
         name: String,
         arguments: Option<serde_json::Map<String, Value>>,
+        input_responses: Option<std::collections::BTreeMap<String, Value>>,
+        request_state: Option<String>,
         reply: oneshot::Sender<Result<Value, UpstreamCallError>>,
     },
 }
@@ -738,11 +744,19 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                     ServerMsg::CallTool {
                         name,
                         params,
+                        input_responses,
+                        request_state,
                         reply,
                     } => {
                         let mut req = CallToolRequestParams::new(name);
                         if let Some(obj) = params.as_object().cloned() {
                             req = req.with_arguments(obj);
+                        }
+                        if let Some(responses) = input_responses {
+                            req = req.with_input_responses(responses);
+                        }
+                        if let Some(state) = request_state {
+                            req = req.with_request_state(state);
                         }
 
                         let result = timeout(per_server_timeout, mcp_client.call_tool(req)).await;
@@ -755,8 +769,20 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                         };
                         let _ = reply.send(res);
                     }
-                    ServerMsg::ReadResource { uri, reply } => {
-                        let req = ReadResourceRequestParams::new(uri);
+                    ServerMsg::ReadResource {
+                        uri,
+                        input_responses,
+                        request_state,
+                        reply,
+                    } => {
+                        let mut req = ReadResourceRequestParams::new(uri);
+                        if let Some(responses) = input_responses {
+                            req = req.with_input_responses(responses);
+                        }
+                        if let Some(state) = request_state {
+                            req = req.with_request_state(state);
+                        }
+
                         let result =
                             timeout(per_server_timeout, mcp_client.read_resource(req)).await;
                         let res = match result {
@@ -771,12 +797,21 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                     ServerMsg::GetPrompt {
                         name,
                         arguments,
+                        input_responses,
+                        request_state,
                         reply,
                     } => {
                         let mut req = GetPromptRequestParams::new(name);
                         if let Some(args) = arguments {
                             req = req.with_arguments(args);
                         }
+                        if let Some(responses) = input_responses {
+                            req = req.with_input_responses(responses);
+                        }
+                        if let Some(state) = request_state {
+                            req = req.with_request_state(state);
+                        }
+
                         let result = timeout(per_server_timeout, mcp_client.get_prompt(req)).await;
                         let res = match result {
                             Ok(Ok(prompt_res)) => {

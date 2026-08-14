@@ -109,6 +109,12 @@ pub struct CallCapabilityRequest {
     /// Optional key for idempotent request deduplication.
     #[serde(default)]
     pub idempotency_key: Option<String>,
+    /// Optional MRTR client input responses for multi-roundtrip retry.
+    #[serde(default)]
+    pub input_responses: Option<std::collections::BTreeMap<String, Value>>,
+    /// Optional MRTR opaque request state for multi-roundtrip retry.
+    #[serde(default)]
+    pub request_state: Option<String>,
 }
 
 /// Request body for reading a resource.
@@ -125,6 +131,12 @@ pub struct ReadResourceRequest {
     /// Optional key for idempotent request deduplication.
     #[serde(default)]
     pub idempotency_key: Option<String>,
+    /// Optional MRTR client input responses for multi-roundtrip retry.
+    #[serde(default)]
+    pub input_responses: Option<std::collections::BTreeMap<String, Value>>,
+    /// Optional MRTR opaque request state for multi-roundtrip retry.
+    #[serde(default)]
+    pub request_state: Option<String>,
 }
 
 /// Request body for fetching a prompt template.
@@ -144,6 +156,12 @@ pub struct GetPromptRequest {
     /// Optional key for idempotent request deduplication.
     #[serde(default)]
     pub idempotency_key: Option<String>,
+    /// Optional MRTR client input responses for multi-roundtrip retry.
+    #[serde(default)]
+    pub input_responses: Option<std::collections::BTreeMap<String, Value>>,
+    /// Optional MRTR opaque request state for multi-roundtrip retry.
+    #[serde(default)]
+    pub request_state: Option<String>,
 }
 
 fn default_search_limit() -> usize {
@@ -630,6 +648,8 @@ pub async fn handle_read_resource(
     if tx
         .send(ServerMsg::ReadResource {
             uri: meta.uri.clone(),
+            input_responses: payload.input_responses,
+            request_state: payload.request_state,
             reply: reply_tx,
         })
         .await
@@ -844,6 +864,8 @@ pub async fn handle_get_prompt(
         .send(ServerMsg::GetPrompt {
             name: meta.name.clone(),
             arguments,
+            input_responses: payload.input_responses,
+            request_state: payload.request_state,
             reply: reply_tx,
         })
         .await
@@ -1092,6 +1114,8 @@ pub async fn handle_call_capability(
         .send(ServerMsg::CallTool {
             name: meta.tool.clone(),
             params: payload.args,
+            input_responses: payload.input_responses,
+            request_state: payload.request_state,
             reply: reply_tx,
         })
         .await
@@ -1441,6 +1465,8 @@ mod tests {
                 request_id: None,
                 context: None,
                 idempotency_key: None,
+                input_responses: None,
+                request_state: None,
             }),
         )
         .await
@@ -1515,6 +1541,8 @@ mod tests {
                 request_id: None,
                 context: None,
                 idempotency_key: None,
+                input_responses: None,
+                request_state: None,
             }),
         )
         .await
@@ -1562,6 +1590,8 @@ mod tests {
                 request_id: None,
                 context: None,
                 idempotency_key: None,
+                input_responses: None,
+                request_state: None,
             }),
         )
         .await
@@ -1699,6 +1729,8 @@ mod tests {
                     ..Default::default()
                 }),
                 idempotency_key: None,
+                input_responses: None,
+                request_state: None,
             }),
         )
         .await
