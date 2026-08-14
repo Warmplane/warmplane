@@ -298,11 +298,36 @@ Warmplane exposes lightweight synthetic tools to keep LLM context token usage mi
 
 ---
 
-### 5.3 CLI Facade Mode
+### 5.3 CLI Configuration & Facade Mode
 
-Run single-shot CLI commands for administration, debugging, and automation scripts.
+Run single-shot CLI commands for administration, configuration management, debugging, and automation scripts.
 
-#### CLI Command Reference
+#### Upstream Server Management (`warmplane server`)
+
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `server add` | Adds or configures an upstream MCP server (interactive if flags omitted). | `warmplane server add github --command npx --arg "-y" --arg "@modelcontextprotocol/server-github"` |
+| `server remove` | Removes an upstream MCP server with confirmation prompt (`-y` bypass). | `warmplane server remove github -y` |
+| `server list` | Displays a table or JSON (`--json`) list of configured servers. | `warmplane server list` |
+| `server get` | Inspects a single server definition in detail. | `warmplane server get github` |
+| `server test` | Tests upstream reachability, binary path resolution, or HTTP connectivity. | `warmplane server test github` |
+
+#### Global Configuration, Aliases & Policy Management (`warmplane config`)
+
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `config init` | Scaffolds a clean `mcp_servers.json` configuration file. | `warmplane config init` |
+| `config show` | Pretty-prints the merged configuration file. | `warmplane config show` |
+| `config import` | Discovers and imports servers from Claude Desktop, Cursor, or custom files. | `warmplane config import` |
+| `config alias set` | Registers a capability/tool, resource, or prompt alias. | `warmplane config alias set tool git-commit github.create_commit` |
+| `config alias remove` | Removes an alias mapping. | `warmplane config alias remove tool git-commit` |
+| `config alias list` | Lists all active capability, resource, and prompt aliases. | `warmplane config alias list` |
+| `config policy allow` | Adds capability patterns to the policy allow list. | `warmplane config policy allow "github.*" "fetch.*"` |
+| `config policy deny` | Adds capability patterns to the policy deny list. | `warmplane config policy deny "filesystem.write*"` |
+| `config policy redact` | Adds sensitive key names to the payload log redaction list. | `warmplane config policy redact "api_key" "token"` |
+| `config policy show` | Displays active security policy rules and redaction keys. | `warmplane config policy show` |
+
+#### Operational & Execution CLI Commands
 
 | Command | Description | Example |
 | :--- | :--- | :--- |

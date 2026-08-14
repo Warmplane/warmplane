@@ -36,6 +36,16 @@ pub enum Commands {
         #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
         config: String,
     },
+    /// Manage upstream MCP servers (add, remove, list, get, test)
+    Server {
+        #[command(subcommand)]
+        command: ServerCommands,
+    },
+    /// Manage Warmplane configuration, aliases, policies, and imports
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommands,
+    },
     /// List compact capabilities from the v1 facade API
     ListCapabilities {
         #[arg(short = 'p', long)]
@@ -156,4 +166,209 @@ pub enum Commands {
         config: String,
         id: String,
     },
+}
+
+/// Upstream server management subcommands.
+#[derive(Subcommand, Debug, Clone)]
+pub enum ServerCommands {
+    /// Add or configure an upstream MCP server
+    Add(Box<ServerAddArgs>),
+    /// Remove an upstream MCP server by identifier
+    Remove {
+        /// Server identifier
+        name: String,
+        /// Bypass confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// List all configured upstream MCP servers
+    List {
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Get details of a specific upstream MCP server
+    Get {
+        /// Server identifier
+        name: String,
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Test reachability and capability discovery with upstream server
+    Test {
+        /// Server identifier
+        name: String,
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+}
+
+/// Global Warmplane configuration management subcommands.
+#[derive(Subcommand, Debug, Clone)]
+pub enum ConfigCommands {
+    /// Initialize a new Warmplane configuration file
+    Init {
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+        /// Overwrite existing configuration if present
+        #[arg(short = 'f', long)]
+        force: bool,
+    },
+    /// Show current merged configuration
+    Show {
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Import MCP server configurations from Claude Desktop, Cursor, or Zed
+    Import {
+        /// Automatically overwrite existing servers with same identifier
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Specific file path to import from (optional)
+        #[arg(long)]
+        from_file: Option<String>,
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Manage capability, resource, and prompt aliases
+    Alias {
+        #[command(subcommand)]
+        command: AliasCommands,
+    },
+    /// Manage security access policies
+    Policy {
+        #[command(subcommand)]
+        command: PolicyCommands,
+    },
+}
+
+/// Alias management subcommands.
+#[derive(Subcommand, Debug, Clone)]
+pub enum AliasCommands {
+    /// Set an alias
+    Set {
+        /// Alias type (tool, resource, prompt)
+        kind: String,
+        /// Alias name
+        alias: String,
+        /// Target canonical identifier or URI
+        target: String,
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Remove an alias
+    Remove {
+        /// Alias type (tool, resource, prompt)
+        kind: String,
+        /// Alias name
+        alias: String,
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// List all aliases
+    List {
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+}
+
+/// Policy management subcommands.
+#[derive(Subcommand, Debug, Clone)]
+pub enum PolicyCommands {
+    /// Add capability patterns to allow list
+    Allow {
+        /// Capability pattern(s) (e.g. "github.*")
+        patterns: Vec<String>,
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Add capability patterns to deny list
+    Deny {
+        /// Capability pattern(s) (e.g. "filesystem.write*")
+        patterns: Vec<String>,
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Add sensitive keys to redact list
+    Redact {
+        /// Sensitive key names (e.g. "api_key", "password")
+        keys: Vec<String>,
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Show current security policy rules
+    Show {
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+}
+
+/// Arguments for `warmplane server add` command.
+#[derive(clap::Args, Debug, Clone)]
+pub struct ServerAddArgs {
+    /// Server identifier (e.g. github, filesystem)
+    pub name: Option<String>,
+    /// Stdio executable command (e.g. npx, uvx, python)
+    #[arg(long)]
+    pub command: Option<String>,
+    /// Command line arguments (repeat flag or space/comma separated)
+    #[arg(short, long)]
+    pub arg: Vec<String>,
+    /// Environment variables in KEY=VALUE format
+    #[arg(short, long)]
+    pub env: Vec<String>,
+    /// Remote HTTP/SSE URL endpoint
+    #[arg(long)]
+    pub url: Option<String>,
+    /// Static Bearer token
+    #[arg(long)]
+    pub bearer_token: Option<String>,
+    /// Environment variable containing Bearer token
+    #[arg(long)]
+    pub bearer_env: Option<String>,
+    /// HTTP Basic auth username
+    #[arg(long)]
+    pub username: Option<String>,
+    /// HTTP Basic auth password
+    #[arg(long)]
+    pub password: Option<String>,
+    /// HTTP Basic auth password environment variable
+    #[arg(long)]
+    pub password_env: Option<String>,
+    /// OAuth2 client ID
+    #[arg(long)]
+    pub client_id: Option<String>,
+    /// OAuth2 authorization server URL
+    #[arg(long)]
+    pub auth_server: Option<String>,
+    /// OAuth2 scopes (comma-separated)
+    #[arg(long)]
+    pub scopes: Option<String>,
+    /// Force interactive guided setup prompt
+    #[arg(short, long)]
+    pub interactive: bool,
+    /// Path to Warmplane configuration file
+    #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+    pub config: String,
 }

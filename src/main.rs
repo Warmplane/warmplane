@@ -7,11 +7,14 @@ use clap::Parser;
 use serde_json::{json, Value};
 
 mod catalog;
+mod cli_config;
 mod config;
+mod config_import;
 mod context;
 mod daemon;
 mod http_v1;
 mod idempotency;
+mod interactive;
 mod mcp_server;
 mod models;
 mod oauth2;
@@ -40,6 +43,12 @@ async fn main() -> Result<()> {
                 "{{\"ok\":true,\"config\":\"{}\",\"servers\":{}}}",
                 config, server_count
             );
+        }
+        Commands::Server { command } => {
+            cli_config::handle_server_command(command).await?;
+        }
+        Commands::Config { command } => {
+            cli_config::handle_config_command(command).await?;
         }
         Commands::Daemon { port, config } => {
             let config_data = load_config(&config)?;

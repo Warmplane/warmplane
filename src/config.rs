@@ -1,8 +1,6 @@
-// Rust guideline compliant 2026-08-13
-
 use anyhow::{Context, Result};
-use serde::Deserialize;
-use std::{collections::HashMap, fs, io::ErrorKind};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, fs, io::ErrorKind, path::PathBuf};
 
 /// Default TCP listening port for Warmplane daemon HTTP API.
 pub const DEFAULT_PORT: u16 = 9090;
@@ -12,77 +10,105 @@ pub const DEFAULT_CONFIG_PATH: &str = "mcp_servers.json";
 pub const DEFAULT_TOOL_TIMEOUT_MS: u64 = 15_000;
 
 /// Root configuration container for Warmplane MCP proxy.
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq)]
 pub struct McpConfig {
     /// Optional HTTP port override.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
     /// Tool execution timeout override in milliseconds.
-    #[serde(default, rename = "toolTimeoutMs")]
+    #[serde(
+        default,
+        rename = "toolTimeoutMs",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub tool_timeout_ms: Option<u64>,
     /// Capability alias mapping (alias -> canonical capability ID).
-    #[serde(default, rename = "capabilityAliases")]
+    #[serde(
+        default,
+        rename = "capabilityAliases",
+        skip_serializing_if = "HashMap::is_empty"
+    )]
     pub capability_aliases: HashMap<String, String>,
     /// Resource alias mapping (alias -> canonical resource URI).
-    #[serde(default, rename = "resourceAliases")]
+    #[serde(
+        default,
+        rename = "resourceAliases",
+        skip_serializing_if = "HashMap::is_empty"
+    )]
     pub resource_aliases: HashMap<String, String>,
     /// Prompt alias mapping (alias -> canonical prompt name).
-    #[serde(default, rename = "promptAliases")]
+    #[serde(
+        default,
+        rename = "promptAliases",
+        skip_serializing_if = "HashMap::is_empty"
+    )]
     pub prompt_aliases: HashMap<String, String>,
     /// Optional security policy configuration.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<PolicyConfig>,
     /// Upstream MCP server definitions keyed by server identifier.
-    #[serde(rename = "mcpServers")]
+    #[serde(rename = "mcpServers", default)]
     pub mcp_servers: HashMap<String, ServerConfig>,
 }
 
 /// Upstream server configuration definition.
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq)]
 pub struct ServerConfig {
     /// Executable command for stdio-based servers.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     /// Command line arguments for stdio-based servers.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
     /// Environment variables to pass to stdio server process.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub env: HashMap<String, String>,
     /// URL endpoint for HTTP/SSE-based servers.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// MCP protocol version preference.
-    #[serde(default, rename = "protocolVersion")]
+    #[serde(
+        default,
+        rename = "protocolVersion",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub protocol_version: Option<String>,
     /// Whether stateless HTTP calls are allowed for this server.
-    #[serde(default, rename = "allowStateless")]
+    #[serde(
+        default,
+        rename = "allowStateless",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub allow_stateless: Option<bool>,
     /// Additional static HTTP headers.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub headers: HashMap<String, String>,
     /// Authentication settings for upstream server.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthConfig>,
 }
 
 /// Upstream authentication configuration types.
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuthConfig {
     /// Static or environment-based Bearer token authentication.
     Bearer {
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         token: Option<String>,
-        #[serde(default, rename = "tokenEnv")]
+        #[serde(default, rename = "tokenEnv", skip_serializing_if = "Option::is_none")]
         token_env: Option<String>,
     },
     /// HTTP Basic authentication.
     Basic {
         username: String,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         password: Option<String>,
-        #[serde(default, rename = "passwordEnv")]
+        #[serde(
+            default,
+            rename = "passwordEnv",
+            skip_serializing_if = "Option::is_none"
+        )]
         password_env: Option<String>,
     },
     /// OAuth2 authorization code flow with PKCE.
@@ -91,24 +117,28 @@ pub enum AuthConfig {
         client_id: String,
         #[serde(rename = "authorizationServerUrl")]
         authorization_server_url: String,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         scopes: Vec<String>,
-        #[serde(default, rename = "clientMetadataUrl")]
+        #[serde(
+            default,
+            rename = "clientMetadataUrl",
+            skip_serializing_if = "Option::is_none"
+        )]
         client_metadata_url: Option<String>,
     },
 }
 
 /// Security access control policy configuration.
-#[derive(Deserialize, Clone, Default)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq)]
 pub struct PolicyConfig {
     /// List of capability ID patterns allowed for execution.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow: Vec<String>,
     /// List of capability ID patterns explicitly denied.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deny: Vec<String>,
     /// Sensitive key patterns to redact in logged request/response payloads.
-    #[serde(default, rename = "redactKeys")]
+    #[serde(default, rename = "redactKeys", skip_serializing_if = "Vec::is_empty")]
     pub redact_keys: Vec<String>,
 }
 
@@ -130,6 +160,70 @@ pub fn load_config(config_path: impl AsRef<str>) -> Result<McpConfig> {
         serde_json::from_str(&config_str).context("Failed to parse config JSON")?;
     validate_config(&config)?;
     Ok(config)
+}
+
+/// Loads config if present, or returns an empty default config.
+///
+/// # Arguments
+/// * `config_path` - Path to the JSON configuration file.
+///
+/// # Returns
+/// Existing or newly initialized `McpConfig`.
+///
+/// # Errors
+/// Returns an error if file exists but contains invalid JSON.
+pub fn load_or_default_config(config_path: impl AsRef<str>) -> Result<McpConfig> {
+    let path_ref = config_path.as_ref();
+    match fs::read_to_string(path_ref) {
+        Ok(config_str) => {
+            let config: McpConfig =
+                serde_json::from_str(&config_str).context("Failed to parse config JSON")?;
+            validate_config(&config)?;
+            Ok(config)
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(McpConfig::default()),
+        Err(err) => Err(err).with_context(|| format!("Failed to read config file: {}", path_ref)),
+    }
+}
+
+/// Validates and atomically saves configuration to disk.
+///
+/// # Arguments
+/// * `config_path` - Path to the JSON configuration file.
+/// * `config` - `McpConfig` instance to serialize and save.
+///
+/// # Errors
+/// Returns an error if validation fails or file write/rename fails.
+pub fn save_config(config_path: impl AsRef<str>, config: &McpConfig) -> Result<()> {
+    validate_config(config)?;
+    let target_path = PathBuf::from(config_path.as_ref());
+    if let Some(parent) = target_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+        }
+    }
+
+    let json_bytes = serde_json::to_string_pretty(config)
+        .context("Failed to serialize configuration to JSON")?;
+    let tmp_path = target_path.with_extension(format!("tmp.{}", std::process::id()));
+
+    fs::write(&tmp_path, format!("{}\n", json_bytes)).with_context(|| {
+        format!(
+            "Failed to write temporary config file: {}",
+            tmp_path.display()
+        )
+    })?;
+
+    fs::rename(&tmp_path, &target_path).with_context(|| {
+        format!(
+            "Failed to replace target config file {} with {}",
+            target_path.display(),
+            tmp_path.display()
+        )
+    })?;
+
+    Ok(())
 }
 
 /// Resolves client server listening port from CLI override or config file.
@@ -413,5 +507,24 @@ mod tests {
             client_metadata_url: Some("https://example.com/metadata.json".to_string()),
         });
         assert!(validate_config(&config_with_server(server)).is_ok());
+    }
+
+    #[test]
+    fn save_and_load_config_roundtrip() {
+        let temp_dir = std::env::temp_dir().join(format!("warmplane_test_{}", std::process::id()));
+        let config_file = temp_dir.join("test_servers.json");
+
+        let mut config = McpConfig::default();
+        config.port = Some(9999);
+        let mut server = empty_server();
+        server.command = Some("node".to_string());
+        server.args = vec!["server.js".to_string()];
+        config.mcp_servers.insert("node_server".to_string(), server);
+
+        super::save_config(config_file.to_str().unwrap(), &config).unwrap();
+        let loaded = super::load_config(config_file.to_str().unwrap()).unwrap();
+        assert_eq!(config, loaded);
+
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 }
