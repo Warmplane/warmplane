@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Warmplane Control Deck</title>
+  <link rel="stylesheet" href="./src/styles/theme.css">
+  <style>
+    .ambient-glow {
+      position: fixed;
+      top: -150px;
+      right: 15%;
+      width: 450px;
+      height: 450px;
+      background: radial-gradient(circle, rgba(245, 158, 11, 0.07) 0%, rgba(12, 13, 16, 0) 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    aside.sidebar {
+      width: 240px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding: 16px 12px;
+      z-index: 10;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 8px 18px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+
+    .brand-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: var(--radius-sm);
+      background: linear-gradient(135deg, var(--amber-400), var(--amber-500));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      color: #000;
+      font-size: 15px;
+    }
+
+    .nav-group-label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      padding: 8px 10px 4px;
+      letter-spacing: 0.5px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 12.5px;
+      font-weight: 500;
+      transition: all 0.15s ease;
+      margin-bottom: 2px;
+    }
+
+    .nav-item:hover {
+      background: var(--surface-hover);
+      color: var(--text-main);
+    }
+
+    .nav-item.active {
+      background: var(--surface-card);
+      color: var(--amber-400);
+      font-weight: 600;
+      border-left: 2.5px solid var(--amber-400);
+    }
+
+    .nav-item svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .main-wrapper {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      position: relative;
+      z-index: 1;
+    }
+
+    .top-bar {
+      height: 52px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      background: rgba(19, 21, 26, 0.7);
+      backdrop-filter: blur(8px);
+    }
+
+    .content-viewport {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+    }
+
+    .cap-item {
+      padding: 9px 10px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      margin-bottom: 2px;
+      transition: all 0.15s ease;
+    }
+
+    .cap-item:hover {
+      background: var(--surface-hover);
+    }
+
+    .cap-item.active {
+      background: var(--surface-card);
+      border-left: 2px solid var(--amber-400);
+    }
+
+    .feed-row {
+      display: grid;
+      padding: 8px 14px;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+      align-items: center;
+      font-size: 11.5px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="ambient-glow"></div>
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-icon">W</div>
+      <div>
+        <div style="font-weight: 800; font-size: 13px; letter-spacing: 0.5px;">WARMPLANE</div>
+        <div style="font-size: 10px; color: var(--text-dim);">CONTROL DECK</div>
+      </div>
+      <span class="brand-badge" style="margin-left: auto;">v0.11.0</span>
+    </div>
+
+    <div class="nav-group-label">Mission Control</div>
+    <div class="nav-item active" data-tab="overview" onclick="window.app.switchTab('overview')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+      Overview Cockpit
+    </div>
+    <div class="nav-item" data-tab="servers" onclick="window.app.switchTab('servers')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"></rect><rect x="2" y="14" width="20" height="8" rx="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+      Server Hub
+    </div>
+    <div class="nav-item" data-tab="playground" onclick="window.app.switchTab('playground')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>
+      MCP Playground
+    </div>
+
+    <div class="nav-group-label" style="margin-top: 14px;">Governance</div>
+    <div class="nav-item" data-tab="policy" onclick="window.app.switchTab('policy')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+      Policy &amp; Redaction
+    </div>
+    <div class="nav-item" data-tab="aliases" onclick="window.app.switchTab('aliases')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>
+      Alias Studio
+    </div>
+
+    <div style="margin-top: auto; padding: 10px; background: var(--surface-card); border-radius: var(--radius-sm); border: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 11px;">
+      <span style="display: flex; align-items: center; gap: 6px;">
+        <span style="width: 7px; height: 7px; border-radius: 50%; background: var(--green-400);"></span>
+        <span id="daemon-port-label">Daemon</span>
+      </span>
+      <span style="color: var(--green-400); font-weight: 700;">WARM</span>
+    </div>
+  </aside>
+
+  <!-- MAIN AREA -->
+  <main class="main-wrapper">
+    <header class="top-bar">
+      <div style="font-size: 16px; font-weight: 700; color: var(--text-main);" id="top-title">Overview Cockpit</div>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn btn-ghost" onclick="window.app.openImportModal()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          Import Config
+        </button>
+        <button class="btn btn-primary" onclick="window.app.openAddServerModal()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          Add Server
+        </button>
+      </div>
+    </header>
+
+    <div class="content-viewport" id="app-main">
+      <!-- Dynamic workspace content rendered here -->
+    </div>
+  </main>
+
+  <!-- MODAL: ADD SERVER -->
+  <div class="modal-backdrop" id="modal-add-server" onclick="if(event.target === this) window.app.closeModals()">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="modal-title">Add Upstream MCP Server</div>
+        <button class="btn btn-ghost" onclick="window.app.closeModals()" style="padding: 2px 6px;">✕</button>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Server Identifier</label>
+        <input type="text" class="form-input" id="modal-srv-name" placeholder="e.g. postgres, weather, linear">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Transport Type</label>
+        <select class="form-input" id="modal-srv-transport" onchange="document.getElementById('modal-group-cmd').style.display = this.value === 'stdio' ? 'block' : 'none'; document.getElementById('modal-group-url').style.display = this.value === 'http' ? 'block' : 'none';">
+          <option value="stdio">Stdio (Local Process / CLI)</option>
+          <option value="http">HTTP / SSE (Remote Endpoint)</option>
+        </select>
+      </div>
+      <div class="form-group" id="modal-group-cmd">
+        <label class="form-label">Executable Command &amp; Args</label>
+        <input type="text" class="form-input" id="modal-srv-command" placeholder="npx -y @modelcontextprotocol/server-postgres postgresql://...">
+      </div>
+      <div class="form-group" id="modal-group-url" style="display: none;">
+        <label class="form-label">Remote Endpoint URL</label>
+        <input type="text" class="form-input" id="modal-srv-url" placeholder="https://api.example.com/sse">
+      </div>
+      <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px;">
+        <button class="btn btn-ghost" onclick="window.app.closeModals()">Cancel</button>
+        <button class="btn btn-primary" onclick="window.app.submitAddServer()">Save &amp; Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: IMPORT CONFIG -->
+  <div class="modal-backdrop" id="modal-import" onclick="if(event.target === this) window.app.closeModals()">
+    <div class="modal-box" style="width: 560px;">
+      <div class="modal-header">
+        <div class="modal-title">Import Existing MCP Configurations</div>
+        <button class="btn btn-ghost" onclick="window.app.closeModals()" style="padding: 2px 6px;">✕</button>
+      </div>
+      <p style="color: var(--text-dim); font-size: 12px; margin-bottom: 14px;">
+        Discovered standard MCP configurations from your IDE ecosystem:
+      </p>
+      <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px;" id="modal-eco-list">
+        <!-- Ecosystem sources populated here -->
+      </div>
+      <div style="display: flex; justify-content: flex-end; gap: 8px;">
+        <button class="btn btn-ghost" onclick="window.app.closeModals()">Cancel</button>
+        <button class="btn btn-primary" onclick="window.app.submitImport()">Import Discovered Servers</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

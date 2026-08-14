@@ -1,7 +1,7 @@
 # Warmplane
 
 > **The local control plane that keeps MCP sessions warm.**  
-> v0.10.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml) · [Spec](docs/spec.md)
+> v0.11.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml) · [Spec](docs/spec.md)
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
 
@@ -156,6 +156,8 @@ warmplane cancel-operation req-101
 
 | Feature | Since | Summary |
 |---------|-------|---------|
+| **Control Deck Web UI** | v0.11.0 | Standalone embedded web dashboard for servers, testing playground, policy & telemetry |
+| **Dynamic Hot-Reloading** | v0.11.0 | Zero-downtime upstream mounting/unmounting, explicit `warmplane reload` & `/v1/config/reload` |
 | **CLI Config & Interactive Setup** | v0.10.0 | `warmplane server` & `warmplane config` wizards, atomic JSON writes |
 | **Ecosystem Import** | v0.10.0 | 1-click import from Claude Desktop, Cursor, and Zed settings |
 | **Alias registry** | v0.1 | Short stable aliases over upstream capability IDs |
@@ -175,6 +177,12 @@ warmplane cancel-operation req-101
 ---
 
 ## Changelog
+
+### v0.11.0 — Control Deck Web UI & Dynamic Upstream Hot-Reloading
+- **Control Deck Web UI:** Embedded zero-dependency web dashboard at `/ui` and `/` with live telemetry, server manager, interactive tool playground, policy/redaction manager, and alias registry.
+- **Zero-Downtime Dynamic Upstream Mounting:** Dynamically mount and unmount stdio, HTTP, and OAuth2 upstream workers via REST/UI/CLI without restarting the daemon process.
+- **Dynamic Catalogs & ETags:** Concurrency-safe state management with automatic SHA256 ETag recomputation and SSE resource notifications on server changes.
+- **Explicit Config Hot-Reload:** Added `warmplane reload` CLI command and `POST /v1/config/reload` endpoint to cleanly reconcile in-memory workers against manual edits to `mcp_servers.json`.
 
 ### v0.10.0 — CLI Configuration Management & Ecosystem Importers
 - Added `warmplane server` (`add`, `remove`, `list`, `get`, `test`) commands with interactive `inquire` wizards and flag-driven headless automation.

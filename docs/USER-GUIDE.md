@@ -18,11 +18,12 @@ Warmplane optimizes AI agent tool execution across three core technical metrics:
 
 ### Client Interfaces
 
-Warmplane exposes three client interfaces backed by shared daemon state:
+Warmplane exposes four primary client interfaces backed by shared daemon state:
 
-1. **HTTP REST API (`/v1/...`)**: Low-overhead HTTP JSON API for web applications, microservices, and orchestration gateways.
-2. **MCP Stdio Server Mode (`mcp-server`)**: Standard MCP stdio interface for direct integration with MCP-native AI clients.
-3. **CLI Facade (`warmplane <command>`)**: Command-line interface for administrative scripting, health checks, and manual debugging.
+1. **Control Deck Web UI (`/ui` & `/`)**: Embedded zero-dependency web management interface for runtime telemetry, upstream server lifecycle, interactive tool execution playground, and security policy rules.
+2. **HTTP REST API (`/v1/...`)**: Low-overhead HTTP JSON API for web applications, microservices, and orchestration gateways.
+3. **MCP Stdio Server Mode (`mcp-server`)**: Standard MCP stdio interface for direct integration with MCP-native AI clients.
+4. **CLI Facade (`warmplane <command>`)**: Command-line interface for administrative scripting, server hot-reloading (`warmplane reload`), health checks, and manual debugging.
 
 ---
 

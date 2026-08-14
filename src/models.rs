@@ -46,6 +46,13 @@ pub enum Commands {
         #[command(subcommand)]
         command: ConfigCommands,
     },
+    /// Trigger a hot-reload of active upstream servers and policies from config file
+    Reload {
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
     /// List compact capabilities from the v1 facade API
     ListCapabilities {
         #[arg(short = 'p', long)]
@@ -253,6 +260,14 @@ pub enum ConfigCommands {
     Policy {
         #[command(subcommand)]
         command: PolicyCommands,
+    },
+    /// Hot-reload daemon configuration and upstream servers from disk
+    Reload {
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
     },
 }
 

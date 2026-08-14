@@ -23,7 +23,7 @@ use tokio::{
     sync::{mpsc, oneshot, RwLock},
     time::timeout,
 };
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     config::{AuthConfig, McpConfig, PolicyConfig, ServerConfig, DEFAULT_TOOL_TIMEOUT_MS},
@@ -282,25 +282,34 @@ fn build_http_headers(server_id: &str, srv_cfg: &ServerConfig) -> Result<HeaderM
     Ok(headers)
 }
 
+pub type SharedServers = Arc<RwLock<HashMap<String, mpsc::Sender<ServerMsg>>>>;
+pub type SharedCapabilities = Arc<RwLock<HashMap<String, CapabilityMeta>>>;
+pub type SharedResources = Arc<RwLock<HashMap<String, ResourceMeta>>>;
+pub type SharedPrompts = Arc<RwLock<HashMap<String, PromptMeta>>>;
+pub type SharedPolicy = Arc<RwLock<Policy>>;
+pub type SharedCatalogVersion = Arc<RwLock<String>>;
+pub type SharedServerConfigs = Arc<RwLock<HashMap<String, ServerConfig>>>;
+pub type SharedServerStatuses = Arc<RwLock<HashMap<String, serde_json::Value>>>;
+
 /// Global application state shared across Axum HTTP handlers in the daemon.
 #[derive(Clone)]
 pub struct AppState {
     /// Active communication channels to upstream server workers.
-    pub servers: Arc<HashMap<String, mpsc::Sender<ServerMsg>>>,
+    pub servers: SharedServers,
     /// Compact capability catalog metadata map.
-    pub capabilities: Arc<HashMap<String, CapabilityMeta>>,
+    pub capabilities: SharedCapabilities,
     /// Compact resource catalog metadata map.
-    pub resources: Arc<HashMap<String, ResourceMeta>>,
+    pub resources: SharedResources,
     /// Compact prompt catalog metadata map.
-    pub prompts: Arc<HashMap<String, PromptMeta>>,
+    pub prompts: SharedPrompts,
     /// Global tool execution timeout in milliseconds.
     pub tool_timeout_ms: u64,
     /// Security policy rules.
-    pub policy: Policy,
+    pub policy: SharedPolicy,
     /// Hybrid search engine instance.
     pub search_engine: Arc<crate::search::HybridSearchEngine>,
     /// SHA256 catalog ETag version string.
-    pub catalog_version: String,
+    pub catalog_version: SharedCatalogVersion,
     /// Event store for catalog changes.
     pub event_store: Arc<crate::catalog::CatalogEventStore>,
     /// Idempotency deduplication store.
@@ -309,6 +318,24 @@ pub struct AppState {
     pub operation_registry: crate::operations::OperationRegistry,
     /// Real-time broadcast channel for resource update notifications.
     pub resource_update_tx: tokio::sync::broadcast::Sender<crate::catalog::ResourceUpdateEvent>,
+    /// Path to active config file.
+    pub config_path: String,
+    /// Active server configurations keyed by server identifier.
+    pub server_configs: SharedServerConfigs,
+    /// Active server protocol version & transport info.
+    pub server_statuses: SharedServerStatuses,
+    /// Live total catalog / capabilities requests.
+    pub total_catalog_requests: Arc<std::sync::atomic::AtomicU64>,
+    /// Live ETag 304 cache hits.
+    pub total_etag_hits: Arc<std::sync::atomic::AtomicU64>,
+    /// Live total capability executions.
+    pub total_tool_calls: Arc<std::sync::atomic::AtomicU64>,
+    /// Live cumulative tool execution duration in microseconds.
+    pub total_tool_duration_us: Arc<std::sync::atomic::AtomicU64>,
+    /// Optional OAuth proxy server port.
+    pub oauth_proxy_port: Option<u16>,
+    /// Central OAuth registry.
+    pub oauth_registry: crate::oauth2::OAuthRegistry,
 }
 
 impl AppState {
@@ -321,37 +348,63 @@ impl AppState {
 /// Builder for constructing `AppState` instances (`M-INIT-BUILDER`).
 #[derive(Default)]
 pub struct AppStateBuilder {
-    servers: Option<Arc<HashMap<String, mpsc::Sender<ServerMsg>>>>,
-    capabilities: Option<Arc<HashMap<String, CapabilityMeta>>>,
-    resources: Option<Arc<HashMap<String, ResourceMeta>>>,
-    prompts: Option<Arc<HashMap<String, PromptMeta>>>,
+    servers: Option<SharedServers>,
+    capabilities: Option<SharedCapabilities>,
+    resources: Option<SharedResources>,
+    prompts: Option<SharedPrompts>,
     tool_timeout_ms: Option<u64>,
-    policy: Option<Policy>,
+    policy: Option<SharedPolicy>,
     search_engine: Option<Arc<crate::search::HybridSearchEngine>>,
-    catalog_version: Option<String>,
+    catalog_version: Option<SharedCatalogVersion>,
     event_store: Option<Arc<crate::catalog::CatalogEventStore>>,
     idempotency_store: Option<Arc<crate::idempotency::IdempotencyStore>>,
     operation_registry: Option<crate::operations::OperationRegistry>,
     resource_update_tx: Option<tokio::sync::broadcast::Sender<crate::catalog::ResourceUpdateEvent>>,
+    config_path: Option<String>,
+    server_configs: Option<SharedServerConfigs>,
+    server_statuses: Option<SharedServerStatuses>,
+    oauth_proxy_port: Option<u16>,
+    oauth_registry: Option<crate::oauth2::OAuthRegistry>,
 }
 
+#[allow(dead_code)]
 impl AppStateBuilder {
-    pub fn servers(mut self, servers: Arc<HashMap<String, mpsc::Sender<ServerMsg>>>) -> Self {
+    pub fn servers(mut self, servers: HashMap<String, mpsc::Sender<ServerMsg>>) -> Self {
+        self.servers = Some(Arc::new(RwLock::new(servers)));
+        self
+    }
+
+    pub fn servers_arc(mut self, servers: SharedServers) -> Self {
         self.servers = Some(servers);
         self
     }
 
-    pub fn capabilities(mut self, capabilities: Arc<HashMap<String, CapabilityMeta>>) -> Self {
+    pub fn capabilities(mut self, capabilities: HashMap<String, CapabilityMeta>) -> Self {
+        self.capabilities = Some(Arc::new(RwLock::new(capabilities)));
+        self
+    }
+
+    pub fn capabilities_arc(mut self, capabilities: SharedCapabilities) -> Self {
         self.capabilities = Some(capabilities);
         self
     }
 
-    pub fn resources(mut self, resources: Arc<HashMap<String, ResourceMeta>>) -> Self {
+    pub fn resources(mut self, resources: HashMap<String, ResourceMeta>) -> Self {
+        self.resources = Some(Arc::new(RwLock::new(resources)));
+        self
+    }
+
+    pub fn resources_arc(mut self, resources: SharedResources) -> Self {
         self.resources = Some(resources);
         self
     }
 
-    pub fn prompts(mut self, prompts: Arc<HashMap<String, PromptMeta>>) -> Self {
+    pub fn prompts(mut self, prompts: HashMap<String, PromptMeta>) -> Self {
+        self.prompts = Some(Arc::new(RwLock::new(prompts)));
+        self
+    }
+
+    pub fn prompts_arc(mut self, prompts: SharedPrompts) -> Self {
         self.prompts = Some(prompts);
         self
     }
@@ -362,6 +415,11 @@ impl AppStateBuilder {
     }
 
     pub fn policy(mut self, policy: Policy) -> Self {
+        self.policy = Some(Arc::new(RwLock::new(policy)));
+        self
+    }
+
+    pub fn policy_arc(mut self, policy: Arc<RwLock<Policy>>) -> Self {
         self.policy = Some(policy);
         self
     }
@@ -372,7 +430,12 @@ impl AppStateBuilder {
     }
 
     pub fn catalog_version(mut self, version: impl Into<String>) -> Self {
-        self.catalog_version = Some(version.into());
+        self.catalog_version = Some(Arc::new(RwLock::new(version.into())));
+        self
+    }
+
+    pub fn catalog_version_arc(mut self, version: Arc<RwLock<String>>) -> Self {
+        self.catalog_version = Some(version);
         self
     }
 
@@ -388,6 +451,47 @@ impl AppStateBuilder {
 
     pub fn operation_registry(mut self, registry: crate::operations::OperationRegistry) -> Self {
         self.operation_registry = Some(registry);
+        self
+    }
+
+    pub fn config_path(mut self, path: impl Into<String>) -> Self {
+        self.config_path = Some(path.into());
+        self
+    }
+
+    pub fn server_configs(mut self, configs: HashMap<String, ServerConfig>) -> Self {
+        self.server_configs = Some(Arc::new(RwLock::new(configs)));
+        self
+    }
+
+    pub fn server_configs_arc(
+        mut self,
+        configs: Arc<RwLock<HashMap<String, ServerConfig>>>,
+    ) -> Self {
+        self.server_configs = Some(configs);
+        self
+    }
+
+    pub fn server_statuses(mut self, statuses: HashMap<String, serde_json::Value>) -> Self {
+        self.server_statuses = Some(Arc::new(RwLock::new(statuses)));
+        self
+    }
+
+    pub fn server_statuses_arc(
+        mut self,
+        statuses: Arc<RwLock<HashMap<String, serde_json::Value>>>,
+    ) -> Self {
+        self.server_statuses = Some(statuses);
+        self
+    }
+
+    pub fn oauth_proxy_port(mut self, port: Option<u16>) -> Self {
+        self.oauth_proxy_port = port;
+        self
+    }
+
+    pub fn oauth_registry(mut self, registry: crate::oauth2::OAuthRegistry) -> Self {
+        self.oauth_registry = Some(registry);
         self
     }
 
@@ -413,6 +517,15 @@ impl AppStateBuilder {
             resource_update_tx: self
                 .resource_update_tx
                 .unwrap_or_else(|| tokio::sync::broadcast::channel(64).0),
+            config_path: self.config_path.unwrap_or_default(),
+            server_configs: self.server_configs.unwrap_or_default(),
+            server_statuses: self.server_statuses.unwrap_or_default(),
+            total_catalog_requests: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            total_etag_hits: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            total_tool_calls: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            total_tool_duration_us: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            oauth_proxy_port: self.oauth_proxy_port,
+            oauth_registry: self.oauth_registry.unwrap_or_default(),
         }
     }
 }
@@ -451,46 +564,24 @@ pub fn compute_catalog_version(
     format!("sha256:{:x}", hasher.finalize())
 }
 
-/// Boots all configured upstream MCP servers and constructs global `AppState`.
-///
-/// # Arguments
-/// * `config` - Loaded `McpConfig` instance.
-///
-/// # Returns
-/// An initialized `AppState` instance.
-///
-/// # Errors
-/// Returns an error if an upstream server connection or protocol handshake fails.
-pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
-    let mut server_channels = HashMap::new();
-    let mut capabilities = HashMap::new();
-    let mut resources = HashMap::new();
-    let mut prompts = HashMap::new();
-    let tool_timeout_ms = config.tool_timeout_ms.unwrap_or(DEFAULT_TOOL_TIMEOUT_MS);
-    let policy = Policy::from_config(config.policy.clone());
-    let event_store = Arc::new(crate::catalog::CatalogEventStore::new());
+impl AppState {
+    /// Mounts a single upstream server dynamically into `AppState`.
+    pub async fn mount_upstream_server(
+        &self,
+        server_id: &str,
+        srv_cfg: &ServerConfig,
+        capability_aliases: &HashMap<String, String>,
+        resource_aliases: &HashMap<String, String>,
+        prompt_aliases: &HashMap<String, String>,
+    ) -> Result<()> {
+        info!(%server_id, "dynamically mounting upstream server");
 
-    info!(
-        server_count = config.mcp_servers.len(),
-        "booting upstream MCP servers"
-    );
+        let transport_type = if srv_cfg.command.is_some() {
+            "stdio"
+        } else {
+            "http"
+        };
 
-    // Initialize central OAuth registry and proxy server if any server uses OAuth2
-    let oauth_registry = crate::oauth2::OAuthRegistry::default();
-    let mut oauth_proxy_port = None;
-
-    let has_oauth2 = config
-        .mcp_servers
-        .values()
-        .any(|s| matches!(s.auth, Some(AuthConfig::Oauth2 { .. })));
-
-    if has_oauth2 {
-        let port = crate::oauth2::start_oauth_proxy_server(oauth_registry.clone()).await?;
-        oauth_proxy_port = Some(port);
-    }
-
-    for (server_id, srv_cfg) in config.mcp_servers {
-        info!(%server_id, "starting upstream server");
         let mcp_client = if let Some(command) = &srv_cfg.command {
             let mut cmd = Command::new(command);
             cmd.args(&srv_cfg.args);
@@ -512,16 +603,16 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                 client_metadata_url,
             }) = &srv_cfg.auth
             {
-                let proxy_port = oauth_proxy_port
-                    .ok_or_else(|| anyhow!("OAuth proxy server failed to initialize"))?;
+                let proxy_port = self
+                    .oauth_proxy_port
+                    .ok_or_else(|| anyhow!("OAuth proxy server not running"))?;
 
-                // Discover the OAuth authorization server metadata
                 let discovery =
                     crate::oauth2::discover_auth_server(url, Some(authorization_server_url))
                         .await?;
 
                 let client_state = crate::oauth2::OAuth2ClientState {
-                    server_id: server_id.clone(),
+                    server_id: server_id.to_string(),
                     client_id: client_id.clone(),
                     _authorization_server_url: authorization_server_url.clone(),
                     scopes: Arc::new(RwLock::new(scopes.iter().cloned().collect())),
@@ -531,26 +622,23 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                     remote_base_url: url.clone(),
                 };
 
-                // Perform the initial browser-based PKCE auth flow
                 let initial_token =
-                    crate::oauth2::run_oauth2_flow(&client_state, &oauth_registry, proxy_port)
+                    crate::oauth2::run_oauth2_flow(&client_state, &self.oauth_registry, proxy_port)
                         .await?;
                 {
                     let mut guard = client_state.token_state.write().await;
                     *guard = Some(initial_token);
                 }
 
-                // Add to registry so proxy can handle incoming requests
                 {
-                    let mut clients = oauth_registry.clients.write().await;
-                    clients.insert(server_id.clone(), client_state);
+                    let mut clients = self.oauth_registry.clients.write().await;
+                    clients.insert(server_id.to_string(), client_state);
                 }
 
-                // Rewrite transport target URL to route through the local proxy
                 target_url = format!("http://127.0.0.1:{}/proxy/{}/", proxy_port, server_id);
             }
 
-            let headers = build_http_headers(&server_id, &srv_cfg)?;
+            let headers = build_http_headers(server_id, srv_cfg)?;
             let http_client = reqwest::Client::builder()
                 .default_headers(headers)
                 .build()
@@ -575,26 +663,17 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
             ));
         };
 
+        let mut new_capabilities = Vec::new();
         if let Ok(tools) = mcp_client.list_tools(Default::default()).await {
             if let Ok(tools_json) = serde_json::to_value(&tools) {
                 if let Some(tools_array) = tools_json.get("tools").and_then(|t| t.as_array()) {
                     for tool in tools_array {
                         if let Some(tool_name) = tool.get("name").and_then(|n| n.as_str()) {
-                            info!(%server_id, tool_name = %tool_name, "registered upstream tool");
-
                             let source_id = format!("{}.{}", server_id, tool_name);
-                            let capability_id = config
-                                .capability_aliases
+                            let capability_id = capability_aliases
                                 .get(&source_id)
                                 .cloned()
                                 .unwrap_or(source_id);
-
-                            if capabilities.contains_key(&capability_id) {
-                                return Err(anyhow!(
-                                    "Duplicate capability id '{}'. Use capabilityAliases to disambiguate",
-                                    capability_id
-                                ));
-                            }
 
                             let summary = tool
                                 .get("description")
@@ -607,25 +686,25 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                                 .cloned()
                                 .unwrap_or_else(|| json!({}));
 
-                            capabilities.insert(
-                                capability_id.clone(),
+                            new_capabilities.push((
+                                capability_id,
                                 CapabilityMeta {
-                                    server: server_id.clone(),
+                                    server: server_id.to_string(),
                                     tool: tool_name.to_string(),
                                     summary,
                                     description,
                                     input_schema,
-                                    tags: vec![server_id.clone()],
+                                    tags: vec![server_id.to_string()],
                                     examples: vec![],
                                 },
-                            );
-                            event_store.record("capability", &capability_id, "added");
+                            ));
                         }
                     }
                 }
             }
         }
 
+        let mut new_resources = Vec::new();
         if let Ok(listed_resources) = mcp_client.list_resources(Default::default()).await {
             if let Ok(resources_json) = serde_json::to_value(&listed_resources) {
                 if let Some(resource_array) =
@@ -642,18 +721,10 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                             .to_string();
 
                         let source_id = format!("{}.{}", server_id, uri);
-                        let resource_id = config
-                            .resource_aliases
+                        let resource_id = resource_aliases
                             .get(&source_id)
                             .cloned()
                             .unwrap_or(source_id);
-
-                        if resources.contains_key(&resource_id) {
-                            return Err(anyhow!(
-                                "Duplicate resource id '{}'. Use resourceAliases to disambiguate",
-                                resource_id
-                            ));
-                        }
 
                         let description = resource
                             .get("description")
@@ -664,45 +735,34 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                             .and_then(|v| v.as_str())
                             .map(ToString::to_string);
 
-                        info!(%server_id, uri = %uri, "registered upstream resource");
-                        resources.insert(
-                            resource_id.clone(),
+                        new_resources.push((
+                            resource_id,
                             ResourceMeta {
-                                server: server_id.clone(),
+                                server: server_id.to_string(),
                                 uri: uri.to_string(),
                                 name,
                                 description,
                                 mime_type,
-                                tags: vec![server_id.clone()],
+                                tags: vec![server_id.to_string()],
                             },
-                        );
-                        event_store.record("resource", &resource_id, "added");
+                        ));
                     }
                 }
             }
         }
 
-        if let Ok(listed_prompts) = mcp_client.list_all_prompts().await {
+        let mut new_prompts = Vec::new();
+        if let Ok(listed_prompts) = mcp_client.list_prompts(Default::default()).await {
             if let Ok(prompts_json) = serde_json::to_value(&listed_prompts) {
-                if let Some(prompt_array) = prompts_json.as_array() {
+                if let Some(prompt_array) = prompts_json.get("prompts").and_then(|p| p.as_array()) {
                     for prompt in prompt_array {
                         let Some(name) = prompt.get("name").and_then(|v| v.as_str()) else {
                             continue;
                         };
 
                         let source_id = format!("{}.{}", server_id, name);
-                        let prompt_id = config
-                            .prompt_aliases
-                            .get(&source_id)
-                            .cloned()
-                            .unwrap_or(source_id);
-
-                        if prompts.contains_key(&prompt_id) {
-                            return Err(anyhow!(
-                                "Duplicate prompt id '{}'. Use promptAliases to disambiguate",
-                                prompt_id
-                            ));
-                        }
+                        let prompt_id =
+                            prompt_aliases.get(&source_id).cloned().unwrap_or(source_id);
 
                         let title = prompt
                             .get("title")
@@ -718,26 +778,24 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                             .cloned()
                             .unwrap_or_default();
 
-                        info!(%server_id, prompt_name = %name, "registered upstream prompt");
-                        prompts.insert(
-                            prompt_id.clone(),
+                        new_prompts.push((
+                            prompt_id,
                             PromptMeta {
-                                server: server_id.clone(),
+                                server: server_id.to_string(),
                                 name: name.to_string(),
                                 title,
                                 description,
                                 arguments,
-                                tags: vec![server_id.clone()],
+                                tags: vec![server_id.to_string()],
                             },
-                        );
-                        event_store.record("prompt", &prompt_id, "added");
+                        ));
                     }
                 }
             }
         }
 
         let (tx, mut rx) = mpsc::channel::<ServerMsg>(32);
-        let per_server_timeout = Duration::from_millis(tool_timeout_ms);
+        let per_server_timeout = Duration::from_millis(self.tool_timeout_ms);
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
                 match msg {
@@ -755,8 +813,8 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                         if let Some(responses) = input_responses {
                             req = req.with_input_responses(responses);
                         }
-                        if let Some(state) = request_state {
-                            req = req.with_request_state(state);
+                        if let Some(req_st) = request_state {
+                            req = req.with_request_state(req_st);
                         }
 
                         let result = timeout(per_server_timeout, mcp_client.call_tool(req)).await;
@@ -779,8 +837,8 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                         if let Some(responses) = input_responses {
                             req = req.with_input_responses(responses);
                         }
-                        if let Some(state) = request_state {
-                            req = req.with_request_state(state);
+                        if let Some(req_st) = request_state {
+                            req = req.with_request_state(req_st);
                         }
 
                         let result =
@@ -808,8 +866,8 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
                         if let Some(responses) = input_responses {
                             req = req.with_input_responses(responses);
                         }
-                        if let Some(state) = request_state {
-                            req = req.with_request_state(state);
+                        if let Some(req_st) = request_state {
+                            req = req.with_request_state(req_st);
                         }
 
                         let result = timeout(per_server_timeout, mcp_client.get_prompt(req)).await;
@@ -826,25 +884,294 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
             }
         });
 
-        server_channels.insert(server_id, tx);
+        {
+            let mut servers_guard = self.servers.write().await;
+            servers_guard.insert(server_id.to_string(), tx);
+        }
+        {
+            let mut configs_guard = self.server_configs.write().await;
+            configs_guard.insert(server_id.to_string(), srv_cfg.clone());
+        }
+        {
+            let mut statuses_guard = self.server_statuses.write().await;
+            statuses_guard.insert(
+                server_id.to_string(),
+                json!({
+                    "transport": transport_type,
+                    "protocol_version": srv_cfg.protocol_version.as_deref().unwrap_or(DEFAULT_MCP_PROTOCOL_VERSION),
+                    "status": "connected"
+                }),
+            );
+        }
+        {
+            let mut caps_guard = self.capabilities.write().await;
+            for (id, meta) in new_capabilities {
+                info!(%server_id, capability_id = %id, "registered upstream capability");
+                caps_guard.insert(id.clone(), meta);
+                self.event_store.record("capability", &id, "added");
+            }
+        }
+        {
+            let mut res_guard = self.resources.write().await;
+            for (id, meta) in new_resources {
+                info!(%server_id, resource_id = %id, "registered upstream resource");
+                res_guard.insert(id.clone(), meta);
+                self.event_store.record("resource", &id, "added");
+            }
+        }
+        {
+            let mut prompts_guard = self.prompts.write().await;
+            for (id, meta) in new_prompts {
+                info!(%server_id, prompt_id = %id, "registered upstream prompt");
+                prompts_guard.insert(id.clone(), meta);
+                self.event_store.record("prompt", &id, "added");
+            }
+        }
+
+        {
+            let caps = self.capabilities.read().await;
+            let res = self.resources.read().await;
+            let prompts = self.prompts.read().await;
+            let new_ver = compute_catalog_version(&caps, &res, &prompts);
+            let mut ver_guard = self.catalog_version.write().await;
+            *ver_guard = new_ver;
+        }
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_else(|_| "0".to_string());
+
+        let _ = self
+            .resource_update_tx
+            .send(crate::catalog::ResourceUpdateEvent {
+                uri: format!("server://{}", server_id),
+                timestamp,
+                server: server_id.to_string(),
+            });
+
+        Ok(())
     }
 
-    let catalog_version = compute_catalog_version(&capabilities, &resources, &prompts);
+    /// Unmounts an upstream server dynamically from `AppState`.
+    pub async fn unmount_upstream_server(&self, server_id: &str) {
+        info!(%server_id, "dynamically unmounting upstream server");
+
+        {
+            let mut servers_guard = self.servers.write().await;
+            servers_guard.remove(server_id);
+        }
+        {
+            let mut configs_guard = self.server_configs.write().await;
+            configs_guard.remove(server_id);
+        }
+        {
+            let mut statuses_guard = self.server_statuses.write().await;
+            statuses_guard.remove(server_id);
+        }
+        {
+            let mut caps_guard = self.capabilities.write().await;
+            let removed_caps: Vec<String> = caps_guard
+                .iter()
+                .filter(|(_, meta)| meta.server == server_id)
+                .map(|(k, _)| k.clone())
+                .collect();
+            for id in removed_caps {
+                caps_guard.remove(&id);
+                self.event_store.record("capability", &id, "removed");
+            }
+        }
+        {
+            let mut res_guard = self.resources.write().await;
+            let removed_res: Vec<String> = res_guard
+                .iter()
+                .filter(|(_, meta)| meta.server == server_id)
+                .map(|(k, _)| k.clone())
+                .collect();
+            for id in removed_res {
+                res_guard.remove(&id);
+                self.event_store.record("resource", &id, "removed");
+            }
+        }
+        {
+            let mut prompts_guard = self.prompts.write().await;
+            let removed_prompts: Vec<String> = prompts_guard
+                .iter()
+                .filter(|(_, meta)| meta.server == server_id)
+                .map(|(k, _)| k.clone())
+                .collect();
+            for id in removed_prompts {
+                prompts_guard.remove(&id);
+                self.event_store.record("prompt", &id, "removed");
+            }
+        }
+
+        {
+            let caps = self.capabilities.read().await;
+            let res = self.resources.read().await;
+            let prompts = self.prompts.read().await;
+            let new_ver = compute_catalog_version(&caps, &res, &prompts);
+            let mut ver_guard = self.catalog_version.write().await;
+            *ver_guard = new_ver;
+        }
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_else(|_| "0".to_string());
+
+        let _ = self
+            .resource_update_tx
+            .send(crate::catalog::ResourceUpdateEvent {
+                uri: format!("server://{}", server_id),
+                timestamp,
+                server: server_id.to_string(),
+            });
+    }
+
+    /// Reconciles the runtime daemon state against the on-disk configuration file.
+    ///
+    /// # Returns
+    /// A JSON Value summary of mounted, unmounted, and updated upstream servers.
+    ///
+    /// # Errors
+    /// Returns an error if loading or parsing the config file fails.
+    pub async fn reload_from_disk(&self) -> Result<serde_json::Value> {
+        info!(config_path = %self.config_path, "reloading configuration from disk");
+
+        let config = crate::config::load_config(&self.config_path)?;
+
+        // 1. Update security policy atomically
+        {
+            let mut pol_guard = self.policy.write().await;
+            *pol_guard = Policy::from_config(config.policy.clone());
+        }
+
+        // 2. Identify active servers vs disk servers
+        let current_server_ids: Vec<String> = {
+            let srv_guard = self.servers.read().await;
+            srv_guard.keys().cloned().collect()
+        };
+
+        let mut unmounted = Vec::new();
+        let mut mounted = Vec::new();
+        let mut warnings = Vec::new();
+
+        // Unmount servers removed from disk config
+        for active_id in &current_server_ids {
+            if !config.mcp_servers.contains_key(active_id) {
+                self.unmount_upstream_server(active_id).await;
+                unmounted.push(active_id.clone());
+            }
+        }
+
+        // Mount new or updated servers
+        for (server_id, srv_cfg) in &config.mcp_servers {
+            let res = self
+                .mount_upstream_server(
+                    server_id,
+                    srv_cfg,
+                    &config.capability_aliases,
+                    &config.resource_aliases,
+                    &config.prompt_aliases,
+                )
+                .await;
+
+            match res {
+                Ok(_) => {
+                    mounted.push(server_id.clone());
+                }
+                Err(e) => {
+                    warn!(server_id = %server_id, error = %e, "server failed to mount during reload");
+                    warnings.push(format!("Server '{}': {}", server_id, e));
+                }
+            }
+        }
+
+        Ok(serde_json::json!({
+            "ok": true,
+            "mounted": mounted,
+            "unmounted": unmounted,
+            "warnings": warnings,
+            "total_active": self.servers.read().await.len(),
+            "catalog_version": self.catalog_version.read().await.clone(),
+        }))
+    }
+}
+
+/// Boots all configured upstream MCP servers and constructs global `AppState`.
+///
+/// # Arguments
+/// * `config` - Loaded `McpConfig` instance.
+/// * `config_path` - Path to configuration file.
+///
+/// # Returns
+/// An initialized `AppState` instance.
+///
+/// # Errors
+/// Returns an error if an upstream server connection or protocol handshake fails.
+pub async fn initialize_state(
+    config: McpConfig,
+    config_path: impl Into<String>,
+) -> Result<AppState> {
+    let config_path_str = config_path.into();
+    let tool_timeout_ms = config.tool_timeout_ms.unwrap_or(DEFAULT_TOOL_TIMEOUT_MS);
+    let policy = Policy::from_config(config.policy.clone());
+    let event_store = Arc::new(crate::catalog::CatalogEventStore::new());
+
+    // Initialize central OAuth registry and proxy server if any server uses OAuth2
+    let oauth_registry = crate::oauth2::OAuthRegistry::default();
+    let mut oauth_proxy_port = None;
+
+    let has_oauth2 = config
+        .mcp_servers
+        .values()
+        .any(|s| matches!(s.auth, Some(AuthConfig::Oauth2 { .. })));
+
+    if has_oauth2 {
+        let port = crate::oauth2::start_oauth_proxy_server(oauth_registry.clone()).await?;
+        oauth_proxy_port = Some(port);
+    }
+
     let search_engine = Arc::new(crate::search::HybridSearchEngine::new());
 
-    Ok(AppState::builder()
-        .servers(Arc::new(server_channels))
-        .capabilities(Arc::new(capabilities))
-        .resources(Arc::new(resources))
-        .prompts(Arc::new(prompts))
+    let state = AppState::builder()
+        .servers_arc(Arc::new(RwLock::new(HashMap::new())))
+        .capabilities_arc(Arc::new(RwLock::new(HashMap::new())))
+        .resources_arc(Arc::new(RwLock::new(HashMap::new())))
+        .prompts_arc(Arc::new(RwLock::new(HashMap::new())))
         .tool_timeout_ms(tool_timeout_ms)
-        .policy(policy)
+        .policy_arc(Arc::new(RwLock::new(policy)))
         .search_engine(search_engine)
-        .catalog_version(catalog_version)
+        .catalog_version_arc(Arc::new(RwLock::new(String::new())))
         .event_store(event_store)
         .idempotency_store(Arc::new(crate::idempotency::IdempotencyStore::default()))
         .operation_registry(crate::operations::OperationRegistry::new())
-        .build())
+        .config_path(config_path_str)
+        .server_configs_arc(Arc::new(RwLock::new(HashMap::new())))
+        .server_statuses_arc(Arc::new(RwLock::new(HashMap::new())))
+        .oauth_proxy_port(oauth_proxy_port)
+        .oauth_registry(oauth_registry)
+        .build();
+
+    info!(
+        server_count = config.mcp_servers.len(),
+        "booting upstream MCP servers"
+    );
+
+    for (server_id, srv_cfg) in &config.mcp_servers {
+        state
+            .mount_upstream_server(
+                server_id,
+                srv_cfg,
+                &config.capability_aliases,
+                &config.resource_aliases,
+                &config.prompt_aliases,
+            )
+            .await?;
+    }
+
+    Ok(state)
 }
 
 /// Starts the HTTP daemon server listening on the specified TCP port.
@@ -852,11 +1179,16 @@ pub async fn initialize_state(config: McpConfig) -> Result<AppState> {
 /// # Arguments
 /// * `port` - TCP listening port.
 /// * `config` - `McpConfig` configuration struct.
+/// * `config_path` - Path to the config file.
 ///
 /// # Errors
 /// Returns an error if binding TCP socket or server execution fails.
-pub async fn run_daemon(port: u16, config: McpConfig) -> Result<()> {
-    let app_state = initialize_state(config).await?;
+pub async fn run_daemon(
+    port: u16,
+    config: McpConfig,
+    config_path: impl Into<String>,
+) -> Result<()> {
+    let app_state = initialize_state(config, config_path).await?;
     let app = Router::new()
         .route("/v1/capabilities", get(http_v1::handle_list_capabilities))
         .route(
@@ -886,6 +1218,24 @@ pub async fn run_daemon(port: u16, config: McpConfig) -> Result<()> {
             "/v1/sampling/create_message",
             post(http_v1::handle_sampling_create_message),
         )
+        // Configuration & Control Deck Endpoints
+        .route("/v1/config", get(http_v1::handle_get_config))
+        .route("/v1/config/servers", post(http_v1::handle_upsert_server))
+        .route(
+            "/v1/config/servers/:id",
+            axum::routing::delete(http_v1::handle_delete_server),
+        )
+        .route(
+            "/v1/config/ecosystem",
+            get(http_v1::handle_get_ecosystem_sources),
+        )
+        .route("/v1/config/import", post(http_v1::handle_import_config))
+        .route("/v1/config/alias", post(http_v1::handle_update_alias))
+        .route("/v1/config/policy", post(http_v1::handle_update_policy))
+        .route("/v1/config/reload", post(http_v1::handle_reload_config))
+        // Web UI Control Deck
+        .route("/ui", get(http_v1::handle_ui_dashboard))
+        .route("/", get(http_v1::handle_ui_dashboard))
         .with_state(app_state);
 
     info!(port, "all upstream servers connected; daemon listening");

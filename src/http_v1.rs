@@ -83,10 +83,11 @@ pub async fn handle_catalog_events(
     Query(query): Query<CatalogEventsQuery>,
 ) -> impl IntoResponse {
     let (events, next_cursor) = state.event_store.get_events_after(query.after.as_deref());
+    let catalog_ver = state.catalog_version.read().await.clone();
     (
-        make_etag_header(&state.catalog_version),
+        make_etag_header(&catalog_ver),
         Json(CatalogEventsResponse {
-            catalog_version: state.catalog_version.clone(),
+            catalog_version: catalog_ver,
             cursor: next_cursor,
             events,
         }),
@@ -198,19 +199,19 @@ pub async fn handle_search_capabilities(
         .modes(payload.modes)
         .build();
 
-    let results = state.search_engine.search(
-        query_str,
-        payload.limit,
-        &filter,
-        &state.capabilities,
-        &state.policy,
-    );
+    let caps = state.capabilities.read().await;
+    let pol = state.policy.read().await;
+    let catalog_ver = state.catalog_version.read().await.clone();
+
+    let results = state
+        .search_engine
+        .search(query_str, payload.limit, &filter, &caps, &pol);
 
     (
-        make_etag_header(&state.catalog_version),
+        make_etag_header(&catalog_ver),
         Json(json!({
             "version": "v1",
-            "catalog_version": state.catalog_version,
+            "catalog_version": catalog_ver,
             "capabilities": results
         })),
     )
@@ -236,17 +237,18 @@ pub async fn handle_completion(
     Json(payload): Json<CompletionRequest>,
 ) -> impl IntoResponse {
     let trace_id = format!("trc_{}", TRACE_COUNTER.fetch_add(1, Ordering::Relaxed));
+    let catalog_ver = state.catalog_version.read().await.clone();
 
     let found = match payload.ref_type.as_str() {
-        "prompt" => state.prompts.contains_key(&payload.ref_name),
-        "resource" => state.resources.contains_key(&payload.ref_name),
+        "prompt" => state.prompts.read().await.contains_key(&payload.ref_name),
+        "resource" => state.resources.read().await.contains_key(&payload.ref_name),
         _ => false,
     };
 
     if !found {
         return (
             StatusCode::NOT_FOUND,
-            make_etag_header(&state.catalog_version),
+            make_etag_header(&catalog_ver),
             Json(json!({
                 "ok": false,
                 "trace_id": trace_id,
@@ -262,7 +264,7 @@ pub async fn handle_completion(
 
     (
         StatusCode::OK,
-        make_etag_header(&state.catalog_version),
+        make_etag_header(&catalog_ver),
         Json(json!({
             "ok": true,
             "trace_id": trace_id,
@@ -326,11 +328,12 @@ pub async fn handle_sampling_create_message(
     Json(payload): Json<SamplingRequest>,
 ) -> impl IntoResponse {
     let trace_id = format!("trc_{}", TRACE_COUNTER.fetch_add(1, Ordering::Relaxed));
+    let catalog_ver = state.catalog_version.read().await.clone();
 
-    if !state.servers.contains_key(&payload.server_id) {
+    if !state.servers.read().await.contains_key(&payload.server_id) {
         return (
             StatusCode::NOT_FOUND,
-            make_etag_header(&state.catalog_version),
+            make_etag_header(&catalog_ver),
             Json(json!({
                 "ok": false,
                 "trace_id": trace_id,
@@ -346,7 +349,7 @@ pub async fn handle_sampling_create_message(
 
     (
         StatusCode::OK,
-        make_etag_header(&state.catalog_version),
+        make_etag_header(&catalog_ver),
         Json(json!({
             "ok": true,
             "trace_id": trace_id,
@@ -370,17 +373,22 @@ pub async fn handle_list_capabilities(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if check_if_none_match(&headers, &state.catalog_version) {
+    state.total_catalog_requests.fetch_add(1, Ordering::Relaxed);
+
+    let catalog_ver = state.catalog_version.read().await.clone();
+
+    if check_if_none_match(&headers, &catalog_ver) {
+        state.total_etag_hits.fetch_add(1, Ordering::Relaxed);
         return (
             StatusCode::NOT_MODIFIED,
-            make_etag_header(&state.catalog_version),
+            make_etag_header(&catalog_ver),
             Body::empty(),
         )
             .into_response();
     }
 
-    let mut capabilities = state
-        .capabilities
+    let caps_guard = state.capabilities.read().await;
+    let mut capabilities = caps_guard
         .iter()
         .map(|(id, meta)| {
             json!({
@@ -401,10 +409,10 @@ pub async fn handle_list_capabilities(
 
     (
         StatusCode::OK,
-        make_etag_header(&state.catalog_version),
+        make_etag_header(&catalog_ver),
         Json(json!({
             "version": "v1",
-            "catalog_version": state.catalog_version,
+            "catalog_version": catalog_ver,
             "ttl_ms": 300000,
             "cache_scope": "public",
             "capabilities": capabilities,
@@ -418,16 +426,19 @@ pub async fn handle_describe_capability(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if check_if_none_match(&headers, &state.catalog_version) {
+    let catalog_ver = state.catalog_version.read().await.clone();
+
+    if check_if_none_match(&headers, &catalog_ver) {
         return (
             StatusCode::NOT_MODIFIED,
-            make_etag_header(&state.catalog_version),
+            make_etag_header(&catalog_ver),
             Body::empty(),
         )
             .into_response();
     }
 
-    match state.capabilities.get(&id) {
+    let caps_guard = state.capabilities.read().await;
+    match caps_guard.get(&id) {
         Some(CapabilityMeta {
             server,
             tool,
@@ -438,10 +449,10 @@ pub async fn handle_describe_capability(
             examples,
         }) => (
             StatusCode::OK,
-            make_etag_header(&state.catalog_version),
+            make_etag_header(&catalog_ver),
             Json(json!({
                 "version": "v1",
-                "catalog_version": state.catalog_version,
+                "catalog_version": catalog_ver,
                 "capability": {
                     "id": id,
                     "server": server,
@@ -455,7 +466,7 @@ pub async fn handle_describe_capability(
             .into_response(),
         None => (
             StatusCode::NOT_FOUND,
-            make_etag_header(&state.catalog_version),
+            make_etag_header(&catalog_ver),
             Json(error_envelope(
                 next_trace_id(),
                 None,
@@ -474,17 +485,19 @@ pub async fn handle_list_resources(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if check_if_none_match(&headers, &state.catalog_version) {
+    let catalog_ver = state.catalog_version.read().await.clone();
+
+    if check_if_none_match(&headers, &catalog_ver) {
         return (
             StatusCode::NOT_MODIFIED,
-            make_etag_header(&state.catalog_version),
+            make_etag_header(&catalog_ver),
             Body::empty(),
         )
             .into_response();
     }
 
-    let mut resources = state
-        .resources
+    let res_guard = state.resources.read().await;
+    let mut resources = res_guard
         .iter()
         .map(|(id, meta)| {
             json!({
@@ -507,10 +520,10 @@ pub async fn handle_list_resources(
 
     (
         StatusCode::OK,
-        make_etag_header(&state.catalog_version),
+        make_etag_header(&catalog_ver),
         Json(json!({
             "version": "v1",
-            "catalog_version": state.catalog_version,
+            "catalog_version": catalog_ver,
             "ttl_ms": 300000,
             "cache_scope": "public",
             "resources": resources,
@@ -523,17 +536,19 @@ pub async fn handle_list_prompts(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if check_if_none_match(&headers, &state.catalog_version) {
+    let catalog_ver = state.catalog_version.read().await.clone();
+
+    if check_if_none_match(&headers, &catalog_ver) {
         return (
             StatusCode::NOT_MODIFIED,
-            make_etag_header(&state.catalog_version),
+            make_etag_header(&catalog_ver),
             Body::empty(),
         )
             .into_response();
     }
 
-    let mut prompts = state
-        .prompts
+    let prompts_guard = state.prompts.read().await;
+    let mut prompts = prompts_guard
         .iter()
         .map(|(id, meta)| {
             json!({
@@ -556,10 +571,10 @@ pub async fn handle_list_prompts(
 
     (
         StatusCode::OK,
-        make_etag_header(&state.catalog_version),
+        make_etag_header(&catalog_ver),
         Json(json!({
             "version": "v1",
-            "catalog_version": state.catalog_version,
+            "catalog_version": catalog_ver,
             "ttl_ms": 300000,
             "cache_scope": "public",
             "prompts": prompts,
@@ -581,7 +596,7 @@ pub async fn handle_read_resource(
     let cancel_token: tokio_util::sync::CancellationToken =
         state.operation_registry.register(&request_id).await;
 
-    if !state.policy.allows(&payload.resource_id) {
+    if !state.policy.read().await.allows(&payload.resource_id) {
         state.operation_registry.unregister(&request_id).await;
         return (
             StatusCode::FORBIDDEN,
@@ -598,39 +613,49 @@ pub async fn handle_read_resource(
             .into_response();
     }
 
-    let Some(meta) = state.resources.get(&payload.resource_id) else {
-        state.operation_registry.unregister(&request_id).await;
-        return (
-            StatusCode::NOT_FOUND,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                crate::idempotency::RetryMetadata::safe("not_started"),
-                "RESOURCE_NOT_FOUND",
-                format!("Resource '{}' not found", payload.resource_id),
-                false,
-            )),
-        )
-            .into_response();
+    let (server_id, uri) = {
+        let res_guard = state.resources.read().await;
+        let Some(meta) = res_guard.get(&payload.resource_id) else {
+            state.operation_registry.unregister(&request_id).await;
+            return (
+                StatusCode::NOT_FOUND,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    crate::idempotency::RetryMetadata::safe("not_started"),
+                    "RESOURCE_NOT_FOUND",
+                    format!("Resource '{}' not found", payload.resource_id),
+                    false,
+                )),
+            )
+                .into_response();
+        };
+        (meta.server.clone(), meta.uri.clone())
     };
 
-    let Some(tx) = state.servers.get(&meta.server) else {
-        state.operation_registry.unregister(&request_id).await;
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                crate::idempotency::RetryMetadata::safe("not_started"),
-                "SERVER_UNREACHABLE",
-                format!("Server '{}' is unreachable", meta.server),
-                true,
-            )),
-        )
-            .into_response();
+    let tx = {
+        let servers_guard = state.servers.read().await;
+        let Some(tx) = servers_guard.get(&server_id).cloned() else {
+            state.operation_registry.unregister(&request_id).await;
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    crate::idempotency::RetryMetadata::safe("not_started"),
+                    "SERVER_UNREACHABLE",
+                    format!("Server '{}' is unreachable", server_id),
+                    true,
+                )),
+            )
+                .into_response();
+        };
+        tx
     };
+
+    let redact_keys = state.policy.read().await.redact_keys.clone();
 
     info!(
         trace_id = %trace_id,
@@ -640,14 +665,14 @@ pub async fn handle_read_resource(
         actor_id = ?req_context.actor_id,
         grant_id = ?req_context.grant_id,
         resource_id = %payload.resource_id,
-        uri = %meta.uri,
+        uri = %uri,
         "resource read start"
     );
 
     let (reply_tx, reply_rx) = oneshot::channel();
     if tx
         .send(ServerMsg::ReadResource {
-            uri: meta.uri.clone(),
+            uri,
             input_responses: payload.input_responses,
             request_state: payload.request_state,
             reply: reply_tx,
@@ -664,7 +689,7 @@ pub async fn handle_read_resource(
                 Some(req_context),
                 crate::idempotency::RetryMetadata::safe("not_started"),
                 "SERVER_UNREACHABLE",
-                format!("Server '{}' mailbox is closed", meta.server),
+                format!("Server '{}' mailbox is closed", server_id),
                 true,
             )),
         )
@@ -694,7 +719,7 @@ pub async fn handle_read_resource(
 
     match result {
         Ok(Ok(data)) => {
-            let redacted_output = redact_value(data.clone(), &state.policy.redact_keys);
+            let redacted_output = redact_value(data.clone(), &redact_keys);
             info!(
                 trace_id = %trace_id,
                 request_id = %request_id,
@@ -771,7 +796,8 @@ pub async fn handle_get_prompt(
     let cancel_token: tokio_util::sync::CancellationToken =
         state.operation_registry.register(&request_id).await;
 
-    if !state.policy.allows(&payload.prompt_id) {
+    let policy_guard = state.policy.read().await;
+    if !policy_guard.allows(&payload.prompt_id) {
         state.operation_registry.unregister(&request_id).await;
         return (
             StatusCode::FORBIDDEN,
@@ -787,39 +813,49 @@ pub async fn handle_get_prompt(
         )
             .into_response();
     }
+    let redact_keys = policy_guard.redact_keys.clone();
+    drop(policy_guard);
 
-    let Some(meta) = state.prompts.get(&payload.prompt_id) else {
-        state.operation_registry.unregister(&request_id).await;
-        return (
-            StatusCode::NOT_FOUND,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                crate::idempotency::RetryMetadata::safe("not_started"),
-                "PROMPT_NOT_FOUND",
-                format!("Prompt '{}' not found", payload.prompt_id),
-                false,
-            )),
-        )
-            .into_response();
+    let (server_id, prompt_name) = {
+        let prompts_guard = state.prompts.read().await;
+        let Some(meta) = prompts_guard.get(&payload.prompt_id) else {
+            state.operation_registry.unregister(&request_id).await;
+            return (
+                StatusCode::NOT_FOUND,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    crate::idempotency::RetryMetadata::safe("not_started"),
+                    "PROMPT_NOT_FOUND",
+                    format!("Prompt '{}' not found", payload.prompt_id),
+                    false,
+                )),
+            )
+                .into_response();
+        };
+        (meta.server.clone(), meta.name.clone())
     };
 
-    let Some(tx) = state.servers.get(&meta.server) else {
-        state.operation_registry.unregister(&request_id).await;
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                crate::idempotency::RetryMetadata::safe("not_started"),
-                "SERVER_UNREACHABLE",
-                format!("Server '{}' is unreachable", meta.server),
-                true,
-            )),
-        )
-            .into_response();
+    let tx = {
+        let servers_guard = state.servers.read().await;
+        let Some(tx) = servers_guard.get(&server_id).cloned() else {
+            state.operation_registry.unregister(&request_id).await;
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    crate::idempotency::RetryMetadata::safe("not_started"),
+                    "SERVER_UNREACHABLE",
+                    format!("Server '{}' is unreachable", server_id),
+                    true,
+                )),
+            )
+                .into_response();
+        };
+        tx
     };
 
     let arguments = match payload.arguments {
@@ -845,7 +881,7 @@ pub async fn handle_get_prompt(
 
     let redacted_input = redact_value(
         serde_json::to_value(&arguments).unwrap_or(Value::Null),
-        &state.policy.redact_keys,
+        &redact_keys,
     );
     info!(
         trace_id = %trace_id,
@@ -862,7 +898,7 @@ pub async fn handle_get_prompt(
     let (reply_tx, reply_rx) = oneshot::channel();
     if tx
         .send(ServerMsg::GetPrompt {
-            name: meta.name.clone(),
+            name: prompt_name,
             arguments,
             input_responses: payload.input_responses,
             request_state: payload.request_state,
@@ -880,7 +916,7 @@ pub async fn handle_get_prompt(
                 Some(req_context),
                 crate::idempotency::RetryMetadata::safe("not_started"),
                 "SERVER_UNREACHABLE",
-                format!("Server '{}' mailbox is closed", meta.server),
+                format!("Server '{}' mailbox is closed", server_id),
                 true,
             )),
         )
@@ -910,7 +946,7 @@ pub async fn handle_get_prompt(
 
     match result {
         Ok(Ok(data)) => {
-            let redacted_output = redact_value(data.clone(), &state.policy.redact_keys);
+            let redacted_output = redact_value(data.clone(), &redact_keys);
             info!(
                 trace_id = %trace_id,
                 request_id = %request_id,
@@ -987,6 +1023,8 @@ pub async fn handle_call_capability(
     headers: HeaderMap,
     Json(payload): Json<CallCapabilityRequest>,
 ) -> impl IntoResponse {
+    let start_time = std::time::Instant::now();
+    state.total_tool_calls.fetch_add(1, Ordering::Relaxed);
     let trace_id = next_trace_id();
     let request_id =
         crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
@@ -1036,7 +1074,8 @@ pub async fn handle_call_capability(
             .into_response();
     }
 
-    if !state.policy.allows(&payload.capability_id) {
+    let policy_guard = state.policy.read().await;
+    if !policy_guard.allows(&payload.capability_id) {
         state.operation_registry.unregister(&request_id).await;
         if let Some(ref key) = idempotency_key {
             state.idempotency_store.remove(key).await;
@@ -1055,48 +1094,58 @@ pub async fn handle_call_capability(
         )
             .into_response();
     }
+    let redact_keys = policy_guard.redact_keys.clone();
+    drop(policy_guard);
 
-    let Some(meta) = state.capabilities.get(&payload.capability_id) else {
-        state.operation_registry.unregister(&request_id).await;
-        if let Some(ref key) = idempotency_key {
-            state.idempotency_store.remove(key).await;
-        }
-        return (
-            StatusCode::NOT_FOUND,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                retry_base("not_started"),
-                "TOOL_NOT_FOUND",
-                format!("Capability '{}' not found", payload.capability_id),
-                false,
-            )),
-        )
-            .into_response();
+    let (server_id, tool_name) = {
+        let caps_guard = state.capabilities.read().await;
+        let Some(meta) = caps_guard.get(&payload.capability_id) else {
+            state.operation_registry.unregister(&request_id).await;
+            if let Some(ref key) = idempotency_key {
+                state.idempotency_store.remove(key).await;
+            }
+            return (
+                StatusCode::NOT_FOUND,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    retry_base("not_started"),
+                    "TOOL_NOT_FOUND",
+                    format!("Capability '{}' not found", payload.capability_id),
+                    false,
+                )),
+            )
+                .into_response();
+        };
+        (meta.server.clone(), meta.tool.clone())
     };
 
-    let Some(tx) = state.servers.get(&meta.server) else {
-        state.operation_registry.unregister(&request_id).await;
-        if let Some(ref key) = idempotency_key {
-            state.idempotency_store.remove(key).await;
-        }
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                retry_base("not_started"),
-                "SERVER_UNREACHABLE",
-                format!("Server '{}' is unreachable", meta.server),
-                true,
-            )),
-        )
-            .into_response();
+    let tx = {
+        let servers_guard = state.servers.read().await;
+        let Some(tx) = servers_guard.get(&server_id).cloned() else {
+            state.operation_registry.unregister(&request_id).await;
+            if let Some(ref key) = idempotency_key {
+                state.idempotency_store.remove(key).await;
+            }
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    retry_base("not_started"),
+                    "SERVER_UNREACHABLE",
+                    format!("Server '{}' is unreachable", server_id),
+                    true,
+                )),
+            )
+                .into_response();
+        };
+        tx
     };
 
-    let redacted_input = redact_value(payload.args.clone(), &state.policy.redact_keys);
+    let redacted_input = redact_value(payload.args.clone(), &redact_keys);
     info!(
         trace_id = %trace_id,
         request_id = %request_id,
@@ -1112,7 +1161,7 @@ pub async fn handle_call_capability(
     let (reply_tx, reply_rx) = oneshot::channel();
     if tx
         .send(ServerMsg::CallTool {
-            name: meta.tool.clone(),
+            name: tool_name,
             params: payload.args,
             input_responses: payload.input_responses,
             request_state: payload.request_state,
@@ -1133,7 +1182,7 @@ pub async fn handle_call_capability(
                 Some(req_context),
                 retry_base("not_started"),
                 "SERVER_UNREACHABLE",
-                format!("Server '{}' mailbox is closed", meta.server),
+                format!("Server '{}' mailbox is closed", server_id),
                 true,
             )),
         )
@@ -1166,7 +1215,7 @@ pub async fn handle_call_capability(
 
     match result {
         Ok(Ok(data)) => {
-            let redacted_output = redact_value(data.clone(), &state.policy.redact_keys);
+            let redacted_output = redact_value(data.clone(), &redact_keys);
             info!(
                 trace_id = %trace_id,
                 request_id = %request_id,
@@ -1174,6 +1223,11 @@ pub async fn handle_call_capability(
                 data = %redacted_output,
                 "tool call success"
             );
+            let elapsed_us = start_time.elapsed().as_micros() as u64;
+            state
+                .total_tool_duration_us
+                .fetch_add(elapsed_us, Ordering::Relaxed);
+
             let response_json = json!({
                 "ok": true,
                 "request_id": request_id,
@@ -1318,6 +1372,391 @@ fn redact_value(value: Value, redact_keys: &[String]) -> Value {
     }
 }
 
+// ============================================================
+// CONFIGURATION & CONTROL DECK REST API HANDLERS
+// ============================================================
+
+/// Handles GET `/v1/config` returning the active configuration.
+pub async fn handle_get_config(State(state): State<AppState>) -> impl IntoResponse {
+    let total_reqs = state.total_catalog_requests.load(Ordering::Relaxed);
+    let etag_hits = state.total_etag_hits.load(Ordering::Relaxed);
+    let tool_calls = state.total_tool_calls.load(Ordering::Relaxed);
+    let tool_duration_us = state.total_tool_duration_us.load(Ordering::Relaxed);
+    let srv_configs = state.server_configs.read().await.clone();
+    let srv_statuses = state.server_statuses.read().await.clone();
+
+    match crate::config::load_or_default_config(&state.config_path) {
+        Ok(config) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "config_path": state.config_path,
+                "config": config,
+                "server_configs": srv_configs,
+                "server_statuses": srv_statuses,
+                "metrics": {
+                    "total_catalog_requests": total_reqs,
+                    "total_etag_hits": etag_hits,
+                    "total_tool_calls": tool_calls,
+                    "total_tool_duration_us": tool_duration_us,
+                }
+            })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": err.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Request payload for adding or updating an upstream server.
+#[derive(Deserialize)]
+pub struct UpsertServerRequest {
+    pub name: String,
+    pub server: crate::config::ServerConfig,
+}
+
+/// Handles POST `/v1/config/servers` to add or update an upstream server.
+pub async fn handle_upsert_server(
+    State(state): State<AppState>,
+    Json(payload): Json<UpsertServerRequest>,
+) -> impl IntoResponse {
+    let mut config = match crate::config::load_or_default_config(&state.config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    config
+        .mcp_servers
+        .insert(payload.name.clone(), payload.server.clone());
+    if let Err(e) = crate::config::save_config(&state.config_path, &config) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    // Hot-mount the newly added/updated server into active daemon state
+    let mount_result = state
+        .mount_upstream_server(
+            &payload.name,
+            &payload.server,
+            &config.capability_aliases,
+            &config.resource_aliases,
+            &config.prompt_aliases,
+        )
+        .await;
+
+    let warning = mount_result.err().map(|e| e.to_string());
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "message": if warning.is_some() {
+                format!("Server '{}' saved to configuration, but initial connection failed", payload.name)
+            } else {
+                format!("Server '{}' connected and mounted successfully", payload.name)
+            },
+            "warning": warning,
+            "server": payload.name
+        })),
+    )
+        .into_response()
+}
+
+/// Handles DELETE `/v1/config/servers/:id` to remove an upstream server.
+pub async fn handle_delete_server(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let mut config = match crate::config::load_or_default_config(&state.config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    if config.mcp_servers.remove(&id).is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "ok": false, "error": format!("Server '{}' not found", id) })),
+        )
+            .into_response();
+    }
+
+    if let Err(e) = crate::config::save_config(&state.config_path, &config) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    // Hot-unmount server from runtime
+    state.unmount_upstream_server(&id).await;
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "message": format!("Server '{}' unmounted and removed", id),
+        })),
+    )
+        .into_response()
+}
+
+/// Handles GET `/v1/config/ecosystem` discovering external MCP sources.
+pub async fn handle_get_ecosystem_sources() -> impl IntoResponse {
+    let sources = crate::config_import::discover_sources();
+    let serializable_sources: Vec<_> = sources
+        .into_iter()
+        .map(|s| {
+            json!({
+                "name": s.name,
+                "path": s.path.to_string_lossy(),
+                "server_count": s.server_count,
+                "servers": s.servers.keys().cloned().collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "sources": serializable_sources,
+        })),
+    )
+        .into_response()
+}
+
+/// Request payload for ecosystem config import.
+#[derive(Deserialize)]
+pub struct ImportConfigRequest {
+    pub source_path: Option<String>,
+    pub overwrite: Option<bool>,
+}
+
+/// Handles POST `/v1/config/import` importing external MCP configurations.
+pub async fn handle_import_config(
+    State(state): State<AppState>,
+    Json(payload): Json<ImportConfigRequest>,
+) -> impl IntoResponse {
+    let overwrite = payload.overwrite.unwrap_or(false);
+    let mut all_imported = 0;
+    let mut all_skipped = Vec::new();
+
+    let sources = if let Some(path_str) = payload.source_path {
+        let pb = std::path::PathBuf::from(path_str);
+        match crate::config_import::parse_standard_mcp_source("Custom File", pb) {
+            Ok(s) => vec![s],
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "ok": false, "error": e.to_string() })),
+                )
+                    .into_response()
+            }
+        }
+    } else {
+        crate::config_import::discover_sources()
+    };
+
+    let active_cfg = match crate::config::load_or_default_config(&state.config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    for src in sources {
+        let servers_to_mount = src.servers.clone();
+        match crate::config_import::import_servers_into_config(
+            &state.config_path,
+            src.servers,
+            overwrite,
+        ) {
+            Ok((count, skipped)) => {
+                all_imported += count;
+                all_skipped.extend(skipped);
+
+                // Dynamically mount newly imported servers
+                for (s_id, s_cfg) in servers_to_mount {
+                    let _ = state
+                        .mount_upstream_server(
+                            &s_id,
+                            &s_cfg,
+                            &active_cfg.capability_aliases,
+                            &active_cfg.resource_aliases,
+                            &active_cfg.prompt_aliases,
+                        )
+                        .await;
+                }
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "ok": false, "error": e.to_string() })),
+                )
+                    .into_response()
+            }
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "imported_count": all_imported,
+            "skipped_servers": all_skipped,
+        })),
+    )
+        .into_response()
+}
+
+/// Request payload for updating alias mappings.
+#[derive(Deserialize)]
+pub struct UpdateAliasRequest {
+    pub kind: String,
+    pub alias: String,
+    pub target: Option<String>,
+}
+
+/// Handles POST `/v1/config/alias` adding or removing an alias.
+pub async fn handle_update_alias(
+    State(state): State<AppState>,
+    Json(payload): Json<UpdateAliasRequest>,
+) -> impl IntoResponse {
+    let mut config = match crate::config::load_or_default_config(&state.config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    let kind_lower = payload.kind.to_lowercase();
+    if let Some(target) = payload.target {
+        match kind_lower.as_str() {
+            "tool" | "capability" | "cap" => {
+                config
+                    .capability_aliases
+                    .insert(payload.alias.clone(), target);
+            }
+            "resource" | "res" => {
+                config
+                    .resource_aliases
+                    .insert(payload.alias.clone(), target);
+            }
+            "prompt" => {
+                config.prompt_aliases.insert(payload.alias.clone(), target);
+            }
+            _ => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "ok": false, "error": "Invalid alias kind. Expected 'tool', 'resource', or 'prompt'" })),
+                ).into_response();
+            }
+        }
+    } else {
+        match kind_lower.as_str() {
+            "tool" | "capability" | "cap" => {
+                config.capability_aliases.remove(&payload.alias);
+            }
+            "resource" | "res" => {
+                config.resource_aliases.remove(&payload.alias);
+            }
+            "prompt" => {
+                config.prompt_aliases.remove(&payload.alias);
+            }
+            _ => {}
+        }
+    }
+
+    if let Err(e) = crate::config::save_config(&state.config_path, &config) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}
+
+/// Handles POST `/v1/config/policy` updating security policies.
+pub async fn handle_update_policy(
+    State(state): State<AppState>,
+    Json(payload): Json<crate::config::PolicyConfig>,
+) -> impl IntoResponse {
+    let mut config = match crate::config::load_or_default_config(&state.config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    config.policy = Some(payload.clone());
+    if let Err(e) = crate::config::save_config(&state.config_path, &config) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    // Immediately update in-memory active policy
+    {
+        let mut pol_guard = state.policy.write().await;
+        *pol_guard = crate::daemon::Policy::from_config(Some(payload));
+    }
+
+    (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}
+
+/// Handles POST `/v1/config/reload` explicitly triggering a hot-reloading reconciliation from disk.
+pub async fn handle_reload_config(State(state): State<AppState>) -> impl IntoResponse {
+    match state.reload_from_disk().await {
+        Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Serves the Warmplane Control Deck single-page web UI.
+pub async fn handle_ui_dashboard() -> impl IntoResponse {
+    let html = include_str!("../ui/dist/index.html");
+    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1371,7 +1810,7 @@ mod tests {
             },
         );
 
-        let state = AppState::builder().prompts(Arc::new(prompts)).build();
+        let state = AppState::builder().prompts(prompts).build();
 
         let req = CompletionRequest {
             ref_type: "prompt".to_string(),
@@ -1392,7 +1831,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(1);
         servers.insert("srv".to_string(), tx);
 
-        let state = AppState::builder().servers(Arc::new(servers)).build();
+        let state = AppState::builder().servers(servers).build();
 
         let req = SamplingRequest {
             server_id: "srv".to_string(),
@@ -1433,7 +1872,7 @@ mod tests {
         );
 
         let state = AppState::builder()
-            .resources(Arc::new(resources))
+            .resources(resources)
             .catalog_version("sha256:test")
             .build();
 
@@ -1508,7 +1947,7 @@ mod tests {
         );
 
         let state = AppState::builder()
-            .prompts(Arc::new(prompts))
+            .prompts(prompts)
             .catalog_version("sha256:test")
             .build();
 
@@ -1577,8 +2016,8 @@ mod tests {
         servers.insert("s1".to_string(), tx);
 
         let state = AppState::builder()
-            .servers(Arc::new(servers))
-            .prompts(Arc::new(prompts))
+            .servers(servers)
+            .prompts(prompts)
             .catalog_version("sha256:test")
             .build();
 
@@ -1625,7 +2064,7 @@ mod tests {
         );
 
         let state = AppState::builder()
-            .capabilities(Arc::new(capabilities))
+            .capabilities(capabilities)
             .catalog_version("sha256:test_cat")
             .build();
 
@@ -1770,8 +2209,8 @@ mod tests {
         servers.insert("interactive_srv".to_string(), tx);
 
         let state = AppState::builder()
-            .capabilities(Arc::new(capabilities))
-            .servers(Arc::new(servers))
+            .capabilities(capabilities)
+            .servers(servers)
             .catalog_version("sha256:test")
             .build();
 
@@ -1845,8 +2284,8 @@ mod tests {
         servers.insert("interactive_srv".to_string(), tx);
 
         let state = AppState::builder()
-            .resources(Arc::new(resources))
-            .servers(Arc::new(servers))
+            .resources(resources)
+            .servers(servers)
             .catalog_version("sha256:test")
             .build();
 
@@ -1894,5 +2333,64 @@ mod tests {
         assert_eq!(payload["ok"], true);
         assert_eq!(payload["request_id"], "req-mrtr-res-202");
         assert_eq!(payload["data"]["contents"][0]["text"], "Resource content");
+    }
+
+    #[tokio::test]
+    async fn test_ui_and_config_rest_api() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("warmplane_http_cfg_test_{}", std::process::id()));
+        let config_file = temp_dir.join("mcp_servers.json");
+        let cfg_str = config_file.to_str().unwrap().to_string();
+
+        let state = AppState::builder()
+            .config_path(cfg_str.clone())
+            .catalog_version("sha256:test")
+            .build();
+
+        // 1. Test UI Dashboard handler
+        let ui_res = super::handle_ui_dashboard().await.into_response();
+        assert_eq!(ui_res.status(), StatusCode::OK);
+        assert_eq!(
+            ui_res.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/html; charset=utf-8"
+        );
+
+        // 2. Test Get Config (empty/default)
+        let get_cfg_res = super::handle_get_config(State(state.clone()))
+            .await
+            .into_response();
+        assert_eq!(get_cfg_res.status(), StatusCode::OK);
+
+        // 3. Test Upsert Server
+        let mut new_server = crate::config::ServerConfig::default();
+        new_server.command = Some("node".to_string());
+        new_server.args = vec!["index.js".to_string()];
+
+        let upsert_res = super::handle_upsert_server(
+            State(state.clone()),
+            Json(super::UpsertServerRequest {
+                name: "node_srv".to_string(),
+                server: new_server,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(upsert_res.status(), StatusCode::OK);
+
+        // Verify config written
+        let reloaded = crate::config::load_config(&cfg_str).unwrap();
+        assert!(reloaded.mcp_servers.contains_key("node_srv"));
+
+        // 4. Test Ecosystem Sources
+        let eco_res = super::handle_get_ecosystem_sources().await.into_response();
+        assert_eq!(eco_res.status(), StatusCode::OK);
+
+        // 5. Test Reload Config handler
+        let reload_res = super::handle_reload_config(State(state.clone()))
+            .await
+            .into_response();
+        assert_eq!(reload_res.status(), StatusCode::OK);
+
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 }
