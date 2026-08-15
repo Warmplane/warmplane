@@ -46,6 +46,9 @@ pub struct McpConfig {
     /// Optional security policy configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<PolicyConfig>,
+    /// Optional WORM audit trail configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit: Option<AuditConfig>,
     /// Upstream MCP server definitions keyed by server identifier.
     #[serde(rename = "mcpServers", default)]
     pub mcp_servers: HashMap<String, ServerConfig>,
@@ -207,6 +210,62 @@ pub struct PolicyConfig {
     /// Outbound webhook configuration for dispatching approval events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook: Option<WebhookConfig>,
+}
+
+/// WORM audit trail and telemetry logging configuration.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub struct AuditConfig {
+    /// Whether audit logging is enabled (defaults to true if block is present).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Path to the append-only audit log file (e.g. `warmplane_audit.jsonl`).
+    #[serde(
+        default,
+        rename = "filePath",
+        alias = "file_path",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub file_path: Option<String>,
+    /// Capacity of the asynchronous in-memory bounded queue (default 10,000).
+    #[serde(
+        default,
+        rename = "bufferCapacity",
+        alias = "buffer_capacity",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub buffer_capacity: Option<usize>,
+    /// Flush interval in milliseconds for background batching worker (default 250ms).
+    #[serde(
+        default,
+        rename = "flushIntervalMs",
+        alias = "flush_interval_ms",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub flush_interval_ms: Option<u64>,
+    /// Maximum batch size before flushing immediately (default 100).
+    #[serde(
+        default,
+        rename = "maxBatchSize",
+        alias = "max_batch_size",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_batch_size: Option<usize>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            file_path: None,
+            buffer_capacity: Some(10_000),
+            flush_interval_ms: Some(250),
+            max_batch_size: Some(100),
+        }
+    }
 }
 
 /// Loads and validates Warmplane server configuration from JSON file.
@@ -471,6 +530,7 @@ mod tests {
             resource_aliases: HashMap::new(),
             prompt_aliases: HashMap::new(),
             policy: None,
+            audit: None,
             mcp_servers,
         }
     }
