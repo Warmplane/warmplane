@@ -228,9 +228,9 @@ Add a dedicated **Audit & Compliance** tab to the Control Deck:
 - [x] Write thorough unit & integration tests for tampering detection and append-only constraints.
 
 ### Phase 2: Interceptor Integration & Redaction
-- [ ] Hook audit event emission into `/v1/tools/call`, HITL approval lifecycle (`approve`, `reject`, `expire`), and policy rejection paths.
-- [ ] Ensure arguments and returns pass through `redact_keys` sanitization before channel dispatch.
-- [ ] Benchmark overhead to ensure <10µs latency impact on tool calls.
+- [x] Hook audit event emission into `/v1/tools/call`, HITL approval lifecycle (`approve`, `reject`, `expire`), and policy rejection paths.
+- [x] Ensure arguments and returns pass through `redact_keys` sanitization before channel dispatch.
+- [x] Benchmark overhead to ensure <10µs latency impact on tool calls.
 
 ### Phase 3: HTTP API & Compliance Export
 - [ ] Implement `/v1/audit/events`, `/v1/audit/events/:id`, `/v1/audit/verify`, `/v1/audit/export`, and `/v1/audit/stats` in `src/http_v1/audit_api.rs`.

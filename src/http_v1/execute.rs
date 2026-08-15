@@ -85,6 +85,28 @@ pub async fn handle_call_capability(
             if let Some(ref key) = idempotency_key {
                 state.idempotency_store.remove(key).await;
             }
+            state.audit_handle.send(crate::audit::RawAuditEvent {
+                event_type: crate::audit::AuditEventType::PolicyViolation,
+                trace_id: trace_id.clone(),
+                request_id: Some(request_id.clone()),
+                actor_id: req_context.actor_id.clone(),
+                work_item_id: req_context.work_item_id.clone(),
+                client_ip: headers
+                    .get("x-forwarded-for")
+                    .and_then(|h| h.to_str().ok())
+                    .map(|s| s.to_string()),
+                server_id: None,
+                capability_id: Some(payload.capability_id.clone()),
+                resource_uri: None,
+                sanitized_args: Some(redact_value(payload.args.clone(), &policy_guard.redact_keys)),
+                sanitized_response: None,
+                execution_latency_us: Some(start_time.elapsed().as_micros() as u64),
+                status: crate::audit::AuditEventStatus::Denied,
+                error_code: Some("POLICY_DENIED".to_string()),
+                error_message: Some(format!("Capability '{}' blocked by policy", payload.capability_id)),
+                operator_id: None,
+                approval_ticket_id: None,
+            });
             return (
                 StatusCode::FORBIDDEN,
                 Json(error_envelope(
@@ -142,13 +164,36 @@ pub async fn handle_call_capability(
                 capability_id: payload.capability_id.clone(),
                 server_id: server_id.clone(),
                 args: payload.args.clone(),
-                sanitized_args: sanitized,
+                sanitized_args: sanitized.clone(),
                 request_id: Some(request_id.clone()),
                 context: Some(req_context.clone()),
                 timeout_secs: approval_timeout_secs,
                 webhook: webhook_cfg.as_ref(),
             })
             .await;
+
+        state.audit_handle.send(crate::audit::RawAuditEvent {
+            event_type: crate::audit::AuditEventType::ToolInterceptedHitl,
+            trace_id: trace_id.clone(),
+            request_id: Some(request_id.clone()),
+            actor_id: req_context.actor_id.clone(),
+            work_item_id: req_context.work_item_id.clone(),
+            client_ip: headers
+                .get("x-forwarded-for")
+                .and_then(|h| h.to_str().ok())
+                .map(|s| s.to_string()),
+            server_id: Some(server_id.clone()),
+            capability_id: Some(payload.capability_id.clone()),
+            resource_uri: None,
+            sanitized_args: Some(sanitized.clone()),
+            sanitized_response: None,
+            execution_latency_us: Some(start_time.elapsed().as_micros() as u64),
+            status: crate::audit::AuditEventStatus::Intercepted,
+            error_code: None,
+            error_message: None,
+            operator_id: None,
+            approval_ticket_id: Some(approval_id.clone()),
+        });
 
         let prefer_async = headers
             .get("prefer")
@@ -214,6 +259,28 @@ pub async fn handle_call_capability(
                 if let Some(ref key) = idempotency_key {
                     state.idempotency_store.remove(key).await;
                 }
+                state.audit_handle.send(crate::audit::RawAuditEvent {
+                    event_type: crate::audit::AuditEventType::ApprovalRejected,
+                    trace_id: trace_id.clone(),
+                    request_id: Some(request_id.clone()),
+                    actor_id: req_context.actor_id.clone(),
+                    work_item_id: req_context.work_item_id.clone(),
+                    client_ip: headers
+                        .get("x-forwarded-for")
+                        .and_then(|h| h.to_str().ok())
+                        .map(|s| s.to_string()),
+                    server_id: Some(server_id.clone()),
+                    capability_id: Some(payload.capability_id.clone()),
+                    resource_uri: None,
+                    sanitized_args: Some(sanitized),
+                    sanitized_response: None,
+                    execution_latency_us: Some(start_time.elapsed().as_micros() as u64),
+                    status: crate::audit::AuditEventStatus::Denied,
+                    error_code: Some("OPERATION_REJECTED_BY_OPERATOR".to_string()),
+                    error_message: reason.clone(),
+                    operator_id: Some(operator.clone()),
+                    approval_ticket_id: Some(approval_id),
+                });
                 let reason_str = reason.map(|r| format!(": {}", r)).unwrap_or_default();
                 return (
                     StatusCode::FORBIDDEN,
@@ -239,6 +306,28 @@ pub async fn handle_call_capability(
                 if let Some(ref key) = idempotency_key {
                     state.idempotency_store.remove(key).await;
                 }
+                state.audit_handle.send(crate::audit::RawAuditEvent {
+                    event_type: crate::audit::AuditEventType::ApprovalExpired,
+                    trace_id: trace_id.clone(),
+                    request_id: Some(request_id.clone()),
+                    actor_id: req_context.actor_id.clone(),
+                    work_item_id: req_context.work_item_id.clone(),
+                    client_ip: headers
+                        .get("x-forwarded-for")
+                        .and_then(|h| h.to_str().ok())
+                        .map(|s| s.to_string()),
+                    server_id: Some(server_id.clone()),
+                    capability_id: Some(payload.capability_id.clone()),
+                    resource_uri: None,
+                    sanitized_args: Some(sanitized),
+                    sanitized_response: None,
+                    execution_latency_us: Some(start_time.elapsed().as_micros() as u64),
+                    status: crate::audit::AuditEventStatus::Denied,
+                    error_code: Some("APPROVAL_TIMEOUT".to_string()),
+                    error_message: Some(format!("Approval request timed out after {}s", approval_timeout_secs)),
+                    operator_id: None,
+                    approval_ticket_id: Some(approval_id),
+                });
                 return (
                     StatusCode::GATEWAY_TIMEOUT,
                     Json(error_envelope(
@@ -366,6 +455,29 @@ pub async fn handle_call_capability(
                 .total_tool_duration_us
                 .fetch_add(elapsed_us, Ordering::Relaxed);
 
+            state.audit_handle.send(crate::audit::RawAuditEvent {
+                event_type: crate::audit::AuditEventType::ToolExecution,
+                trace_id: trace_id.clone(),
+                request_id: Some(request_id.clone()),
+                actor_id: req_context.actor_id.clone(),
+                work_item_id: req_context.work_item_id.clone(),
+                client_ip: headers
+                    .get("x-forwarded-for")
+                    .and_then(|h| h.to_str().ok())
+                    .map(|s| s.to_string()),
+                server_id: Some(server_id.clone()),
+                capability_id: Some(payload.capability_id.clone()),
+                resource_uri: None,
+                sanitized_args: Some(redacted_input),
+                sanitized_response: Some(redacted_output),
+                execution_latency_us: Some(elapsed_us),
+                status: crate::audit::AuditEventStatus::Success,
+                error_code: None,
+                error_message: None,
+                operator_id: None,
+                approval_ticket_id: None,
+            });
+
             let response_json = json!({
                 "ok": true,
                 "request_id": request_id,
@@ -386,9 +498,32 @@ pub async fn handle_call_capability(
             (StatusCode::OK, Json(response_json)).into_response()
         }
         Ok(Err(UpstreamCallError::Timeout)) => {
+            let elapsed_us = start_time.elapsed().as_micros() as u64;
             if let Some(ref key) = idempotency_key {
                 state.idempotency_store.remove(key).await;
             }
+            state.audit_handle.send(crate::audit::RawAuditEvent {
+                event_type: crate::audit::AuditEventType::ToolExecution,
+                trace_id: trace_id.clone(),
+                request_id: Some(request_id.clone()),
+                actor_id: req_context.actor_id.clone(),
+                work_item_id: req_context.work_item_id.clone(),
+                client_ip: headers
+                    .get("x-forwarded-for")
+                    .and_then(|h| h.to_str().ok())
+                    .map(|s| s.to_string()),
+                server_id: Some(server_id.clone()),
+                capability_id: Some(payload.capability_id.clone()),
+                resource_uri: None,
+                sanitized_args: Some(redacted_input),
+                sanitized_response: None,
+                execution_latency_us: Some(elapsed_us),
+                status: crate::audit::AuditEventStatus::Failed,
+                error_code: Some("UPSTREAM_TIMEOUT".to_string()),
+                error_message: Some(format!("Tool call timed out after {}ms", state.tool_timeout_ms)),
+                operator_id: None,
+                approval_ticket_id: None,
+            });
             (
                 StatusCode::GATEWAY_TIMEOUT,
                 Json(error_envelope(
@@ -404,9 +539,32 @@ pub async fn handle_call_capability(
                 .into_response()
         }
         Ok(Err(UpstreamCallError::Upstream(err))) => {
+            let elapsed_us = start_time.elapsed().as_micros() as u64;
             if let Some(ref key) = idempotency_key {
                 state.idempotency_store.remove(key).await;
             }
+            state.audit_handle.send(crate::audit::RawAuditEvent {
+                event_type: crate::audit::AuditEventType::ToolExecution,
+                trace_id: trace_id.clone(),
+                request_id: Some(request_id.clone()),
+                actor_id: req_context.actor_id.clone(),
+                work_item_id: req_context.work_item_id.clone(),
+                client_ip: headers
+                    .get("x-forwarded-for")
+                    .and_then(|h| h.to_str().ok())
+                    .map(|s| s.to_string()),
+                server_id: Some(server_id.clone()),
+                capability_id: Some(payload.capability_id.clone()),
+                resource_uri: None,
+                sanitized_args: Some(redacted_input),
+                sanitized_response: None,
+                execution_latency_us: Some(elapsed_us),
+                status: crate::audit::AuditEventStatus::Failed,
+                error_code: Some("UPSTREAM_ERROR".to_string()),
+                error_message: Some(err.clone()),
+                operator_id: None,
+                approval_ticket_id: None,
+            });
             (
                 StatusCode::BAD_GATEWAY,
                 Json(error_envelope(

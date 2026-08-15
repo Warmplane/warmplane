@@ -873,4 +873,72 @@ mod tests {
             .contains("Cannot drop production table"));
         assert_eq!(payload["error"]["operator"], "lead-dba");
     }
+
+    #[tokio::test]
+    async fn test_tool_call_emits_audit_events_and_hash_chain() {
+        let (server_tx, mut server_rx) = mpsc::channel(16);
+        let mut servers = HashMap::new();
+        servers.insert("srv".to_string(), server_tx);
+
+        let mut capabilities = HashMap::new();
+        capabilities.insert(
+            "srv.echo".to_string(),
+            CapabilityMeta {
+                server: "srv".to_string(),
+                tool: "echo".to_string(),
+                summary: "Echo test".to_string(),
+                description: "Echo test description".to_string(),
+                tags: vec![],
+                input_schema: Value::Null,
+                examples: vec![],
+            },
+        );
+
+        let state = AppState::builder()
+            .servers(servers)
+            .capabilities(capabilities)
+            .build();
+
+        tokio::spawn(async move {
+            while let Some(msg) = server_rx.recv().await {
+                if let ServerMsg::CallTool { reply, params, .. } = msg {
+                    let _ = reply.send(Ok(params));
+                }
+            }
+        });
+
+        let req = CallCapabilityRequest {
+            capability_id: "srv.echo".to_string(),
+            args: json!({"message": "hello audit", "secret": "shhh"}),
+            request_id: Some("req-audit-test".to_string()),
+            context: None,
+            idempotency_key: None,
+            input_responses: None,
+            request_state: None,
+        };
+
+        let res = handle_call_capability(State(state.clone()), HeaderMap::new(), Json(req))
+            .await
+            .into_response();
+
+        assert_eq!(res.status(), StatusCode::OK);
+
+        // Allow background flusher to process event
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        let (events, total) = state
+            .audit_store
+            .query(&crate::audit::AuditQueryFilter {
+                capability_id: Some("srv.echo".to_string()),
+                ..Default::default()
+            })
+            .await;
+
+        assert_eq!(total, 1);
+        assert_eq!(events[0].capability_id.as_deref(), Some("srv.echo"));
+        assert_eq!(events[0].status, crate::audit::AuditEventStatus::Success);
+
+        let report = state.audit_store.verify_chain().await;
+        assert!(report.is_valid);
+    }
 }
