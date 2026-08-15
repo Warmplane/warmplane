@@ -7,11 +7,45 @@ export interface McpServerConfig {
   allowStateless?: boolean;
 }
 
+export interface WebhookConfig {
+  url: string;
+  secret?: string;
+  secretEnv?: string;
+  authHeader?: string;
+  headers?: Record<string, string>;
+}
+
 export interface PolicyConfig {
   allow?: string[];
   deny?: string[];
   redact_keys?: string[];
   redactKeys?: string[];
+  requireApproval?: string[];
+  require_approval?: string[];
+  approvalTimeoutSecs?: number;
+  approval_timeout_secs?: number;
+  webhook?: WebhookConfig;
+}
+
+export interface PendingApproval {
+  id: string;
+  capability_id: string;
+  server_id: string;
+  args: Record<string, any>;
+  sanitized_args: Record<string, any>;
+  request_id?: string;
+  context?: {
+    operation_id?: string;
+    actor_id?: string;
+    grant_id?: string;
+  };
+  created_at: number;
+  expires_at: number;
+  status: 'pending' | 'approved' | 'rejected' | 'expired';
+  operator?: string;
+  reason?: string;
+  modified_args?: Record<string, any>;
+  timestamp?: number;
 }
 
 export interface McpConfig {
@@ -137,12 +171,38 @@ export class WarmplaneClient {
     const payload = {
       allow: policy.allow || [],
       deny: policy.deny || [],
-      redactKeys: policy.redact_keys || policy.redactKeys || []
+      redactKeys: policy.redact_keys || policy.redactKeys || [],
+      requireApproval: policy.require_approval || policy.requireApproval || [],
+      approvalTimeoutSecs: policy.approvalTimeoutSecs || policy.approval_timeout_secs || 300,
+      webhook: policy.webhook
     };
     const res = await fetch(`${this.baseUrl}/v1/config/policy`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
+    });
+    return res.json();
+  }
+
+  async listApprovals(): Promise<{ ok: boolean; approvals: PendingApproval[]; total: number }> {
+    const res = await fetch(`${this.baseUrl}/v1/approvals`);
+    return res.json();
+  }
+
+  async approveTicket(id: string, operator: string, modifiedArgs?: Record<string, any>): Promise<{ ok: boolean; message?: string; error?: string }> {
+    const res = await fetch(`${this.baseUrl}/v1/approvals/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operator, modified_args: modifiedArgs })
+    });
+    return res.json();
+  }
+
+  async rejectTicket(id: string, operator: string, reason?: string): Promise<{ ok: boolean; message?: string; error?: string }> {
+    const res = await fetch(`${this.baseUrl}/v1/approvals/${encodeURIComponent(id)}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operator, reason })
     });
     return res.json();
   }

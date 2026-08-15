@@ -244,6 +244,9 @@ async fn main() -> Result<()> {
                 .await?;
             println!("{}", res.text().await?);
         }
+        Commands::Approvals { command } => {
+            cli_config::handle_approvals_command(command).await?;
+        }
     }
     Ok(())
 }

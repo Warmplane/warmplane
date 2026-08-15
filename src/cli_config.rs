@@ -580,6 +580,18 @@ fn handle_policy_command(cmd: PolicyCommands) -> Result<()> {
             save_config(&config, &mcp_config)?;
             println!("{} Added deny patterns: {:?}", "✔".green().bold(), patterns);
         }
+        PolicyCommands::RequireApproval { patterns, config } => {
+            let mut mcp_config = load_or_default_config(&config)?;
+            let mut policy = mcp_config.policy.unwrap_or_default();
+            policy.require_approval.extend(patterns.clone());
+            mcp_config.policy = Some(policy);
+            save_config(&config, &mcp_config)?;
+            println!(
+                "{} Added human approval patterns: {:?}",
+                "✔".green().bold(),
+                patterns
+            );
+        }
         PolicyCommands::Redact { keys, config } => {
             let mut mcp_config = load_or_default_config(&config)?;
             let mut policy = mcp_config.policy.unwrap_or_default();
@@ -594,12 +606,165 @@ fn handle_policy_command(cmd: PolicyCommands) -> Result<()> {
                 println!("{}", "=== Security Policies ===".cyan().bold());
                 println!("  {} {:?}", "Allow:".bold(), p.allow);
                 println!("  {} {:?}", "Deny:".bold(), p.deny);
+                println!("  {} {:?}", "Require Approval:".bold(), p.require_approval);
                 println!("  {} {:?}", "Redact:".bold(), p.redact_keys);
+                if let Some(wh) = p.webhook {
+                    println!("  {} {}", "Webhook:".bold(), wh.url);
+                }
             } else {
                 println!(
                     "{}",
                     "No security policies configured (open mode).".yellow()
                 );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Handles Human-in-the-Loop approval CLI commands (`warmplane approvals ...`).
+pub async fn handle_approvals_command(cmd: crate::models::ApprovalCommands) -> Result<()> {
+    match cmd {
+        crate::models::ApprovalCommands::List { port, config } => {
+            let resolved_port = crate::config::resolve_client_port(port, &config)?;
+            let client = reqwest::Client::new();
+            let res = client
+                .get(format!("http://127.0.0.1:{}/v1/approvals", resolved_port))
+                .send()
+                .await
+                .with_context(|| {
+                    format!("Could not reach daemon at 127.0.0.1:{}", resolved_port)
+                })?;
+
+            let body: serde_json::Value = res.json().await?;
+            if let Some(approvals) = body.get("approvals").and_then(|v| v.as_array()) {
+                println!("{}", "=== Human-in-the-Loop Approvals ===".cyan().bold());
+                if approvals.is_empty() {
+                    println!("  (no approval tickets)");
+                } else {
+                    for appr in approvals {
+                        let id = appr.get("id").and_then(|v| v.as_str()).unwrap_or("-");
+                        let cap = appr
+                            .get("capability_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("-");
+                        let status = appr
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        let status_display = match status {
+                            "pending" => status.yellow().bold(),
+                            "approved" => status.green().bold(),
+                            "rejected" => status.red().bold(),
+                            _ => status.normal(),
+                        };
+                        println!("  • {} | {} | {}", id.bold(), cap.cyan(), status_display);
+                    }
+                }
+            }
+        }
+        crate::models::ApprovalCommands::Get { id, port, config } => {
+            let resolved_port = crate::config::resolve_client_port(port, &config)?;
+            let client = reqwest::Client::new();
+            let res = client
+                .get(format!(
+                    "http://127.0.0.1:{}/v1/approvals/{}",
+                    resolved_port, id
+                ))
+                .send()
+                .await
+                .with_context(|| {
+                    format!("Could not reach daemon at 127.0.0.1:{}", resolved_port)
+                })?;
+
+            let body: serde_json::Value = res.json().await?;
+            println!("{}", serde_json::to_string_pretty(&body)?);
+        }
+        crate::models::ApprovalCommands::Approve {
+            id,
+            operator,
+            modified_args,
+            port,
+            config,
+        } => {
+            let resolved_port = crate::config::resolve_client_port(port, &config)?;
+            let client = reqwest::Client::new();
+            let mod_val: Option<serde_json::Value> = match modified_args {
+                Some(ref s) => Some(serde_json::from_str(s)?),
+                None => None,
+            };
+
+            let res = client
+                .post(format!(
+                    "http://127.0.0.1:{}/v1/approvals/{}/approve",
+                    resolved_port, id
+                ))
+                .json(&serde_json::json!({
+                    "operator": operator,
+                    "modified_args": mod_val
+                }))
+                .send()
+                .await
+                .with_context(|| {
+                    format!("Could not reach daemon at 127.0.0.1:{}", resolved_port)
+                })?;
+
+            let status = res.status();
+            let body: serde_json::Value = res.json().await?;
+            if status.is_success() {
+                println!(
+                    "{} Ticket '{}' approved by {}",
+                    "✔".green().bold(),
+                    id.bold(),
+                    operator.cyan()
+                );
+            } else {
+                let err = body
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Failed to approve ticket");
+                println!("{} {}", "✖".red().bold(), err);
+            }
+        }
+        crate::models::ApprovalCommands::Reject {
+            id,
+            operator,
+            reason,
+            port,
+            config,
+        } => {
+            let resolved_port = crate::config::resolve_client_port(port, &config)?;
+            let client = reqwest::Client::new();
+            let res = client
+                .post(format!(
+                    "http://127.0.0.1:{}/v1/approvals/{}/reject",
+                    resolved_port, id
+                ))
+                .json(&serde_json::json!({
+                    "operator": operator,
+                    "reason": reason
+                }))
+                .send()
+                .await
+                .with_context(|| {
+                    format!("Could not reach daemon at 127.0.0.1:{}", resolved_port)
+                })?;
+
+            let status = res.status();
+            let body: serde_json::Value = res.json().await?;
+            if status.is_success() {
+                println!(
+                    "{} Ticket '{}' rejected by {}",
+                    "✔".green().bold(),
+                    id.bold(),
+                    operator.cyan()
+                );
+            } else {
+                let err = body
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Failed to reject ticket");
+                println!("{} {}", "✖".red().bold(), err);
             }
         }
     }

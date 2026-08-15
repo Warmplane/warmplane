@@ -128,7 +128,50 @@ pub enum AuthConfig {
     },
 }
 
-/// Security access control policy configuration.
+/// Webhook configuration for external notifications and HITL workflows.
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq)]
+pub struct WebhookConfig {
+    /// Target webhook URL.
+    pub url: String,
+    /// Static HMAC-SHA256 signing secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    /// Environment variable containing HMAC-SHA256 signing secret.
+    #[serde(
+        default,
+        rename = "secretEnv",
+        alias = "secret_env",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub secret_env: Option<String>,
+    /// Authorization header value (e.g. Bearer token).
+    #[serde(
+        default,
+        rename = "authHeader",
+        alias = "auth_header",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub auth_header: Option<String>,
+    /// Optional custom HTTP headers map.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<HashMap<String, String>>,
+}
+
+impl WebhookConfig {
+    /// Resolves the HMAC signing secret from env var or direct value.
+    pub fn resolve_secret(&self) -> Option<String> {
+        if let Some(ref env_name) = self.secret_env {
+            if let Ok(val) = std::env::var(env_name) {
+                if !val.trim().is_empty() {
+                    return Some(val);
+                }
+            }
+        }
+        self.secret.clone()
+    }
+}
+
+/// Security access control and human-in-the-loop policy configuration.
 #[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq)]
 pub struct PolicyConfig {
     /// List of capability ID patterns allowed for execution.
@@ -138,8 +181,32 @@ pub struct PolicyConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deny: Vec<String>,
     /// Sensitive key patterns to redact in logged request/response payloads.
-    #[serde(default, rename = "redactKeys", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "redactKeys",
+        alias = "redact_keys",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub redact_keys: Vec<String>,
+    /// List of capability ID patterns requiring human operator approval before execution.
+    #[serde(
+        default,
+        rename = "requireApproval",
+        alias = "require_approval",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub require_approval: Vec<String>,
+    /// Timeout in seconds before a pending approval automatically expires (default 300s).
+    #[serde(
+        default,
+        rename = "approvalTimeoutSecs",
+        alias = "approval_timeout_secs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub approval_timeout_secs: Option<u64>,
+    /// Outbound webhook configuration for dispatching approval events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook: Option<WebhookConfig>,
 }
 
 /// Loads and validates Warmplane server configuration from JSON file.
