@@ -205,6 +205,12 @@ pub async fn run_daemon(
             "/v1/approvals/:id/reject",
             post(http_v1::handle_reject_ticket),
         )
+        // WORM Audit & Compliance Endpoints
+        .route("/v1/audit/events", get(http_v1::handle_list_audit_events))
+        .route("/v1/audit/events/:id", get(http_v1::handle_get_audit_event))
+        .route("/v1/audit/verify", get(http_v1::handle_verify_audit_chain))
+        .route("/v1/audit/stats", get(http_v1::handle_get_audit_stats))
+        .route("/v1/audit/export", get(http_v1::handle_export_audit))
         // Web UI Control Deck
         .route("/ui", get(http_v1::handle_ui_dashboard))
         .route("/", get(http_v1::handle_ui_dashboard))

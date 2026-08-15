@@ -463,6 +463,79 @@ paths:
           description: Ticket rejected
         "409":
           description: Ticket is not pending or already resolved
+  /v1/audit/events:
+    get:
+      summary: Query paginated WORM audit events with filters
+      operationId: listAuditEvents
+      parameters:
+        - in: query
+          name: actor_id
+          schema:
+            type: string
+        - in: query
+          name: capability_id
+          schema:
+            type: string
+        - in: query
+          name: event_type
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of audit events
+  /v1/audit/events/{id}:
+    get:
+      summary: Get details of a single audit event record
+      operationId: getAuditEvent
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Audit event record
+        "404":
+          description: Audit event not found
+  /v1/audit/verify:
+    get:
+      summary: Verify complete cryptographic SHA-256 hash chain integrity
+      operationId: verifyAuditChain
+      responses:
+        "200":
+          description: Hash chain verification report
+  /v1/audit/stats:
+    get:
+      summary: Retrieve summary metrics and event breakdown of the audit log
+      operationId: getAuditStats
+      responses:
+        "200":
+          description: Aggregate audit statistics
+  /v1/audit/export:
+    get:
+      summary: Export raw audit log as JSONL or CSV file attachment
+      operationId: exportAuditLog
+      parameters:
+        - in: query
+          name: format
+          schema:
+            type: string
+            enum: [jsonl, csv]
+            default: jsonl
+      responses:
+        "200":
+          description: Streamed audit log file
   /v1/operations/{id}/cancel:
     post:
       summary: Cancel in-flight operation

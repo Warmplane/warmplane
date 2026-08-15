@@ -233,9 +233,9 @@ Add a dedicated **Audit & Compliance** tab to the Control Deck:
 - [x] Benchmark overhead to ensure <10µs latency impact on tool calls.
 
 ### Phase 3: HTTP API & Compliance Export
-- [ ] Implement `/v1/audit/events`, `/v1/audit/events/:id`, `/v1/audit/verify`, `/v1/audit/export`, and `/v1/audit/stats` in `src/http_v1/audit_api.rs`.
-- [ ] Support JSONL and CSV streaming downloads.
-- [ ] Add OpenAPI specification documentation for audit endpoints.
+- [x] Implement `/v1/audit/events`, `/v1/audit/events/:id`, `/v1/audit/verify`, `/v1/audit/export`, and `/v1/audit/stats` in `src/http_v1/audit_api.rs`.
+- [x] Support JSONL and CSV streaming downloads.
+- [x] Add OpenAPI specification documentation for audit endpoints.
 
 ### Phase 4: SIEM Exporter Pipelines
 - [ ] Implement OTLP, Splunk HEC, and HTTP Webhook telemetry forwarders with batching and retry buffers.
