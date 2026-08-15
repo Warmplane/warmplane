@@ -1,4 +1,4 @@
-import { McpConfig, CapabilityItem, PendingApproval } from './api';
+import { McpConfig, CapabilityItem, PendingApproval, AuditEventItem, VerificationReport, AuditStats } from './api';
 
 export interface AppState {
   configPath: string;
@@ -6,8 +6,11 @@ export interface AppState {
   serverStatuses: Record<string, { transport: string; protocol_version: string; status: string }>;
   capabilities: CapabilityItem[];
   approvals: PendingApproval[];
+  auditEvents: AuditEventItem[];
+  auditStats: AuditStats | null;
+  auditVerification: VerificationReport | null;
   selectedCapabilityId: string | null;
-  activeTab: 'overview' | 'servers' | 'playground' | 'approvals' | 'policy' | 'aliases';
+  activeTab: 'overview' | 'servers' | 'playground' | 'approvals' | 'audit' | 'policy' | 'aliases';
   eventLogs: Array<{ time: string; method: string; target: string; status: string; latency: string }>;
   executionResult: { status: number; durationMs: number; data: any } | null;
   metrics: {
@@ -27,6 +30,9 @@ class Store {
     serverStatuses: {},
     capabilities: [],
     approvals: [],
+    auditEvents: [],
+    auditStats: null,
+    auditVerification: null,
     selectedCapabilityId: null,
     activeTab: 'overview',
     eventLogs: [],

@@ -4,6 +4,7 @@ import { renderOverview } from './components/overview';
 import { renderServers } from './components/servers';
 import { renderPlayground } from './components/playground';
 import { renderApprovals } from './components/approvals';
+import { renderAudit } from './components/audit';
 import { renderPolicy } from './components/policy';
 import { renderAliases } from './components/aliases';
 import { SERVER_TEMPLATES, ServerTemplate } from './templates';
@@ -29,10 +30,12 @@ class WarmplaneApp {
 
   async refreshData() {
     try {
-      const [configRes, capsRes, apprRes] = await Promise.all([
+      const [configRes, capsRes, apprRes, auditEventsRes, auditStatsRes] = await Promise.all([
         api.getConfig(),
         api.listCapabilities(),
-        api.listApprovals()
+        api.listApprovals(),
+        api.listAuditEvents({ limit: 50 }),
+        api.getAuditStats()
       ]);
 
       if (configRes.ok) {
@@ -60,8 +63,48 @@ class WarmplaneApp {
           approvals: apprRes.approvals
         });
       }
+
+      if (auditEventsRes && Array.isArray(auditEventsRes.events)) {
+        store.setState({
+          auditEvents: auditEventsRes.events
+        });
+      }
+
+      if (auditStatsRes && auditStatsRes.ok) {
+        store.setState({
+          auditStats: auditStatsRes
+        });
+      }
     } catch (e) {
       console.error('Failed to fetch daemon state:', e);
+    }
+  }
+
+  async refreshAuditEvents() {
+    try {
+      const [auditEventsRes, auditStatsRes] = await Promise.all([
+        api.listAuditEvents({ limit: 50 }),
+        api.getAuditStats()
+      ]);
+      if (auditEventsRes && Array.isArray(auditEventsRes.events)) {
+        store.setState({ auditEvents: auditEventsRes.events });
+      }
+      if (auditStatsRes && auditStatsRes.ok) {
+        store.setState({ auditStats: auditStatsRes });
+      }
+    } catch (e) {
+      console.error('Failed to refresh audit events:', e);
+    }
+  }
+
+  async verifyAuditChain() {
+    try {
+      const res = await api.verifyAuditChain();
+      if (res && res.report) {
+        store.setState({ auditVerification: res.report });
+      }
+    } catch (e) {
+      console.error('Failed to verify audit chain:', e);
     }
   }
 
@@ -88,7 +131,7 @@ class WarmplaneApp {
     }
   }
 
-  switchTab(tab: 'overview' | 'servers' | 'playground' | 'approvals' | 'policy' | 'aliases') {
+  switchTab(tab: 'overview' | 'servers' | 'playground' | 'approvals' | 'audit' | 'policy' | 'aliases') {
     store.setState({ activeTab: tab });
     this.refreshData();
   }
@@ -122,6 +165,7 @@ class WarmplaneApp {
       servers: 'Server Hub & Connections',
       playground: 'MCP Capability Playground',
       approvals: 'Human-in-the-Loop Review Queue',
+      audit: 'WORM Audit & Compliance Ledger',
       policy: 'Security Governance & Redaction',
       aliases: 'Facade & Alias Studio'
     };
@@ -139,6 +183,9 @@ class WarmplaneApp {
         break;
       case 'approvals':
         mainEl.innerHTML = renderApprovals(state);
+        break;
+      case 'audit':
+        mainEl.innerHTML = renderAudit();
         break;
       case 'policy':
         mainEl.innerHTML = renderPolicy();

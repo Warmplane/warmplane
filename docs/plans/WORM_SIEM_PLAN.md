@@ -242,7 +242,7 @@ Add a dedicated **Audit & Compliance** tab to the Control Deck:
 - [x] Add configuration parsing in `src/config.rs` for `audit.siem`.
 
 ### Phase 5: Control Deck UI (Audit Explorer)
-- [ ] Create `ui/src/components/audit.ts` with responsive filtering, stats cards, and expandable event rows.
-- [ ] Add integrity verification UI indicator and CSV/JSONL export triggers.
-- [ ] Integrate into `ui/src/main.ts` navigation and state management.
-- [ ] Run full UI build (`bun run build:ui`) and verify end-to-end.
+- [x] Create `ui/src/components/audit.ts` with responsive filtering, stats cards, and expandable event rows.
+- [x] Add integrity verification UI indicator and CSV/JSONL export triggers.
+- [x] Integrate into `ui/src/main.ts` navigation and state management.
+- [x] Run full UI build (`bun run build`) and verify end-to-end.
