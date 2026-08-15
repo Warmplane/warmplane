@@ -3,6 +3,7 @@
 //! Warmplane: Local control plane and facade proxy for Model Context Protocol (MCP) sessions.
 
 pub mod approvals;
+pub mod audit;
 pub mod catalog;
 pub mod cli_config;
 pub mod config;

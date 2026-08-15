@@ -64,6 +64,10 @@ pub struct AppState {
     pub oauth_registry: crate::oauth2::OAuthRegistry,
     /// Human-in-the-loop approval registry.
     pub approval_registry: crate::approvals::ApprovalRegistry,
+    /// Append-only WORM audit store.
+    pub audit_store: crate::audit::SharedAuditStore,
+    /// Non-blocking async audit event dispatcher handle.
+    pub audit_handle: crate::audit::AuditHandle,
 }
 
 impl AppState {
@@ -94,6 +98,8 @@ pub struct AppStateBuilder {
     oauth_proxy_port: Option<u16>,
     oauth_registry: Option<crate::oauth2::OAuthRegistry>,
     approval_registry: Option<crate::approvals::ApprovalRegistry>,
+    audit_store: Option<crate::audit::SharedAuditStore>,
+    audit_handle: Option<crate::audit::AuditHandle>,
 }
 
 #[allow(dead_code)]
@@ -257,8 +263,33 @@ impl AppStateBuilder {
         self
     }
 
+    /// Sets append-only WORM audit store.
+    pub fn audit_store(mut self, store: crate::audit::SharedAuditStore) -> Self {
+        self.audit_store = Some(store);
+        self
+    }
+
+    /// Sets non-blocking audit event handle.
+    pub fn audit_handle(mut self, handle: crate::audit::AuditHandle) -> Self {
+        self.audit_handle = Some(handle);
+        self
+    }
+
     /// Builds the `AppState` struct instance with defaults for unspecified fields.
     pub fn build(self) -> AppState {
+        let audit_store = self
+            .audit_store
+            .unwrap_or_else(|| Arc::new(crate::audit::AuditStore::in_memory()));
+        let audit_handle = self.audit_handle.unwrap_or_else(|| {
+            crate::audit::spawn_audit_worker(
+                audit_store.clone(),
+                None,
+                crate::audit::DEFAULT_AUDIT_BUFFER_CAPACITY,
+                crate::audit::DEFAULT_AUDIT_FLUSH_INTERVAL_MS,
+                crate::audit::DEFAULT_AUDIT_MAX_BATCH_SIZE,
+            )
+        });
+
         AppState {
             servers: self.servers.unwrap_or_default(),
             capabilities: self.capabilities.unwrap_or_default(),
@@ -290,6 +321,8 @@ impl AppStateBuilder {
             oauth_proxy_port: self.oauth_proxy_port,
             oauth_registry: self.oauth_registry.unwrap_or_default(),
             approval_registry: self.approval_registry.unwrap_or_default(),
+            audit_store,
+            audit_handle,
         }
     }
 }

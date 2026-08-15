@@ -873,4 +873,170 @@ mod tests {
             .contains("Cannot drop production table"));
         assert_eq!(payload["error"]["operator"], "lead-dba");
     }
+
+    #[tokio::test]
+    async fn test_tool_call_emits_audit_events_and_hash_chain() {
+        let (server_tx, mut server_rx) = mpsc::channel(16);
+        let mut servers = HashMap::new();
+        servers.insert("srv".to_string(), server_tx);
+
+        let mut capabilities = HashMap::new();
+        capabilities.insert(
+            "srv.echo".to_string(),
+            CapabilityMeta {
+                server: "srv".to_string(),
+                tool: "echo".to_string(),
+                summary: "Echo test".to_string(),
+                description: "Echo test description".to_string(),
+                tags: vec![],
+                input_schema: Value::Null,
+                examples: vec![],
+            },
+        );
+
+        let state = AppState::builder()
+            .servers(servers)
+            .capabilities(capabilities)
+            .build();
+
+        tokio::spawn(async move {
+            while let Some(msg) = server_rx.recv().await {
+                if let ServerMsg::CallTool { reply, params, .. } = msg {
+                    let _ = reply.send(Ok(params));
+                }
+            }
+        });
+
+        let req = CallCapabilityRequest {
+            capability_id: "srv.echo".to_string(),
+            args: json!({"message": "hello audit", "secret": "shhh"}),
+            request_id: Some("req-audit-test".to_string()),
+            context: None,
+            idempotency_key: None,
+            input_responses: None,
+            request_state: None,
+        };
+
+        let res = handle_call_capability(State(state.clone()), HeaderMap::new(), Json(req))
+            .await
+            .into_response();
+
+        assert_eq!(res.status(), StatusCode::OK);
+
+        // Allow background flusher to process event
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        let (events, total) = state
+            .audit_store
+            .query(&crate::audit::AuditQueryFilter {
+                capability_id: Some("srv.echo".to_string()),
+                ..Default::default()
+            })
+            .await;
+
+        assert_eq!(total, 1);
+        assert_eq!(events[0].capability_id.as_deref(), Some("srv.echo"));
+        assert_eq!(events[0].status, crate::audit::AuditEventStatus::Success);
+
+        let report = state.audit_store.verify_chain().await;
+        assert!(report.is_valid);
+    }
+
+    #[tokio::test]
+    async fn test_audit_api_endpoints_and_export() {
+        let store = Arc::new(crate::audit::AuditStore::in_memory());
+        let handle = crate::audit::spawn_audit_worker(store.clone(), None, 100, 50, 10);
+        let state = AppState::builder()
+            .audit_store(store.clone())
+            .audit_handle(handle.clone())
+            .build();
+
+        handle
+            .send_async(crate::audit::RawAuditEvent {
+                event_type: crate::audit::AuditEventType::ToolExecution,
+                trace_id: "trace-audit-api".to_string(),
+                request_id: Some("req-100".to_string()),
+                actor_id: Some("agent-compliance".to_string()),
+                work_item_id: None,
+                client_ip: Some("127.0.0.1".to_string()),
+                server_id: Some("github".to_string()),
+                capability_id: Some("github.get_repo".to_string()),
+                resource_uri: None,
+                sanitized_args: Some(json!({"repo": "warmplane"})),
+                sanitized_response: Some(json!({"stars": 500})),
+                execution_latency_us: Some(1200),
+                status: crate::audit::AuditEventStatus::Success,
+                error_code: None,
+                error_message: None,
+                operator_id: None,
+                approval_ticket_id: None,
+            })
+            .await;
+
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        // Test GET /v1/audit/events
+        let list_res = crate::http_v1::audit_api::handle_list_audit_events(
+            State(state.clone()),
+            Query(crate::http_v1::audit_api::AuditEventsQuery {
+                actor_id: Some("agent-compliance".to_string()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(list_res.status(), StatusCode::OK);
+        let bytes = to_bytes(list_res.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["total"], 1);
+        let event_id = payload["events"][0]["id"].as_str().unwrap().to_string();
+
+        // Test GET /v1/audit/events/:id
+        let get_res = crate::http_v1::audit_api::handle_get_audit_event(
+            State(state.clone()),
+            axum::extract::Path(event_id.clone()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(get_res.status(), StatusCode::OK);
+
+        // Test GET /v1/audit/verify
+        let verify_res =
+            crate::http_v1::audit_api::handle_verify_audit_chain(State(state.clone()))
+                .await
+                .into_response();
+
+        assert_eq!(verify_res.status(), StatusCode::OK);
+        let verify_bytes = to_bytes(verify_res.into_body(), usize::MAX).await.unwrap();
+        let verify_json: Value = serde_json::from_slice(&verify_bytes).unwrap();
+        assert_eq!(verify_json["ok"], true);
+        assert_eq!(verify_json["report"]["is_valid"], true);
+
+        // Test GET /v1/audit/stats
+        let stats_res = crate::http_v1::audit_api::handle_get_audit_stats(State(state.clone()))
+            .await
+            .into_response();
+
+        assert_eq!(stats_res.status(), StatusCode::OK);
+
+        // Test GET /v1/audit/export as CSV
+        let export_csv = crate::http_v1::audit_api::handle_export_audit(
+            State(state.clone()),
+            Query(crate::http_v1::audit_api::AuditExportQuery {
+                format: Some("csv".to_string()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(export_csv.status(), StatusCode::OK);
+        let csv_bytes = to_bytes(export_csv.into_body(), usize::MAX).await.unwrap();
+        let csv_str = String::from_utf8(csv_bytes.to_vec()).unwrap();
+        assert!(csv_str.contains("github.get_repo"));
+        assert!(csv_str.contains("agent-compliance"));
+    }
 }

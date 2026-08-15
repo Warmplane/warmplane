@@ -221,28 +221,28 @@ Add a dedicated **Audit & Compliance** tab to the Control Deck:
 ## 9. Phased Execution Roadmap
 
 ### Phase 1: Core Audit Engine & Hash Chain Storage
-- [ ] Create `src/audit/` module (`models.rs`, `store.rs`, `chain.rs`, `worker.rs`).
-- [ ] Implement SQLite append-only storage with linear SHA-256 hash chaining.
-- [ ] Add async batching worker with bounded mpsc channel.
-- [ ] Implement integrity verification algorithm (`verify_chain`).
-- [ ] Write thorough unit & integration tests for tampering detection and append-only constraints.
+- [x] Create `src/audit/` module (`models.rs`, `store.rs`, `chain.rs`, `worker.rs`).
+- [x] Implement append-only storage with linear SHA-256 hash chaining.
+- [x] Add async batching worker with bounded mpsc channel.
+- [x] Implement integrity verification algorithm (`verify_chain`).
+- [x] Write thorough unit & integration tests for tampering detection and append-only constraints.
 
 ### Phase 2: Interceptor Integration & Redaction
-- [ ] Hook audit event emission into `/v1/tools/call`, HITL approval lifecycle (`approve`, `reject`, `expire`), and policy rejection paths.
-- [ ] Ensure arguments and returns pass through `redact_keys` sanitization before channel dispatch.
-- [ ] Benchmark overhead to ensure <10µs latency impact on tool calls.
+- [x] Hook audit event emission into `/v1/tools/call`, HITL approval lifecycle (`approve`, `reject`, `expire`), and policy rejection paths.
+- [x] Ensure arguments and returns pass through `redact_keys` sanitization before channel dispatch.
+- [x] Benchmark overhead to ensure <10µs latency impact on tool calls.
 
 ### Phase 3: HTTP API & Compliance Export
-- [ ] Implement `/v1/audit/events`, `/v1/audit/events/:id`, `/v1/audit/verify`, `/v1/audit/export`, and `/v1/audit/stats` in `src/http_v1/audit_api.rs`.
-- [ ] Support JSONL and CSV streaming downloads.
-- [ ] Add OpenAPI specification documentation for audit endpoints.
+- [x] Implement `/v1/audit/events`, `/v1/audit/events/:id`, `/v1/audit/verify`, `/v1/audit/export`, and `/v1/audit/stats` in `src/http_v1/audit_api.rs`.
+- [x] Support JSONL and CSV streaming downloads.
+- [x] Add OpenAPI specification documentation for audit endpoints.
 
 ### Phase 4: SIEM Exporter Pipelines
-- [ ] Implement OTLP, Splunk HEC, and HTTP Webhook telemetry forwarders with batching and retry buffers.
-- [ ] Add configuration parsing in `src/config.rs` for `audit.siem`.
+- [x] Implement OTLP, Splunk HEC, and HTTP Webhook telemetry forwarders with batching and retry buffers.
+- [x] Add configuration parsing in `src/config.rs` for `audit.siem`.
 
 ### Phase 5: Control Deck UI (Audit Explorer)
-- [ ] Create `ui/src/components/audit.ts` with responsive filtering, stats cards, and expandable event rows.
-- [ ] Add integrity verification UI indicator and CSV/JSONL export triggers.
-- [ ] Integrate into `ui/src/main.ts` navigation and state management.
-- [ ] Run full UI build (`bun run build:ui`) and verify end-to-end.
+- [x] Create `ui/src/components/audit.ts` with responsive filtering, stats cards, and expandable event rows.
+- [x] Add integrity verification UI indicator and CSV/JSONL export triggers.
+- [x] Integrate into `ui/src/main.ts` navigation and state management.
+- [x] Run full UI build (`bun run build`) and verify end-to-end.

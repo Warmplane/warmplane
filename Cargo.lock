@@ -4233,7 +4233,7 @@ dependencies = [
 
 [[package]]
 name = "warmplane"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4256,6 +4256,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",

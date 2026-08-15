@@ -53,6 +53,54 @@ pub async fn initialize_state(
 
     let search_engine = Arc::new(crate::search::HybridSearchEngine::new());
 
+    let (audit_store, audit_handle) = if let Some(ref audit_cfg) = config.audit {
+        if audit_cfg.enabled {
+            let store = if let Some(ref path) = audit_cfg.file_path {
+                Arc::new(crate::audit::AuditStore::open_or_create(path)?)
+            } else {
+                Arc::new(crate::audit::AuditStore::in_memory())
+            };
+            let siem_dispatcher = audit_cfg
+                .siem
+                .clone()
+                .map(|cfg| crate::audit::SiemDispatcher::new(Some(cfg)));
+            let handle = crate::audit::spawn_audit_worker(
+                store.clone(),
+                siem_dispatcher,
+                audit_cfg
+                    .buffer_capacity
+                    .unwrap_or(crate::audit::DEFAULT_AUDIT_BUFFER_CAPACITY),
+                audit_cfg
+                    .flush_interval_ms
+                    .unwrap_or(crate::audit::DEFAULT_AUDIT_FLUSH_INTERVAL_MS),
+                audit_cfg
+                    .max_batch_size
+                    .unwrap_or(crate::audit::DEFAULT_AUDIT_MAX_BATCH_SIZE),
+            );
+            (store, handle)
+        } else {
+            let store = Arc::new(crate::audit::AuditStore::in_memory());
+            let handle = crate::audit::spawn_audit_worker(
+                store.clone(),
+                None,
+                crate::audit::DEFAULT_AUDIT_BUFFER_CAPACITY,
+                crate::audit::DEFAULT_AUDIT_FLUSH_INTERVAL_MS,
+                crate::audit::DEFAULT_AUDIT_MAX_BATCH_SIZE,
+            );
+            (store, handle)
+        }
+    } else {
+        let store = Arc::new(crate::audit::AuditStore::in_memory());
+        let handle = crate::audit::spawn_audit_worker(
+            store.clone(),
+            None,
+            crate::audit::DEFAULT_AUDIT_BUFFER_CAPACITY,
+            crate::audit::DEFAULT_AUDIT_FLUSH_INTERVAL_MS,
+            crate::audit::DEFAULT_AUDIT_MAX_BATCH_SIZE,
+        );
+        (store, handle)
+    };
+
     let state = AppState::builder()
         .servers_arc(Arc::new(RwLock::new(HashMap::new())))
         .capabilities_arc(Arc::new(RwLock::new(HashMap::new())))
@@ -70,6 +118,8 @@ pub async fn initialize_state(
         .server_statuses_arc(Arc::new(RwLock::new(HashMap::new())))
         .oauth_proxy_port(oauth_proxy_port)
         .oauth_registry(oauth_registry)
+        .audit_store(audit_store)
+        .audit_handle(audit_handle)
         .build();
 
     info!(
@@ -162,6 +212,12 @@ pub async fn run_daemon(
             "/v1/approvals/:id/reject",
             post(http_v1::handle_reject_ticket),
         )
+        // WORM Audit & Compliance Endpoints
+        .route("/v1/audit/events", get(http_v1::handle_list_audit_events))
+        .route("/v1/audit/events/:id", get(http_v1::handle_get_audit_event))
+        .route("/v1/audit/verify", get(http_v1::handle_verify_audit_chain))
+        .route("/v1/audit/stats", get(http_v1::handle_get_audit_stats))
+        .route("/v1/audit/export", get(http_v1::handle_export_audit))
         // Web UI Control Deck
         .route("/ui", get(http_v1::handle_ui_dashboard))
         .route("/", get(http_v1::handle_ui_dashboard))
