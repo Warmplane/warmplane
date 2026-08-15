@@ -1077,28 +1077,34 @@ pub async fn handle_call_capability(
             .into_response();
     }
 
-    let policy_guard = state.policy.read().await;
-    if !policy_guard.allows(&payload.capability_id) {
-        state.operation_registry.unregister(&request_id).await;
-        if let Some(ref key) = idempotency_key {
-            state.idempotency_store.remove(key).await;
+    let (requires_approval, approval_timeout_secs, webhook_cfg, redact_keys) = {
+        let policy_guard = state.policy.read().await;
+        if !policy_guard.allows(&payload.capability_id) {
+            state.operation_registry.unregister(&request_id).await;
+            if let Some(ref key) = idempotency_key {
+                state.idempotency_store.remove(key).await;
+            }
+            return (
+                StatusCode::FORBIDDEN,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    retry_base("not_started"),
+                    "INVALID_ARGS",
+                    format!("Capability '{}' blocked by policy", payload.capability_id),
+                    false,
+                )),
+            )
+                .into_response();
         }
-        return (
-            StatusCode::FORBIDDEN,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                retry_base("not_started"),
-                "INVALID_ARGS",
-                format!("Capability '{}' blocked by policy", payload.capability_id),
-                false,
-            )),
+        (
+            policy_guard.requires_approval(&payload.capability_id),
+            policy_guard.approval_timeout_secs,
+            policy_guard.webhook.clone(),
+            policy_guard.redact_keys.clone(),
         )
-            .into_response();
-    }
-    let redact_keys = policy_guard.redact_keys.clone();
-    drop(policy_guard);
+    };
 
     let (server_id, tool_name) = {
         let caps_guard = state.capabilities.read().await;
@@ -1124,6 +1130,134 @@ pub async fn handle_call_capability(
         (meta.server.clone(), meta.tool.clone())
     };
 
+    let mut effective_args = payload.args.clone();
+
+    // Human-in-the-Loop (HITL) Interception Flow
+    if requires_approval {
+        let sanitized = redact_value(payload.args.clone(), &redact_keys);
+        let (approval_id, rx) = state
+            .approval_registry
+            .create_approval(crate::approvals::CreateApprovalRequest {
+                capability_id: payload.capability_id.clone(),
+                server_id: server_id.clone(),
+                args: payload.args.clone(),
+                sanitized_args: sanitized,
+                request_id: Some(request_id.clone()),
+                context: Some(req_context.clone()),
+                timeout_secs: approval_timeout_secs,
+                webhook: webhook_cfg.as_ref(),
+            })
+            .await;
+
+        let prefer_async = headers
+            .get("prefer")
+            .and_then(|h| h.to_str().ok())
+            .map(|v| v.to_lowercase().contains("respond-async"))
+            .unwrap_or(false);
+
+        if prefer_async {
+            return (
+                StatusCode::ACCEPTED,
+                Json(json!({
+                    "ok": true,
+                    "status": "pending_approval",
+                    "approval_id": approval_id,
+                    "capability_id": payload.capability_id,
+                    "message": "Execution suspended pending human operator approval",
+                    "request_id": request_id,
+                    "trace_id": trace_id,
+                })),
+            )
+                .into_response();
+        }
+
+        // Synchronous caller suspension on approval wait channel
+        let resolution = tokio::select! {
+            _ = cancel_token.cancelled() => {
+                state.operation_registry.unregister(&request_id).await;
+                if let Some(ref key) = idempotency_key {
+                    state.idempotency_store.remove(key).await;
+                }
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(error_envelope(
+                        trace_id,
+                        Some(request_id),
+                        Some(req_context),
+                        retry_base("unknown"),
+                        "OPERATION_CANCELLED",
+                        "Tool call operation was cancelled while awaiting approval",
+                        false,
+                    )),
+                ).into_response();
+            }
+            res = rx => match res {
+                Ok(r) => r,
+                Err(_) => crate::approvals::ApprovalResolution::Expired,
+            }
+        };
+
+        match resolution {
+            crate::approvals::ApprovalResolution::Approved { modified_args, .. } => {
+                if let Some(mod_args) = modified_args {
+                    info!(
+                        approval_id = %approval_id,
+                        capability_id = %payload.capability_id,
+                        "resuming tool call with operator-modified arguments"
+                    );
+                    effective_args = mod_args;
+                }
+            }
+            crate::approvals::ApprovalResolution::Rejected { operator, reason } => {
+                state.operation_registry.unregister(&request_id).await;
+                if let Some(ref key) = idempotency_key {
+                    state.idempotency_store.remove(key).await;
+                }
+                let reason_str = reason.map(|r| format!(": {}", r)).unwrap_or_default();
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "ok": false,
+                        "request_id": request_id,
+                        "context": req_context,
+                        "trace_id": trace_id,
+                        "data": null,
+                        "error": {
+                            "code": "OPERATION_REJECTED_BY_OPERATOR",
+                            "message": format!("Human operator rejected execution{}", reason_str),
+                            "operator": operator,
+                            "retryable": false,
+                        },
+                        "retry": retry_base("not_started"),
+                    })),
+                )
+                    .into_response();
+            }
+            crate::approvals::ApprovalResolution::Expired => {
+                state.operation_registry.unregister(&request_id).await;
+                if let Some(ref key) = idempotency_key {
+                    state.idempotency_store.remove(key).await;
+                }
+                return (
+                    StatusCode::GATEWAY_TIMEOUT,
+                    Json(error_envelope(
+                        trace_id,
+                        Some(request_id),
+                        Some(req_context),
+                        retry_base("not_started"),
+                        "APPROVAL_TIMEOUT",
+                        format!(
+                            "Approval request timed out after {}s",
+                            approval_timeout_secs
+                        ),
+                        true,
+                    )),
+                )
+                    .into_response();
+            }
+        }
+    }
+
     let tx = {
         let servers_guard = state.servers.read().await;
         let Some(tx) = servers_guard.get(&server_id).cloned() else {
@@ -1148,7 +1282,7 @@ pub async fn handle_call_capability(
         tx
     };
 
-    let redacted_input = redact_value(payload.args.clone(), &redact_keys);
+    let redacted_input = redact_value(effective_args.clone(), &redact_keys);
     info!(
         trace_id = %trace_id,
         request_id = %request_id,
@@ -1165,7 +1299,7 @@ pub async fn handle_call_capability(
     if tx
         .send(ServerMsg::CallTool {
             name: tool_name,
-            params: payload.args,
+            params: effective_args,
             input_responses: payload.input_responses,
             request_state: payload.request_state,
             reply: reply_tx,
@@ -1749,6 +1883,148 @@ pub async fn handle_reload_config(State(state): State<AppState>) -> impl IntoRes
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "ok": false, "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Request body for approving a pending capability execution.
+#[derive(Deserialize)]
+pub struct ApproveTicketRequest {
+    /// Identifier of the human operator approving the action.
+    pub operator: String,
+    /// Optional modified arguments to execute instead of original payload.
+    #[serde(default)]
+    pub modified_args: Option<Value>,
+}
+
+/// Request body for rejecting a pending capability execution.
+#[derive(Deserialize)]
+pub struct RejectTicketRequest {
+    /// Identifier of the human operator rejecting the action.
+    pub operator: String,
+    /// Reason explaining why the action was rejected.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Handles GET `/v1/approvals` returning active pending tickets and recent history.
+pub async fn handle_list_approvals(State(state): State<AppState>) -> impl IntoResponse {
+    let approvals = state.approval_registry.list().await;
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "approvals": approvals,
+            "total": approvals.len(),
+        })),
+    )
+        .into_response()
+}
+
+/// Handles GET `/v1/approvals/:id` returning details of a single approval ticket.
+pub async fn handle_get_approval(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.approval_registry.get(&id).await {
+        Some(approval) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "approval": approval,
+            })),
+        )
+            .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "ok": false,
+                "error": format!("Approval ticket '{}' not found", id),
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// Handles POST `/v1/approvals/:id/approve` approving a suspended capability execution.
+pub async fn handle_approve_ticket(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(payload): Json<ApproveTicketRequest>,
+) -> impl IntoResponse {
+    let webhook_cfg = state.policy.read().await.webhook.clone();
+    match state
+        .approval_registry
+        .approve(
+            &id,
+            payload.operator,
+            payload.modified_args,
+            webhook_cfg.as_ref(),
+        )
+        .await
+    {
+        Ok(true) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "message": format!("Ticket '{}' approved successfully", id),
+            })),
+        )
+            .into_response(),
+        Ok(false) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "ok": false,
+                "error": format!("Ticket '{}' is not pending or already processed", id),
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "ok": false,
+                "error": e.to_string(),
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// Handles POST `/v1/approvals/:id/reject` rejecting a suspended capability execution.
+pub async fn handle_reject_ticket(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(payload): Json<RejectTicketRequest>,
+) -> impl IntoResponse {
+    let webhook_cfg = state.policy.read().await.webhook.clone();
+    match state
+        .approval_registry
+        .reject(&id, payload.operator, payload.reason, webhook_cfg.as_ref())
+        .await
+    {
+        Ok(true) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "message": format!("Ticket '{}' rejected successfully", id),
+            })),
+        )
+            .into_response(),
+        Ok(false) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "ok": false,
+                "error": format!("Ticket '{}' is not pending or already processed", id),
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "ok": false,
+                "error": e.to_string(),
+            })),
         )
             .into_response(),
     }
@@ -2397,5 +2673,226 @@ mod tests {
         assert_eq!(reload_res.status(), StatusCode::OK);
 
         let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_hitl_approval_flow_and_endpoints() {
+        let mut capabilities = HashMap::new();
+        capabilities.insert(
+            "docker.run".to_string(),
+            CapabilityMeta {
+                server: "docker_srv".to_string(),
+                tool: "run".to_string(),
+                summary: "Run docker container".to_string(),
+                description: "Run docker container".to_string(),
+                input_schema: json!({}),
+                tags: vec![],
+                examples: vec![],
+            },
+        );
+
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut servers = HashMap::new();
+        servers.insert("docker_srv".to_string(), tx);
+
+        let policy = crate::daemon::Policy {
+            allow: vec!["*".to_string()],
+            deny: vec![],
+            redact_keys: vec![],
+            require_approval: vec!["docker.run*".to_string()],
+            approval_timeout_secs: 10,
+            webhook: None,
+        };
+
+        let state = AppState::builder()
+            .capabilities(capabilities)
+            .servers(servers)
+            .policy(policy)
+            .build();
+
+        // 1. Test Prefer: respond-async returns 202 Accepted with approval ticket
+        let mut headers = HeaderMap::new();
+        headers.insert("prefer", "respond-async".parse().unwrap());
+
+        let req = CallCapabilityRequest {
+            capability_id: "docker.run".to_string(),
+            args: json!({"image": "ubuntu", "command": "rm -rf /"}),
+            request_id: Some("req-hitl-async".to_string()),
+            context: None,
+            idempotency_key: None,
+            input_responses: None,
+            request_state: None,
+        };
+
+        let async_res = super::handle_call_capability(State(state.clone()), headers, Json(req))
+            .await
+            .into_response();
+
+        assert_eq!(async_res.status(), StatusCode::ACCEPTED);
+        let bytes = to_bytes(async_res.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["status"], "pending_approval");
+        let approval_id = payload["approval_id"].as_str().unwrap().to_string();
+
+        // 2. Test List Approvals contains our ticket
+        let list_res = super::handle_list_approvals(State(state.clone()))
+            .await
+            .into_response();
+        assert_eq!(list_res.status(), StatusCode::OK);
+        let list_bytes = to_bytes(list_res.into_body(), usize::MAX).await.unwrap();
+        let list_payload: Value = serde_json::from_slice(&list_bytes).unwrap();
+        let apprs = list_payload["approvals"].as_array().unwrap();
+        assert_eq!(apprs.len(), 1);
+        assert_eq!(apprs[0]["id"], approval_id.as_str());
+
+        // 3. Test Synchronous wait channel resolution with modified arguments
+        let state_clone = state.clone();
+        let approval_id_clone = approval_id.clone();
+
+        tokio::spawn(async move {
+            // Wait for receiver to register
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+            // Spawn upstream mock tool receiver
+            // Operator approves ticket with modified arguments
+            let appr_res = super::handle_approve_ticket(
+                State(state_clone.clone()),
+                axum::extract::Path(approval_id_clone),
+                Json(super::ApproveTicketRequest {
+                    operator: "sec-admin".to_string(),
+                    modified_args: Some(json!({"image": "ubuntu", "command": "echo safe"})),
+                }),
+            )
+            .await
+            .into_response();
+            assert_eq!(appr_res.status(), StatusCode::OK);
+        });
+
+        tokio::spawn(async move {
+            if let Some(ServerMsg::CallTool { params, reply, .. }) = rx.recv().await {
+                // Verify upstream received operator-modified arguments
+                assert_eq!(params["command"], "echo safe");
+                let _ = reply.send(Ok(json!({"stdout": "safe execution"})));
+            }
+        });
+
+        // Execute synchronous call (should suspend and resolve when approved)
+        let sync_req = CallCapabilityRequest {
+            capability_id: "docker.run".to_string(),
+            args: json!({"image": "ubuntu", "command": "rm -rf /"}),
+            request_id: Some("req-hitl-sync".to_string()),
+            context: None,
+            idempotency_key: None,
+            input_responses: None,
+            request_state: None,
+        };
+
+        // Note: this creates a second approval ticket since it's a new call
+        // Let's spawn an operator to approve this second ticket as well
+        let state_for_sync = state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            let list = state_for_sync.approval_registry.list().await;
+            if let Some(second_ticket) = list.iter().find(|t| t.id != approval_id) {
+                let _ = super::handle_approve_ticket(
+                    State(state_for_sync.clone()),
+                    axum::extract::Path(second_ticket.id.clone()),
+                    Json(super::ApproveTicketRequest {
+                        operator: "sec-admin".to_string(),
+                        modified_args: Some(json!({"image": "ubuntu", "command": "echo safe"})),
+                    }),
+                )
+                .await;
+            }
+        });
+
+        let sync_res =
+            super::handle_call_capability(State(state.clone()), HeaderMap::new(), Json(sync_req))
+                .await
+                .into_response();
+
+        assert_eq!(sync_res.status(), StatusCode::OK);
+        let sync_bytes = to_bytes(sync_res.into_body(), usize::MAX).await.unwrap();
+        let sync_payload: Value = serde_json::from_slice(&sync_bytes).unwrap();
+        assert_eq!(sync_payload["ok"], true);
+        assert_eq!(sync_payload["data"]["stdout"], "safe execution");
+    }
+
+    #[tokio::test]
+    async fn test_hitl_rejection_returns_structured_envelope() {
+        let mut capabilities = HashMap::new();
+        capabilities.insert(
+            "db.drop_table".to_string(),
+            CapabilityMeta {
+                server: "db_srv".to_string(),
+                tool: "drop_table".to_string(),
+                summary: "Drop database table".to_string(),
+                description: "Drop table".to_string(),
+                input_schema: json!({}),
+                tags: vec![],
+                examples: vec![],
+            },
+        );
+
+        let (tx, _rx) = mpsc::channel(1);
+        let mut servers = HashMap::new();
+        servers.insert("db_srv".to_string(), tx);
+
+        let policy = crate::daemon::Policy {
+            allow: vec!["*".to_string()],
+            deny: vec![],
+            redact_keys: vec![],
+            require_approval: vec!["db.drop*".to_string()],
+            approval_timeout_secs: 5,
+            webhook: None,
+        };
+
+        let state = AppState::builder()
+            .capabilities(capabilities)
+            .servers(servers)
+            .policy(policy)
+            .build();
+
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            let list = state_clone.approval_registry.list().await;
+            if let Some(ticket) = list.first() {
+                let _ = super::handle_reject_ticket(
+                    State(state_clone.clone()),
+                    axum::extract::Path(ticket.id.clone()),
+                    Json(super::RejectTicketRequest {
+                        operator: "lead-dba".to_string(),
+                        reason: Some("Cannot drop production table".to_string()),
+                    }),
+                )
+                .await;
+            }
+        });
+
+        let req = CallCapabilityRequest {
+            capability_id: "db.drop_table".to_string(),
+            args: json!({"table": "users"}),
+            request_id: Some("req-reject-test".to_string()),
+            context: None,
+            idempotency_key: None,
+            input_responses: None,
+            request_state: None,
+        };
+
+        let res = super::handle_call_capability(State(state), HeaderMap::new(), Json(req))
+            .await
+            .into_response();
+
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["ok"], false);
+        assert_eq!(payload["error"]["code"], "OPERATION_REJECTED_BY_OPERATOR");
+        assert!(payload["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Cannot drop production table"));
+        assert_eq!(payload["error"]["operator"], "lead-dba");
     }
 }

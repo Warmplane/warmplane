@@ -8,6 +8,8 @@ export function renderPolicy(): string {
   const deny = policy.deny || [];
   const redact = policy.redact_keys || policy.redactKeys || [];
 
+  const requireApproval = policy.require_approval || policy.requireApproval || [];
+
   const allowHtml = allow.length === 0 ? `
     <div style="color: var(--text-dim); font-size: 12px;">No allow list (all non-denied operations permitted)</div>
   ` : allow.map((a, i) => `
@@ -26,6 +28,15 @@ export function renderPolicy(): string {
     </div>
   `).join('');
 
+  const approvalHtml = requireApproval.length === 0 ? `
+    <div style="color: var(--text-dim); font-size: 12px;">No human-in-the-loop approval rules configured</div>
+  ` : requireApproval.map((ap, i) => `
+    <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface); padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
+      <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--amber-400);">🛡️ ${escapeHtml(ap)}</span>
+      <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 11px; color: var(--red-400);" onclick="window.app.removePolicyRule('requireApproval', ${i})">✕</button>
+    </div>
+  `).join('');
+
   const redactHtml = redact.length === 0 ? `
     <div style="color: var(--text-dim); font-size: 12px;">No key redaction patterns configured</div>
   ` : redact.map((r, i) => `
@@ -38,14 +49,14 @@ export function renderPolicy(): string {
   return `
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px;">
       <div>
-        <div style="font-size: 16px; font-weight: 700; color: var(--text-main);">Security Governance &amp; Data Redaction</div>
-        <div style="font-size: 11px; color: var(--text-dim);">Wildcard capability access control and sensitive key masking</div>
+        <div style="font-size: 16px; font-weight: 700; color: var(--text-main);">Security Governance, Approvals &amp; Data Redaction</div>
+        <div style="font-size: 11px; color: var(--text-dim);">Wildcard capability access control, human-in-the-loop triggers, and sensitive key masking</div>
       </div>
     </div>
 
     <div class="bento-grid">
       <!-- Allow Rules -->
-      <div class="bento-card col-6">
+      <div class="bento-card col-4">
         <div class="stat-header">
           <span class="stat-label" style="color: var(--green-400);">Allow List Patterns</span>
         </div>
@@ -59,7 +70,7 @@ export function renderPolicy(): string {
       </div>
 
       <!-- Deny Rules -->
-      <div class="bento-card col-6">
+      <div class="bento-card col-4">
         <div class="stat-header">
           <span class="stat-label" style="color: var(--red-400);">Deny List Patterns (Strict Precedence)</span>
         </div>
@@ -69,6 +80,20 @@ export function renderPolicy(): string {
         <div style="display: flex; gap: 8px; margin-top: 14px;">
           <input type="text" class="form-input" id="policy-new-deny" placeholder="e.g. *.drop_*, filesystem.write_*" onkeydown="if(event.key==='Enter') window.app.submitPolicyRule('deny')">
           <button class="btn btn-ghost" onclick="window.app.submitPolicyRule('deny')">Add Deny</button>
+        </div>
+      </div>
+
+      <!-- Require Approval Rules -->
+      <div class="bento-card col-4">
+        <div class="stat-header">
+          <span class="stat-label" style="color: var(--amber-400);">Human-in-the-Loop Triggers</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 8px; margin: 12px 0;">
+          ${approvalHtml}
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 14px;">
+          <input type="text" class="form-input" id="policy-new-requireApproval" placeholder="e.g. docker.run*, db.write*" onkeydown="if(event.key==='Enter') window.app.submitPolicyRule('requireApproval')">
+          <button class="btn btn-ghost" onclick="window.app.submitPolicyRule('requireApproval')">Add Approval</button>
         </div>
       </div>
 

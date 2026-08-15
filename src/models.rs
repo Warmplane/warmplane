@@ -173,6 +173,11 @@ pub enum Commands {
         config: String,
         id: String,
     },
+    /// Manage Human-in-the-Loop (HITL) capability approvals
+    Approvals {
+        #[command(subcommand)]
+        command: ApprovalCommands,
+    },
 }
 
 /// Upstream server management subcommands.
@@ -323,6 +328,14 @@ pub enum PolicyCommands {
         #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
         config: String,
     },
+    /// Add capability patterns requiring human operator approval
+    RequireApproval {
+        /// Capability pattern(s) (e.g. "docker.run*", "db.write*")
+        patterns: Vec<String>,
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
     /// Add sensitive keys to redact list
     Redact {
         /// Sensitive key names (e.g. "api_key", "password")
@@ -334,6 +347,57 @@ pub enum PolicyCommands {
     /// Show current security policy rules
     Show {
         /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+}
+
+/// Human-in-the-Loop (HITL) approval subcommands.
+#[derive(Subcommand, Debug, Clone)]
+pub enum ApprovalCommands {
+    /// List all pending approvals and recent history
+    List {
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Get details of a specific approval ticket
+    Get {
+        /// Approval ticket identifier (e.g. appr-1723668200-1)
+        id: String,
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Approve a pending capability execution
+    Approve {
+        /// Approval ticket identifier
+        id: String,
+        /// Operator identifier
+        #[arg(short = 'o', long, default_value = "cli-operator")]
+        operator: String,
+        /// Optional modified JSON arguments to execute
+        #[arg(short = 'm', long)]
+        modified_args: Option<String>,
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Reject a pending capability execution
+    Reject {
+        /// Approval ticket identifier
+        id: String,
+        /// Operator identifier
+        #[arg(short = 'o', long, default_value = "cli-operator")]
+        operator: String,
+        /// Reason explaining the rejection
+        #[arg(short = 'r', long)]
+        reason: Option<String>,
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
         #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
         config: String,
     },

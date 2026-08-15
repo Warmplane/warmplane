@@ -3,6 +3,7 @@ import { api } from './api';
 import { renderOverview } from './components/overview';
 import { renderServers } from './components/servers';
 import { renderPlayground } from './components/playground';
+import { renderApprovals } from './components/approvals';
 import { renderPolicy } from './components/policy';
 import { renderAliases } from './components/aliases';
 import { SERVER_TEMPLATES, ServerTemplate } from './templates';
@@ -28,9 +29,10 @@ class WarmplaneApp {
 
   async refreshData() {
     try {
-      const [configRes, capsRes] = await Promise.all([
+      const [configRes, capsRes, apprRes] = await Promise.all([
         api.getConfig(),
-        api.listCapabilities()
+        api.listCapabilities(),
+        api.listApprovals()
       ]);
 
       if (configRes.ok) {
@@ -52,8 +54,25 @@ class WarmplaneApp {
           capabilities: capsRes.capabilities
         });
       }
+
+      if (apprRes && Array.isArray(apprRes.approvals)) {
+        store.setState({
+          approvals: apprRes.approvals
+        });
+      }
     } catch (e) {
       console.error('Failed to fetch daemon state:', e);
+    }
+  }
+
+  async refreshApprovals() {
+    try {
+      const apprRes = await api.listApprovals();
+      if (apprRes && Array.isArray(apprRes.approvals)) {
+        store.setState({ approvals: apprRes.approvals });
+      }
+    } catch (e) {
+      console.error('Failed to refresh approvals:', e);
     }
   }
 
@@ -69,7 +88,7 @@ class WarmplaneApp {
     }
   }
 
-  switchTab(tab: 'overview' | 'servers' | 'playground' | 'policy' | 'aliases') {
+  switchTab(tab: 'overview' | 'servers' | 'playground' | 'approvals' | 'policy' | 'aliases') {
     store.setState({ activeTab: tab });
     this.refreshData();
   }
@@ -79,7 +98,14 @@ class WarmplaneApp {
     const mainEl = document.getElementById('app-main');
     if (!mainEl) return;
 
-    // Update nav item active states
+    // Update nav item active states and badges
+    const pendingCount = state.approvals.filter(a => a.status === 'pending').length;
+    const badgeEl = document.getElementById('nav-approvals-badge');
+    if (badgeEl) {
+      badgeEl.textContent = pendingCount > 0 ? `${pendingCount}` : '';
+      (badgeEl as HTMLElement).style.display = pendingCount > 0 ? 'inline-block' : 'none';
+    }
+
     document.querySelectorAll('.nav-item').forEach(el => {
       const tabAttr = el.getAttribute('data-tab');
       if (tabAttr === state.activeTab) {
@@ -95,6 +121,7 @@ class WarmplaneApp {
       overview: 'Overview Cockpit',
       servers: 'Server Hub & Connections',
       playground: 'MCP Capability Playground',
+      approvals: 'Human-in-the-Loop Review Queue',
       policy: 'Security Governance & Redaction',
       aliases: 'Facade & Alias Studio'
     };
@@ -110,12 +137,53 @@ class WarmplaneApp {
       case 'playground':
         mainEl.innerHTML = renderPlayground();
         break;
+      case 'approvals':
+        mainEl.innerHTML = renderApprovals(state);
+        break;
       case 'policy':
         mainEl.innerHTML = renderPolicy();
         break;
       case 'aliases':
         mainEl.innerHTML = renderAliases();
         break;
+    }
+  }
+
+  // HITL Approval Actions
+  async submitApproval(id: string) {
+    const operatorInput = document.getElementById(`appr-operator-${id}`) as HTMLInputElement | null;
+    const argsInput = document.getElementById(`appr-args-${id}`) as HTMLTextAreaElement | null;
+    const operator = operatorInput?.value.trim() || 'security-operator';
+
+    let modifiedArgs: any = undefined;
+    if (argsInput && argsInput.value.trim()) {
+      try {
+        modifiedArgs = JSON.parse(argsInput.value.trim());
+      } catch {
+        alert('Invalid JSON in arguments editor');
+        return;
+      }
+    }
+
+    const res = await api.approveTicket(id, operator, modifiedArgs);
+    if (res.ok) {
+      await this.refreshApprovals();
+    } else {
+      alert(`Approval failed: ${res.error || 'Unknown error'}`);
+    }
+  }
+
+  async promptReject(id: string) {
+    const reason = prompt('Reason for rejection (will be returned to the calling agent):');
+    if (reason === null) return;
+    const operatorInput = document.getElementById(`appr-operator-${id}`) as HTMLInputElement | null;
+    const operator = operatorInput?.value.trim() || 'security-operator';
+
+    const res = await api.rejectTicket(id, operator, reason);
+    if (res.ok) {
+      await this.refreshApprovals();
+    } else {
+      alert(`Rejection failed: ${res.error || 'Unknown error'}`);
     }
   }
 

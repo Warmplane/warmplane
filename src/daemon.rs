@@ -130,6 +130,12 @@ pub struct Policy {
     pub deny: Vec<String>,
     /// Keys to redact in logged payload envelopes.
     pub redact_keys: Vec<String>,
+    /// List of wildcard patterns requiring human operator approval.
+    pub require_approval: Vec<String>,
+    /// Timeout in seconds before a pending approval expires.
+    pub approval_timeout_secs: u64,
+    /// Outbound webhook configuration.
+    pub webhook: Option<crate::config::WebhookConfig>,
 }
 
 impl Policy {
@@ -148,6 +154,9 @@ impl Policy {
             allow: config.allow,
             deny: config.deny,
             redact_keys: config.redact_keys,
+            require_approval: config.require_approval,
+            approval_timeout_secs: config.approval_timeout_secs.unwrap_or(300),
+            webhook: config.webhook,
         }
     }
 
@@ -173,6 +182,20 @@ impl Policy {
         }
 
         self.allow
+            .iter()
+            .any(|pattern| wildcard_match(pattern, id_ref))
+    }
+
+    /// Checks whether the given capability requires human approval prior to execution.
+    ///
+    /// # Arguments
+    /// * `id` - Identifier string to test.
+    ///
+    /// # Returns
+    /// `true` if operator approval is required, `false` otherwise.
+    pub fn requires_approval(&self, id: impl AsRef<str>) -> bool {
+        let id_ref = id.as_ref();
+        self.require_approval
             .iter()
             .any(|pattern| wildcard_match(pattern, id_ref))
     }
@@ -336,6 +359,8 @@ pub struct AppState {
     pub oauth_proxy_port: Option<u16>,
     /// Central OAuth registry.
     pub oauth_registry: crate::oauth2::OAuthRegistry,
+    /// Human-in-the-loop approval registry.
+    pub approval_registry: crate::approvals::ApprovalRegistry,
 }
 
 impl AppState {
@@ -365,6 +390,7 @@ pub struct AppStateBuilder {
     server_statuses: Option<SharedServerStatuses>,
     oauth_proxy_port: Option<u16>,
     oauth_registry: Option<crate::oauth2::OAuthRegistry>,
+    approval_registry: Option<crate::approvals::ApprovalRegistry>,
 }
 
 #[allow(dead_code)]
@@ -495,6 +521,11 @@ impl AppStateBuilder {
         self
     }
 
+    pub fn approval_registry(mut self, registry: crate::approvals::ApprovalRegistry) -> Self {
+        self.approval_registry = Some(registry);
+        self
+    }
+
     pub fn build(self) -> AppState {
         AppState {
             servers: self.servers.unwrap_or_default(),
@@ -526,6 +557,7 @@ impl AppStateBuilder {
             total_tool_duration_us: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             oauth_proxy_port: self.oauth_proxy_port,
             oauth_registry: self.oauth_registry.unwrap_or_default(),
+            approval_registry: self.approval_registry.unwrap_or_default(),
         }
     }
 }
@@ -1233,6 +1265,17 @@ pub async fn run_daemon(
         .route("/v1/config/alias", post(http_v1::handle_update_alias))
         .route("/v1/config/policy", post(http_v1::handle_update_policy))
         .route("/v1/config/reload", post(http_v1::handle_reload_config))
+        // Human-in-the-Loop (HITL) Approvals Endpoints
+        .route("/v1/approvals", get(http_v1::handle_list_approvals))
+        .route("/v1/approvals/:id", get(http_v1::handle_get_approval))
+        .route(
+            "/v1/approvals/:id/approve",
+            post(http_v1::handle_approve_ticket),
+        )
+        .route(
+            "/v1/approvals/:id/reject",
+            post(http_v1::handle_reject_ticket),
+        )
         // Web UI Control Deck
         .route("/ui", get(http_v1::handle_ui_dashboard))
         .route("/", get(http_v1::handle_ui_dashboard))
@@ -1260,7 +1303,7 @@ mod tests {
         let policy = Policy {
             allow: vec!["db.*".to_string()],
             deny: vec!["db.delete".to_string()],
-            redact_keys: vec![],
+            ..Default::default()
         };
 
         assert!(policy.allows("db.query"));
@@ -1272,7 +1315,7 @@ mod tests {
         let policy = Policy {
             allow: vec!["fs.read".to_string()],
             deny: vec![],
-            redact_keys: vec![],
+            ..Default::default()
         };
 
         assert!(policy.allows("fs.read"));
