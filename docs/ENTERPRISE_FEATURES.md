@@ -62,6 +62,7 @@ As enterprises deploy autonomous agents in production environments, unmanaged MC
   * **Append-Only SQLite / Parquet Log:** Records `request_id`, `actor_id`, `grant_id`, `timestamp`, `capability_id`, `sanitized_args`, `execution_latency_us`, and `status`.
   * **Native SIEM Streaming:** Structured telemetry pipeline exporting audit events over OpenTelemetry (OTLP gRPC), Splunk HEC, Datadog, or AWS CloudWatch.
   * **Compliance UI:** Searchable timeline viewer in the Control Deck with JSON/CSV export capabilities.
+  * **Detailed Blueprint:** See [WORM Audit & SIEM Implementation Plan](plans/WORM_SIEM_PLAN.md).
 
 ---
 
