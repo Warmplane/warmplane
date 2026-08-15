@@ -2,27 +2,27 @@
 
 Warmplane is a local control plane that maintains persistent Model Context Protocol (MCP) sessions.
 
-It aggregates multiple upstream MCP servers behind a single runtime. It provides a compact, deterministic interface for tools, resources, and prompts over HTTP REST APIs, CLI commands, and stdio MCP server proxying.
+It aggregates multiple upstream MCP servers behind a single runtime. It provides a compact, deterministic interface for tools, resources, and prompts over HTTP REST APIs, interactive Web UI, CLI commands, and stdio MCP server proxying.
 
-This guide provides configuration references, deployment procedures, API specifications, and operational guidance for enterprise platform engineers and software integrators.
+This guide provides configuration references, deployment procedures, API specifications, and operational guidance for platform engineers and developers.
 
 ---
 
 ## 1. System Overview
 
-Warmplane optimizes AI agent tool execution across three core technical metrics:
+Warmplane optimizes AI agent tool execution across three core technical dimensions:
 
 - **Startup latency**: Eliminates per-call handshake overhead by maintaining persistent, warm connections to upstream MCP servers.
 - **Payload footprint**: Reduces LLM context token usage by serving lightweight catalog indexes first and full schema details on demand.
-- **System determinism**: Standardizes request envelopes, response structures, and error classifications across heterogeneous upstream tools.
+- **System determinism**: Standardizes request envelopes, response structures, retry classifications, and error codes across heterogeneous upstream tools.
 
 ### Client Interfaces
 
-Warmplane exposes four primary client interfaces backed by shared daemon state:
+Warmplane exposes four client interfaces backed by shared daemon state:
 
-1. **Control Deck Web UI (`/ui` & `/`)**: Embedded zero-dependency web management interface for runtime telemetry, upstream server lifecycle, interactive tool execution playground, and security policy rules.
+1. **Control Deck Web UI (`/ui` and `/`)**: Embedded zero-dependency web management interface for runtime telemetry, upstream server lifecycle, interactive tool execution playground, and security policy rules.
 2. **HTTP REST API (`/v1/...`)**: Low-overhead HTTP JSON API for web applications, microservices, and orchestration gateways.
-3. **MCP Stdio Server Mode (`mcp-server`)**: Standard MCP stdio interface for direct integration with MCP-native AI clients.
+3. **MCP Stdio Server Mode (`mcp-server`)**: Standard MCP stdio interface for direct integration with MCP-native AI clients (Claude Desktop, Cursor, Zed).
 4. **CLI Facade (`warmplane <command>`)**: Command-line interface for administrative scripting, server hot-reloading (`warmplane reload`), health checks, and manual debugging.
 
 ---
@@ -34,7 +34,7 @@ Warmplane exposes four primary client interfaces backed by shared daemon state:
 - Rust toolchain (version 1.80 or later)
 - Cargo package manager
 
-### Build from Source
+### Build and Install
 
 1. Clone the repository:
 
@@ -43,18 +43,22 @@ Warmplane exposes four primary client interfaces backed by shared daemon state:
    cd warmplane
    ```
 
-2. Compile the release binary:
-
-   ```bash
-   cargo build --release
-   ```
-
-3. Locate the compiled executable at `./target/release/warmplane`.
-
-4. Install the binary to system path:
+2. Compile and install the release binary:
 
    ```bash
    cargo install --path .
+   ```
+
+3. (Optional) Install with local ONNX vector search support:
+
+   ```bash
+   cargo install --path . --features semantic-search
+   ```
+
+4. Verify the installation:
+
+   ```bash
+   warmplane --help
    ```
 
 ---
@@ -63,27 +67,25 @@ Warmplane exposes four primary client interfaces backed by shared daemon state:
 
 Follow this procedure to deploy a local Warmplane daemon with a sample filesystem MCP server.
 
-1. Create a configuration file named `mcp_servers.json`:
+1. Initialize a new configuration file:
 
-   ```json
-   {
-     "port": 9090,
-     "mcpServers": {
-       "filesystem": {
-         "command": "npx",
-         "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-       }
-     }
-   }
+   ```bash
+   warmplane config init
    ```
 
-2. Start the daemon process:
+2. Add a sample filesystem MCP server:
+
+   ```bash
+   warmplane server add filesystem --command npx --arg "-y" --arg "@modelcontextprotocol/server-filesystem" --arg "/tmp"
+   ```
+
+3. Start the daemon process:
 
    ```bash
    warmplane daemon --config mcp_servers.json
    ```
 
-3. Verify catalog discovery from a separate terminal:
+4. Verify catalog discovery from a separate terminal:
 
    ```bash
    curl -s http://127.0.0.1:9090/v1/capabilities | jq
@@ -95,7 +97,7 @@ Follow this procedure to deploy a local Warmplane daemon with a sample filesyste
 
 ## 4. Configuration Reference
 
-The configuration file (default: `mcp_servers.json`) controls upstream server connections, network ports, access control policies, and alias mappings.
+The configuration file (default: `mcp_servers.json`) controls upstream server connections, network ports, access control policies, human-in-the-loop approvals, and alias mappings.
 
 ### Top-Level Fields
 
@@ -106,8 +108,8 @@ The configuration file (default: `mcp_servers.json`) controls upstream server co
 | `capabilityAliases` | Object | No | `{}` | Map of upstream tool identifiers (`<server>.<tool>`) to canonical public capability IDs. |
 | `resourceAliases` | Object | No | `{}` | Map of upstream resource URIs to canonical public resource IDs. |
 | `promptAliases` | Object | No | `{}` | Map of upstream prompt names to canonical public prompt IDs. |
-| `policy` | Object | No | `null` | Access control rules and data redaction settings. |
-| `mcpServers` | Object | Yes | N/A | Upstream server definitions keyed by server identifier string. |
+| `policy` | Object | No | `null` | Access control rules, approval workflows, and data redaction settings. |
+| `mcpServers` | Object | Yes | `{}` | Upstream server definitions keyed by server identifier string. |
 
 ---
 
@@ -171,7 +173,7 @@ Example:
 
 ### 4.2 Authentication Protocols
 
-Warmplane supports Bearer token, HTTP Basic, and enterprise OAuth2 / OpenID Connect (OIDC) authentication.
+Warmplane supports Bearer token, HTTP Basic, and enterprise OAuth 2.1 / OpenID Connect (OIDC) authentication.
 
 #### Bearer Token Authentication
 
@@ -204,7 +206,7 @@ Warmplane implements enterprise OAuth 2.1 authorization code flow with PKCE (`S2
 | :--- | :--- | :---: | :--- |
 | `clientId` | String | Yes | Registered OAuth2 client ID. |
 | `authorizationServerUrl` | String | Yes | Base URL of the OAuth2 authorization server / identity provider. |
-| `scopes` | Array | No | Requested OAuth2 scope strings (e.g. `["read", "write"]`). |
+| `scopes` | Array | No | Requested OAuth2 scope strings (e.g. `["mcp.read", "mcp.execute"]`). |
 | `clientMetadataUrl` | String | No | Optional URL for OAuth2 client metadata discovery (RFC 7591). |
 
 Example:
@@ -229,24 +231,32 @@ When an upstream server requires OAuth2 authentication, Warmplane executes the f
 
 ---
 
-### 4.3 Policy and Access Control
+### 4.3 Policy, Access Control, and Human-in-the-Loop (HITL)
 
-The `policy` block enforces global security boundaries across all capabilities, resources, and prompts.
+The `policy` block enforces global security boundaries, human approval gates, and data redaction.
 
 ```json
 "policy": {
   "allow": ["github.*", "obs.*", "db.read_*"],
   "deny": ["*.delete", "db.drop_*", "admin.*"],
-  "redactKeys": ["password", "api_key", "secret", "private_key"]
+  "requireApproval": ["docker.run*", "db.write_*", "payments.*"],
+  "approvalTimeoutSecs": 300,
+  "redactKeys": ["password", "api_key", "secret", "private_key"],
+  "webhook": {
+    "url": "https://ops.internal/webhooks/warmplane",
+    "secretEnv": "WARMPLANE_WEBHOOK_SECRET",
+    "authHeader": "Bearer ops-token-xyz"
+  }
 }
 ```
 
 #### Evaluation Rules
 
-- **Deny Precedence**: Rules in `deny` take absolute precedence over `allow` rules. Matching a `deny` pattern blocks execution immediately.
+- **Deny Precedence**: Rules in `deny` take absolute precedence over `allow` and `requireApproval` rules. Matching a `deny` pattern blocks execution immediately.
+- **Human-in-the-Loop Interception**: Capabilities matching `requireApproval` suspend execution and return a pending ticket until approved or rejected.
 - **Default Permissiveness**: If `allow` is empty or omitted, all non-denied items are permitted.
-- **Wildcard Syntax**: Supports prefix wildcards (e.g. `github.*`) and global wildcards (`*`).
-- **Data Redaction**: Fields in request and response payloads matching keys in `redactKeys` are masked in logs and tracing spans before emission.
+- **Data Redaction**: Fields matching keys in `redactKeys` are masked in logs, trace spans, and webhook payloads.
+- **Webhook HMAC Signing**: Outbound webhook requests are signed with HMAC-SHA256 in the `X-Warmplane-Signature-256` header using `secret` or `secretEnv`.
 
 ---
 
@@ -264,7 +274,7 @@ By default, the daemon binds to `127.0.0.1:<port>`.
 
 ### 5.2 Stdio MCP Server Mode
 
-Run Warmplane as a stdio MCP server for native integration with desktop AI clients (e.g. Claude Desktop, VS Code extensions):
+Run Warmplane as a stdio MCP server for native integration with desktop AI clients (Claude Desktop, Cursor, VS Code):
 
 ```bash
 warmplane mcp-server --config mcp_servers.json
@@ -277,7 +287,7 @@ warmplane mcp-server --config mcp_servers.json
   "mcpServers": {
     "warmplane": {
       "command": "warmplane",
-      "args": ["mcp-server", "--config", "/etc/warmplane/mcp_servers.json"]
+      "args": ["mcp-server", "--config", "/path/to/mcp_servers.json"]
     }
   }
 }
@@ -299,9 +309,9 @@ Warmplane exposes lightweight synthetic tools to keep LLM context token usage mi
 
 ---
 
-### 5.3 CLI Configuration & Facade Mode
+### 5.3 CLI Management and Operations
 
-Run single-shot CLI commands for administration, configuration management, debugging, and automation scripts.
+Run single-shot CLI commands for administration, configuration management, approvals, debugging, and automation scripts.
 
 #### Upstream Server Management (`warmplane server`)
 
@@ -313,7 +323,7 @@ Run single-shot CLI commands for administration, configuration management, debug
 | `server get` | Inspects a single server definition in detail. | `warmplane server get github` |
 | `server test` | Tests upstream reachability, binary path resolution, or HTTP connectivity. | `warmplane server test github` |
 
-#### Global Configuration, Aliases & Policy Management (`warmplane config`)
+#### Configuration, Aliases, Policy, and Reload (`warmplane config` & `warmplane reload`)
 
 | Command | Description | Example |
 | :--- | :--- | :--- |
@@ -325,20 +335,28 @@ Run single-shot CLI commands for administration, configuration management, debug
 | `config alias list` | Lists all active capability, resource, and prompt aliases. | `warmplane config alias list` |
 | `config policy allow` | Adds capability patterns to the policy allow list. | `warmplane config policy allow "github.*" "fetch.*"` |
 | `config policy deny` | Adds capability patterns to the policy deny list. | `warmplane config policy deny "filesystem.write*"` |
+| `config policy require-approval` | Adds capability patterns requiring human operator approval. | `warmplane config policy require-approval "docker.*"` |
 | `config policy redact` | Adds sensitive key names to the payload log redaction list. | `warmplane config policy redact "api_key" "token"` |
 | `config policy show` | Displays active security policy rules and redaction keys. | `warmplane config policy show` |
+| `config reload` / `reload` | Hot-reloads daemon upstream servers and policies from disk without downtime. | `warmplane reload` |
 
-#### Operational & Execution CLI Commands
+#### Human-in-the-Loop Approvals (`warmplane approvals`)
 
 | Command | Description | Example |
 | :--- | :--- | :--- |
-| `validate-config` | Validates syntax and transport requirements of configuration file. | `warmplane validate-config --config mcp_servers.json` |
-| `daemon` | Starts the HTTP daemon process. | `warmplane daemon --port 9090 --config mcp_servers.json` |
-| `mcp-server` | Starts stdio MCP proxy server interface. | `warmplane mcp-server --config mcp_servers.json` |
+| `approvals list` | Lists pending approval tickets and recent decision history. | `warmplane approvals list` |
+| `approvals get` | Inspects ticket details, capability target, and sanitized parameters. | `warmplane approvals get appr-1723668200-1` |
+| `approvals approve` | Approves execution (optionally providing modified JSON arguments). | `warmplane approvals approve appr-1723668200-1 -o "lead-sre"` |
+| `approvals reject` | Rejects execution with an optional explanation reason. | `warmplane approvals reject appr-1723668200-1 -r "Unauthorized drop"` |
+
+#### Capability Discovery, Search, and Invocation
+
+| Command | Description | Example |
+| :--- | :--- | :--- |
 | `list-capabilities` | Lists discovered tools from daemon or config. | `warmplane list-capabilities --port 9090` |
-| `search-capabilities` | Performs hybrid search over capabilities. | `warmplane search-capabilities "triage logs" --limit 5` |
+| `search-capabilities` | Performs hybrid lexical and semantic search over capabilities. | `warmplane search-capabilities "triage logs" --limit 5` |
 | `describe-capability` | Displays full JSON Schema for a capability ID. | `warmplane describe-capability github.issues.search` |
-| `call-capability` | Executes a capability tool with JSON parameters. | `warmplane call-capability db.query --params '{"query":"SELECT 1"}'` |
+| `call-capability` | Executes a capability tool with JSON parameters and request context. | `warmplane call-capability db.query --params '{"query":"SELECT 1"}' --request-id req-101 --idempotency-key idem-201` |
 | `list-resources` | Lists registered resources. | `warmplane list-resources --port 9090` |
 | `read-resource` | Reads resource contents by resource ID. | `warmplane read-resource fs.readme` |
 | `list-prompts` | Lists registered prompt templates. | `warmplane list-prompts --port 9090` |
@@ -346,18 +364,7 @@ Run single-shot CLI commands for administration, configuration management, debug
 | `list-catalog-events` | Reads catalog mutation event log. | `warmplane list-catalog-events --after evt_1` |
 | `cancel-operation` | Cancels an in-flight operation by request ID. | `warmplane cancel-operation req-trace-99` |
 
-#### Request Tracing & Idempotency CLI Flags
-
-When invoking `call-capability`, `read-resource`, or `get-prompt`, pass optional context flags for correlation and deduplication:
-
-```bash
-warmplane call-capability payments.charge \
-  --params '{"amount":100}' \
-  --request-id "req-tx-881" \
-  --actor-id "user-449" \
-  --grant-id "grant-scope-read" \
-  --idempotency-key "idem-tx-881"
-```
+---
 
 ## 6. HTTP API Specification
 
@@ -368,22 +375,35 @@ All HTTP API endpoints return standard JSON response envelopes.
 | Method | Path | Description | ETag Support |
 | :--- | :--- | :--- | :---: |
 | `GET` | `/v1/capabilities` | List compact capability index with `ttl_ms` and `cache_scope` hints. | Yes |
-| `POST` | `/v1/capabilities/search` | Search capabilities via hybrid lexical/semantic ranking. | Yes |
+| `POST` | `/v1/capabilities/search` | Search capabilities via hybrid lexical and semantic ranking. | Yes |
 | `GET` | `/v1/capabilities/:id` | Fetch full input JSON Schema for a specific capability. | Yes |
-| `POST` | `/v1/tools/call` | Execute an upstream tool call with MRTR retry support. | No |
+| `POST` | `/v1/tools/call` | Execute an upstream tool call with retry and approval handling. | No |
 | `GET` | `/v1/resources` | List compact resource index with `ttl_ms` and `cache_scope` hints. | Yes |
-| `POST` | `/v1/resources/read` | Read content of an upstream resource URI with MRTR support. | No |
+| `POST` | `/v1/resources/read` | Read content of an upstream resource URI. | No |
 | `GET` | `/v1/prompts` | List compact prompt index with `ttl_ms` and `cache_scope` hints. | Yes |
-| `POST` | `/v1/prompts/get` | Render an upstream prompt template with MRTR support. | No |
+| `POST` | `/v1/prompts/get` | Render an upstream prompt template. | No |
 | `GET` | `/v1/catalog/events` | Read catalog mutation change feed with cursor pagination. | Yes |
 | `GET` | `/v1/resources/updates` | Server-Sent Events (SSE) stream for real-time resource mutations. | No |
 | `POST` | `/v1/completion/complete` | Request prompt or resource argument completions. | Yes |
 | `POST` | `/v1/sampling/create_message` | Sample LLM completions on behalf of upstream servers. | Yes |
 | `POST` | `/v1/operations/:id/cancel` | Cancel an in-flight async operation. | No |
+| `GET` | `/v1/config` | Read current daemon configuration and upstream server statuses. | No |
+| `POST` | `/v1/config/servers` | Add or update an upstream server configuration. | No |
+| `DELETE` | `/v1/config/servers/:id` | Remove an upstream server configuration. | No |
+| `GET` | `/v1/config/ecosystem` | Discover installed MCP configurations from Claude/Cursor. | No |
+| `POST` | `/v1/config/import` | Import MCP servers from external client configurations. | No |
+| `POST` | `/v1/config/alias` | Add or remove capability, resource, or prompt aliases. | No |
+| `POST` | `/v1/config/policy` | Update security access policies and redaction keys. | No |
+| `POST` | `/v1/config/reload` | Trigger a hot-reload of active upstream servers and policies. | No |
+| `GET` | `/v1/approvals` | List pending and resolved human approval tickets. | No |
+| `GET` | `/v1/approvals/:id` | Get details and sanitized parameters for an approval ticket. | No |
+| `POST` | `/v1/approvals/:id/approve` | Approve a pending capability execution. | No |
+| `POST` | `/v1/approvals/:id/reject` | Reject a pending capability execution. | No |
+| `GET` | `/ui`, `/` | Embedded Control Deck Web UI dashboard. | No |
 
 ---
 
-### 6.1 Catalog Caching (`If-None-Match` & Cache Hints)
+### 6.1 Catalog Caching (`If-None-Match` and Cache Hints)
 
 Catalog read endpoints (`/v1/capabilities`, `/v1/capabilities/:id`, `/v1/resources`, `/v1/prompts`) return an `ETag` header containing the SHA-256 catalog checksum alongside `ttl_ms` and `cache_scope` metadata in the response body.
 
@@ -451,7 +471,7 @@ curl -X POST http://127.0.0.1:9090/v1/tools/call \
 
 ---
 
-### 6.4 Response Envelope & Multi Round-Trip Requests (MRTR)
+### 6.4 Response Envelope and Multi Round-Trip Requests (MRTR)
 
 Tool execution, resource reading, and prompt fetching return normalized execution envelopes:
 
@@ -512,9 +532,14 @@ When `ok` is `false`, the envelope provides a structured error object (`error.co
 | `RESOURCE_NOT_FOUND` | 404 | Resource ID or URI not found. | Check registered resources list. |
 | `PROMPT_NOT_FOUND` | 404 | Prompt template ID not found. | Check registered prompts list. |
 | `INVALID_ARGS` | 400 | Request body failed JSON schema validation. | Correct invalid argument fields. |
+| `POLICY_DENIED` | 403 | Execution blocked by policy deny rule. | Review `policy.deny` configuration. |
+| `APPROVAL_PENDING` | 202 / 403 | Intercepted by HITL policy; awaiting operator decision. | Approve ticket via UI or `/v1/approvals/:id/approve`. |
+| `APPROVAL_TIMEOUT` | 408 | Approval ticket expired before decision was submitted. | Re-issue execution request or increase timeout. |
+| `APPROVAL_REJECTED` | 403 | Human operator rejected capability execution. | Review rejection reason from ticket details. |
 | `SERVER_UNREACHABLE` | 502 | Upstream server process crashed or network disconnected. | Inspect upstream process status and network. |
 | `UPSTREAM_TIMEOUT` | 504 | Upstream operation exceeded `toolTimeoutMs`. | Increase timeout or optimize upstream query. |
 | `UPSTREAM_ERROR` | 500 | Upstream server returned a protocol error. | Inspect upstream server logs. |
+| `OPERATION_CANCELLED` | 499 | In-flight execution was cancelled by client. | Re-submit operation if cancellation was unintentional. |
 | `INTERNAL_ERROR` | 500 | Internal daemon process error. | Review Warmplane daemon logs. |
 
 ---
@@ -577,4 +602,6 @@ cargo test
 - [HTTP API Specification (`docs/spec.md`)](spec.md)
 - [OpenAPI 3.1 Definition (`docs/openapi.yaml`)](openapi.yaml)
 - [Observability Guide (`docs/OBSERVABILITY.md`)](OBSERVABILITY.md)
+- [Performance Benchmarks (`docs/PERFORMANCE.md`)](PERFORMANCE.md)
+- [Enterprise Architecture Whitepaper (`docs/WHITEPAPER.md`)](WHITEPAPER.md)
 - [Deployment Runbook (`docs/DEPLOYMENT.md`)](DEPLOYMENT.md)

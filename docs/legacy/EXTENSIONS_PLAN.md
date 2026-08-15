@@ -4,7 +4,7 @@
 
 Warmplane serves as a compact, high-performance local control plane and HTTP bridge for Model Context Protocol (MCP) servers. By maintaining persistent ("warm") upstream connections, applying security policies, and providing stable resource/capability facades, Warmplane eliminates session overhead and simplifies MCP integration for AI agent applications.
 
-This plan addresses the requirements outlined in [`docs/INTEGRATOR_WISHLIST.md`](file:///Users/origo/src/warmplane/docs/INTEGRATOR_WISHLIST.md). It outlines the architecture, evaluation, technical designs, and implementation roadmap required to transform Warmplane into an embedding-ready, highly observable MCP control plane without compromising its core principle: remaining a lightweight control facade rather than an application-level agent runtime.
+This plan addresses the requirements outlined in [`docs/INTEGRATOR_WISHLIST.md`](file://./docs/INTEGRATOR_WISHLIST.md). It outlines the architecture, evaluation, technical designs, and implementation roadmap required to transform Warmplane into an embedding-ready, highly observable MCP control plane without compromising its core principle: remaining a lightweight control facade rather than an application-level agent runtime.
 
 ---
 
@@ -110,11 +110,11 @@ Warmplane will implement **Option D** using an optional, feature-gated embedded 
 
 ### Current Architecture Assessment
 Currently, Warmplane codebase comprises:
-* [`src/daemon.rs`](file:///Users/origo/src/warmplane/src/daemon.rs): Manages `AppState`, MCP upstream server initialization via stdio/HTTP transport, actor loops, and Axum routing.
-* [`src/http_v1.rs`](file:///Users/origo/src/warmplane/src/http_v1.rs): Axum handlers for listing, describing, reading, getting, and calling capabilities/resources/prompts.
-* [`src/config.rs`](file:///Users/origo/src/warmplane/src/config.rs): Serde structures for `McpConfig`, `ServerConfig`, `PolicyConfig`, and validation logic.
-* [`src/oauth2.rs`](file:///Users/origo/src/warmplane/src/oauth2.rs): Dynamic OAuth2 PKCE flow, discovery, token cache, and proxy bridge.
-* [`src/models.rs`](file:///Users/origo/src/warmplane/src/models.rs): Clap CLI commands.
+* [`src/daemon.rs`](file://./src/daemon.rs): Manages `AppState`, MCP upstream server initialization via stdio/HTTP transport, actor loops, and Axum routing.
+* [`src/http_v1.rs`](file://./src/http_v1.rs): Axum handlers for listing, describing, reading, getting, and calling capabilities/resources/prompts.
+* [`src/config.rs`](file://./src/config.rs): Serde structures for `McpConfig`, `ServerConfig`, `PolicyConfig`, and validation logic.
+* [`src/oauth2.rs`](file://./src/oauth2.rs): Dynamic OAuth2 PKCE flow, discovery, token cache, and proxy bridge.
+* [`src/models.rs`](file://./src/models.rs): Clap CLI commands.
 
 ### Proposed Codebase Reorganization
 To support the extension suite cleanly, the code will be structured into dedicated domain modules:
