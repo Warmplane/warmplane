@@ -1,7 +1,7 @@
 # Warmplane
 
 > **The local control plane that keeps MCP sessions warm.**  
-> v0.12.2 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml) · [Spec](docs/spec.md)
+> v0.12.2 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
 
@@ -235,7 +235,6 @@ SHA-256 catalog version. `ETag` headers on all catalog reads, `If-None-Match` co
 |----------|-------------|
 | [docs/USER-GUIDE.md](docs/USER-GUIDE.md) | Complete usage guide: config, modes, all CLI commands, auth, policy |
 | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | Benchmark methodology, latency percentiles, and profiling results |
-| [docs/spec.md](docs/spec.md) | HTTP request/response contracts |
 | [docs/openapi.yaml](docs/openapi.yaml) | OpenAPI 3.1 spec |
 | [docs/config.schema.json](docs/config.schema.json) | JSON Schema for `mcp_servers.json` |
 | [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) | Structured logs, OTLP config, trace correlation |

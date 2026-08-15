@@ -599,7 +599,6 @@ cargo test
 
 ## 9. Reference Documentation
 
-- [HTTP API Specification (`docs/spec.md`)](spec.md)
 - [OpenAPI 3.1 Definition (`docs/openapi.yaml`)](openapi.yaml)
 - [Observability Guide (`docs/OBSERVABILITY.md`)](OBSERVABILITY.md)
 - [Performance Benchmarks (`docs/PERFORMANCE.md`)](PERFORMANCE.md)
