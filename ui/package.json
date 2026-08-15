@@ -3,7 +3,7 @@
   "version": "0.12.2",
   "private": true,
   "scripts": {
-    "build": "bun build ./src/main.ts --outfile=./dist/bundle.js --minify"
+    "build": "bun build ./src/main.ts --outfile=./dist/bundle.js --minify && bun run ./build.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
