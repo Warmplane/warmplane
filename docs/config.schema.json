@@ -40,6 +40,56 @@
       },
       "additionalProperties": false
     },
+    "audit": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "filePath": { "type": "string" },
+        "bufferCapacity": { "type": "integer", "minimum": 1 },
+        "flushIntervalMs": { "type": "integer", "minimum": 1 },
+        "maxBatchSize": { "type": "integer", "minimum": 1 },
+        "siem": {
+          "type": "object",
+          "properties": {
+            "targets": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": ["type", "url"],
+                    "properties": {
+                      "type": { "const": "webhook" },
+                      "url": { "type": "string", "format": "uri" },
+                      "authHeader": { "type": "string" },
+                      "headers": {
+                        "type": "object",
+                        "additionalProperties": { "type": "string" }
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": ["type", "url", "token"],
+                    "properties": {
+                      "type": { "const": "splunk_hec" },
+                      "url": { "type": "string", "format": "uri" },
+                      "token": { "type": "string" },
+                      "index": { "type": "string" },
+                      "source": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "mcpServers": {
       "type": "object",
       "minProperties": 1,

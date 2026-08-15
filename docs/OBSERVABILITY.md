@@ -104,6 +104,17 @@ Hot-reloading daemon state via `POST /v1/config/reload` or `warmplane reload` em
 - `config_reloaded`: Records added, updated, and removed server counts.
 - `server_mounted` / `server_unmounted`: Records individual upstream connection lifecycle transitions.
 
+### 4.5 WORM Audit Trail and SIEM Telemetry Streaming
+
+Warmplane records execution events into a Write-Once-Read-Many (WORM) append-only log with linear SHA-256 cryptographic hash chaining.
+
+- **Cryptographic Hash Chaining**: Every event record is linked to its preceding hash. Run `GET /v1/audit/verify` to perform automated cryptographic chain integrity checks.
+- **Asynchronous Batching**: Ingestion operates over an in-memory bounded queue with periodic batch flushing to disk and SIEM collectors.
+- **SIEM Forwarders**:
+  - **Splunk HEC**: Formats and transmits batch events directly to Splunk HTTP Event Collector endpoints with index and source metadata.
+  - **Webhook Collector**: Sends JSON-serialized batch payloads with custom HTTP headers and bearer authentication.
+- **Raw Export**: Stream logs as JSONL or CSV using `GET /v1/audit/export?format=csv` or `GET /v1/audit/export?format=jsonl`.
+
 ---
 
 ## 5. OpenTelemetry (OTLP) Export

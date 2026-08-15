@@ -6,9 +6,9 @@
 
 Modern Model Context Protocol (MCP) deployments increasingly suffer from a structural inefficiency: repeated transmission and processing of large capability surfaces, even when only a small subset of tools, resources, and prompts are used per task. This paper introduces **Warmplane**, a local control plane that maintains persistent upstream MCP sessions while exposing a compact, deterministic, policy-governed interface to clients.
 
-Warmplane separates backend protocol richness from frontend interaction cost by presenting index-first capability discovery, hybrid lexical/vector search, SHA-256 catalog cache validation (`304 Not Modified`), and on-demand schema expansion. In measured scenarios from the project evaluation harness, this approach reduced token footprint by **58.1%–58.2%** in a public filesystem control suite and **95.6%–95.8%** in an authenticated GitHub Copilot MCP suite. Micro-benchmarks demonstrate sub-microsecond facade overheads, including **50.4 ns** cached catalog validation and **159.8 ns** idempotency lookups. These improvements were achieved while introducing deterministic execution governance, including Human-in-the-Loop (HITL) approval gates, request context propagation (`operation_id`, `actor_id`, `grant_id`), idempotency deduplication (`Idempotency-Key`), safe/unsafe retry classification, and active operation cancellation.
+Warmplane separates backend protocol richness from frontend interaction cost by presenting index-first capability discovery, hybrid lexical/vector search, SHA-256 catalog cache validation (`304 Not Modified`), and on-demand schema expansion. In measured scenarios from the project evaluation harness, this approach reduced token footprint by **58.1%–58.2%** in a public filesystem control suite and **95.6%–95.8%** in an authenticated GitHub Copilot MCP suite. Micro-benchmarks demonstrate sub-microsecond facade overheads, including **50.4 ns** cached catalog validation and **159.8 ns** idempotency lookups. These improvements were achieved while introducing deterministic execution governance, including Human-in-the-Loop (HITL) approval gates, cryptographic Write-Once-Read-Many (WORM) audit logging, SIEM streaming (Splunk HEC, Webhooks), request context propagation (`operation_id`, `actor_id`, `grant_id`), idempotency deduplication (`Idempotency-Key`), safe/unsafe retry classification, and active operation cancellation.
 
-We present the system architecture, transport model, policy and governance controls, error determinism model, hybrid capability search engine, catalog versioning model, and empirical evaluation methodology. We also discuss enterprise implications for latency, cost, reliability, security, and auditability, and outline future research directions for adaptive schema compaction and workload-aware orchestration.
+We present the system architecture, transport model, policy and governance controls, error determinism model, hybrid capability search engine, catalog versioning model, cryptographic audit subsystem, and empirical evaluation methodology. We also discuss enterprise implications for latency, cost, reliability, security, and auditability, and outline future research directions for adaptive schema compaction and workload-aware orchestration.
 
 ---
 
@@ -19,9 +19,9 @@ We present the system architecture, transport model, policy and governance contr
 As organizations operationalize AI agents, tool connectivity moves from demonstration to infrastructure. MCP has become a useful substrate for standardizing tool, resource, and prompt access. However, in direct MCP client-server patterns, agent loops frequently overpay in two dimensions:
 
 1. **Context overhead**: Large metadata payloads are delivered repeatedly.
-2. **Control fragmentation**: Policy enforcement, Human-in-the-Loop governance, context tracking, retries, and error handling are inconsistently implemented across clients.
+2. **Control fragmentation**: Policy enforcement, Human-in-the-Loop governance, context tracking, audit trails, retries, and error handling are inconsistently implemented across clients.
 
-The result is avoidable token spend, higher startup latency, security exposure, and reduced operational predictability.
+The result is avoidable token spend, higher startup latency, security exposure, compliance vulnerability, and reduced operational predictability.
 
 ### 1.2 Thesis
 
@@ -36,6 +36,7 @@ Warmplane implements this thesis by:
 - Providing zero-token catalog revalidation via SHA-256 state digests and change event streams.
 - Normalizing invocation, request context, and error envelopes with explicit retry governance.
 - Centralizing policy, PII redaction, Human-in-the-Loop approval workflows, idempotency deduplication, and operation cancellation controls.
+- Enforcing non-repudiable WORM audit logging with SHA-256 linear hash chaining and real-time SIEM streaming.
 
 ### 1.3 Contributions
 
@@ -44,11 +45,12 @@ This paper contributes:
 1. A practical architecture for MCP session persistence and compact interaction surfaces.
 2. A deterministic execution model across Web UI, CLI, HTTP REST, and MCP-native client modes.
 3. A Human-in-the-Loop governance model providing non-blocking suspension, parameter modification, and signed webhook notifications for sensitive capability execution.
-4. A reproducible token-efficiency evaluation harness and measured baselines across real-world workloads.
-5. Micro-benchmark profiling demonstrating sub-microsecond control-plane overheads.
-6. A hybrid BM25 and ONNX vector search engine for sub-linear capability discovery over dense catalogs.
-7. A deterministic catalog digest model for conditional cache revalidation (`304 Not Modified`) and cursor-based event feeds.
-8. An execution governance framework providing multi-tenant request context propagation, idempotency deduplication, retry safety classification, and active in-flight operation cancellation.
+4. A Write-Once-Read-Many (WORM) cryptographic audit log architecture guaranteeing tamper-evident traceability and seamless SIEM forwarding.
+5. A reproducible token-efficiency evaluation harness and measured baselines across real-world workloads.
+6. Micro-benchmark profiling demonstrating sub-microsecond control-plane overheads.
+7. A hybrid BM25 and ONNX vector search engine for sub-linear capability discovery over dense catalogs.
+8. A deterministic catalog digest model for conditional cache revalidation (`304 Not Modified`) and cursor-based event feeds.
+9. An execution governance framework providing multi-tenant request context propagation, idempotency deduplication, retry safety classification, and active in-flight operation cancellation.
 
 ---
 
@@ -142,9 +144,15 @@ Warmplane consists of five major components:
    - Deduplicates concurrent or replayed invocations via `Idempotency-Key`.
    - Manages active task handle lifetimes and provides in-flight operation cancellation (`POST /v1/operations/:id/cancel`).
 
-5. **Access Modes**
+5. **WORM Audit & SIEM Subsystem**
+   - Implements append-only storage with linear SHA-256 cryptographic hash chaining ($\text{hash}_i = \text{SHA256}(\text{prev\_hash}_i \mathbin{\Vert} \text{canonical\_payload}_i)$).
+   - Guarantees non-repudiable audit trails across tool invocations, HITL decisions, policy violations, and configuration mutations.
+   - Houses an asynchronous background batching queue with automatic SIEM dispatchers (Splunk HEC, HTTP Webhooks).
+   - Exposes mathematical integrity verification (`/v1/audit/verify`) and streaming exports (`/v1/audit/export`).
+
+6. **Access Modes**
    - Embedded Control Deck Web UI (`/ui` and `/`).
-   - HTTP `/v1` facade (exposing capabilities, hybrid search, catalog events, approvals, operation cancellation, SSE resource updates, argument completion, sampling, resources, and prompts).
+   - HTTP `/v1` facade (exposing capabilities, hybrid search, catalog events, approvals, WORM audit verification/export, operation cancellation, SSE resource updates, argument completion, sampling, resources, and prompts).
    - CLI facade (`warmplane server`, `config`, `approvals`, `search-capabilities`, `list-catalog-events`, `cancel-operation`).
    - MCP stdio server mode exposing lightweight synthetic tools (`subscriptions_listen`, `completion_complete`, etc.) and native resources/prompts methods.
 
@@ -173,6 +181,20 @@ Warmplane introduces an integrated HITL suspension engine:
 3. **Webhook Notification**: Outbound HMAC-SHA256 signed webhook alerts (`X-Warmplane-Signature-256`) are dispatched to operator dashboards or chat bots.
 4. **Resolution**: Operators approve (optionally modifying JSON arguments) or reject the ticket via the Control Deck Web UI, HTTP API, or CLI (`warmplane approvals approve`).
 5. **Execution or Abortion**: Approved executions resume immediately with operator-supplied arguments; rejected or expired tickets return clean `APPROVAL_REJECTED` or `APPROVAL_TIMEOUT` error codes.
+
+### 3.4 Cryptographic WORM Audit Trails and SIEM Forwarding
+
+To satisfy enterprise compliance mandates (SOC2 Type II, ISO 27001, HIPAA), Warmplane implements a Write-Once-Read-Many (WORM) audit subsystem:
+
+1. **Linear Cryptographic Hash Chaining**: Every log event record $R_i$ computes a SHA-256 hash over its canonical representation concatenated with the hash of the preceding record:
+   $$\text{hash}_0 = \text{SHA256}(\text{GENESIS\_HASH} \mathbin{\Vert} \text{canonical}(R_0))$$
+   $$\text{hash}_i = \text{SHA256}(\text{hash}_{i-1} \mathbin{\Vert} \text{canonical}(R_i)) \quad \forall i \ge 1$$
+   Any modification, insertion, or truncation of stored events invalidates subsequent hashes in the chain.
+2. **Deterministic Verification (`GET /v1/audit/verify`)**: Traverses the sequential log in $O(N)$ time, recomputing and verifying each link. Returns a detailed verification report identifying the exact record ID if corruption is detected.
+3. **Asynchronous Batching**: Ingestion utilizes a non-blocking bounded queue (default capacity 10,000) flushed via background worker batches (flush interval 250ms, max batch size 100).
+4. **Native SIEM Export**: Batched events stream in real time to external security hubs:
+   - **Splunk HEC**: Formatted directly to Splunk HTTP Event Collector JSON payloads with event timestamps and index routing.
+   - **HTTP Webhooks / Datadog**: Dispatched over HTTPS with configurable authorization headers and custom metadata tags.
 
 ---
 
@@ -293,6 +315,8 @@ Warmplane concentrates control points to enforce strict security invariants:
 - **Idempotency Key Scope Boundaries**: Scopes deduplication state by caller identity and target operation to prevent cache pollution attacks.
 - **Egress Filtering and SSRF Defenses**: Discovery and token requests utilize strict hostname and scheme validations to avoid server-side request forgery.
 - **HMAC Webhook Signatures**: Signs outbound approval notifications with HMAC-SHA256.
+- **Cryptographic Audit Immutability**: Proves tamper-evidence via sequential SHA-256 chain links, protecting historical execution logs against post-hoc alteration or deletion.
+- **SIEM Telemetry Boundary**: Enforces PII/credential redaction rules before dispatching audit batches to external collectors (Splunk HEC, HTTP Webhooks).
 
 ---
 

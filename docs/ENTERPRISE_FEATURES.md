@@ -85,10 +85,10 @@ As enterprises deploy autonomous agents in production environments, unmanaged MC
 
 ## 3. Prioritized Implementation Roadmap
 
-| Milestone | Feature Pillar | Impact | Complexity | Target Audience |
-| :--- | :--- | :--- | :--- | :--- |
-| **Phase 1** | **Human-in-the-Loop (HITL) Workflows** | 🟢 Critical | Medium | Security & Compliance Officers |
-| **Phase 2** | **WORM Audit Trail & SIEM Export** | 🟢 High | Low-Medium | SecOps / Enterprise Auditors |
-| **Phase 3** | **Multi-Tenant RBAC & OIDC Auth** | 🟡 High | Medium | Platform Engineers & SREs |
-| **Phase 4** | **Circuit Breaking & Supervision** | 🟡 High | Medium | AI Platform Teams |
-| **Phase 5** | **FinOps Budgeting & Quota Caps** | 🔵 Medium | Low | FinOps & Engineering Leads |
+| Milestone | Feature Pillar | Status | Impact | Complexity | Target Audience |
+| :--- | :--- | :---: | :--- | :--- | :--- |
+| **Phase 1** | **Human-in-the-Loop (HITL) Workflows** | ✅ Released (v0.8.0) | 🟢 Critical | Medium | Security & Compliance Officers |
+| **Phase 2** | **WORM Audit Trail & SIEM Export** | ✅ Released (v0.12.0) | 🟢 High | Low-Medium | SecOps / Enterprise Auditors |
+| **Phase 3** | **Multi-Tenant RBAC & OIDC Auth** | 🔄 Planned | 🟡 High | Medium | Platform Engineers & SREs |
+| **Phase 4** | **Circuit Breaking & Supervision** | 🔄 Planned | 🟡 High | Medium | AI Platform Teams |
+| **Phase 5** | **FinOps Budgeting & Quota Caps** | 🔄 Planned | 🔵 Medium | Low | FinOps & Engineering Leads |

@@ -109,6 +109,7 @@ The configuration file (default: `mcp_servers.json`) controls upstream server co
 | `resourceAliases` | Object | No | `{}` | Map of upstream resource URIs to canonical public resource IDs. |
 | `promptAliases` | Object | No | `{}` | Map of upstream prompt names to canonical public prompt IDs. |
 | `policy` | Object | No | `null` | Access control rules, approval workflows, and data redaction settings. |
+| `audit` | Object | No | `null` | Cryptographic WORM audit logging and SIEM exporter settings. |
 | `mcpServers` | Object | Yes | `{}` | Upstream server definitions keyed by server identifier string. |
 
 ---
@@ -260,6 +261,53 @@ The `policy` block enforces global security boundaries, human approval gates, an
 
 ---
 
+### 4.4 WORM Audit Trail and SIEM Export Configuration
+
+The `audit` block configures non-repudiable append-only audit logging with linear SHA-256 cryptographic hash chaining and asynchronous streaming to SIEM targets (Splunk HEC, HTTP Webhooks, Datadog).
+
+```json
+"audit": {
+  "enabled": true,
+  "filePath": "warmplane_audit.jsonl",
+  "bufferCapacity": 10000,
+  "flushIntervalMs": 250,
+  "maxBatchSize": 100,
+  "siem": {
+    "targets": [
+      {
+        "type": "webhook",
+        "url": "https://siem.internal/events",
+        "authHeader": "Bearer siem-token-xyz",
+        "headers": {
+          "X-Source": "warmplane"
+        }
+      },
+      {
+        "type": "splunk_hec",
+        "url": "https://splunk.internal:8088/services/collector/event",
+        "token": "hec-guid-token",
+        "index": "mcp_audit",
+        "source": "warmplane"
+      }
+    ]
+  }
+}
+```
+
+#### Configuration Parameters
+
+| Field | Type | Required | Default | Description |
+| :--- | :--- | :---: | :--- | :--- |
+| `enabled` | Boolean | No | `true` | Enables or disables the audit subsystem. |
+| `filePath` | String | No | In-memory | Path to the append-only JSONL log file on disk (e.g. `warmplane_audit.jsonl`). |
+| `bufferCapacity` | Number | No | `10000` | Capacity of the bounded async in-memory queue. |
+| `flushIntervalMs` | Number | No | `250` | Maximum wait time in milliseconds before batch flush. |
+| `maxBatchSize` | Number | No | `100` | Batch size threshold triggering immediate disk flush and SIEM dispatch. |
+| `siem` | Object | No | `null` | SIEM streaming exporter configuration. |
+| `siem.targets` | Array | No | `[]` | List of target SIEM collectors (`webhook` or `splunk_hec`). |
+
+---
+
 ## 5. Execution Modes
 
 ### 5.1 HTTP Daemon Mode
@@ -399,6 +447,11 @@ All HTTP API endpoints return standard JSON response envelopes.
 | `GET` | `/v1/approvals/:id` | Get details and sanitized parameters for an approval ticket. | No |
 | `POST` | `/v1/approvals/:id/approve` | Approve a pending capability execution. | No |
 | `POST` | `/v1/approvals/:id/reject` | Reject a pending capability execution. | No |
+| `GET` | `/v1/audit/events` | List paginated audit events with filters (`start_time`, `actor_id`, `status`, etc.). | No |
+| `GET` | `/v1/audit/events/:id` | Get single audit event record with cryptographic hash details. | No |
+| `GET` | `/v1/audit/verify` | Verify cryptographic SHA-256 hash chain integrity. | No |
+| `GET` | `/v1/audit/stats` | Get aggregate audit statistics and event disposition breakdowns. | No |
+| `GET` | `/v1/audit/export` | Stream or download audit logs in `jsonl` or `csv` format. | No |
 | `GET` | `/ui`, `/` | Embedded Control Deck Web UI dashboard. | No |
 
 ---
@@ -541,6 +594,76 @@ When `ok` is `false`, the envelope provides a structured error object (`error.co
 | `UPSTREAM_ERROR` | 500 | Upstream server returned a protocol error. | Inspect upstream server logs. |
 | `OPERATION_CANCELLED` | 499 | In-flight execution was cancelled by client. | Re-submit operation if cancellation was unintentional. |
 | `INTERNAL_ERROR` | 500 | Internal daemon process error. | Review Warmplane daemon logs. |
+
+---
+
+### 6.6 WORM Audit Trail and SIEM API
+
+Warmplane provides enterprise audit query, cryptographic hash chain verification, and telemetry export APIs.
+
+#### 1. Query Audit Events (`GET /v1/audit/events`)
+
+Query paginated audit logs with fine-grained filters.
+
+**Query Parameters:**
+- `start_time`, `end_time`: Filter by Unix timestamp in nanoseconds.
+- `actor_id`: Filter by actor identifier.
+- `capability_id`: Filter by capability ID.
+- `event_type`: Filter by event classification (`tool_execution`, `tool_intercepted_hitl`, `approval_granted`, `approval_rejected`, `approval_expired`, `policy_violation`, `config_mutation`, `sampling_call`, `resource_access`).
+- `trace_id`, `request_id`: Filter by trace or request correlation ID.
+- `limit`, `offset`: Pagination controls (default limit `50`, offset `0`).
+
+**Example Request:**
+```bash
+curl -s "http://127.0.0.1:9090/v1/audit/events?actor_id=user-7&limit=10" | jq
+```
+
+#### 2. Verify Hash Chain Integrity (`GET /v1/audit/verify`)
+
+Validates the cryptographic SHA-256 linear hash chain across all stored audit records.
+
+```bash
+curl -s http://127.0.0.1:9090/v1/audit/verify | jq
+```
+
+**Example Response:**
+```json
+{
+  "ok": true,
+  "report": {
+    "is_valid": true,
+    "total_records": 1420,
+    "verified_records": 1420,
+    "first_corrupted_id": null,
+    "details": "All 1420 records cryptographically verified with zero discrepancies"
+  }
+}
+```
+
+#### 3. Audit Analytics & Breakdown (`GET /v1/audit/stats`)
+
+Returns aggregate execution metrics, status breakdowns (`success`, `failed`, `denied`, `intercepted`), and volume summaries.
+
+```bash
+curl -s http://127.0.0.1:9090/v1/audit/stats | jq
+```
+
+#### 4. Export Audit Logs (`GET /v1/audit/export`)
+
+Streams the audit log directly for compliance reporting or offline analysis.
+
+**Parameters:**
+- `format`: Output format, either `jsonl` (default) or `csv`.
+- `start_time`, `end_time`, `actor_id`, `capability_id`: Optional filters.
+
+**Example Download:**
+```bash
+# Export as CSV
+curl -s "http://127.0.0.1:9090/v1/audit/export?format=csv" -o audit_export.csv
+
+# Export as JSONL
+curl -s "http://127.0.0.1:9090/v1/audit/export?format=jsonl" -o audit_export.jsonl
+```
 
 ---
 

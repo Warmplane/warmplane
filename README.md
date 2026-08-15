@@ -172,6 +172,7 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 |---------|-------|---------|
 | **Control Deck Web UI** | v0.11.0 | Standalone embedded web dashboard for servers, testing playground, policy & telemetry |
 | **Dynamic Hot-Reloading** | v0.11.0 | Zero-downtime upstream mounting/unmounting, explicit `warmplane reload` & `/v1/config/reload` |
+| **WORM Audit & SIEM** | v0.12.0 | Append-only SHA-256 hash-chained audit logging, verification API, and Splunk/Webhook SIEM export |
 | **CLI Config & Interactive Setup** | v0.10.0 | `warmplane server` & `warmplane config` wizards, atomic JSON writes |
 | **Ecosystem Import** | v0.10.0 | 1-click import from Claude Desktop, Cursor, and Zed settings |
 | **Alias registry** | v0.1 | Short stable aliases over upstream capability IDs |
