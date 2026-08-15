@@ -321,7 +321,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/UpsertServerRequest"
       responses:
         "200":
           description: Server upserted and mounted
@@ -338,6 +338,52 @@ paths:
       responses:
         "200":
           description: Server deleted and unmounted
+  /v1/config/ecosystem:
+    get:
+      summary: Discover external MCP server configurations from Claude Desktop, Cursor, or Zed
+      operationId: getEcosystemSources
+      responses:
+        "200":
+          description: Discovered ecosystem configuration files and servers
+  /v1/config/import:
+    post:
+      summary: Import MCP servers from external client configurations
+      operationId: importConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportConfigRequest"
+      responses:
+        "200":
+          description: Summary of imported servers
+  /v1/config/alias:
+    post:
+      summary: Add or remove capability, resource, or prompt aliases
+      operationId: updateAlias
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAliasRequest"
+      responses:
+        "200":
+          description: Alias updated
+  /v1/config/policy:
+    post:
+      summary: Update security policy rules, approval requirements, and redaction keys
+      operationId: updatePolicy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PolicyConfig"
+      responses:
+        "200":
+          description: Policy updated
   /v1/config/reload:
     post:
       summary: Hot-reload daemon configuration and upstream servers from disk
@@ -345,6 +391,78 @@ paths:
       responses:
         "200":
           description: Summary of mounted, unmounted, and updated servers
+  /v1/approvals:
+    get:
+      summary: List pending and resolved human approval tickets
+      operationId: listApprovals
+      responses:
+        "200":
+          description: List of approval tickets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListApprovalsResponse"
+  /v1/approvals/{id}:
+    get:
+      summary: Get details and sanitized parameters for an approval ticket
+      operationId: getApproval
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Approval ticket details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetApprovalResponse"
+        "404":
+          description: Approval ticket not found
+  /v1/approvals/{id}/approve:
+    post:
+      summary: Approve a suspended capability execution
+      operationId: approveTicket
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveTicketRequest"
+      responses:
+        "200":
+          description: Ticket approved and execution resumed
+        "409":
+          description: Ticket is not pending or already resolved
+  /v1/approvals/{id}/reject:
+    post:
+      summary: Reject a suspended capability execution
+      operationId: rejectTicket
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RejectTicketRequest"
+      responses:
+        "200":
+          description: Ticket rejected
+        "409":
+          description: Ticket is not pending or already resolved
   /v1/operations/{id}/cancel:
     post:
       summary: Cancel in-flight operation
@@ -674,6 +792,144 @@ components:
         upstream_execution_state:
           type: string
           enum: [not_started, completed, unknown]
+    UpsertServerRequest:
+      type: object
+      required: [name, server]
+      properties:
+        name:
+          type: string
+        server:
+          type: object
+    ImportConfigRequest:
+      type: object
+      properties:
+        source_path:
+          type: [string, "null"]
+        overwrite:
+          type: [boolean, "null"]
+    UpdateAliasRequest:
+      type: object
+      required: [kind, alias]
+      properties:
+        kind:
+          type: string
+          enum: [tool, resource, prompt]
+        alias:
+          type: string
+        target:
+          type: [string, "null"]
+    WebhookConfig:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+        secret:
+          type: [string, "null"]
+        secret_env:
+          type: [string, "null"]
+        auth_header:
+          type: [string, "null"]
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+    PolicyConfig:
+      type: object
+      properties:
+        allow:
+          type: array
+          items:
+            type: string
+        deny:
+          type: array
+          items:
+            type: string
+        require_approval:
+          type: array
+          items:
+            type: string
+        approval_timeout_secs:
+          type: integer
+        redact_keys:
+          type: array
+          items:
+            type: string
+        webhook:
+          $ref: "#/components/schemas/WebhookConfig"
+    ApprovalStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [pending, approved, rejected, expired]
+        operator:
+          type: string
+        timestamp:
+          type: integer
+        reason:
+          type: string
+        modified_args:
+          type: object
+    ApprovalTicket:
+      type: object
+      required: [id, capability_id, server_id, args, sanitized_args, status, created_at, expires_at]
+      properties:
+        id:
+          type: string
+        capability_id:
+          type: string
+        server_id:
+          type: string
+        args:
+          type: object
+        sanitized_args:
+          type: object
+        request_id:
+          type: [string, "null"]
+        status:
+          $ref: "#/components/schemas/ApprovalStatus"
+        created_at:
+          type: integer
+        expires_at:
+          type: integer
+    ListApprovalsResponse:
+      type: object
+      required: [ok, approvals, total]
+      properties:
+        ok:
+          type: boolean
+        approvals:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApprovalTicket"
+        total:
+          type: integer
+    GetApprovalResponse:
+      type: object
+      required: [ok, approval]
+      properties:
+        ok:
+          type: boolean
+        approval:
+          $ref: "#/components/schemas/ApprovalTicket"
+    ApproveTicketRequest:
+      type: object
+      required: [operator]
+      properties:
+        operator:
+          type: string
+        modified_args:
+          type: object
+    RejectTicketRequest:
+      type: object
+      required: [operator]
+      properties:
+        operator:
+          type: string
+        reason:
+          type: string
     SuccessEnvelope:
       type: object
       required: [ok, request_id, trace_id, data, error, retry]
@@ -723,6 +979,10 @@ components:
                 - INVALID_ARGS
                 - UPSTREAM_TIMEOUT
                 - UPSTREAM_ERROR
+                - POLICY_DENIED
+                - APPROVAL_PENDING
+                - APPROVAL_TIMEOUT
+                - APPROVAL_REJECTED
                 - OPERATION_CANCELLED
                 - INTERNAL_ERROR
             message:
