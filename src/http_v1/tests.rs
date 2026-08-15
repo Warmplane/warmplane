@@ -945,7 +945,7 @@ mod tests {
     #[tokio::test]
     async fn test_audit_api_endpoints_and_export() {
         let store = Arc::new(crate::audit::AuditStore::in_memory());
-        let handle = crate::audit::spawn_audit_worker(store.clone(), 100, 50, 10);
+        let handle = crate::audit::spawn_audit_worker(store.clone(), None, 100, 50, 10);
         let state = AppState::builder()
             .audit_store(store.clone())
             .audit_handle(handle.clone())

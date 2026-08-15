@@ -238,8 +238,8 @@ Add a dedicated **Audit & Compliance** tab to the Control Deck:
 - [x] Add OpenAPI specification documentation for audit endpoints.
 
 ### Phase 4: SIEM Exporter Pipelines
-- [ ] Implement OTLP, Splunk HEC, and HTTP Webhook telemetry forwarders with batching and retry buffers.
-- [ ] Add configuration parsing in `src/config.rs` for `audit.siem`.
+- [x] Implement OTLP, Splunk HEC, and HTTP Webhook telemetry forwarders with batching and retry buffers.
+- [x] Add configuration parsing in `src/config.rs` for `audit.siem`.
 
 ### Phase 5: Control Deck UI (Audit Explorer)
 - [ ] Create `ui/src/components/audit.ts` with responsive filtering, stats cards, and expandable event rows.

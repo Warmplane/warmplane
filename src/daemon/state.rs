@@ -283,6 +283,7 @@ impl AppStateBuilder {
         let audit_handle = self.audit_handle.unwrap_or_else(|| {
             crate::audit::spawn_audit_worker(
                 audit_store.clone(),
+                None,
                 crate::audit::DEFAULT_AUDIT_BUFFER_CAPACITY,
                 crate::audit::DEFAULT_AUDIT_FLUSH_INTERVAL_MS,
                 crate::audit::DEFAULT_AUDIT_MAX_BATCH_SIZE,

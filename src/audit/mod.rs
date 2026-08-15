@@ -7,6 +7,7 @@
 
 pub mod chain;
 pub mod models;
+pub mod siem;
 pub mod store;
 pub mod worker;
 
@@ -15,6 +16,7 @@ mod tests;
 
 pub use chain::{compute_event_hash, verify_record_hash, GENESIS_HASH};
 pub use models::{AuditEvent, AuditEventStatus, AuditEventType, RawAuditEvent, VerificationReport};
+pub use siem::SiemDispatcher;
 pub use store::{AuditQueryFilter, AuditStore, SharedAuditStore};
 pub use worker::{
     spawn_audit_worker, AuditHandle, DEFAULT_AUDIT_BUFFER_CAPACITY,

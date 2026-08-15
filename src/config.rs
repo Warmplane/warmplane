@@ -250,6 +250,40 @@ pub struct AuditConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub max_batch_size: Option<usize>,
+    /// Optional external SIEM export target configurations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub siem: Option<SiemConfig>,
+}
+
+/// SIEM telemetry forwarder configuration.
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq)]
+pub struct SiemConfig {
+    /// List of telemetry export destinations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<SiemTargetConfig>,
+}
+
+/// Target destination configuration for SIEM telemetry export.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SiemTargetConfig {
+    /// Generic Webhook / Datadog JSON ingestion endpoint.
+    Webhook {
+        url: String,
+        #[serde(default, rename = "authHeader", alias = "auth_header", skip_serializing_if = "Option::is_none")]
+        auth_header: Option<String>,
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        headers: HashMap<String, String>,
+    },
+    /// Splunk HTTP Event Collector (HEC).
+    SplunkHec {
+        url: String,
+        token: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+    },
 }
 
 fn default_true() -> bool {
@@ -264,6 +298,7 @@ impl Default for AuditConfig {
             buffer_capacity: Some(10_000),
             flush_interval_ms: Some(250),
             max_batch_size: Some(100),
+            siem: None,
         }
     }
 }

@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use tracing::error;
 
 use crate::audit::models::RawAuditEvent;
+use crate::audit::siem::SiemDispatcher;
 use crate::audit::store::SharedAuditStore;
 
 /// Default buffer capacity for the audit logging channel.
@@ -58,6 +59,7 @@ impl AuditHandle {
 ///
 /// # Arguments
 /// * `store` - Shared append-only audit store.
+/// * `siem_dispatcher` - Optional SIEM dispatcher.
 /// * `buffer_capacity` - Max in-memory channel capacity.
 /// * `flush_interval_ms` - Max time before flushing buffered events to storage.
 /// * `max_batch_size` - Max events accumulated before flushing immediately.
@@ -66,6 +68,7 @@ impl AuditHandle {
 /// An `AuditHandle` producer.
 pub fn spawn_audit_worker(
     store: SharedAuditStore,
+    siem_dispatcher: Option<SiemDispatcher>,
     buffer_capacity: usize,
     flush_interval_ms: u64,
     max_batch_size: usize,
@@ -83,16 +86,30 @@ pub fn spawn_audit_worker(
                     buffer.push(event);
                     if buffer.len() >= max_batch_size {
                         let batch = std::mem::take(&mut buffer);
-                        if let Err(err) = store.append_batch(batch).await {
-                            error!("Failed to flush audit batch to store: {:?}", err);
+                        match store.append_batch(batch).await {
+                            Ok(committed) => {
+                                if let Some(ref siem) = siem_dispatcher {
+                                    siem.dispatch_batch(&committed).await;
+                                }
+                            }
+                            Err(err) => {
+                                error!("Failed to flush audit batch to store: {:?}", err);
+                            }
                         }
                     }
                 }
                 _ = interval.tick() => {
                     if !buffer.is_empty() {
                         let batch = std::mem::take(&mut buffer);
-                        if let Err(err) = store.append_batch(batch).await {
-                            error!("Failed to flush periodic audit batch to store: {:?}", err);
+                        match store.append_batch(batch).await {
+                            Ok(committed) => {
+                                if let Some(ref siem) = siem_dispatcher {
+                                    siem.dispatch_batch(&committed).await;
+                                }
+                            }
+                            Err(err) => {
+                                error!("Failed to flush periodic audit batch to store: {:?}", err);
+                            }
                         }
                     }
                 }
@@ -100,7 +117,11 @@ pub fn spawn_audit_worker(
                     // Channel closed, flush remaining
                     if !buffer.is_empty() {
                         let batch = std::mem::take(&mut buffer);
-                        let _ = store.append_batch(batch).await;
+                        if let Ok(committed) = store.append_batch(batch).await {
+                            if let Some(ref siem) = siem_dispatcher {
+                                siem.dispatch_batch(&committed).await;
+                            }
+                        }
                     }
                     break;
                 }

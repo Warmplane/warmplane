@@ -8,7 +8,7 @@ use tempfile::NamedTempFile;
 #[tokio::test]
 async fn test_audit_worker_batching_and_chain() {
     let store = Arc::new(AuditStore::in_memory());
-    let handle = spawn_audit_worker(store.clone(), 100, 50, 5);
+    let handle = spawn_audit_worker(store.clone(), None, 100, 50, 5);
 
     for i in 0..12 {
         handle
@@ -114,4 +114,11 @@ async fn test_audit_tampering_detection() {
     // Reopening must fail due to corrupted hash signature
     let corrupted_open = AuditStore::open_or_create(&file_path);
     assert!(corrupted_open.is_err());
+}
+
+#[tokio::test]
+async fn test_siem_dispatcher_batch_empty() {
+    let dispatcher = SiemDispatcher::new(None);
+    // Dispatches empty or populated list safely without panic
+    dispatcher.dispatch_batch(&[]).await;
 }
