@@ -43,6 +43,7 @@ class WarmplaneApp {
           configPath: configRes.config_path,
           config: configRes.config,
           serverStatuses: configRes.server_statuses || {},
+          circuitBreakers: configRes.circuit_breakers || [],
           metrics: {
             totalCatalogRequests: configRes.metrics?.total_catalog_requests || 0,
             totalEtagHits: configRes.metrics?.total_etag_hits || 0,
@@ -276,13 +277,26 @@ class WarmplaneApp {
 
     const argsText = (document.getElementById('pg-args-input') as HTMLTextAreaElement)?.value || '{}';
     const contextVal = (document.getElementById('pg-context-input') as HTMLInputElement)?.value || undefined;
+    const jsonpathVal = (document.getElementById('pg-jsonpath-input') as HTMLInputElement)?.value.trim() || undefined;
+    const limitLinesStr = (document.getElementById('pg-limit-lines-input') as HTMLInputElement)?.value.trim() || undefined;
+    const truncateBytesStr = (document.getElementById('pg-truncate-bytes-input') as HTMLInputElement)?.value.trim() || undefined;
 
-    let parsedArgs = {};
+    let parsedArgs: any = {};
     try {
       parsedArgs = JSON.parse(argsText);
     } catch {
       alert('Invalid arguments JSON object');
       return;
+    }
+
+    if (jsonpathVal) {
+      parsedArgs['_jsonpath'] = jsonpathVal;
+    }
+    if (limitLinesStr && !isNaN(Number(limitLinesStr))) {
+      parsedArgs['_limit_lines'] = Number(limitLinesStr);
+    }
+    if (truncateBytesStr && !isNaN(Number(truncateBytesStr))) {
+      parsedArgs['_truncate_bytes'] = Number(truncateBytesStr);
     }
 
     const statusBadge = document.getElementById('pg-status-badge');
@@ -297,10 +311,8 @@ class WarmplaneApp {
         capability_id: capId,
         args: parsedArgs,
         context: contextVal ? { operation_id: contextVal } : undefined,
-        request_id: `ui-req-${Date.now()}`
       });
 
-      // Update store so result is preserved across re-renders
       store.setState({
         executionResult: {
           status: res.status,
@@ -310,6 +322,12 @@ class WarmplaneApp {
       });
 
       store.addEventLog('POST', `/v1/tools/call → ${capId}`, res.status === 200 ? '200 OK' : `HTTP ${res.status}`, `${res.durationMs.toFixed(1)}ms`);
+
+      api.getConfig().then(cfgRes => {
+        if (cfgRes.ok && cfgRes.circuit_breakers) {
+          store.setState({ circuitBreakers: cfgRes.circuit_breakers });
+        }
+      });
     } catch (e: any) {
       if (statusBadge) {
         statusBadge.textContent = 'ERROR';
@@ -319,6 +337,27 @@ class WarmplaneApp {
         responseJson.textContent = e.toString();
       }
     }
+  }
+
+  toggleBatchPlayground() {
+    const argsInput = document.getElementById('pg-args-input') as HTMLTextAreaElement | null;
+    if (!argsInput) return;
+
+    const sampleBatch = [
+      {
+        "id": "step_1",
+        "capability_id": "sqlite.read_query",
+        "args": { "query": "SELECT * FROM users LIMIT 2" }
+      },
+      {
+        "id": "step_2",
+        "capability_id": "github.issues.search",
+        "args": { "query": "label:bug" },
+        "continue_on_error": true
+      }
+    ];
+
+    argsInput.value = JSON.stringify(sampleBatch, null, 2);
   }
 
   // Policy Actions
@@ -416,6 +455,88 @@ class WarmplaneApp {
 
   openAddServerModal() {
     this.closeModals();
+    const titleEl = document.getElementById('modal-srv-title');
+    const bannerEl = document.getElementById('modal-srv-template-banner');
+    const nameInput = document.getElementById('modal-srv-name') as HTMLInputElement | null;
+    const transportSelect = document.getElementById('modal-srv-transport') as HTMLSelectElement | null;
+    const cmdInput = document.getElementById('modal-srv-command') as HTMLInputElement | null;
+    const urlInput = document.getElementById('modal-srv-url') as HTMLInputElement | null;
+    const ftInput = document.getElementById('modal-srv-ft') as HTMLInputElement | null;
+    const cdInput = document.getElementById('modal-srv-cd') as HTMLInputElement | null;
+    const autoRestartSelect = document.getElementById('modal-srv-autorestart') as HTMLSelectElement | null;
+    const maxRestartsInput = document.getElementById('modal-srv-maxrestarts') as HTMLInputElement | null;
+
+    if (titleEl) titleEl.textContent = 'Add Upstream MCP Server';
+    if (bannerEl) bannerEl.style.display = 'flex';
+    if (nameInput) {
+      nameInput.value = '';
+      nameInput.disabled = false;
+    }
+    if (transportSelect) transportSelect.value = 'stdio';
+    if (cmdInput) cmdInput.value = '';
+    if (urlInput) urlInput.value = '';
+    const cmdGroup = document.getElementById('modal-group-cmd');
+    const urlGroup = document.getElementById('modal-group-url');
+    if (cmdGroup) cmdGroup.style.display = 'block';
+    if (urlGroup) urlGroup.style.display = 'none';
+
+    if (ftInput) ftInput.value = '3';
+    if (cdInput) cdInput.value = '30000';
+    if (autoRestartSelect) autoRestartSelect.value = 'true';
+    if (maxRestartsInput) maxRestartsInput.value = '5';
+
+    const modal = document.getElementById('modal-add-server');
+    if (modal) modal.classList.add('active');
+  }
+
+  openEditServerModal(serverName: string) {
+    this.closeModals();
+    const state = store.getState();
+    const serverCfg = state.config.mcpServers?.[serverName];
+    if (!serverCfg) {
+      alert(`Server '${serverName}' not found in configuration.`);
+      return;
+    }
+
+    const titleEl = document.getElementById('modal-srv-title');
+    const bannerEl = document.getElementById('modal-srv-template-banner');
+    const nameInput = document.getElementById('modal-srv-name') as HTMLInputElement | null;
+    const transportSelect = document.getElementById('modal-srv-transport') as HTMLSelectElement | null;
+    const cmdInput = document.getElementById('modal-srv-command') as HTMLInputElement | null;
+    const urlInput = document.getElementById('modal-srv-url') as HTMLInputElement | null;
+    const ftInput = document.getElementById('modal-srv-ft') as HTMLInputElement | null;
+    const cdInput = document.getElementById('modal-srv-cd') as HTMLInputElement | null;
+    const autoRestartSelect = document.getElementById('modal-srv-autorestart') as HTMLSelectElement | null;
+    const maxRestartsInput = document.getElementById('modal-srv-maxrestarts') as HTMLInputElement | null;
+
+    if (titleEl) titleEl.textContent = `Edit Server '${serverName}'`;
+    if (bannerEl) bannerEl.style.display = 'none';
+    if (nameInput) {
+      nameInput.value = serverName;
+      nameInput.disabled = true; // Identifier remains immutable during edit
+    }
+
+    const isStdio = !!serverCfg.command;
+    if (transportSelect) transportSelect.value = isStdio ? 'stdio' : 'http';
+
+    const cmdGroup = document.getElementById('modal-group-cmd');
+    const urlGroup = document.getElementById('modal-group-url');
+    if (cmdGroup) cmdGroup.style.display = isStdio ? 'block' : 'none';
+    if (urlGroup) urlGroup.style.display = isStdio ? 'none' : 'block';
+
+    if (cmdInput) {
+      cmdInput.value = isStdio ? `${serverCfg.command} ${(serverCfg.args || []).join(' ')}`.trim() : '';
+    }
+    if (urlInput) {
+      urlInput.value = serverCfg.url || '';
+    }
+
+    const res = serverCfg.resilience || state.config.resilience;
+    if (ftInput) ftInput.value = String(res?.failureThreshold ?? 3);
+    if (cdInput) cdInput.value = String(res?.cooldownMs ?? 30000);
+    if (autoRestartSelect) autoRestartSelect.value = res?.autoRestart === false ? 'false' : 'true';
+    if (maxRestartsInput) maxRestartsInput.value = String(res?.maxRestarts ?? 5);
+
     const modal = document.getElementById('modal-add-server');
     if (modal) modal.classList.add('active');
   }
@@ -445,6 +566,20 @@ class WarmplaneApp {
         return;
       }
       serverPayload.url = url;
+    }
+
+    const ftVal = (document.getElementById('modal-srv-ft') as HTMLInputElement)?.value.trim();
+    const cdVal = (document.getElementById('modal-srv-cd') as HTMLInputElement)?.value.trim();
+    const autoRestartVal = (document.getElementById('modal-srv-autorestart') as HTMLSelectElement)?.value;
+    const maxRestartsVal = (document.getElementById('modal-srv-maxrestarts') as HTMLInputElement)?.value.trim();
+
+    if (ftVal || cdVal || autoRestartVal || maxRestartsVal) {
+      serverPayload.resilience = {
+        failureThreshold: ftVal ? Number(ftVal) : 3,
+        cooldownMs: cdVal ? Number(cdVal) : 30000,
+        autoRestart: autoRestartVal !== 'false',
+        maxRestarts: maxRestartsVal ? Number(maxRestartsVal) : 5
+      };
     }
 
     const res = await api.upsertServer(name, serverPayload);
@@ -596,6 +731,32 @@ class WarmplaneApp {
           <div style="font-size: 10.5px; color: var(--text-dim); margin-top: 3px;">Executable: <code>${escapeHtml(tmpl.command)}</code></div>
         </div>
         ${envHtml}
+        <details style="margin-top: 14px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px;">
+          <summary style="font-size: 11.5px; font-weight: 600; color: var(--amber-400); cursor: pointer;">
+            🛡️ Fault Tolerance &amp; Process Supervision (Optional)
+          </summary>
+          <div style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <div>
+              <label class="form-label" style="font-size: 10.5px;">Failure Threshold</label>
+              <input type="number" class="form-input" id="cfg-srv-ft" placeholder="3" value="3">
+            </div>
+            <div>
+              <label class="form-label" style="font-size: 10.5px;">Cooldown (ms)</label>
+              <input type="number" class="form-input" id="cfg-srv-cd" placeholder="30000" value="30000">
+            </div>
+            <div>
+              <label class="form-label" style="font-size: 10.5px;">Auto-Restart</label>
+              <select class="form-input" id="cfg-srv-autorestart">
+                <option value="true">Enabled (Default)</option>
+                <option value="false">Disabled</option>
+              </select>
+            </div>
+            <div>
+              <label class="form-label" style="font-size: 10.5px;">Max Restarts</label>
+              <input type="number" class="form-input" id="cfg-srv-maxrestarts" placeholder="5" value="5">
+            </div>
+          </div>
+        </details>
       `;
     }
   }
@@ -634,6 +795,20 @@ class WarmplaneApp {
     };
     if (Object.keys(env).length > 0) {
       payload.env = env;
+    }
+
+    const ftVal = (document.getElementById('cfg-srv-ft') as HTMLInputElement)?.value.trim();
+    const cdVal = (document.getElementById('cfg-srv-cd') as HTMLInputElement)?.value.trim();
+    const autoRestartVal = (document.getElementById('cfg-srv-autorestart') as HTMLSelectElement)?.value;
+    const maxRestartsVal = (document.getElementById('cfg-srv-maxrestarts') as HTMLInputElement)?.value.trim();
+
+    if (ftVal || cdVal || autoRestartVal || maxRestartsVal) {
+      payload.resilience = {
+        failureThreshold: ftVal ? Number(ftVal) : 3,
+        cooldownMs: cdVal ? Number(cdVal) : 30000,
+        autoRestart: autoRestartVal !== 'false',
+        maxRestarts: maxRestartsVal ? Number(maxRestartsVal) : 5
+      };
     }
 
     const res = await api.upsertServer(serverId, payload);

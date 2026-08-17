@@ -29,22 +29,45 @@ export function renderServers(): string {
       const statusInfo = state.serverStatuses[k] || { status: 'connected', protocol_version: '2026-07-28' };
       const envKeys = s.env ? Object.keys(s.env).map(e => `${e}=***`).join(', ') : 'None';
 
+      const cb = (state.circuitBreakers || []).find(c => c.server_id === k);
+      let cbBadge = `<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.25);">Circuit: CLOSED</span>`;
+      if (cb) {
+        if (cb.state === 'open') {
+          cbBadge = `<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);">Circuit: OPEN (${cb.consecutive_failures} failures)</span>`;
+        } else if (cb.state === 'half_open') {
+          cbBadge = `<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.1);">Circuit: HALF-OPEN (${cb.consecutive_successes} probe)</span>`;
+        }
+      }
+
+      const res = s.resilience || state.config.resilience;
+      const resDetails = res ? `FT: ${res.failureThreshold || 3} · Cooldown: ${(res.cooldownMs || 30000) / 1000}s · AutoRestart: ${res.autoRestart !== false ? 'ON' : 'OFF'}` : 'Default Resilience';
+
+      const isDegraded = statusInfo.status === 'degraded';
+      const isError = statusInfo.status === 'error' || statusInfo.status === 'disconnected';
+      const statusColor = isDegraded ? 'var(--amber-400)' : isError ? 'var(--red-400)' : 'var(--green-400)';
+
       return `
         <div class="bento-card" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
           <div>
             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
-              <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--green-400); display: inline-block;"></span>
+              <span style="width: 8px; height: 8px; border-radius: 50%; background: ${statusColor}; display: inline-block;"></span>
               <span style="font-size: 15px; font-weight: 700; color: var(--text-main);">${escapeHtml(k)}</span>
               <span class="brand-badge">${transport}</span>
+              <span class="brand-badge" style="color: ${statusColor}; border-color: rgba(245, 158, 11, 0.3);">Status: ${escapeHtml(statusInfo.status)}</span>
               <span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">Protocol: ${statusInfo.protocol_version}</span>
+              ${cbBadge}
             </div>
             <div style="font-family: var(--ff-mono); font-size: 12px; color: var(--text-muted); margin-top: 4px;">
               ${s.command ? 'Command: ' : 'URL: '}<code>${escapeHtml(cmd || '')}</code>
             </div>
-            ${s.env && Object.keys(s.env).length > 0 ? `<div style="font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim); margin-top: 2px;">Env: ${escapeHtml(envKeys)}</div>` : ''}
+            <div style="display: flex; gap: 14px; font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim); margin-top: 4px;">
+              <span>🛡️ ${escapeHtml(resDetails)}</span>
+              ${s.env && Object.keys(s.env).length > 0 ? `<span>Env: ${escapeHtml(envKeys)}</span>` : ''}
+            </div>
           </div>
           <div style="display: flex; gap: 8px;">
-            <button class="btn btn-danger" onclick="window.app.deleteServer('${escapeHtml(k)}')">Remove</button>
+            <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openEditServerModal('${escapeHtml(k)}')">✏️ Edit</button>
+            <button class="btn btn-danger" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.deleteServer('${escapeHtml(k)}')">Remove</button>
           </div>
         </div>
       `;
@@ -58,10 +81,7 @@ export function renderServers(): string {
         <div style="font-size: 11px; color: var(--text-dim);">Active configuration file: <code>${escapeHtml(state.configPath)}</code></div>
       </div>
       <div style="display: flex; gap: 8px;">
-        <button class="btn btn-ghost" onclick="window.app.reloadFromDisk()">⟳ Reload</button>
-        <button class="btn btn-ghost" onclick="window.app.openImportModal()">Sync from IDEs</button>
-        <button class="btn btn-ghost" onclick="window.app.openAddServerModal()">+ Custom Server</button>
-        <button class="btn btn-primary" onclick="window.app.openTemplateCatalog()">✨ Browse Templates</button>
+        <button class="btn btn-ghost" onclick="window.app.reloadFromDisk()">⟳ Reload Config</button>
       </div>
     </div>
 
