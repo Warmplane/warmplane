@@ -31,7 +31,9 @@ pub use config_api::{
     handle_delete_server, handle_get_config, handle_get_ecosystem_sources, handle_import_config,
     handle_reload_config, handle_update_alias, handle_update_policy, handle_upsert_server,
 };
-pub use execute::{handle_call_capability, handle_cancel_operation};
+pub use execute::{
+    handle_batch_call_capabilities, handle_call_capability, handle_cancel_operation,
+};
 pub use helpers::{
     check_if_none_match, make_etag_header, next_trace_id, redact_value, resolve_idempotency_key,
 };

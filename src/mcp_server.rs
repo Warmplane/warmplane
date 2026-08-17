@@ -29,6 +29,7 @@ use crate::{
 const TOOL_CAPABILITIES_LIST: &str = "capabilities_list";
 const TOOL_CAPABILITY_DESCRIBE: &str = "capability_describe";
 const TOOL_CAPABILITY_CALL: &str = "capability_call";
+const TOOL_CAPABILITIES_BATCH_CALL: &str = "capabilities_batch_call";
 const TOOL_RESOURCES_LIST: &str = "resources_list";
 const TOOL_RESOURCE_READ: &str = "resource_read";
 const TOOL_PROMPTS_LIST: &str = "prompts_list";
@@ -135,6 +136,43 @@ impl ServerHandler for FacadeMcpServer {
                     request_state,
                 )
                 .await
+            }
+            TOOL_CAPABILITIES_BATCH_CALL => {
+                let Some(steps_val) = args.get("steps") else {
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "Missing required field 'steps'",
+                        )),
+                    ));
+                };
+                let Ok(steps) = serde_json::from_value::<Vec<crate::batch_executor::BatchStep>>(
+                    steps_val.clone(),
+                ) else {
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "'steps' must be an array of BatchStep objects",
+                        )),
+                    ));
+                };
+                let request_id = args
+                    .get("request_id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string);
+                let context: Option<crate::context::RequestContext> = args
+                    .get("_meta")
+                    .or_else(|| args.get("context"))
+                    .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+                let trace_id = next_trace_id();
+                let res = crate::batch_executor::execute_batch(
+                    &self.state,
+                    steps,
+                    trace_id,
+                    request_id,
+                    context,
+                )
+                .await;
+                Ok(serde_json::to_value(res).unwrap_or_default())
             }
             TOOL_RESOURCES_LIST => self.list_resources_value().await,
             TOOL_RESOURCE_READ => {
@@ -939,6 +977,33 @@ fn facade_tools() -> Vec<Tool> {
             })),
         ),
         Tool::new(
+            TOOL_CAPABILITIES_BATCH_CALL,
+            "Execute multiple sequential capability steps with output variable reference interpolation",
+            schema_object(json!({
+                "type":"object",
+                "properties":{
+                    "steps":{
+                        "type":"array",
+                        "items":{
+                            "type":"object",
+                            "properties":{
+                                "id":{"type":"string"},
+                                "capability_id":{"type":"string"},
+                                "args":{"type":"object"},
+                                "continue_on_error":{"type":"boolean"}
+                            },
+                            "required":["id","capability_id","args"]
+                        }
+                    },
+                    "request_id":{"type":"string"},
+                    "context":{"type":"object"},
+                    "_meta":{"type":"object"}
+                },
+                "required":["steps"],
+                "additionalProperties":true
+            })),
+        ),
+        Tool::new(
             TOOL_RESOURCES_LIST,
             "List compact resource index",
             schema_object(json!({"type":"object","properties":{},"additionalProperties":false})),
@@ -1063,10 +1128,11 @@ mod tests {
             .into_iter()
             .map(|t| t.name.to_string())
             .collect::<Vec<_>>();
-        assert_eq!(names.len(), 9);
+        assert_eq!(names.len(), 10);
         assert!(names.contains(&"capabilities_list".to_string()));
         assert!(names.contains(&"capability_describe".to_string()));
         assert!(names.contains(&"capability_call".to_string()));
+        assert!(names.contains(&"capabilities_batch_call".to_string()));
         assert!(names.contains(&"resources_list".to_string()));
         assert!(names.contains(&"resource_read".to_string()));
         assert!(names.contains(&"prompts_list".to_string()));

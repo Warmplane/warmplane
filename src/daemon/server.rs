@@ -172,6 +172,10 @@ pub async fn run_daemon(
         .route("/v1/prompts", get(http_v1::handle_list_prompts))
         .route("/v1/prompts/get", post(http_v1::handle_get_prompt))
         .route("/v1/tools/call", post(http_v1::handle_call_capability))
+        .route(
+            "/v1/tools/batch_call",
+            post(http_v1::handle_batch_call_capabilities),
+        )
         .route("/v1/catalog/events", get(http_v1::handle_catalog_events))
         .route(
             "/v1/operations/:id/cancel",

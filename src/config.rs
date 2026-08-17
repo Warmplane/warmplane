@@ -270,7 +270,12 @@ pub enum SiemTargetConfig {
     /// Generic Webhook / Datadog JSON ingestion endpoint.
     Webhook {
         url: String,
-        #[serde(default, rename = "authHeader", alias = "auth_header", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            rename = "authHeader",
+            alias = "auth_header",
+            skip_serializing_if = "Option::is_none"
+        )]
         auth_header: Option<String>,
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         headers: HashMap<String, String>,
