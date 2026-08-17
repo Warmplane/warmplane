@@ -487,12 +487,16 @@ pub async fn handle_call_capability(
                 approval_ticket_id: None,
             });
 
+            let distill_opts =
+                crate::context_filter::DistillationOptions::from_args(Some(&payload.args));
+            let distilled_data = crate::context_filter::distill_value(data, &distill_opts);
+
             let response_json = json!({
                 "ok": true,
                 "request_id": request_id,
                 "context": req_context,
                 "trace_id": trace_id,
-                "data": data,
+                "data": distilled_data,
                 "error": null,
                 "retry": retry_base("completed"),
             });

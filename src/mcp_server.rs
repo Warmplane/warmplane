@@ -587,6 +587,8 @@ impl FacadeMcpServer {
             tx
         };
 
+        let distill_opts = crate::context_filter::DistillationOptions::from_args(Some(&args));
+
         let (reply_tx, reply_rx) = oneshot::channel();
         if tx
             .send(ServerMsg::CallTool {
@@ -611,15 +613,18 @@ impl FacadeMcpServer {
         }
 
         match reply_rx.await {
-            Ok(Ok(data)) => Ok(json!({
-                "ok": true,
-                "request_id": request_id,
-                "context": ctx,
-                "trace_id": trace_id,
-                "data": data,
-                "error": null,
-                "retry": crate::idempotency::RetryMetadata::unsafe_op("completed"),
-            })),
+            Ok(Ok(data)) => {
+                let distilled_data = crate::context_filter::distill_value(data, &distill_opts);
+                Ok(json!({
+                    "ok": true,
+                    "request_id": request_id,
+                    "context": ctx,
+                    "trace_id": trace_id,
+                    "data": distilled_data,
+                    "error": null,
+                    "retry": crate::idempotency::RetryMetadata::unsafe_op("completed"),
+                }))
+            }
             Ok(Err(UpstreamCallError::Timeout)) => Ok(error_envelope(
                 trace_id,
                 request_id,

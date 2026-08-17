@@ -9,6 +9,7 @@ pub mod cli_config;
 pub mod config;
 pub mod config_import;
 pub mod context;
+pub mod context_filter;
 pub mod daemon;
 pub mod http_v1;
 pub mod idempotency;
