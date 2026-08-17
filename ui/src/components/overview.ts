@@ -123,7 +123,7 @@ export function renderOverview(): string {
       <button class="btn btn-ghost" onclick="window.app.switchTab('servers')">Manage All (${warmCount}) →</button>
     </div>
 
-    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; margin-bottom: 24px;">
+    <div class="bento-grid" style="margin-bottom: 24px;">
       ${serverCardsHtml}
     </div>
 
