@@ -308,6 +308,63 @@ The `audit` block configures non-repudiable append-only audit logging with linea
 
 ---
 
+### 4.5 Upstream Resiliency & Circuit Breaking
+
+The `resilience` block configures per-server circuit breakers to prevent cascading timeouts and deadlock loops when upstream servers hang, crash, or fail repeatedly.
+
+```json
+"resilience": {
+  "failureThreshold": 3,
+  "cooldownMs": 30000,
+  "consecutiveSuccesses": 2
+}
+```
+
+You can set global resilience defaults at the root of `mcp_servers.json` or override them per upstream server under `mcpServers.<id>.resilience`:
+
+```json
+{
+  "mcpServers": {
+    "flaky_service": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-flaky"],
+      "resilience": {
+        "failureThreshold": 2,
+        "cooldownMs": 15000,
+        "consecutiveSuccesses": 1
+      }
+    }
+  }
+}
+```
+
+#### Circuit Breaker Parameters
+
+| Field | Type | Required | Default | Description |
+| :--- | :--- | :---: | :--- | :--- |
+| `failureThreshold` | Number | No | `3` | Number of consecutive upstream timeouts or failures required to trip the circuit to `Open`. |
+| `cooldownMs` | Number | No | `30000` | Cooldown period in milliseconds before allowing probe requests in `HalfOpen` state. |
+| `consecutiveSuccesses` | Number | No | `2` | Number of successful probe executions in `HalfOpen` required to fully reset the circuit to `Closed`. |
+
+When a circuit is `Open`, calls fast-fail instantly with HTTP 503 and error code `CIRCUIT_OPEN` without contacting the upstream worker:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "CIRCUIT_OPEN",
+    "message": "Circuit breaker for server 'flaky_service' is OPEN (3 consecutive failures). Retry in 24500ms.",
+    "retryable": false
+  },
+  "retry": {
+    "classification": "safe",
+    "upstream_execution_state": "not_started"
+  }
+}
+```
+
+---
+
 ## 5. Execution Modes
 
 ### 5.1 HTTP Daemon Mode
@@ -643,6 +700,7 @@ When `ok` is `false`, the envelope provides a structured error object (`error.co
 | `APPROVAL_PENDING` | 202 / 403 | Intercepted by HITL policy; awaiting operator decision. | Approve ticket via UI or `/v1/approvals/:id/approve`. |
 | `APPROVAL_TIMEOUT` | 408 | Approval ticket expired before decision was submitted. | Re-issue execution request or increase timeout. |
 | `APPROVAL_REJECTED` | 403 | Human operator rejected capability execution. | Review rejection reason from ticket details. |
+| `CIRCUIT_OPEN` | 503 | Upstream server circuit breaker is tripped due to consecutive errors/timeouts. | Await cooldown period or investigate upstream server crash logs. |
 | `SERVER_UNREACHABLE` | 502 | Upstream server process crashed or network disconnected. | Inspect upstream process status and network. |
 | `UPSTREAM_TIMEOUT` | 504 | Upstream operation exceeded `toolTimeoutMs`. | Increase timeout or optimize upstream query. |
 | `UPSTREAM_ERROR` | 500 | Upstream server returned a protocol error. | Inspect upstream server logs. |

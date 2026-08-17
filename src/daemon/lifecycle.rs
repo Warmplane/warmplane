@@ -395,6 +395,11 @@ impl AppState {
             ));
         };
 
+        let resilience_cfg = srv_cfg.resilience.clone().unwrap_or_default();
+        self.circuit_breakers
+            .get_or_create(server_id, resilience_cfg)
+            .await;
+
         {
             let mut servers_guard = self.servers.write().await;
             servers_guard.insert(server_id.to_string(), tx);

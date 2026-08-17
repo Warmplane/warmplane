@@ -68,6 +68,8 @@ pub struct AppState {
     pub audit_store: crate::audit::SharedAuditStore,
     /// Non-blocking async audit event dispatcher handle.
     pub audit_handle: crate::audit::AuditHandle,
+    /// Upstream circuit breaker registry for fault tolerance.
+    pub circuit_breakers: crate::circuit_breaker::CircuitBreakerRegistry,
 }
 
 impl AppState {
@@ -100,6 +102,7 @@ pub struct AppStateBuilder {
     approval_registry: Option<crate::approvals::ApprovalRegistry>,
     audit_store: Option<crate::audit::SharedAuditStore>,
     audit_handle: Option<crate::audit::AuditHandle>,
+    circuit_breakers: Option<crate::circuit_breaker::CircuitBreakerRegistry>,
 }
 
 #[allow(dead_code)]
@@ -275,6 +278,15 @@ impl AppStateBuilder {
         self
     }
 
+    /// Sets circuit breaker registry.
+    pub fn circuit_breakers(
+        mut self,
+        circuit_breakers: crate::circuit_breaker::CircuitBreakerRegistry,
+    ) -> Self {
+        self.circuit_breakers = Some(circuit_breakers);
+        self
+    }
+
     /// Builds the `AppState` struct instance with defaults for unspecified fields.
     pub fn build(self) -> AppState {
         let audit_store = self
@@ -323,6 +335,7 @@ impl AppStateBuilder {
             approval_registry: self.approval_registry.unwrap_or_default(),
             audit_store,
             audit_handle,
+            circuit_breakers: self.circuit_breakers.unwrap_or_default(),
         }
     }
 }
