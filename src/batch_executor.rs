@@ -68,10 +68,16 @@ pub struct BatchCallResponse {
     pub total_duration_us: u64,
 }
 
-/// Executes a series of batch capability steps sequentially with variable interpolation.
+/// Maximum number of sequential steps permitted in a single batch request.
+pub const MAX_BATCH_STEPS: usize = 50;
+
+/// Default overall execution budget for a multi-step batch (60 seconds).
+pub const DEFAULT_BATCH_TIMEOUT_MS: u64 = 60_000;
+
+/// Executes an ordered sequence of tool execution steps, interpolating prior step outputs.
 ///
 /// # Arguments
-/// * `state` - Shared daemon `AppState`.
+/// * `state` - Daemon application state.
 /// * `steps` - Ordered vector of `BatchStep` items.
 /// * `trace_id` - Trace ID for the batch.
 /// * `request_id` - Optional request ID.
@@ -87,12 +93,52 @@ pub async fn execute_batch(
     context: Option<crate::context::RequestContext>,
 ) -> BatchCallResponse {
     let start_all = std::time::Instant::now();
+
+    if steps.len() > MAX_BATCH_STEPS {
+        return BatchCallResponse {
+            trace_id,
+            request_id,
+            ok: false,
+            results: vec![BatchStepResult {
+                id: "batch_validation".to_string(),
+                capability_id: "batch".to_string(),
+                ok: false,
+                data: None,
+                error: Some(format!(
+                    "Batch exceeds maximum allowed steps of {} (requested {})",
+                    MAX_BATCH_STEPS,
+                    steps.len()
+                )),
+                duration_us: 0,
+            }],
+            total_duration_us: 0,
+        };
+    }
+
     let mut step_outputs: HashMap<String, Value> = HashMap::new();
     let mut results = Vec::new();
     let mut overall_ok = true;
 
     for step in steps {
         let step_start = std::time::Instant::now();
+
+        // Check aggregate batch timeout budget
+        if start_all.elapsed().as_millis() as u64 >= DEFAULT_BATCH_TIMEOUT_MS {
+            results.push(BatchStepResult {
+                id: step.id.clone(),
+                capability_id: step.capability_id.clone(),
+                ok: false,
+                data: None,
+                error: Some(format!(
+                    "Batch execution timed out after {}ms budget",
+                    DEFAULT_BATCH_TIMEOUT_MS
+                )),
+                duration_us: step_start.elapsed().as_micros() as u64,
+            });
+            overall_ok = false;
+            break;
+        }
+
         let mut interpolated_args = interpolate_step_references(&step.args, &step_outputs);
 
         // Check policy allow/deny

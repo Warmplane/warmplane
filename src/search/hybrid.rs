@@ -226,7 +226,7 @@ impl HybridSearchEngine {
         scored_items.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Truncate to limit before building detailed objects
-        scored_items.truncate(limit);
+        scored_items.truncate(limit.min(100));
 
         let mut final_results = Vec::with_capacity(scored_items.len());
         for (id, raw_score, mut match_types) in scored_items {

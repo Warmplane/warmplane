@@ -42,8 +42,15 @@ async fn main() -> Result<()> {
         Commands::Reload { port, config } => {
             cli_config::trigger_daemon_reload(port, &config).await?;
         }
-        Commands::Daemon { port, config } => {
-            let config_data = load_config(&config)?;
+        Commands::Daemon {
+            port,
+            config,
+            auth_token,
+        } => {
+            let mut config_data = load_config(&config)?;
+            if auth_token.is_some() {
+                config_data.auth_token = auth_token;
+            }
             let resolved_port = port.or(config_data.port).unwrap_or(DEFAULT_PORT);
             daemon::run_daemon(resolved_port, config_data, config).await?;
         }

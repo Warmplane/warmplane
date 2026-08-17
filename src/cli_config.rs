@@ -168,8 +168,9 @@ pub async fn handle_server_command(cmd: ServerCommands) -> Result<()> {
             );
         }
         ServerCommands::List { json, config } => {
-            let mcp_config = load_or_default_config(&config)?;
+            let mut mcp_config = load_or_default_config(&config)?;
             if json {
+                mcp_config.sanitize_secrets();
                 println!("{}", serde_json::to_string_pretty(&mcp_config.mcp_servers)?);
             } else {
                 if mcp_config.mcp_servers.is_empty() {
@@ -231,7 +232,8 @@ pub async fn handle_server_command(cmd: ServerCommands) -> Result<()> {
             }
         }
         ServerCommands::Get { name, json, config } => {
-            let mcp_config = load_config(&config)?;
+            let mut mcp_config = load_config(&config)?;
+            mcp_config.sanitize_secrets();
             let server = mcp_config
                 .mcp_servers
                 .get(&name)
@@ -351,7 +353,8 @@ pub async fn handle_config_command(cmd: ConfigCommands) -> Result<()> {
             );
         }
         ConfigCommands::Show { config } => {
-            let mcp_config = load_or_default_config(&config)?;
+            let mut mcp_config = load_or_default_config(&config)?;
+            mcp_config.sanitize_secrets();
             println!("{}", serde_json::to_string_pretty(&mcp_config)?);
         }
         ConfigCommands::Import {
@@ -719,6 +722,8 @@ pub fn handle_audit_command(cmd: crate::models::AuditCommands) -> Result<()> {
                 .unwrap_or_else(|| crate::config::AuditConfig {
                     enabled: true,
                     file_path: Some("warmplane_audit.jsonl".to_string()),
+                    hmac_key: None,
+                    hmac_key_env: None,
                     buffer_capacity: Some(10000),
                     flush_interval_ms: Some(250),
                     max_batch_size: Some(100),

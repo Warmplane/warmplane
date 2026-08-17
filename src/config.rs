@@ -52,6 +52,14 @@ pub struct McpConfig {
     /// Optional global resilience and circuit breaker configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resilience: Option<crate::circuit_breaker::ResilienceConfig>,
+    /// Optional static API auth token protecting mutating/admin control-plane endpoints.
+    #[serde(
+        default,
+        rename = "authToken",
+        alias = "auth_token",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub auth_token: Option<String>,
     /// Upstream MCP server definitions keyed by server identifier.
     #[serde(rename = "mcpServers", default)]
     pub mcp_servers: HashMap<String, ServerConfig>,
@@ -256,9 +264,39 @@ pub struct AuditConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub max_batch_size: Option<usize>,
+    /// Optional HMAC secret key used to compute keyed integrity digests over audit events.
+    #[serde(
+        default,
+        rename = "hmacKey",
+        alias = "hmac_key",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hmac_key: Option<String>,
+    /// Environment variable containing HMAC secret key.
+    #[serde(
+        default,
+        rename = "hmacKeyEnv",
+        alias = "hmac_key_env",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hmac_key_env: Option<String>,
     /// Optional external SIEM export target configurations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub siem: Option<SiemConfig>,
+}
+
+impl AuditConfig {
+    /// Resolves the HMAC secret key from env var or direct value.
+    pub fn resolve_hmac_key(&self) -> Option<String> {
+        if let Some(ref env_name) = self.hmac_key_env {
+            if let Ok(val) = std::env::var(env_name) {
+                if !val.trim().is_empty() {
+                    return Some(val);
+                }
+            }
+        }
+        self.hmac_key.clone()
+    }
 }
 
 /// SIEM telemetry forwarder configuration.
@@ -309,6 +347,8 @@ impl Default for AuditConfig {
             buffer_capacity: Some(10_000),
             flush_interval_ms: Some(250),
             max_batch_size: Some(100),
+            hmac_key: None,
+            hmac_key_env: None,
             siem: None,
         }
     }
@@ -317,6 +357,9 @@ impl Default for AuditConfig {
 impl McpConfig {
     /// Sanitizes all confidential credentials and secrets in place for safe API exposure.
     pub fn sanitize_secrets(&mut self) {
+        if self.auth_token.is_some() {
+            self.auth_token = Some("********".to_string());
+        }
         if let Some(ref mut policy) = self.policy {
             policy.sanitize_secrets();
         }
@@ -351,8 +394,11 @@ impl WebhookConfig {
 }
 
 impl AuditConfig {
-    /// Sanitizes SIEM target secrets in place.
+    /// Sanitizes SIEM target secrets and HMAC keys in place.
     pub fn sanitize_secrets(&mut self) {
+        if self.hmac_key.is_some() {
+            self.hmac_key = Some("********".to_string());
+        }
         if let Some(ref mut siem) = self.siem {
             siem.sanitize_secrets();
         }
@@ -672,15 +718,8 @@ mod tests {
         let mut mcp_servers = HashMap::new();
         mcp_servers.insert("s1".to_string(), server);
         McpConfig {
-            port: None,
-            tool_timeout_ms: None,
-            capability_aliases: HashMap::new(),
-            resource_aliases: HashMap::new(),
-            prompt_aliases: HashMap::new(),
-            policy: None,
-            audit: None,
-            resilience: None,
             mcp_servers,
+            ..Default::default()
         }
     }
 

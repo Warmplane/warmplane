@@ -54,11 +54,15 @@ pub async fn initialize_state(
     let search_engine = Arc::new(crate::search::HybridSearchEngine::new());
 
     let (audit_store, audit_handle) = if let Some(ref audit_cfg) = config.audit {
+        let hmac_key_bytes = audit_cfg.resolve_hmac_key().map(|k| k.into_bytes());
         if audit_cfg.enabled {
             let store = if let Some(ref path) = audit_cfg.file_path {
-                Arc::new(crate::audit::AuditStore::open_or_create(path)?)
+                Arc::new(crate::audit::AuditStore::open_or_create_with_key(
+                    path,
+                    hmac_key_bytes,
+                )?)
             } else {
-                Arc::new(crate::audit::AuditStore::in_memory())
+                Arc::new(crate::audit::AuditStore::in_memory_with_key(hmac_key_bytes))
             };
             let siem_dispatcher = audit_cfg
                 .siem
@@ -101,7 +105,13 @@ pub async fn initialize_state(
         (store, handle)
     };
 
-    let state = AppState::builder()
+    let auth_token = config.auth_token.or_else(|| {
+        std::env::var("WARMPLANE_AUTH_TOKEN")
+            .ok()
+            .filter(|t| !t.trim().is_empty())
+    });
+
+    let mut state_builder = AppState::builder()
         .servers_arc(Arc::new(RwLock::new(HashMap::new())))
         .capabilities_arc(Arc::new(RwLock::new(HashMap::new())))
         .resources_arc(Arc::new(RwLock::new(HashMap::new())))
@@ -119,8 +129,12 @@ pub async fn initialize_state(
         .oauth_proxy_port(oauth_proxy_port)
         .oauth_registry(oauth_registry)
         .audit_store(audit_store)
-        .audit_handle(audit_handle)
-        .build();
+        .audit_handle(audit_handle);
+
+    if let Some(token) = auth_token {
+        state_builder = state_builder.auth_token(token);
+    }
+    let state = state_builder.build();
 
     info!(
         server_count = config.mcp_servers.len(),
