@@ -1114,6 +1114,42 @@ async fn test_audit_api_endpoints_and_export() {
     let csv_str = String::from_utf8(csv_bytes.to_vec()).unwrap();
     assert!(csv_str.contains("github.get_repo"));
     assert!(csv_str.contains("agent-compliance"));
+
+    // Test GET /v1/audit/events with status & search filtering
+    let search_res = crate::http_v1::audit_api::handle_list_audit_events(
+        State(state.clone()),
+        Query(crate::http_v1::audit_api::AuditEventsQuery {
+            status: Some("success".to_string()),
+            server_id: Some("github".to_string()),
+            search: Some("get_repo".to_string()),
+            limit: Some(10),
+            offset: Some(0),
+            ..Default::default()
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(search_res.status(), StatusCode::OK);
+    let s_bytes = to_bytes(search_res.into_body(), usize::MAX).await.unwrap();
+    let s_payload: Value = serde_json::from_slice(&s_bytes).unwrap();
+    assert_eq!(s_payload["ok"], true);
+    assert_eq!(s_payload["total"], 1);
+
+    // Test GET /v1/audit/events with non-matching status
+    let nomatch_res = crate::http_v1::audit_api::handle_list_audit_events(
+        State(state.clone()),
+        Query(crate::http_v1::audit_api::AuditEventsQuery {
+            status: Some("denied".to_string()),
+            ..Default::default()
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(nomatch_res.status(), StatusCode::OK);
+    let nm_bytes = to_bytes(nomatch_res.into_body(), usize::MAX).await.unwrap();
+    let nm_payload: Value = serde_json::from_slice(&nm_bytes).unwrap();
+    assert_eq!(nm_payload["ok"], true);
+    assert_eq!(nm_payload["total"], 0);
 }
 
 #[tokio::test]

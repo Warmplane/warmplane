@@ -1,3 +1,85 @@
+export interface PolicyConfig {
+  allow?: string[];
+  deny?: string[];
+  redactKeys?: string[];
+  redact_keys?: string[];
+  requireApproval?: string[];
+  require_approval?: string[];
+  approvalTimeoutSecs?: number;
+  approval_timeout_secs?: number;
+  webhook?: string;
+}
+
+export interface PendingApproval {
+  id: string;
+  tool?: string;
+  capability_id?: string;
+  args?: Record<string, any>;
+  created_at?: string | number;
+  status: 'pending' | 'approved' | 'rejected' | 'expired' | string;
+  operator?: string;
+  reason?: string;
+  modified_args?: Record<string, any>;
+}
+
+export interface AuditEventItem {
+  id: string;
+  timestamp_ns: number;
+  event_type: string;
+  trace_id: string;
+  request_id?: string;
+  actor_id?: string;
+  work_item_id?: string;
+  client_ip?: string;
+  server_id?: string;
+  capability_id?: string;
+  resource_uri?: string;
+  sanitized_args?: Record<string, any>;
+  sanitized_response?: Record<string, any>;
+  execution_latency_us?: number;
+  status: 'success' | 'failed' | 'denied' | 'intercepted' | 'cancelled' | string;
+  error_code?: string;
+  error_message?: string;
+  operator_id?: string;
+  approval_ticket_id?: string;
+  prev_hash: string;
+  hash: string;
+}
+
+export interface VerificationReport {
+  is_valid: boolean;
+  total_records: number;
+  corrupted_at_index?: number;
+  corrupted_record_id?: string;
+  message?: string;
+}
+
+export interface AuditStats {
+  ok: boolean;
+  total_events: number;
+  by_status: {
+    success: number;
+    failed: number;
+    denied: number;
+    intercepted: number;
+  };
+}
+
+export interface AuditQueryOptions {
+  actor_id?: string;
+  server_id?: string;
+  capability_id?: string;
+  event_type?: string;
+  status?: string;
+  trace_id?: string;
+  request_id?: string;
+  search?: string;
+  start_time?: number;
+  end_time?: number;
+  limit?: number;
+  offset?: number;
+}
+
 export interface ResilienceConfig {
   failureThreshold?: number;
   cooldownMs?: number;
@@ -215,16 +297,35 @@ export class WarmplaneClient {
     return res.json();
   }
 
-  async listAuditEvents(params?: { actor_id?: string; capability_id?: string; event_type?: string; limit?: number; offset?: number }): Promise<{ ok: boolean; events: AuditEventItem[]; total: number }> {
+  async listAuditEvents(params?: AuditQueryOptions): Promise<{ ok: boolean; events: AuditEventItem[]; total: number; limit: number; offset: number }> {
     const q = new URLSearchParams();
     if (params?.actor_id) q.set('actor_id', params.actor_id);
+    if (params?.server_id && params.server_id !== 'all') q.set('server_id', params.server_id);
     if (params?.capability_id) q.set('capability_id', params.capability_id);
-    if (params?.event_type) q.set('event_type', params.event_type);
+    if (params?.event_type && params.event_type !== 'all') q.set('event_type', params.event_type);
+    if (params?.status && params.status !== 'all') q.set('status', params.status);
+    if (params?.trace_id) q.set('trace_id', params.trace_id);
+    if (params?.request_id) q.set('request_id', params.request_id);
+    if (params?.search) q.set('search', params.search);
     if (params?.limit) q.set('limit', String(params.limit));
-    if (params?.offset) q.set('offset', String(params.offset));
+    if (params?.offset !== undefined) q.set('offset', String(params.offset));
     const qs = q.toString();
     const res = await fetch(`${this.baseUrl}/v1/audit/events${qs ? `?${qs}` : ''}`);
     return res.json();
+  }
+
+  getAuditExportUrl(params?: AuditQueryOptions, format: 'csv' | 'jsonl' = 'csv'): string {
+    const q = new URLSearchParams();
+    q.set('format', format);
+    if (params?.actor_id) q.set('actor_id', params.actor_id);
+    if (params?.server_id && params.server_id !== 'all') q.set('server_id', params.server_id);
+    if (params?.capability_id) q.set('capability_id', params.capability_id);
+    if (params?.event_type && params.event_type !== 'all') q.set('event_type', params.event_type);
+    if (params?.status && params.status !== 'all') q.set('status', params.status);
+    if (params?.trace_id) q.set('trace_id', params.trace_id);
+    if (params?.request_id) q.set('request_id', params.request_id);
+    if (params?.search) q.set('search', params.search);
+    return `${this.baseUrl}/v1/audit/export?${q.toString()}`;
   }
 
   async verifyAuditChain(): Promise<{ ok: boolean; report: VerificationReport }> {
@@ -239,3 +340,4 @@ export class WarmplaneClient {
 }
 
 export const api = new WarmplaneClient();
+
