@@ -632,3 +632,26 @@ pub async fn handle_cancel_operation(
     )
         .into_response()
 }
+
+/// Handles HTTP POST `/v1/tools/batch_call` executing multiple chained tool capabilities.
+pub async fn handle_batch_call_capabilities(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<crate::batch_executor::BatchCallRequest>,
+) -> impl IntoResponse {
+    let trace_id = next_trace_id();
+    let request_id =
+        crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
+    let req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
+
+    let response = crate::batch_executor::execute_batch(
+        &state,
+        payload.steps,
+        trace_id,
+        Some(request_id),
+        Some(req_context),
+    )
+    .await;
+
+    (StatusCode::OK, Json(response)).into_response()
+}

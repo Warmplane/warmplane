@@ -4,6 +4,7 @@
 
 pub mod approvals;
 pub mod audit;
+pub mod batch_executor;
 pub mod catalog;
 pub mod cli_config;
 pub mod config;
