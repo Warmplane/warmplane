@@ -3,9 +3,69 @@ import { api } from '../api';
 
 export function renderPlayground(): string {
   const state = store.getState();
-  const caps = state.capabilities;
+  const mode = state.playgroundMode || 'tools';
+
+  const caps = state.capabilities || [];
+  const resources = state.resources || [];
+  const prompts = state.prompts || [];
+
+  // Top Mode Switcher Bar
+  const modeSwitcherHtml = `
+    <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center; justify-content: space-between;">
+      <div style="display: inline-flex; padding: 3px; background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: var(--radius-sm);">
+        <button 
+          class="btn ${mode === 'tools' ? 'btn-primary' : 'btn-ghost'}" 
+          style="padding: 4px 12px; font-size: 11.5px; height: 28px;"
+          onclick="window.app.setPlaygroundMode('tools')"
+        >
+          🛠️ Tools (${caps.length})
+        </button>
+        <button 
+          class="btn ${mode === 'resources' ? 'btn-primary' : 'btn-ghost'}" 
+          style="padding: 4px 12px; font-size: 11.5px; height: 28px;"
+          onclick="window.app.setPlaygroundMode('resources')"
+        >
+          📄 Resources (${resources.length})
+        </button>
+        <button 
+          class="btn ${mode === 'prompts' ? 'btn-primary' : 'btn-ghost'}" 
+          style="padding: 4px 12px; font-size: 11.5px; height: 28px;"
+          onclick="window.app.setPlaygroundMode('prompts')"
+        >
+          💬 Prompts (${prompts.length})
+        </button>
+      </div>
+
+      <div style="font-size: 11.5px; color: var(--text-dim);">
+        ${mode === 'tools' ? 'Interactive Tool Caller & Context Distillation' : mode === 'resources' ? 'Live MCP Resource Inspector & Reader' : 'Prompt Template Studio & Variable Binder'}
+      </div>
+    </div>
+  `;
+
+  if (mode === 'resources') {
+    return `
+      ${modeSwitcherHtml}
+      ${renderResourcesPlayground(state)}
+    `;
+  }
+
+  if (mode === 'prompts') {
+    return `
+      ${modeSwitcherHtml}
+      ${renderPromptsPlayground(state)}
+    `;
+  }
+
+  return `
+    ${modeSwitcherHtml}
+    ${renderToolsPlayground(state)}
+  `;
+}
+
+function renderToolsPlayground(state: any): string {
+  const caps = state.capabilities || [];
   const selectedId = state.selectedCapabilityId || (caps.length > 0 ? caps[0].id : null);
-  const selectedCap = caps.find(c => c.id === selectedId);
+  const selectedCap = caps.find((c: any) => c.id === selectedId);
 
   let capListHtml = '';
   if (caps.length === 0) {
@@ -15,7 +75,7 @@ export function renderPlayground(): string {
       </div>
     `;
   } else {
-    capListHtml = caps.map(c => {
+    capListHtml = caps.map((c: any) => {
       const active = c.id === selectedId ? 'active' : '';
       return `
         <div class="cap-item ${active}" onclick="window.app.selectCapability('${escapeHtml(c.id)}')">
@@ -32,7 +92,7 @@ export function renderPlayground(): string {
   const initialArgs = selectedCap && selectedCap.input_schema ? JSON.stringify(selectedCap.input_schema.properties || {}, null, 2) : '{}';
 
   return `
-    <div style="display: grid; grid-template-columns: 320px 1fr; gap: 16px; height: calc(100vh - 120px);">
+    <div style="display: grid; grid-template-columns: 320px 1fr; gap: 16px; height: calc(100vh - 165px);">
       <!-- Left Sidebar: Capabilities Catalog -->
       <div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); display: flex; flex-direction: column; overflow: hidden;">
         <div style="padding: 12px; border-bottom: 1px solid var(--border);">
@@ -119,6 +179,233 @@ export function renderPlayground(): string {
   `;
 }
 
-function escapeHtml(str: string): string {
-  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function renderResourcesPlayground(state: any): string {
+  const resources = state.resources || [];
+  const selectedId = state.selectedResourceId || (resources.length > 0 ? resources[0].id : null);
+  const selectedRes = resources.find((r: any) => r.id === selectedId);
+  const result = state.resourceReadResult;
+
+  let resListHtml = '';
+  if (resources.length === 0) {
+    resListHtml = `
+      <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
+        No resources exposed by connected MCP servers.
+      </div>
+    `;
+  } else {
+    resListHtml = resources.map((r: any) => {
+      const active = r.id === selectedId ? 'active' : '';
+      const scheme = r.uri ? r.uri.split(':')[0] : 'res';
+      return `
+        <div class="cap-item ${active}" onclick="window.app.selectResource('${escapeHtml(r.id)}')">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${escapeHtml(r.name || r.id)}</span>
+            <span class="badge" style="font-size: 9.5px; background: rgba(56, 189, 248, 0.15); color: var(--cyan-400);">${escapeHtml(scheme)}</span>
+          </div>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(r.uri)}</div>
+          <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+            <span>server: ${escapeHtml(r.server || 'local')}</span>
+            <span>${escapeHtml(r.mime_type || 'text/plain')}</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  return `
+    <div style="display: grid; grid-template-columns: 340px 1fr; gap: 16px; height: calc(100vh - 165px);">
+      <!-- Left Sidebar: Resources Catalog -->
+      <div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); display: flex; flex-direction: column; overflow: hidden;">
+        <div style="padding: 12px; border-bottom: 1px solid var(--border);">
+          <input type="text" class="form-input" placeholder="Search ${resources.length} resources..." oninput="window.app.filterResources(this.value)">
+        </div>
+        <div style="flex: 1; overflow-y: auto; padding: 8px;" id="pg-res-list">
+          ${resListHtml}
+        </div>
+      </div>
+
+      <!-- Right Panel: Resource Content Reader & Metadata Inspector -->
+      <div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); display: flex; flex-direction: column; overflow: hidden;">
+        <div style="padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-size: 15px; font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">
+              ${escapeHtml(selectedRes ? (selectedRes.name || selectedRes.id) : 'No Resource Selected')}
+            </div>
+            <div style="font-size: 11.5px; color: var(--cyan-400); font-family: var(--ff-mono);">
+              ${escapeHtml(selectedRes ? selectedRes.uri : 'Select a resource from the list to read live content')}
+            </div>
+          </div>
+          <button class="btn btn-primary" onclick="window.app.executeReadResource()" ${selectedRes ? '' : 'disabled'}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+            Read Resource Content
+          </button>
+        </div>
+
+        <div style="flex: 1; display: grid; grid-template-columns: 1fr 1fr; overflow: hidden;">
+          <!-- Request / Distillation Parameters -->
+          <div style="padding: 16px; border-right: 1px solid var(--border); overflow-y: auto;">
+            ${selectedRes ? `
+              <div style="background: rgba(0,0,0,0.25); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); margin-bottom: 14px;">
+                <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px;">Resource Metadata</div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 11.5px;">
+                  <div><span style="color: var(--text-muted);">Server:</span> <strong style="color: var(--text-main);">${escapeHtml(selectedRes.server)}</strong></div>
+                  <div><span style="color: var(--text-muted);">MIME Type:</span> <strong style="color: var(--text-main);">${escapeHtml(selectedRes.mime_type || 'text/plain')}</strong></div>
+                </div>
+                ${selectedRes.description ? `
+                  <div style="margin-top: 8px; font-size: 11.5px; color: var(--text-dim); border-top: 1px solid rgba(255,255,255,0.05); padding-top: 6px;">
+                    ${escapeHtml(selectedRes.description)}
+                  </div>
+                ` : ''}
+              </div>
+            ` : ''}
+
+            <div style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: var(--radius-sm); border: 1px solid var(--border);">
+              <div style="font-size: 11px; font-weight: 700; color: var(--cyan-400); margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
+                <span>⚡ Context Distillation Options</span>
+              </div>
+              <div class="form-group" style="margin-bottom: 8px;">
+                <label class="form-label" style="font-size: 10.5px;">JSONPath Expression</label>
+                <input type="text" class="form-input" id="pg-res-jsonpath-input" placeholder="$.items[*].data">
+              </div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                <div>
+                  <label class="form-label" style="font-size: 10.5px;">Max Lines</label>
+                  <input type="number" class="form-input" id="pg-res-lines-input" placeholder="e.g. 100">
+                </div>
+                <div>
+                  <label class="form-label" style="font-size: 10.5px;">Max Bytes</label>
+                  <input type="number" class="form-input" id="pg-res-bytes-input" placeholder="e.g. 32768">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Content Output Preview -->
+          <div style="padding: 16px; background: var(--bg-app); display: flex; flex-direction: column; overflow: hidden;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <span style="font-size: 11px; font-weight: 600; color: var(--text-dim);">RESOURCE CONTENT ENVELOPE</span>
+              <span style="font-size: 11px; font-weight: 600; color: ${result ? (result.status === 200 ? 'var(--green-400)' : 'var(--red-400)') : 'var(--text-dim)'}; font-family: var(--ff-mono);">
+                ${result ? `HTTP ${result.status} · ${result.durationMs.toFixed(1)}ms` : 'READY'}
+              </span>
+            </div>
+            <pre style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: var(--cyan-400); font-size: 11.5px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-word;">${result ? escapeHtml(JSON.stringify(result.data, null, 2)) : '// Click "Read Resource Content" to inspect live payload'}</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
 }
+
+function renderPromptsPlayground(state: any): string {
+  const prompts = state.prompts || [];
+  const selectedId = state.selectedPromptId || (prompts.length > 0 ? prompts[0].id : null);
+  const selectedPrompt = prompts.find((p: any) => p.id === selectedId);
+  const result = state.promptGetResult;
+
+  let promptListHtml = '';
+  if (prompts.length === 0) {
+    promptListHtml = `
+      <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
+        No prompt templates registered by connected MCP servers.
+      </div>
+    `;
+  } else {
+    promptListHtml = prompts.map((p: any) => {
+      const active = p.id === selectedId ? 'active' : '';
+      const argCount = p.arguments ? p.arguments.length : 0;
+      return `
+        <div class="cap-item ${active}" onclick="window.app.selectPrompt('${escapeHtml(p.id)}')">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${escapeHtml(p.name || p.id)}</span>
+            <span class="badge" style="font-size: 9.5px; background: rgba(168, 85, 247, 0.15); color: var(--purple-400);">${argCount} args</span>
+          </div>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">${escapeHtml(p.description || p.title || 'Prompt template')}</div>
+          <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">server: ${escapeHtml(p.server || 'local')}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // Dynamic argument form fields
+  let argumentFieldsHtml = '';
+  if (selectedPrompt && selectedPrompt.arguments && selectedPrompt.arguments.length > 0) {
+    argumentFieldsHtml = selectedPrompt.arguments.map((arg: any) => `
+      <div class="form-group" style="margin-bottom: 12px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+          <label class="form-label" style="margin: 0; font-family: var(--ff-mono);">${escapeHtml(arg.name)}</label>
+          ${arg.required ? '<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--red-400); font-size: 9px;">REQUIRED</span>' : '<span style="font-size: 10px; color: var(--text-dim);">optional</span>'}
+        </div>
+        ${arg.description ? `<div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">${escapeHtml(arg.description)}</div>` : ''}
+        <input type="text" class="form-input prompt-arg-input" data-arg-name="${escapeHtml(arg.name)}" placeholder="Enter ${escapeHtml(arg.name)}..." />
+      </div>
+    `).join('');
+  } else if (selectedPrompt) {
+    argumentFieldsHtml = `
+      <div style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: var(--radius-sm); border: 1px solid var(--border); font-size: 11.5px; color: var(--text-dim);">
+        This prompt template does not require any input arguments.
+      </div>
+    `;
+  }
+
+  return `
+    <div style="display: grid; grid-template-columns: 340px 1fr; gap: 16px; height: calc(100vh - 165px);">
+      <!-- Left Sidebar: Prompts Catalog -->
+      <div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); display: flex; flex-direction: column; overflow: hidden;">
+        <div style="padding: 12px; border-bottom: 1px solid var(--border);">
+          <input type="text" class="form-input" placeholder="Search ${prompts.length} prompts..." oninput="window.app.filterPrompts(this.value)">
+        </div>
+        <div style="flex: 1; overflow-y: auto; padding: 8px;" id="pg-prompt-list">
+          ${promptListHtml}
+        </div>
+      </div>
+
+      <!-- Right Panel: Prompt Parameter Binder & Message Envelope Preview -->
+      <div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); display: flex; flex-direction: column; overflow: hidden;">
+        <div style="padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-size: 15px; font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">
+              ${escapeHtml(selectedPrompt ? (selectedPrompt.name || selectedPrompt.id) : 'No Prompt Selected')}
+            </div>
+            <div style="font-size: 11.5px; color: var(--text-dim);">
+              ${escapeHtml(selectedPrompt ? (selectedPrompt.description || selectedPrompt.title || 'Bind variables and render messages') : 'Select a prompt from the list to test')}
+            </div>
+          </div>
+          <button class="btn btn-primary" onclick="window.app.executeGetPrompt()" ${selectedPrompt ? '' : 'disabled'}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+            Render Prompt Messages
+          </button>
+        </div>
+
+        <div style="flex: 1; display: grid; grid-template-columns: 1fr 1fr; overflow: hidden;">
+          <!-- Arguments Form Builder -->
+          <div style="padding: 16px; border-right: 1px solid var(--border); overflow-y: auto;">
+            <div style="font-size: 12px; font-weight: 700; color: var(--text-main); margin-bottom: 12px; text-transform: uppercase;">
+              Template Arguments
+            </div>
+            ${argumentFieldsHtml}
+          </div>
+
+          <!-- Rendered Messages Output -->
+          <div style="padding: 16px; background: var(--bg-app); display: flex; flex-direction: column; overflow: hidden;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <span style="font-size: 11px; font-weight: 600; color: var(--text-dim);">RENDERED PROMPT MESSAGES</span>
+              <span style="font-size: 11px; font-weight: 600; color: ${result ? (result.status === 200 ? 'var(--green-400)' : 'var(--red-400)') : 'var(--text-dim)'}; font-family: var(--ff-mono);">
+                ${result ? `HTTP ${result.status} · ${result.durationMs.toFixed(1)}ms` : 'READY'}
+              </span>
+            </div>
+            <pre style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: #c084fc; font-size: 11.5px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-word;">${result ? escapeHtml(JSON.stringify(result.data, null, 2)) : '// Click "Render Prompt Messages" to view resolved system/user messages'}</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function escapeHtml(str: string): string {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+

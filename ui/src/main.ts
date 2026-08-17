@@ -34,9 +34,12 @@ class WarmplaneApp {
     try {
       const state = store.getState();
       const filters = state.auditFilters;
-      const [configRes, capsRes, apprRes, auditEventsRes, auditStatsRes] = await Promise.all([
+      const [configRes, capsRes, resRes, promptsRes, eventsRes, apprRes, auditEventsRes, auditStatsRes] = await Promise.all([
         api.getConfig(),
         api.listCapabilities(),
+        api.listResources(),
+        api.listPrompts(),
+        api.getCatalogEvents(),
         api.listApprovals(),
         api.listAuditEvents({
           server_id: filters.serverId !== 'all' ? filters.serverId : undefined,
@@ -67,6 +70,24 @@ class WarmplaneApp {
       if (capsRes && Array.isArray(capsRes.capabilities)) {
         store.setState({
           capabilities: capsRes.capabilities
+        });
+      }
+
+      if (resRes && Array.isArray(resRes.resources)) {
+        store.setState({
+          resources: resRes.resources
+        });
+      }
+
+      if (promptsRes && Array.isArray(promptsRes.prompts)) {
+        store.setState({
+          prompts: promptsRes.prompts
+        });
+      }
+
+      if (eventsRes && Array.isArray(eventsRes.events)) {
+        store.setState({
+          catalogEvents: eventsRes.events
         });
       }
 
@@ -448,6 +469,165 @@ class WarmplaneApp {
       if (responseJson) {
         responseJson.textContent = e.toString();
       }
+    }
+  }
+
+  setPlaygroundMode(mode: 'tools' | 'resources' | 'prompts') {
+    store.setState({ playgroundMode: mode });
+  }
+
+  selectResource(id: string) {
+    store.setState({ selectedResourceId: id, resourceReadResult: null });
+  }
+
+  filterResources(query: string) {
+    const q = query.toLowerCase().trim();
+    const all = store.getState().resources || [];
+    const filtered = all.filter(r => 
+      r.id.toLowerCase().includes(q) ||
+      (r.name && r.name.toLowerCase().includes(q)) ||
+      (r.uri && r.uri.toLowerCase().includes(q)) ||
+      (r.server && r.server.toLowerCase().includes(q))
+    );
+    const listEl = document.getElementById('pg-res-list');
+    if (listEl) {
+      if (filtered.length === 0) {
+        listEl.innerHTML = `
+          <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
+            No resources match "${escapeHtml(query)}"
+          </div>
+        `;
+      } else {
+        listEl.innerHTML = filtered.map(r => {
+          const scheme = r.uri ? r.uri.split(':')[0] : 'res';
+          return `
+            <div class="cap-item ${r.id === store.getState().selectedResourceId ? 'active' : ''}" onclick="window.app.selectResource('${escapeHtml(r.id)}')">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${escapeHtml(r.name || r.id)}</span>
+                <span class="badge" style="font-size: 9.5px; background: rgba(56, 189, 248, 0.15); color: var(--cyan-400);">${escapeHtml(scheme)}</span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(r.uri)}</div>
+              <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+                <span>server: ${escapeHtml(r.server || 'local')}</span>
+                <span>${escapeHtml(r.mime_type || 'text/plain')}</span>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+  }
+
+  async executeReadResource() {
+    const state = store.getState();
+    const resId = state.selectedResourceId || (state.resources[0] ? state.resources[0].id : null);
+    if (!resId) return;
+
+    const jsonpath = (document.getElementById('pg-res-jsonpath-input') as HTMLInputElement)?.value.trim() || undefined;
+    const lines = (document.getElementById('pg-res-lines-input') as HTMLInputElement)?.value.trim() || undefined;
+    const bytes = (document.getElementById('pg-res-bytes-input') as HTMLInputElement)?.value.trim() || undefined;
+
+    const reqPayload: any = { resource_id: resId };
+    if (jsonpath) reqPayload['_jsonpath'] = jsonpath;
+    if (lines && !isNaN(Number(lines))) reqPayload['_limit_lines'] = Number(lines);
+    if (bytes && !isNaN(Number(bytes))) reqPayload['_truncate_bytes'] = Number(bytes);
+
+    try {
+      const res = await api.readResource(reqPayload);
+      store.setState({
+        resourceReadResult: {
+          status: res.status,
+          durationMs: res.durationMs,
+          data: res.data
+        }
+      });
+      store.addEventLog('POST', `/v1/resources/read → ${resId}`, res.status === 200 ? '200 OK' : `HTTP ${res.status}`, `${res.durationMs.toFixed(1)}ms`);
+    } catch (e: any) {
+      store.setState({
+        resourceReadResult: {
+          status: 500,
+          durationMs: 0,
+          data: { error: e.toString() }
+        }
+      });
+    }
+  }
+
+  selectPrompt(id: string) {
+    store.setState({ selectedPromptId: id, promptGetResult: null });
+  }
+
+  filterPrompts(query: string) {
+    const q = query.toLowerCase().trim();
+    const all = store.getState().prompts || [];
+    const filtered = all.filter(p => 
+      p.id.toLowerCase().includes(q) ||
+      (p.name && p.name.toLowerCase().includes(q)) ||
+      (p.description && p.description.toLowerCase().includes(q)) ||
+      (p.server && p.server.toLowerCase().includes(q))
+    );
+    const listEl = document.getElementById('pg-prompt-list');
+    if (listEl) {
+      if (filtered.length === 0) {
+        listEl.innerHTML = `
+          <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
+            No prompts match "${escapeHtml(query)}"
+          </div>
+        `;
+      } else {
+        listEl.innerHTML = filtered.map(p => {
+          const argCount = p.arguments ? p.arguments.length : 0;
+          return `
+            <div class="cap-item ${p.id === store.getState().selectedPromptId ? 'active' : ''}" onclick="window.app.selectPrompt('${escapeHtml(p.id)}')">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${escapeHtml(p.name || p.id)}</span>
+                <span class="badge" style="font-size: 9.5px; background: rgba(168, 85, 247, 0.15); color: var(--purple-400);">${argCount} args</span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">${escapeHtml(p.description || p.title || 'Prompt template')}</div>
+              <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">server: ${escapeHtml(p.server || 'local')}</div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+  }
+
+  async executeGetPrompt() {
+    const state = store.getState();
+    const promptId = state.selectedPromptId || (state.prompts[0] ? state.prompts[0].id : null);
+    if (!promptId) return;
+
+    const argInputs = document.querySelectorAll('.prompt-arg-input');
+    const args: Record<string, any> = {};
+    argInputs.forEach((el) => {
+      const input = el as HTMLInputElement;
+      const key = input.getAttribute('data-arg-name');
+      if (key && input.value.trim()) {
+        args[key] = input.value.trim();
+      }
+    });
+
+    try {
+      const res = await api.getPrompt({
+        prompt_id: promptId,
+        arguments: args
+      });
+      store.setState({
+        promptGetResult: {
+          status: res.status,
+          durationMs: res.durationMs,
+          data: res.data
+        }
+      });
+      store.addEventLog('POST', `/v1/prompts/get → ${promptId}`, res.status === 200 ? '200 OK' : `HTTP ${res.status}`, `${res.durationMs.toFixed(1)}ms`);
+    } catch (e: any) {
+      store.setState({
+        promptGetResult: {
+          status: 500,
+          durationMs: 0,
+          data: { error: e.toString() }
+        }
+      });
     }
   }
 
