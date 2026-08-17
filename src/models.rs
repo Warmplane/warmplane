@@ -8,6 +8,7 @@ use crate::config::DEFAULT_CONFIG_PATH;
 #[derive(Parser)]
 #[command(
     name = "warmplane",
+    version,
     about = "The local control plane that keeps MCP sessions warm"
 )]
 pub struct Cli {
