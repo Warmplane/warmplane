@@ -438,7 +438,7 @@ Run single-shot CLI commands for administration, configuration management, appro
 | `server get` | Inspects a single server definition in detail. | `warmplane server get github` |
 | `server test` | Tests upstream reachability, binary path resolution, or HTTP connectivity. | `warmplane server test github` |
 
-#### Configuration, Aliases, Policy, and Reload (`warmplane config` & `warmplane reload`)
+#### Configuration, Aliases, Policy, Resilience, Audit, and Reload (`warmplane config` & `warmplane reload`)
 
 | Command | Description | Example |
 | :--- | :--- | :--- |
@@ -453,6 +453,10 @@ Run single-shot CLI commands for administration, configuration management, appro
 | `config policy require-approval` | Adds capability patterns requiring human operator approval. | `warmplane config policy require-approval "docker.*"` |
 | `config policy redact` | Adds sensitive key names to the payload log redaction list. | `warmplane config policy redact "api_key" "token"` |
 | `config policy show` | Displays active security policy rules and redaction keys. | `warmplane config policy show` |
+| `config resilience set` | Sets global circuit breaker and supervisor parameters. | `warmplane config resilience set --failure-threshold 3 --cooldown-ms 30000 --auto-restart true` |
+| `config resilience show` | Displays active global resilience configuration. | `warmplane config resilience show` |
+| `config audit set` | Configures WORM audit trail logging and SIEM export targets. | `warmplane config audit set --enabled true --file-path warmplane_audit.jsonl --siem-webhook-url https://siem.internal/events` |
+| `config audit show` | Displays active WORM audit logging and SIEM forwarder settings. | `warmplane config audit show` |
 | `config reload` / `reload` | Hot-reloads daemon upstream servers and policies from disk without downtime. | `warmplane reload` |
 
 #### Human-in-the-Loop Approvals (`warmplane approvals`)
@@ -471,7 +475,8 @@ Run single-shot CLI commands for administration, configuration management, appro
 | `list-capabilities` | Lists discovered tools from daemon or config. | `warmplane list-capabilities --port 9090` |
 | `search-capabilities` | Performs hybrid lexical and semantic search over capabilities. | `warmplane search-capabilities "triage logs" --limit 5` |
 | `describe-capability` | Displays full JSON Schema for a capability ID. | `warmplane describe-capability github.issues.search` |
-| `call-capability` | Executes a capability tool with JSON parameters and request context. | `warmplane call-capability db.query --params '{"query":"SELECT 1"}' --request-id req-101 --idempotency-key idem-201` |
+| `call-capability` | Executes a capability tool with context distillation and retry metadata. | `warmplane call-capability db.query --params '{"query":"SELECT 1"}' --jsonpath "$.items[*].name" --limit-lines 20` |
+| `batch-call-capabilities` | Executes a sequential chained batch of capability invocations. | `warmplane batch-call-capabilities --file steps.json` |
 | `list-resources` | Lists registered resources. | `warmplane list-resources --port 9090` |
 | `read-resource` | Reads resource contents by resource ID. | `warmplane read-resource fs.readme` |
 | `list-prompts` | Lists registered prompt templates. | `warmplane list-prompts --port 9090` |

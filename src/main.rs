@@ -107,10 +107,25 @@ async fn main() -> Result<()> {
             actor_id,
             grant_id,
             idempotency_key,
+            jsonpath,
+            limit_lines,
+            truncate_bytes,
         } => {
             let resolved_port = resolve_client_port(port, &config)?;
-            let parsed_params: Value =
+            let mut parsed_params: Value =
                 serde_json::from_str(&params).context("Invalid JSON parameters provided")?;
+
+            if let Some(obj) = parsed_params.as_object_mut() {
+                if let Some(jp) = jsonpath {
+                    obj.insert("_jsonpath".to_string(), Value::String(jp));
+                }
+                if let Some(ll) = limit_lines {
+                    obj.insert("_limit_lines".to_string(), json!(ll));
+                }
+                if let Some(tb) = truncate_bytes {
+                    obj.insert("_truncate_bytes".to_string(), json!(tb));
+                }
+            }
 
             let context = RequestContext {
                 operation_id,
@@ -130,6 +145,40 @@ async fn main() -> Result<()> {
             let client = reqwest::Client::new();
             let res = client
                 .post(format!("http://127.0.0.1:{}/v1/tools/call", resolved_port))
+                .json(&payload)
+                .send()
+                .await?;
+            println!("{}", res.text().await?);
+        }
+        Commands::BatchCallCapabilities {
+            port,
+            config,
+            steps,
+            file,
+        } => {
+            let resolved_port = resolve_client_port(port, &config)?;
+            let steps_json: Value = if let Some(path) = file {
+                let content = std::fs::read_to_string(&path)
+                    .with_context(|| format!("Could not read steps file: {}", path))?;
+                serde_json::from_str(&content).context("Invalid JSON in steps file")?
+            } else if let Some(s) = steps {
+                serde_json::from_str(&s).context("Invalid JSON steps string")?
+            } else {
+                anyhow::bail!("Either --steps '<json>' or --file '<path>' must be provided");
+            };
+
+            let payload = if steps_json.is_array() {
+                json!({ "steps": steps_json })
+            } else {
+                steps_json
+            };
+
+            let client = reqwest::Client::new();
+            let res = client
+                .post(format!(
+                    "http://127.0.0.1:{}/v1/tools/batch_call",
+                    resolved_port
+                ))
                 .json(&payload)
                 .send()
                 .await?;

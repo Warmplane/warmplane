@@ -103,6 +103,28 @@ pub enum Commands {
         grant_id: Option<String>,
         #[arg(long)]
         idempotency_key: Option<String>,
+        /// Filter result payload with JSONPath expression (e.g. "$.items[*].name")
+        #[arg(long)]
+        jsonpath: Option<String>,
+        /// Limit returned output lines
+        #[arg(long)]
+        limit_lines: Option<usize>,
+        /// Truncate returned output byte size
+        #[arg(long)]
+        truncate_bytes: Option<usize>,
+    },
+    /// Execute a chained batch of tool capabilities
+    BatchCallCapabilities {
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+        /// JSON array of step objects, or inline JSON string
+        #[arg(short, long)]
+        steps: Option<String>,
+        /// Path to JSON file containing steps array
+        #[arg(short = 'f', long)]
+        file: Option<String>,
     },
     /// List compact resources from the v1 facade API
     ListResources {
@@ -266,10 +288,96 @@ pub enum ConfigCommands {
         #[command(subcommand)]
         command: PolicyCommands,
     },
+    /// Manage global fault tolerance and process supervision
+    Resilience {
+        #[command(subcommand)]
+        command: ResilienceCommands,
+    },
+    /// Manage WORM audit trail and SIEM exporter settings
+    Audit {
+        #[command(subcommand)]
+        command: AuditCommands,
+    },
     /// Hot-reload daemon configuration and upstream servers from disk
     Reload {
         #[arg(short = 'p', long)]
         port: Option<u16>,
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+}
+
+/// Global resilience and supervisor subcommands.
+#[derive(Subcommand, Debug, Clone)]
+pub enum ResilienceCommands {
+    /// Configure global resilience and circuit breaker settings
+    Set {
+        /// Consecutive failures required to trip circuit to Open
+        #[arg(long)]
+        failure_threshold: Option<u32>,
+        /// Cooldown time in milliseconds in Open state before probe attempts
+        #[arg(long)]
+        cooldown_ms: Option<u64>,
+        /// Consecutive successful probe calls in HalfOpen to reset circuit
+        #[arg(long)]
+        consecutive_successes: Option<u32>,
+        /// Automatically restart crashed stdio child processes
+        #[arg(long)]
+        auto_restart: Option<bool>,
+        /// Maximum restart attempts before giving up
+        #[arg(long)]
+        max_restarts: Option<u32>,
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Show current resilience and supervisor settings
+    Show {
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+}
+
+/// WORM audit logging and SIEM exporter subcommands.
+#[derive(Subcommand, Debug, Clone)]
+pub enum AuditCommands {
+    /// Configure WORM audit logging and SIEM export targets
+    Set {
+        /// Enable or disable audit logging
+        #[arg(long)]
+        enabled: Option<bool>,
+        /// Append-only audit log file path on disk (e.g. warmplane_audit.jsonl)
+        #[arg(long)]
+        file_path: Option<String>,
+        /// Queue buffer capacity
+        #[arg(long)]
+        buffer_capacity: Option<usize>,
+        /// Flush interval in milliseconds
+        #[arg(long)]
+        flush_interval_ms: Option<u64>,
+        /// Maximum batch size
+        #[arg(long)]
+        max_batch_size: Option<usize>,
+        /// Add generic SIEM HTTP Webhook destination URL
+        #[arg(long)]
+        siem_webhook_url: Option<String>,
+        /// SIEM HTTP Webhook Bearer authorization header
+        #[arg(long)]
+        siem_webhook_auth: Option<String>,
+        /// Add Splunk HEC collector endpoint URL
+        #[arg(long)]
+        siem_splunk_url: Option<String>,
+        /// Splunk HEC authentication token
+        #[arg(long)]
+        siem_splunk_token: Option<String>,
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Show current WORM audit logging and SIEM configuration
+    Show {
         /// Path to Warmplane configuration file
         #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
         config: String,
@@ -444,6 +552,21 @@ pub struct ServerAddArgs {
     /// OAuth2 scopes (comma-separated)
     #[arg(long)]
     pub scopes: Option<String>,
+    /// Consecutive failures required to trip circuit to Open
+    #[arg(long)]
+    pub failure_threshold: Option<u32>,
+    /// Cooldown time in milliseconds in Open state before probe attempts
+    #[arg(long)]
+    pub cooldown_ms: Option<u64>,
+    /// Consecutive successful probe calls in HalfOpen to reset circuit
+    #[arg(long)]
+    pub consecutive_successes: Option<u32>,
+    /// Automatically restart crashed stdio child processes
+    #[arg(long)]
+    pub auto_restart: Option<bool>,
+    /// Maximum restart attempts before giving up
+    #[arg(long)]
+    pub max_restarts: Option<u32>,
     /// Force interactive guided setup prompt
     #[arg(short, long)]
     pub interactive: bool,

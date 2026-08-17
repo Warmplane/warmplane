@@ -35,6 +35,11 @@ pub async fn handle_server_command(cmd: ServerCommands) -> Result<()> {
                 client_id,
                 auth_server,
                 scopes,
+                failure_threshold,
+                cooldown_ms,
+                consecutive_successes,
+                auto_restart,
+                max_restarts,
                 interactive,
                 config,
             } = *boxed_args;
@@ -94,6 +99,31 @@ pub async fn handle_server_command(cmd: ServerCommands) -> Result<()> {
                         client_metadata_url: None,
                     });
                 }
+            }
+
+            if failure_threshold.is_some()
+                || cooldown_ms.is_some()
+                || consecutive_successes.is_some()
+                || auto_restart.is_some()
+                || max_restarts.is_some()
+            {
+                let mut res_cfg = crate::circuit_breaker::ResilienceConfig::default();
+                if let Some(ft) = failure_threshold {
+                    res_cfg.failure_threshold = ft;
+                }
+                if let Some(cd) = cooldown_ms {
+                    res_cfg.cooldown_ms = cd;
+                }
+                if let Some(cs) = consecutive_successes {
+                    res_cfg.consecutive_successes = cs;
+                }
+                if let Some(ar) = auto_restart {
+                    res_cfg.auto_restart = ar;
+                }
+                if let Some(mr) = max_restarts {
+                    res_cfg.max_restarts = mr;
+                }
+                server_cfg.resilience = Some(res_cfg);
             }
 
             let mut mcp_config = load_or_default_config(&config)?;
@@ -224,6 +254,16 @@ pub async fn handle_server_command(cmd: ServerCommands) -> Result<()> {
                     if let Some(auth) = &server.auth {
                         println!("  {} {:?}", "Auth:".bold(), auth);
                     }
+                }
+                if let Some(res) = &server.resilience {
+                    println!(
+                        "  {} failure_threshold={}, cooldown_ms={}, auto_restart={}, max_restarts={}",
+                        "Resilience:".bold(),
+                        res.failure_threshold,
+                        res.cooldown_ms,
+                        res.auto_restart,
+                        res.max_restarts
+                    );
                 }
             }
         }
@@ -392,6 +432,12 @@ pub async fn handle_config_command(cmd: ConfigCommands) -> Result<()> {
         ConfigCommands::Policy { command } => {
             handle_policy_command(command)?;
         }
+        ConfigCommands::Resilience { command } => {
+            handle_resilience_command(command)?;
+        }
+        ConfigCommands::Audit { command } => {
+            handle_audit_command(command)?;
+        }
         ConfigCommands::Reload { port, config } => {
             trigger_daemon_reload(port, &config).await?;
         }
@@ -551,6 +597,228 @@ fn handle_alias_command(cmd: AliasCommands) -> Result<()> {
             } else {
                 for (a, t) in &mcp_config.prompt_aliases {
                     println!("  {} -> {}", a.cyan(), t);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Dispatches `warmplane config resilience` subcommands.
+pub fn handle_resilience_command(cmd: crate::models::ResilienceCommands) -> Result<()> {
+    match cmd {
+        crate::models::ResilienceCommands::Set {
+            failure_threshold,
+            cooldown_ms,
+            consecutive_successes,
+            auto_restart,
+            max_restarts,
+            config,
+        } => {
+            let mut mcp_config = load_or_default_config(&config)?;
+            let mut res_cfg = mcp_config.resilience.unwrap_or_default();
+
+            if let Some(ft) = failure_threshold {
+                res_cfg.failure_threshold = ft;
+            }
+            if let Some(cd) = cooldown_ms {
+                res_cfg.cooldown_ms = cd;
+            }
+            if let Some(cs) = consecutive_successes {
+                res_cfg.consecutive_successes = cs;
+            }
+            if let Some(ar) = auto_restart {
+                res_cfg.auto_restart = ar;
+            }
+            if let Some(mr) = max_restarts {
+                res_cfg.max_restarts = mr;
+            }
+
+            mcp_config.resilience = Some(res_cfg.clone());
+            save_config(&config, &mcp_config)?;
+
+            println!(
+                "{} Updated global resilience configuration in {}",
+                "✔".green().bold(),
+                config.bold()
+            );
+            println!(
+                "  • Failure Threshold: {}",
+                res_cfg.failure_threshold.to_string().cyan()
+            );
+            println!("  • Cooldown: {}ms", res_cfg.cooldown_ms.to_string().cyan());
+            println!(
+                "  • Consecutive Successes: {}",
+                res_cfg.consecutive_successes.to_string().cyan()
+            );
+            println!(
+                "  • Auto-Restart: {}",
+                res_cfg.auto_restart.to_string().cyan()
+            );
+            println!(
+                "  • Max Restarts: {}",
+                res_cfg.max_restarts.to_string().cyan()
+            );
+        }
+        crate::models::ResilienceCommands::Show { config } => {
+            let mcp_config = load_or_default_config(&config)?;
+            println!(
+                "{}",
+                "=== Warmplane Global Resilience Settings ===".cyan().bold()
+            );
+            match &mcp_config.resilience {
+                Some(r) => {
+                    println!(
+                        "  • Failure Threshold: {}",
+                        r.failure_threshold.to_string().cyan()
+                    );
+                    println!("  • Cooldown: {}ms", r.cooldown_ms.to_string().cyan());
+                    println!(
+                        "  • Consecutive Successes: {}",
+                        r.consecutive_successes.to_string().cyan()
+                    );
+                    println!("  • Auto-Restart: {}", r.auto_restart.to_string().cyan());
+                    println!("  • Max Restarts: {}", r.max_restarts.to_string().cyan());
+                }
+                None => {
+                    println!("  (using system defaults)");
+                    let d = crate::circuit_breaker::ResilienceConfig::default();
+                    println!("  • Failure Threshold (default): {}", d.failure_threshold);
+                    println!("  • Cooldown (default): {}ms", d.cooldown_ms);
+                    println!(
+                        "  • Consecutive Successes (default): {}",
+                        d.consecutive_successes
+                    );
+                    println!("  • Auto-Restart (default): {}", d.auto_restart);
+                    println!("  • Max Restarts (default): {}", d.max_restarts);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Dispatches `warmplane config audit` subcommands.
+pub fn handle_audit_command(cmd: crate::models::AuditCommands) -> Result<()> {
+    match cmd {
+        crate::models::AuditCommands::Set {
+            enabled,
+            file_path,
+            buffer_capacity,
+            flush_interval_ms,
+            max_batch_size,
+            siem_webhook_url,
+            siem_webhook_auth,
+            siem_splunk_url,
+            siem_splunk_token,
+            config,
+        } => {
+            let mut mcp_config = load_or_default_config(&config)?;
+            let mut audit_cfg = mcp_config
+                .audit
+                .unwrap_or_else(|| crate::config::AuditConfig {
+                    enabled: true,
+                    file_path: Some("warmplane_audit.jsonl".to_string()),
+                    buffer_capacity: Some(10000),
+                    flush_interval_ms: Some(250),
+                    max_batch_size: Some(100),
+                    siem: None,
+                });
+
+            if let Some(en) = enabled {
+                audit_cfg.enabled = en;
+            }
+            if let Some(fp) = file_path {
+                audit_cfg.file_path = Some(fp);
+            }
+            if let Some(bc) = buffer_capacity {
+                audit_cfg.buffer_capacity = Some(bc);
+            }
+            if let Some(fi) = flush_interval_ms {
+                audit_cfg.flush_interval_ms = Some(fi);
+            }
+            if let Some(mbs) = max_batch_size {
+                audit_cfg.max_batch_size = Some(mbs);
+            }
+
+            if let Some(wh_url) = siem_webhook_url {
+                let mut siem = audit_cfg.siem.unwrap_or_default();
+                siem.targets.push(crate::config::SiemTargetConfig::Webhook {
+                    url: wh_url,
+                    auth_header: siem_webhook_auth,
+                    headers: HashMap::new(),
+                });
+                audit_cfg.siem = Some(siem);
+            }
+
+            if let Some(splunk_url) = siem_splunk_url {
+                let token = siem_splunk_token.unwrap_or_default();
+                let mut siem = audit_cfg.siem.unwrap_or_default();
+                siem.targets
+                    .push(crate::config::SiemTargetConfig::SplunkHec {
+                        url: splunk_url,
+                        token,
+                        index: None,
+                        source: Some("warmplane".to_string()),
+                    });
+                audit_cfg.siem = Some(siem);
+            }
+
+            mcp_config.audit = Some(audit_cfg.clone());
+            save_config(&config, &mcp_config)?;
+
+            println!(
+                "{} Updated WORM audit configuration in {}",
+                "✔".green().bold(),
+                config.bold()
+            );
+            println!("  • Enabled: {}", audit_cfg.enabled.to_string().cyan());
+            println!(
+                "  • File Path: {}",
+                audit_cfg.file_path.as_deref().unwrap_or("none").cyan()
+            );
+        }
+        crate::models::AuditCommands::Show { config } => {
+            let mcp_config = load_or_default_config(&config)?;
+            println!(
+                "{}",
+                "=== Warmplane WORM Audit & SIEM Settings ===".cyan().bold()
+            );
+            match &mcp_config.audit {
+                Some(a) => {
+                    println!("  • Enabled: {}", a.enabled.to_string().cyan());
+                    println!(
+                        "  • File Path: {}",
+                        a.file_path.as_deref().unwrap_or("none").cyan()
+                    );
+                    println!(
+                        "  • Buffer Capacity: {}",
+                        a.buffer_capacity.unwrap_or(10000).to_string().cyan()
+                    );
+                    println!(
+                        "  • Flush Interval: {}ms",
+                        a.flush_interval_ms.unwrap_or(250).to_string().cyan()
+                    );
+                    println!(
+                        "  • Max Batch Size: {}",
+                        a.max_batch_size.unwrap_or(100).to_string().cyan()
+                    );
+                    if let Some(ref s) = a.siem {
+                        println!("  • SIEM Targets ({} configured):", s.targets.len());
+                        for t in &s.targets {
+                            match t {
+                                crate::config::SiemTargetConfig::Webhook { url, .. } => {
+                                    println!("    - Webhook: {}", url.cyan());
+                                }
+                                crate::config::SiemTargetConfig::SplunkHec { url, .. } => {
+                                    println!("    - Splunk HEC: {}", url.cyan());
+                                }
+                            }
+                        }
+                    }
+                }
+                None => {
+                    println!("  (audit subsystem disabled / unconfigured)");
                 }
             }
         }
@@ -832,6 +1100,67 @@ mod tests {
         let policy = cfg.policy.unwrap();
         assert_eq!(policy.allow, vec!["github.*", "fetch.*"]);
         assert_eq!(policy.deny, vec!["filesystem.write*"]);
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_resilience_mutation() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("warmplane_resilience_test_{}", std::process::id()));
+        let config_file = temp_dir.join("mcp_servers.json");
+        let cfg_str = config_file.to_str().unwrap().to_string();
+
+        handle_resilience_command(crate::models::ResilienceCommands::Set {
+            failure_threshold: Some(5),
+            cooldown_ms: Some(45000),
+            consecutive_successes: Some(3),
+            auto_restart: Some(false),
+            max_restarts: Some(10),
+            config: cfg_str.clone(),
+        })
+        .unwrap();
+
+        let cfg = load_config(&cfg_str).unwrap();
+        let res = cfg.resilience.unwrap();
+        assert_eq!(res.failure_threshold, 5);
+        assert_eq!(res.cooldown_ms, 45000);
+        assert_eq!(res.consecutive_successes, 3);
+        assert!(!res.auto_restart);
+        assert_eq!(res.max_restarts, 10);
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_audit_mutation() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("warmplane_audit_test_{}", std::process::id()));
+        let config_file = temp_dir.join("mcp_servers.json");
+        let cfg_str = config_file.to_str().unwrap().to_string();
+
+        handle_audit_command(crate::models::AuditCommands::Set {
+            enabled: Some(true),
+            file_path: Some("custom_audit.jsonl".to_string()),
+            buffer_capacity: Some(5000),
+            flush_interval_ms: Some(500),
+            max_batch_size: Some(50),
+            siem_webhook_url: Some("https://siem.test/events".to_string()),
+            siem_webhook_auth: Some("Bearer test-token".to_string()),
+            siem_splunk_url: None,
+            siem_splunk_token: None,
+            config: cfg_str.clone(),
+        })
+        .unwrap();
+
+        let cfg = load_config(&cfg_str).unwrap();
+        let audit = cfg.audit.unwrap();
+        assert!(audit.enabled);
+        assert_eq!(audit.file_path, Some("custom_audit.jsonl".to_string()));
+        assert_eq!(audit.buffer_capacity, Some(5000));
+        assert_eq!(audit.flush_interval_ms, Some(500));
+        assert_eq!(audit.max_batch_size, Some(50));
+        assert_eq!(audit.siem.unwrap().targets.len(), 1);
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }
