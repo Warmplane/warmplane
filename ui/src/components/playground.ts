@@ -59,6 +59,7 @@ export function renderPlayground(): string {
   return `
     ${modeSwitcherHtml}
     ${renderToolsPlayground(state)}
+    ${state.isBatchModalOpen ? renderBatchModal(state) : ''}
   `;
 }
 
@@ -66,6 +67,7 @@ function renderToolsPlayground(state: any): string {
   const caps = state.capabilities || [];
   const selectedId = state.selectedCapabilityId || (caps.length > 0 ? caps[0].id : null);
   const selectedCap = caps.find((c: any) => c.id === selectedId);
+  const isExecuting = !!state.isExecuting;
 
   let capListHtml = '';
   if (caps.length === 0) {
@@ -114,10 +116,26 @@ function renderToolsPlayground(state: any): string {
               ${escapeHtml(selectedCap ? (selectedCap.summary || selectedCap.description) : 'Connect servers to inspect and execute tools')}
             </div>
           </div>
-          <button class="btn btn-primary" onclick="window.app.executePlaygroundTool()" ${selectedCap ? '' : 'disabled'}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-            Execute Capability
-          </button>
+          
+          <div style="display: flex; align-items: center; gap: 10px;">
+            ${isExecuting ? `
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <span class="badge" style="background: rgba(234, 179, 8, 0.15); color: var(--amber-400); font-family: var(--ff-mono); font-size: 11px; padding: 4px 8px; display: inline-flex; align-items: center; gap: 6px;">
+                  <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--amber-400); display: inline-block;"></span>
+                  EXECUTING...
+                </span>
+                <button class="btn btn-danger" style="background: rgba(239, 68, 68, 0.2); color: var(--red-400); border: 1px solid rgba(239, 68, 68, 0.4); padding: 5px 12px; font-size: 11.5px;" onclick="window.app.cancelActiveOperation()">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg>
+                  Cancel Operation
+                </button>
+              </div>
+            ` : `
+              <button class="btn btn-primary" onclick="window.app.executePlaygroundTool()" ${selectedCap ? '' : 'disabled'}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                Execute Capability
+              </button>
+            `}
+          </div>
         </div>
 
         <div style="flex: 1; display: grid; grid-template-columns: 1fr 1fr; overflow: hidden;">
@@ -126,7 +144,7 @@ function renderToolsPlayground(state: any): string {
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
               <label class="form-label" style="margin: 0;">Arguments JSON (Object)</label>
               <div style="display: flex; gap: 8px;">
-                <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 11px;" onclick="window.app.toggleBatchPlayground()">🔄 Batch Mode</button>
+                <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 11px;" onclick="window.app.openBatchModal()">⚡ Visual Pipeline Builder</button>
               </div>
             </div>
             <textarea class="form-textarea" rows="7" id="pg-args-input">${escapeHtml(initialArgs)}</textarea>
@@ -401,6 +419,108 @@ function renderPromptsPlayground(state: any): string {
   `;
 }
 
+function renderBatchModal(state: any): string {
+  const caps = state.capabilities || [];
+  const steps = state.batchSteps || [];
+
+  const stepsHtml = steps.map((step: any, idx: number) => {
+    const optionsHtml = caps.map((c: any) => `
+      <option value="${escapeHtml(c.id)}" ${c.id === step.capability_id ? 'selected' : ''}>
+        ${escapeHtml(c.id)} (${escapeHtml(c.server || 'local')})
+      </option>
+    `).join('');
+
+    return `
+      <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; margin-bottom: 12px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: var(--cyan-400); font-family: var(--ff-mono); font-weight: 700;">STEP ${idx + 1}</span>
+            <span style="font-size: 11px; font-family: var(--ff-mono); color: var(--text-dim);">id: ${escapeHtml(step.id)}</span>
+          </div>
+          <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 11px; color: var(--red-400);" onclick="window.app.removeBatchStep(${idx})">
+            ✕ Remove
+          </button>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 10px;">
+          <div class="form-group" style="margin: 0;">
+            <label class="form-label" style="font-size: 11px;">Target Capability</label>
+            <select class="form-input" style="font-size: 11.5px;" onchange="window.app.updateBatchStepCapability(${idx}, this.value)">
+              <option value="">-- Select Capability --</option>
+              ${optionsHtml}
+            </select>
+          </div>
+          <div style="display: flex; align-items: flex-end; padding-bottom: 6px;">
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-muted); cursor: pointer;">
+              <input type="checkbox" ${step.continue_on_error ? 'checked' : ''} onchange="window.app.updateBatchStepContinueOnError(${idx}, this.checked)" />
+              <span>Continue pipeline on step failure</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin: 0;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <label class="form-label" style="margin: 0; font-size: 11px;">Step Arguments JSON</label>
+            <div style="display: flex; gap: 6px; font-size: 10px; color: var(--cyan-400); font-family: var(--ff-mono);">
+              <span>Helpers:</span>
+              <code style="cursor: pointer; background: rgba(0,0,0,0.3); padding: 1px 4px; border-radius: 2px;" onclick="window.app.appendBatchVariable(${idx}, '\${steps[0].result.id}')">\${steps[0].result.id}</code>
+              <code style="cursor: pointer; background: rgba(0,0,0,0.3); padding: 1px 4px; border-radius: 2px;" onclick="window.app.appendBatchVariable(${idx}, '\${steps[0].result.data}')">\${steps[0].result.data}</code>
+            </div>
+          </div>
+          <textarea 
+            id="batch-step-args-${idx}"
+            class="form-textarea" 
+            rows="3" 
+            style="font-size: 11px; font-family: var(--ff-mono);" 
+            oninput="window.app.updateBatchStepArgs(${idx}, this.value)"
+          >${escapeHtml(step.argsJson)}</textarea>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 24px;">
+      <div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); width: 840px; max-width: 95vw; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
+        <div style="padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-size: 16px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 8px;">
+              <span>⚡ Visual Multi-Step Batch Pipeline Builder</span>
+            </div>
+            <div style="font-size: 11.5px; color: var(--text-dim); margin-top: 2px;">
+              Execute chained MCP tools with variable reference interpolation and fault tolerance.
+            </div>
+          </div>
+          <button class="btn btn-ghost" style="font-size: 16px; padding: 4px 8px;" onclick="window.app.closeBatchModal()">✕</button>
+        </div>
+
+        <div style="flex: 1; overflow-y: auto; padding: 20px;">
+          ${stepsHtml}
+
+          <div style="display: flex; gap: 10px; margin-top: 14px;">
+            <button class="btn btn-ghost" style="font-size: 11.5px;" onclick="window.app.addBatchStep()">
+              + Add Pipeline Step
+            </button>
+          </div>
+        </div>
+
+        <div style="padding: 14px 20px; border-top: 1px solid var(--border); background: var(--bg-app); display: flex; justify-content: space-between; align-items: center;">
+          <div style="font-size: 11.5px; color: var(--text-dim);">
+            ${steps.length} sequential execution steps configured
+          </div>
+          <div style="display: flex; gap: 10px;">
+            <button class="btn btn-ghost" onclick="window.app.closeBatchModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="window.app.executeBatchPipeline()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+              Run Batch Pipeline (${steps.length} Steps)
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function escapeHtml(str: string): string {
   return String(str || '')
     .replace(/&/g, '&amp;')
@@ -408,4 +528,5 @@ function escapeHtml(str: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
 

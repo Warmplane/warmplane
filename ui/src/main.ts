@@ -432,21 +432,22 @@ class WarmplaneApp {
       parsedArgs['_truncate_bytes'] = Number(truncateBytesStr);
     }
 
-    const statusBadge = document.getElementById('pg-status-badge');
-    const responseJson = document.getElementById('pg-response-json');
-    if (statusBadge) {
-      statusBadge.textContent = 'EXECUTING...';
-      statusBadge.style.color = 'var(--amber-400)';
-    }
+    const opReqId = `op-${Date.now()}`;
+    store.setState({ isExecuting: true, activeRequestId: opReqId });
 
     try {
       const res = await api.callCapability({
         capability_id: capId,
         args: parsedArgs,
-        context: contextVal ? { operation_id: contextVal } : undefined,
+        request_id: opReqId,
+        context: {
+          operation_id: contextVal || opReqId,
+        },
       });
 
       store.setState({
+        isExecuting: false,
+        activeRequestId: null,
         executionResult: {
           status: res.status,
           durationMs: res.durationMs,
@@ -462,13 +463,167 @@ class WarmplaneApp {
         }
       });
     } catch (e: any) {
-      if (statusBadge) {
-        statusBadge.textContent = 'ERROR';
-        statusBadge.style.color = 'var(--red-400)';
+      store.setState({
+        isExecuting: false,
+        activeRequestId: null,
+        executionResult: {
+          status: 500,
+          durationMs: 0,
+          data: { error: e.toString() }
+        }
+      });
+    }
+  }
+
+  async cancelActiveOperation() {
+    const state = store.getState();
+    const reqId = state.activeRequestId;
+    if (reqId) {
+      try {
+        await api.cancelOperation(reqId);
+        store.addEventLog('POST', `/v1/operations/${reqId}/cancel`, 'CANCELLED', '0.1ms');
+      } catch (e) {
+        console.error('Failed to cancel operation:', e);
       }
-      if (responseJson) {
-        responseJson.textContent = e.toString();
+    }
+    store.setState({
+      isExecuting: false,
+      activeRequestId: null,
+      executionResult: {
+        status: 499,
+        durationMs: 0,
+        data: {
+          ok: false,
+          cancelled: true,
+          message: `Operation '${reqId || 'unknown'}' cancelled by user.`
+        }
       }
+    });
+  }
+
+  // Visual Multi-Step Batch Pipeline Actions
+  openBatchModal() {
+    const state = store.getState();
+    const caps = state.capabilities || [];
+    let steps = state.batchSteps;
+    if (!steps || steps.length === 0) {
+      steps = [
+        { id: 'step_1', capability_id: caps[0] ? caps[0].id : '', argsJson: '{}', continue_on_error: false },
+        { id: 'step_2', capability_id: caps[1] ? caps[1].id : (caps[0] ? caps[0].id : ''), argsJson: '{\n  "ref_id": "${steps[0].result.id}"\n}', continue_on_error: true }
+      ];
+    }
+    store.setState({ isBatchModalOpen: true, batchSteps: steps });
+  }
+
+  closeBatchModal() {
+    store.setState({ isBatchModalOpen: false });
+  }
+
+  addBatchStep() {
+    const state = store.getState();
+    const steps = [...(state.batchSteps || [])];
+    const caps = state.capabilities || [];
+    steps.push({
+      id: `step_${steps.length + 1}`,
+      capability_id: caps[0] ? caps[0].id : '',
+      argsJson: '{}',
+      continue_on_error: false
+    });
+    store.setState({ batchSteps: steps });
+  }
+
+  removeBatchStep(idx: number) {
+    const state = store.getState();
+    const steps = [...(state.batchSteps || [])];
+    if (steps.length <= 1) {
+      alert('A batch pipeline requires at least one step.');
+      return;
+    }
+    steps.splice(idx, 1);
+    store.setState({ batchSteps: steps });
+  }
+
+  updateBatchStepCapability(idx: number, capId: string) {
+    const state = store.getState();
+    const steps = [...(state.batchSteps || [])];
+    if (steps[idx]) {
+      steps[idx].capability_id = capId;
+      store.setState({ batchSteps: steps });
+    }
+  }
+
+  updateBatchStepArgs(idx: number, argsJson: string) {
+    const state = store.getState();
+    const steps = [...(state.batchSteps || [])];
+    if (steps[idx]) {
+      steps[idx].argsJson = argsJson;
+      // Do not trigger full re-render on every keystroke to preserve focus
+    }
+  }
+
+  updateBatchStepContinueOnError(idx: number, checked: boolean) {
+    const state = store.getState();
+    const steps = [...(state.batchSteps || [])];
+    if (steps[idx]) {
+      steps[idx].continue_on_error = checked;
+      store.setState({ batchSteps: steps });
+    }
+  }
+
+  appendBatchVariable(idx: number, varStr: string) {
+    const textarea = document.getElementById(`batch-step-args-${idx}`) as HTMLTextAreaElement | null;
+    if (textarea) {
+      textarea.value += varStr;
+      this.updateBatchStepArgs(idx, textarea.value);
+    }
+  }
+
+  async executeBatchPipeline() {
+    const state = store.getState();
+    const steps = state.batchSteps || [];
+    const formattedSteps: Array<{ id: string; capability_id: string; args: Record<string, any>; continue_on_error?: boolean }> = [];
+
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      if (!step.capability_id) {
+        alert(`Please select a capability for Step ${i + 1}`);
+        return;
+      }
+      let args = {};
+      try {
+        args = JSON.parse(step.argsJson || '{}');
+      } catch {
+        alert(`Invalid JSON in Step ${i + 1} arguments`);
+        return;
+      }
+      formattedSteps.push({
+        id: step.id || `step_${i + 1}`,
+        capability_id: step.capability_id,
+        args,
+        continue_on_error: step.continue_on_error
+      });
+    }
+
+    store.setState({ isBatchModalOpen: false });
+
+    try {
+      const res = await api.batchCallCapabilities(formattedSteps);
+      store.setState({
+        executionResult: {
+          status: res.status,
+          durationMs: res.durationMs,
+          data: res.data
+        }
+      });
+      store.addEventLog('POST', `/v1/tools/batch_call (${steps.length} steps)`, res.status === 200 ? '200 OK' : `HTTP ${res.status}`, `${res.durationMs.toFixed(1)}ms`);
+    } catch (e: any) {
+      store.setState({
+        executionResult: {
+          status: 500,
+          durationMs: 0,
+          data: { error: e.toString() }
+        }
+      });
     }
   }
 
