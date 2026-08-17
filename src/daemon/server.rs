@@ -128,7 +128,7 @@ pub async fn initialize_state(
     );
 
     for (server_id, srv_cfg) in &config.mcp_servers {
-        state
+        if let Err(e) = state
             .mount_upstream_server(
                 server_id,
                 srv_cfg,
@@ -136,7 +136,30 @@ pub async fn initialize_state(
                 &config.resource_aliases,
                 &config.prompt_aliases,
             )
-            .await?;
+            .await
+        {
+            tracing::warn!(
+                server_id = %server_id,
+                error = %e,
+                "upstream server failed initial mount (operating in degraded mode, supervisor will retry)"
+            );
+
+            // Record degraded status so operators & web UI see the failure reason
+            let mut statuses_guard = state.server_statuses.write().await;
+            statuses_guard.insert(
+                server_id.to_string(),
+                serde_json::json!({
+                    "transport": if srv_cfg.command.is_some() { "stdio" } else { "http" },
+                    "protocol_version": srv_cfg.protocol_version.as_deref().unwrap_or(crate::daemon::DEFAULT_MCP_PROTOCOL_VERSION),
+                    "status": "degraded",
+                    "error": e.to_string()
+                }),
+            );
+
+            // Also keep server config in state so circuit breakers and supervisors can manage it
+            let mut configs_guard = state.server_configs.write().await;
+            configs_guard.insert(server_id.to_string(), srv_cfg.clone());
+        }
     }
 
     Ok(state)

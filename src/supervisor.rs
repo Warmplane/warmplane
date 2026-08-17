@@ -301,10 +301,24 @@ pub async fn spawn_supervised_stdio_server(
     let transport = TokioChildProcess::new(cmd)
         .with_context(|| format!("Failed to spawn process for {}", server_id))?;
 
-    let initial_mcp_client = ()
-        .serve(transport)
-        .await
-        .with_context(|| format!("Failed to negotiate stdio MCP connection for {}", server_id))?;
+    let handshake_timeout = Duration::from_millis(5000);
+    let initial_mcp_client = match timeout(handshake_timeout, ().serve(transport)).await {
+        Ok(Ok(client)) => client,
+        Ok(Err(err)) => {
+            return Err(anyhow::anyhow!(
+                "Failed to negotiate stdio MCP connection for {}: {}",
+                server_id,
+                err
+            ))
+        }
+        Err(_) => {
+            return Err(anyhow::anyhow!(
+                "Stdio MCP connection negotiation for {} timed out after {}ms",
+                server_id,
+                handshake_timeout.as_millis()
+            ))
+        }
+    };
 
     let (initial_caps, initial_res, initial_prompts) = discover_supervisor_items!(
         &initial_mcp_client,
