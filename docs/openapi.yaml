@@ -115,6 +115,23 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
+  /v1/tools/batch_call:
+    post:
+      summary: Execute chained multi-step batch capabilities
+      operationId: batchCallCapabilities
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchCallRequest"
+      responses:
+        "200":
+          description: Batch execution summary response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchCallResponse"
   /v1/resources:
     get:
       summary: List resources
@@ -865,6 +882,34 @@ components:
         upstream_execution_state:
           type: string
           enum: [not_started, completed, unknown]
+    ServerConfig:
+      type: object
+      properties:
+        command:
+          type: [string, "null"]
+        args:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        url:
+          type: [string, "null"]
+        protocolVersion:
+          type: [string, "null"]
+          example: "2026-07-28"
+        allowStateless:
+          type: [boolean, "null"]
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        auth:
+          type: object
+        resilience:
+          $ref: "#/components/schemas/ResilienceConfig"
     UpsertServerRequest:
       type: object
       required: [name, server]
@@ -872,7 +917,7 @@ components:
         name:
           type: string
         server:
-          type: object
+          $ref: "#/components/schemas/ServerConfig"
     ImportConfigRequest:
       type: object
       properties:
@@ -1056,9 +1101,95 @@ components:
                 - APPROVAL_PENDING
                 - APPROVAL_TIMEOUT
                 - APPROVAL_REJECTED
+                - CIRCUIT_OPEN
                 - OPERATION_CANCELLED
                 - INTERNAL_ERROR
             message:
               type: string
             retryable:
               type: boolean
+    ResilienceConfig:
+      type: object
+      properties:
+        failureThreshold:
+          type: integer
+          default: 3
+          description: Consecutive failure threshold before tripping circuit to Open
+        cooldownMs:
+          type: integer
+          default: 30000
+          description: Cooldown duration in milliseconds before testing recovery in HalfOpen
+        consecutiveSuccesses:
+          type: integer
+          default: 2
+          description: Consecutive successful probes in HalfOpen to reset circuit to Closed
+        autoRestart:
+          type: boolean
+          default: true
+          description: Automatically restart crashed stdio child processes
+        maxRestarts:
+          type: integer
+          default: 5
+          description: Maximum restart attempts before giving up
+        healthCheckIntervalSecs:
+          type: [integer, "null"]
+    BatchStep:
+      type: object
+      required: [id, capability_id, args]
+      properties:
+        id:
+          type: string
+          description: Unique step identifier within the batch (e.g. step1)
+        capability_id:
+          type: string
+          description: Capability ID to invoke
+        args:
+          type: object
+          description: Arguments object, supporting $step_id.field reference interpolation
+        continue_on_error:
+          type: boolean
+          default: false
+          description: Whether to continue executing subsequent steps if this step fails
+    BatchCallRequest:
+      type: object
+      required: [steps]
+      properties:
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchStep"
+        request_id:
+          type: [string, "null"]
+        context:
+          $ref: "#/components/schemas/RequestContext"
+    BatchStepResult:
+      type: object
+      required: [id, capability_id, ok, duration_us]
+      properties:
+        id:
+          type: string
+        capability_id:
+          type: string
+        ok:
+          type: boolean
+        data: {}
+        error:
+          type: [string, "null"]
+        duration_us:
+          type: integer
+    BatchCallResponse:
+      type: object
+      required: [ok, trace_id, results, total_duration_us]
+      properties:
+        ok:
+          type: boolean
+        request_id:
+          type: [string, "null"]
+        trace_id:
+          type: string
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchStepResult"
+        total_duration_us:
+          type: integer
