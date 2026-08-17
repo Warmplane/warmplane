@@ -649,6 +649,32 @@ class WarmplaneApp {
           <div style="font-size: 10.5px; color: var(--text-dim); margin-top: 3px;">Executable: <code>${escapeHtml(tmpl.command)}</code></div>
         </div>
         ${envHtml}
+        <details style="margin-top: 14px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px;">
+          <summary style="font-size: 11.5px; font-weight: 600; color: var(--amber-400); cursor: pointer;">
+            🛡️ Fault Tolerance &amp; Process Supervision (Optional)
+          </summary>
+          <div style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <div>
+              <label class="form-label" style="font-size: 10.5px;">Failure Threshold</label>
+              <input type="number" class="form-input" id="cfg-srv-ft" placeholder="3" value="3">
+            </div>
+            <div>
+              <label class="form-label" style="font-size: 10.5px;">Cooldown (ms)</label>
+              <input type="number" class="form-input" id="cfg-srv-cd" placeholder="30000" value="30000">
+            </div>
+            <div>
+              <label class="form-label" style="font-size: 10.5px;">Auto-Restart</label>
+              <select class="form-input" id="cfg-srv-autorestart">
+                <option value="true">Enabled (Default)</option>
+                <option value="false">Disabled</option>
+              </select>
+            </div>
+            <div>
+              <label class="form-label" style="font-size: 10.5px;">Max Restarts</label>
+              <input type="number" class="form-input" id="cfg-srv-maxrestarts" placeholder="5" value="5">
+            </div>
+          </div>
+        </details>
       `;
     }
   }
@@ -687,6 +713,20 @@ class WarmplaneApp {
     };
     if (Object.keys(env).length > 0) {
       payload.env = env;
+    }
+
+    const ftVal = (document.getElementById('cfg-srv-ft') as HTMLInputElement)?.value.trim();
+    const cdVal = (document.getElementById('cfg-srv-cd') as HTMLInputElement)?.value.trim();
+    const autoRestartVal = (document.getElementById('cfg-srv-autorestart') as HTMLSelectElement)?.value;
+    const maxRestartsVal = (document.getElementById('cfg-srv-maxrestarts') as HTMLInputElement)?.value.trim();
+
+    if (ftVal || cdVal || autoRestartVal || maxRestartsVal) {
+      payload.resilience = {
+        failureThreshold: ftVal ? Number(ftVal) : 3,
+        cooldownMs: cdVal ? Number(cdVal) : 30000,
+        autoRestart: autoRestartVal !== 'false',
+        maxRestarts: maxRestartsVal ? Number(maxRestartsVal) : 5
+      };
     }
 
     const res = await api.upsertServer(serverId, payload);
