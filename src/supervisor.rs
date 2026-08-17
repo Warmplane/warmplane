@@ -128,8 +128,14 @@ macro_rules! handle_supervisor_msg {
 
 macro_rules! discover_supervisor_items {
     ($mcp_client:expr, $server_id:expr, $capability_aliases:expr, $resource_aliases:expr, $prompt_aliases:expr) => {{
+        let discovery_timeout = std::time::Duration::from_millis(3000);
         let mut new_capabilities = Vec::new();
-        if let Ok(tools) = $mcp_client.list_tools(Default::default()).await {
+        if let Ok(Ok(tools)) = tokio::time::timeout(
+            discovery_timeout,
+            $mcp_client.list_tools(Default::default()),
+        )
+        .await
+        {
             if let Ok(tools_json) = serde_json::to_value(&tools) {
                 if let Some(tools_array) = tools_json.get("tools").and_then(|t| t.as_array()) {
                     for tool in tools_array {
@@ -170,7 +176,12 @@ macro_rules! discover_supervisor_items {
         }
 
         let mut new_resources = Vec::new();
-        if let Ok(listed_resources) = $mcp_client.list_resources(Default::default()).await {
+        if let Ok(Ok(listed_resources)) = tokio::time::timeout(
+            discovery_timeout,
+            $mcp_client.list_resources(Default::default()),
+        )
+        .await
+        {
             if let Ok(resources_json) = serde_json::to_value(&listed_resources) {
                 if let Some(resource_array) =
                     resources_json.get("resources").and_then(|r| r.as_array())
@@ -216,7 +227,12 @@ macro_rules! discover_supervisor_items {
         }
 
         let mut new_prompts = Vec::new();
-        if let Ok(listed_prompts) = $mcp_client.list_prompts(Default::default()).await {
+        if let Ok(Ok(listed_prompts)) = tokio::time::timeout(
+            discovery_timeout,
+            $mcp_client.list_prompts(Default::default()),
+        )
+        .await
+        {
             if let Ok(prompts_json) = serde_json::to_value(&listed_prompts) {
                 if let Some(prompt_array) = prompts_json.get("prompts").and_then(|p| p.as_array()) {
                     for prompt in prompt_array {
@@ -298,21 +314,46 @@ pub async fn spawn_supervised_stdio_server(
     cmd.args(&srv_cfg.args);
     cmd.envs(&srv_cfg.env);
 
-    let transport = TokioChildProcess::new(cmd)
-        .with_context(|| format!("Failed to spawn process for {}", server_id))?;
+    let transport = TokioChildProcess::new(cmd);
 
-    let initial_mcp_client = ()
-        .serve(transport)
-        .await
-        .with_context(|| format!("Failed to negotiate stdio MCP connection for {}", server_id))?;
-
-    let (initial_caps, initial_res, initial_prompts) = discover_supervisor_items!(
-        &initial_mcp_client,
-        server_id,
-        capability_aliases,
-        resource_aliases,
-        prompt_aliases
-    );
+    let handshake_timeout = Duration::from_millis(5000);
+    let (initial_client_opt, initial_caps, initial_res, initial_prompts) = match transport {
+        Ok(proc) => match timeout(handshake_timeout, ().serve(proc)).await {
+            Ok(Ok(client)) => {
+                let (caps, res, prompts) = discover_supervisor_items!(
+                    &client,
+                    server_id,
+                    capability_aliases,
+                    resource_aliases,
+                    prompt_aliases
+                );
+                (Some(client), caps, res, prompts)
+            }
+            Ok(Err(err)) => {
+                warn!(
+                    server_id = %server_id,
+                    error = %err,
+                    "Failed to negotiate initial stdio MCP handshake; supervisor will retry in background"
+                );
+                (None, Vec::new(), Vec::new(), Vec::new())
+            }
+            Err(_) => {
+                warn!(
+                    server_id = %server_id,
+                    "Stdio MCP handshake timed out after 5000ms; supervisor will retry in background"
+                );
+                (None, Vec::new(), Vec::new(), Vec::new())
+            }
+        },
+        Err(err) => {
+            warn!(
+                server_id = %server_id,
+                error = %err,
+                "Failed to spawn initial stdio child process; supervisor will retry in background"
+            );
+            (None, Vec::new(), Vec::new(), Vec::new())
+        }
+    };
 
     let (tx, mut rx) = mpsc::channel::<ServerMsg>(32);
 
@@ -328,7 +369,7 @@ pub async fn spawn_supervised_stdio_server(
     let state_clone = state.clone();
 
     tokio::spawn(async move {
-        let mut client_opt = Some(initial_mcp_client);
+        let mut client_opt = initial_client_opt;
         let mut restart_count: u32 = 0;
 
         while let Some(msg) = rx.recv().await {
