@@ -128,8 +128,14 @@ macro_rules! handle_supervisor_msg {
 
 macro_rules! discover_supervisor_items {
     ($mcp_client:expr, $server_id:expr, $capability_aliases:expr, $resource_aliases:expr, $prompt_aliases:expr) => {{
+        let discovery_timeout = std::time::Duration::from_millis(3000);
         let mut new_capabilities = Vec::new();
-        if let Ok(tools) = $mcp_client.list_tools(Default::default()).await {
+        if let Ok(Ok(tools)) = tokio::time::timeout(
+            discovery_timeout,
+            $mcp_client.list_tools(Default::default()),
+        )
+        .await
+        {
             if let Ok(tools_json) = serde_json::to_value(&tools) {
                 if let Some(tools_array) = tools_json.get("tools").and_then(|t| t.as_array()) {
                     for tool in tools_array {
@@ -170,7 +176,12 @@ macro_rules! discover_supervisor_items {
         }
 
         let mut new_resources = Vec::new();
-        if let Ok(listed_resources) = $mcp_client.list_resources(Default::default()).await {
+        if let Ok(Ok(listed_resources)) = tokio::time::timeout(
+            discovery_timeout,
+            $mcp_client.list_resources(Default::default()),
+        )
+        .await
+        {
             if let Ok(resources_json) = serde_json::to_value(&listed_resources) {
                 if let Some(resource_array) =
                     resources_json.get("resources").and_then(|r| r.as_array())
@@ -216,7 +227,12 @@ macro_rules! discover_supervisor_items {
         }
 
         let mut new_prompts = Vec::new();
-        if let Ok(listed_prompts) = $mcp_client.list_prompts(Default::default()).await {
+        if let Ok(Ok(listed_prompts)) = tokio::time::timeout(
+            discovery_timeout,
+            $mcp_client.list_prompts(Default::default()),
+        )
+        .await
+        {
             if let Ok(prompts_json) = serde_json::to_value(&listed_prompts) {
                 if let Some(prompt_array) = prompts_json.get("prompts").and_then(|p| p.as_array()) {
                     for prompt in prompt_array {
