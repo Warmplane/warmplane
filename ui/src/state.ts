@@ -20,6 +20,13 @@ export interface AuditFiltersState {
   offset: number;
 }
 
+export interface BatchStepState {
+  id: string;
+  capability_id: string;
+  argsJson: string;
+  continue_on_error: boolean;
+}
+
 export interface AppState {
   configPath: string;
   config: McpConfig;
@@ -40,6 +47,10 @@ export interface AppState {
   selectedResourceId: string | null;
   selectedPromptId: string | null;
   playgroundMode: 'tools' | 'resources' | 'prompts';
+  isExecuting: boolean;
+  activeRequestId: string | null;
+  isBatchModalOpen: boolean;
+  batchSteps: BatchStepState[];
   activeTab: 'overview' | 'servers' | 'playground' | 'approvals' | 'audit' | 'policy' | 'aliases';
   eventLogs: Array<{ time: string; method: string; target: string; status: string; latency: string }>;
   executionResult: { status: number; durationMs: number; data: any } | null;
@@ -83,6 +94,13 @@ class Store {
     selectedResourceId: null,
     selectedPromptId: null,
     playgroundMode: 'tools',
+    isExecuting: false,
+    activeRequestId: null,
+    isBatchModalOpen: false,
+    batchSteps: [
+      { id: 'step_1', capability_id: '', argsJson: '{}', continue_on_error: false },
+      { id: 'step_2', capability_id: '', argsJson: '{}', continue_on_error: true }
+    ],
     activeTab: 'overview',
     eventLogs: [],
     executionResult: null,

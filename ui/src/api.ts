@@ -1,3 +1,28 @@
+export interface CompletionRequest {
+  ref_type: 'prompt' | 'resource' | string;
+  ref_name: string;
+  argument_name: string;
+  argument_value?: string;
+}
+
+export interface CompletionResponse {
+  ok: boolean;
+  trace_id: string;
+  data: {
+    ref_type: string;
+    ref_name: string;
+    argument_name: string;
+    argument_value: string;
+    values: string[];
+    total: number;
+    has_more: boolean;
+  };
+  error?: {
+    code: string;
+    message: string;
+  };
+}
+
 export interface ResourceItem {
   id: string;
   server: string;
@@ -330,6 +355,22 @@ export class WarmplaneClient {
     const durationMs = performance.now() - start;
     const data = await res.json();
     return { status: res.status, durationMs, data };
+  }
+
+  async cancelOperation(id: string): Promise<{ ok: boolean; request_id: string; cancelled: boolean; error?: any }> {
+    const res = await fetch(`${this.baseUrl}/v1/operations/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST'
+    });
+    return res.json();
+  }
+
+  async completeArgument(req: CompletionRequest): Promise<CompletionResponse> {
+    const res = await fetch(`${this.baseUrl}/v1/completion/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req)
+    });
+    return res.json();
   }
 
   async upsertServer(name: string, server: McpServerConfig): Promise<{ ok: boolean; error?: string }> {
