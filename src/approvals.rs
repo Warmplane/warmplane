@@ -317,7 +317,7 @@ impl ApprovalRegistry {
     pub async fn list(&self) -> Vec<PendingApproval> {
         let pending_guard = self.pending.read().await;
         let mut list: Vec<_> = pending_guard.values().cloned().collect();
-        list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        list.sort_by_key(|b| std::cmp::Reverse(b.created_at));
         list
     }
 
