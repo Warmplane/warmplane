@@ -70,6 +70,8 @@ pub struct AppState {
     pub audit_handle: crate::audit::AuditHandle,
     /// Upstream circuit breaker registry for fault tolerance.
     pub circuit_breakers: crate::circuit_breaker::CircuitBreakerRegistry,
+    /// Optional static API bearer token / key for authenticating incoming requests.
+    pub auth_token: Option<String>,
 }
 
 impl AppState {
@@ -103,10 +105,16 @@ pub struct AppStateBuilder {
     audit_store: Option<crate::audit::SharedAuditStore>,
     audit_handle: Option<crate::audit::AuditHandle>,
     circuit_breakers: Option<crate::circuit_breaker::CircuitBreakerRegistry>,
+    auth_token: Option<String>,
 }
 
 #[allow(dead_code)]
 impl AppStateBuilder {
+    /// Sets static auth token for inbound authentication.
+    pub fn auth_token(mut self, token: impl Into<String>) -> Self {
+        self.auth_token = Some(token.into());
+        self
+    }
     /// Sets upstream servers map from raw HashMap.
     pub fn servers(
         mut self,
@@ -336,6 +344,7 @@ impl AppStateBuilder {
             audit_store,
             audit_handle,
             circuit_breakers: self.circuit_breakers.unwrap_or_default(),
+            auth_token: self.auth_token,
         }
     }
 }

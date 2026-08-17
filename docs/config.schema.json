@@ -36,6 +36,18 @@
           "type": "array",
           "items": { "type": "string" },
           "default": []
+        },
+        "requireApproval": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "approvalTimeoutSecs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "webhook": {
+          "$ref": "#/$defs/webhookConfig"
         }
       },
       "additionalProperties": false
@@ -90,6 +102,9 @@
       },
       "additionalProperties": false
     },
+    "resilience": {
+      "$ref": "#/$defs/resilienceConfig"
+    },
     "mcpServers": {
       "type": "object",
       "minProperties": 1,
@@ -100,6 +115,33 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "webhookConfig": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "url": { "type": "string", "format": "uri" },
+        "secret": { "type": "string" },
+        "secretEnv": { "type": "string" },
+        "authHeader": { "type": "string" },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "resilienceConfig": {
+      "type": "object",
+      "properties": {
+        "failureThreshold": { "type": "integer", "minimum": 1, "default": 3 },
+        "cooldownMs": { "type": "integer", "minimum": 1, "default": 30000 },
+        "consecutiveSuccesses": { "type": "integer", "minimum": 1, "default": 2 },
+        "autoRestart": { "type": "boolean", "default": true },
+        "maxRestarts": { "type": "integer", "minimum": 0, "default": 5 },
+        "healthCheckIntervalSecs": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
     "serverConfig": {
       "type": "object",
       "properties": {
@@ -122,6 +164,9 @@
           "additionalProperties": { "type": "string" },
           "default": {}
         },
+        "resilience": {
+          "$ref": "#/$defs/resilienceConfig"
+        },
         "auth": {
           "oneOf": [
             {
@@ -142,6 +187,22 @@
                 "username": { "type": "string" },
                 "password": { "type": "string" },
                 "passwordEnv": { "type": "string" }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["type", "clientId", "authorizationServerUrl"],
+              "properties": {
+                "type": { "const": "oauth2" },
+                "clientId": { "type": "string" },
+                "authorizationServerUrl": { "type": "string", "format": "uri" },
+                "scopes": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "default": []
+                },
+                "clientMetadataUrl": { "type": "string", "format": "uri" }
               },
               "additionalProperties": false
             }

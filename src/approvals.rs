@@ -153,6 +153,11 @@ impl ApprovalRegistry {
 
         {
             let mut pending_guard = self.pending.write().await;
+            if pending_guard.len() > 1000 {
+                pending_guard.retain(|_, v| {
+                    v.status == ApprovalStatus::Pending || now.saturating_sub(v.expires_at) < 3600
+                });
+            }
             pending_guard.insert(id.clone(), approval.clone());
         }
         {
@@ -390,6 +395,174 @@ pub async fn dispatch_webhook(cfg: &WebhookConfig, event_type: &str, approval: &
         }
         Err(e) => {
             error!(url = %cfg.url, error = %e, event = %event_type, "failed to dispatch webhook event");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn test_approval_lifecycle_approve() {
+        let registry = ApprovalRegistry::new();
+        let (id, rx) = registry
+            .create_approval(CreateApprovalRequest {
+                capability_id: "db.delete_table".to_string(),
+                server_id: "postgres".to_string(),
+                args: json!({"table": "users"}),
+                sanitized_args: json!({"table": "users"}),
+                request_id: Some("req-100".to_string()),
+                context: None,
+                timeout_secs: 10,
+                webhook: None,
+            })
+            .await;
+
+        let ticket = registry.get(&id).await.expect("ticket must exist");
+        assert_eq!(ticket.status, ApprovalStatus::Pending);
+
+        let approved = registry
+            .approve(&id, "operator-alice".to_string(), None, None)
+            .await
+            .expect("approve should succeed");
+        assert!(approved);
+
+        let resolution = rx.await.expect("receiver should get resolution");
+        match resolution {
+            ApprovalResolution::Approved {
+                operator,
+                modified_args,
+            } => {
+                assert_eq!(operator, "operator-alice");
+                assert!(modified_args.is_none());
+            }
+            _ => panic!("Expected Approved resolution"),
+        }
+
+        let ticket_after = registry.get(&id).await.expect("ticket must exist");
+        match ticket_after.status {
+            ApprovalStatus::Approved { operator, .. } => {
+                assert_eq!(operator, "operator-alice");
+            }
+            _ => panic!("Expected Approved status"),
+        }
+
+        // Second approval attempt should fail atomically
+        let second = registry
+            .approve(&id, "operator-bob".to_string(), None, None)
+            .await
+            .expect("second action result");
+        assert!(!second);
+    }
+
+    #[tokio::test]
+    async fn test_approval_lifecycle_approve_with_modified_args() {
+        let registry = ApprovalRegistry::new();
+        let (id, rx) = registry
+            .create_approval(CreateApprovalRequest {
+                capability_id: "fs.delete_file".to_string(),
+                server_id: "local_fs".to_string(),
+                args: json!({"path": "/etc/passwd"}),
+                sanitized_args: json!({"path": "/etc/passwd"}),
+                request_id: Some("req-101".to_string()),
+                context: None,
+                timeout_secs: 10,
+                webhook: None,
+            })
+            .await;
+
+        let modified = json!({"path": "/tmp/test.txt"});
+        let approved = registry
+            .approve(
+                &id,
+                "security-admin".to_string(),
+                Some(modified.clone()),
+                None,
+            )
+            .await
+            .expect("approve should succeed");
+        assert!(approved);
+
+        let resolution = rx.await.expect("receiver should get resolution");
+        match resolution {
+            ApprovalResolution::Approved {
+                operator,
+                modified_args,
+            } => {
+                assert_eq!(operator, "security-admin");
+                assert_eq!(modified_args, Some(modified));
+            }
+            _ => panic!("Expected Approved resolution"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_approval_lifecycle_reject() {
+        let registry = ApprovalRegistry::new();
+        let (id, rx) = registry
+            .create_approval(CreateApprovalRequest {
+                capability_id: "k8s.delete_namespace".to_string(),
+                server_id: "k8s_cluster".to_string(),
+                args: json!({"namespace": "production"}),
+                sanitized_args: json!({"namespace": "production"}),
+                request_id: Some("req-102".to_string()),
+                context: None,
+                timeout_secs: 10,
+                webhook: None,
+            })
+            .await;
+
+        let rejected = registry
+            .reject(
+                &id,
+                "sre-lead".to_string(),
+                Some("Forbidden in prod".to_string()),
+                None,
+            )
+            .await
+            .expect("reject should succeed");
+        assert!(rejected);
+
+        let resolution = rx.await.expect("receiver should get resolution");
+        match resolution {
+            ApprovalResolution::Rejected { operator, reason } => {
+                assert_eq!(operator, "sre-lead");
+                assert_eq!(reason, Some("Forbidden in prod".to_string()));
+            }
+            _ => panic!("Expected Rejected resolution"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_approval_timeout_expiration() {
+        let registry = ApprovalRegistry::new();
+        let (id, rx) = registry
+            .create_approval(CreateApprovalRequest {
+                capability_id: "aws.terminate_instance".to_string(),
+                server_id: "aws_srv".to_string(),
+                args: json!({"instance_id": "i-12345"}),
+                sanitized_args: json!({"instance_id": "i-12345"}),
+                request_id: Some("req-103".to_string()),
+                context: None,
+                timeout_secs: 1, // 1 second timeout
+                webhook: None,
+            })
+            .await;
+
+        registry.expire_if_pending(&id).await;
+
+        let resolution = rx.await.expect("channel should receive expired");
+        match resolution {
+            ApprovalResolution::Expired => {}
+            _ => panic!("Expected Expired resolution"),
+        }
+
+        let ticket = registry.get(&id).await.expect("ticket exists");
+        match ticket.status {
+            ApprovalStatus::Expired { .. } => {}
+            _ => panic!("Expected Expired status in ticket"),
         }
     }
 }

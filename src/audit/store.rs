@@ -39,6 +39,9 @@ pub struct AuditQueryFilter {
     pub offset: usize,
 }
 
+/// Maximum number of audit events cached in RAM.
+pub const MAX_IN_MEMORY_AUDIT_EVENTS: usize = 20_000;
+
 /// Append-only audit store protecting log records from retroactive tampering.
 pub struct AuditStore {
     /// In-memory sequential audit log.
@@ -171,6 +174,10 @@ impl AuditStore {
         }
 
         *latest_hash_guard = hash;
+        if events_guard.len() >= MAX_IN_MEMORY_AUDIT_EVENTS {
+            let excess = events_guard.len() - (MAX_IN_MEMORY_AUDIT_EVENTS - 1);
+            events_guard.drain(0..excess);
+        }
         events_guard.push(record.clone());
 
         Ok(record)
@@ -231,6 +238,10 @@ impl AuditStore {
 
             *latest_hash_guard = hash;
             disk_lines.push(serde_json::to_string(&record)?);
+            if events_guard.len() >= MAX_IN_MEMORY_AUDIT_EVENTS {
+                let excess = events_guard.len() - (MAX_IN_MEMORY_AUDIT_EVENTS - 1);
+                events_guard.drain(0..excess);
+            }
             events_guard.push(record.clone());
             out.push(record);
         }

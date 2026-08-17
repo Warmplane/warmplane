@@ -43,7 +43,7 @@ As enterprises deploy autonomous agents in production environments, unmanaged MC
 ### 2.1 Human-in-the-Loop (HITL) Interceptor Engine
 * **Problem:** Autonomous models executing mutating or destructive operations (e.g. dropping database tables, deleting Kubernetes namespaces, submitting PRs, triggering financial workflows) without human oversight.
 * **Solution:** A policy-driven suspension engine that intercepts matching capability invocations, puts them in a pending state, alerts human operators via webhook/UI, and resumes or rejects execution based on cryptographically signed operator decisions.
-* **Detailed Blueprint:** See [HITL Implementation Plan](HITL_PLAN.md).
+* **Detailed Blueprint:** See [HITL Implementation Plan](plans/implemented/HITL_PLAN.md).
 
 ---
 
@@ -62,7 +62,7 @@ As enterprises deploy autonomous agents in production environments, unmanaged MC
   * **Append-Only SQLite / Parquet Log:** Records `request_id`, `actor_id`, `grant_id`, `timestamp`, `capability_id`, `sanitized_args`, `execution_latency_us`, and `status`.
   * **Native SIEM Streaming:** Structured telemetry pipeline exporting audit events over OpenTelemetry (OTLP gRPC), Splunk HEC, Datadog, or AWS CloudWatch.
   * **Compliance UI:** Searchable timeline viewer in the Control Deck with JSON/CSV export capabilities.
-  * **Detailed Blueprint:** See [WORM Audit & SIEM Implementation Plan](plans/WORM_SIEM_PLAN.md).
+  * **Detailed Blueprint:** See [WORM Audit & SIEM Implementation Plan](plans/implemented/WORM_SIEM_PLAN.md).
 
 ---
 
@@ -87,8 +87,8 @@ As enterprises deploy autonomous agents in production environments, unmanaged MC
 
 | Milestone | Feature Pillar | Status | Impact | Complexity | Target Audience |
 | :--- | :--- | :---: | :--- | :--- | :--- |
-| **Phase 1** | **Human-in-the-Loop (HITL) Workflows** | ✅ Released (v0.8.0) | 🟢 Critical | Medium | Security & Compliance Officers |
+| **Phase 1** | **Human-in-the-Loop (HITL) Workflows** | ✅ Released (v0.13.0) | 🟢 Critical | Medium | Security & Compliance Officers |
 | **Phase 2** | **WORM Audit Trail & SIEM Export** | ✅ Released (v0.12.0) | 🟢 High | Low-Medium | SecOps / Enterprise Auditors |
-| **Phase 3** | **Multi-Tenant RBAC & OIDC Auth** | 🔄 Planned | 🟡 High | Medium | Platform Engineers & SREs |
-| **Phase 4** | **Circuit Breaking & Supervision** | 🚀 In Progress (PR #20) | 🟡 High | Medium | AI Platform Teams |
+| **Phase 3** | **Circuit Breaking & Supervision** | ✅ Released (v0.15.0) | 🟡 High | Medium | AI Platform Teams |
+| **Phase 4** | **Multi-Tenant RBAC & OIDC Auth** | 🔄 Planned | 🟡 High | Medium | Platform Engineers & SREs |
 | **Phase 5** | **FinOps Budgeting & Quota Caps** | 🔄 Planned | 🔵 Medium | Low | FinOps & Engineering Leads |

@@ -84,7 +84,9 @@ impl Policy {
     }
 }
 
-/// Matches a string against a simple wildcard expression where `*` denotes prefix/wildcard.
+/// Matches a string against a wildcard expression where `*` denotes wildcards.
+///
+/// Supports prefix (`db.*`), suffix (`*.delete`), infix (`db.*.write`), and substring (`*query*`) patterns.
 ///
 /// # Arguments
 /// * `pattern` - Wildcard pattern string.
@@ -96,8 +98,44 @@ pub fn wildcard_match(pattern: &str, value: &str) -> bool {
     if pattern == "*" {
         return true;
     }
-    if let Some(prefix) = pattern.strip_suffix('*') {
-        return value.starts_with(prefix);
+    if !pattern.contains('*') {
+        return pattern == value;
     }
-    pattern == value
+
+    let parts: Vec<&str> = pattern.split('*').collect();
+    let mut remaining = value;
+
+    // First part must match the start if pattern does not start with '*'
+    if !pattern.starts_with('*') {
+        let first = parts[0];
+        if !remaining.starts_with(first) {
+            return false;
+        }
+        remaining = &remaining[first.len()..];
+    }
+
+    // Last part must match the end if pattern does not end with '*'
+    if !pattern.ends_with('*') {
+        let last = parts[parts.len() - 1];
+        if !remaining.ends_with(last) {
+            return false;
+        }
+        remaining = &remaining[..remaining.len() - last.len()];
+    }
+
+    // Middle parts must appear sequentially in remaining
+    if parts.len() > 2 {
+        for part in &parts[1..parts.len() - 1] {
+            if part.is_empty() {
+                continue;
+            }
+            if let Some(pos) = remaining.find(part) {
+                remaining = &remaining[pos + part.len()..];
+            } else {
+                return false;
+            }
+        }
+    }
+
+    true
 }

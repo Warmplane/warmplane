@@ -163,7 +163,7 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 - **159.8 ns** Idempotent Cache-Hit Deduplication
 - **1.58 µs** SHA-256 Incremental Catalog Version Hashing ($N=10$)
 - **15.9 µs** Filtered Hybrid Capability Search ($N=50$)
-- **371 µs** In-Memory Zero-Allocation Lexical Tag Search across 1,000 Tools
+- **372.1 µs** In-Memory Zero-Allocation Lexical Tag Search across 1,000 Tools
 
 👉 See the complete benchmarks and profiling methodology in [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
@@ -173,24 +173,28 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 
 | Feature | Since | Summary |
 |---------|-------|---------|
+| **Fault Tolerance & Supervision** | v0.15.0 | Supervisor restart loop, configurable circuit breakers, and degraded boot |
+| **Agent Enrichment Suite** | v0.14.0 | Facade search, context distillation (`_jsonpath`/`_limit_lines`), and multi-step batch execution |
+| **HITL Approval Engine** | v0.13.0 | Operator gate approval engine, suspension, argument editing, and HMAC webhook dispatch |
+| **WORM Audit & SIEM** | v0.12.0 | Append-only SHA-256 hash-chained audit logging, verification API, and Splunk/Webhook SIEM export |
 | **Control Deck Web UI** | v0.11.0 | Standalone embedded web dashboard for servers, testing playground, policy & telemetry |
 | **Dynamic Hot-Reloading** | v0.11.0 | Zero-downtime upstream mounting/unmounting, explicit `warmplane reload` & `/v1/config/reload` |
-| **WORM Audit & SIEM** | v0.12.0 | Append-only SHA-256 hash-chained audit logging, verification API, and Splunk/Webhook SIEM export |
 | **CLI Config & Interactive Setup** | v0.10.0 | `warmplane server` & `warmplane config` wizards, atomic JSON writes |
 | **Ecosystem Import** | v0.10.0 | 1-click import from Claude Desktop, Cursor, and Zed settings |
-| **Alias registry** | v0.1 | Short stable aliases over upstream capability IDs |
-| **Compact indexes** | v0.1 | Lazy, token-efficient catalog — detail only on demand |
-| **Policy profiles** | v0.1 | Allow/deny lists, redact keys, role-scoped exposure |
-| **Normalized envelopes** | v0.1 | Consistent result, timeout, and error format across all modes |
-| **Hybrid search** | v0.3 | BM25 lexical + optional ONNX vector search with filters |
-| **Catalog versioning** | v0.4 | SHA-256 `ETag`, `If-None-Match` → `304`, change event feed |
-| **Request context** | v0.5 | `operation_id`, `actor_id`, `grant_id` in envelopes + HTTP header fallback |
-| **Idempotency** | v0.6 | `Idempotency-Key` deduplication — concurrent duplicates share one result |
-| **Cancellation** | v0.6 | `POST /v1/operations/:id/cancel` / `cancel-operation` CLI |
-| **Retry metadata** | v0.6 | `"retry": { "classification": "safe\|unsafe\|idempotent", "state": "…" }` |
 | **MCP 2026-07-28 & MRTR**| v0.9 | Full spec compliance, `rmcp 3.1.2`, cache hints, Multi Round-Trip Requests |
 | **Subscriptions Feed** | v0.9 | `subscriptions_listen` tool & `/v1/resources/updates` SSE feed |
-| **OTLP traces** | v0.1 | OpenTelemetry export, `trace_id` reflected in envelopes |
+| **Semantic Vector Search**| v0.8.0 | FastEmbed ONNX embedding pipeline with cosine ranking |
+| **Pragmatic Rust Architecture** | v0.7.0 | Builder patterns (`M-INIT-BUILDER`), robust panic safety, structured logging |
+| **Idempotency & Retry** | v0.6.0 | `Idempotency-Key` deduplication and structured `"retry"` metadata envelopes |
+| **Cancellation** | v0.6.0 | `POST /v1/operations/:id/cancel` / `cancel-operation` CLI |
+| **Request context** | v0.5.0 | `operation_id`, `actor_id`, `grant_id` in envelopes + HTTP header fallback |
+| **Catalog versioning** | v0.4.0 | SHA-256 `ETag`, `If-None-Match` → `304`, change event feed |
+| **Hybrid search** | v0.3.0 | BM25 lexical + vector search with filters |
+| **Alias registry** | v0.1.0 | Short stable aliases over upstream capability IDs |
+| **Compact indexes** | v0.1.0 | Lazy, token-efficient catalog — detail only on demand |
+| **Policy profiles** | v0.1.0 | Allow/deny lists, redact keys, role-scoped exposure |
+| **Normalized envelopes** | v0.1.0 | Consistent result, timeout, and error format across all modes |
+| **OTLP traces** | v0.1.0 | OpenTelemetry export, `trace_id` reflected in envelopes |
 
 ---
 
@@ -210,6 +214,12 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 - **MCP Facade Hybrid Search:** Exposed `capability_search` tool over MCP stdio facade with keyword, tag, server ID, and execution mode filters.
 - **Context Distillation & Truncation:** Added `_jsonpath`, `_limit_lines`, and `_truncate_bytes` modifiers to `/v1/tools/call` and `capability_call` to protect LLM context windows from oversized outputs.
 - **Multi-Step Chained Batch Calls:** Added `POST /v1/tools/batch_call` and `capabilities_batch_call` for single-roundtrip dependent tool executions with `$step.field` reference interpolation.
+
+### v0.13.0 — Human-in-the-Loop (HITL) Approval Engine & Signed Webhooks
+- **Approval Interceptor:** Policy-driven suspension for sensitive capability calls (`requireApproval`).
+- **Operator REST API:** Endpoints to list (`/v1/approvals`), inspect, approve with modified arguments (`/v1/approvals/:id/approve`), or reject (`/v1/approvals/:id/reject`).
+- **Signed HMAC Webhooks:** Real-time webhook dispatch with SHA-256 HMAC signature headers on approval lifecycle events.
+- **Configurable TTL Expiration:** Automatic timeout expiration (`approvalTimeoutSecs`) returning structured cancellation envelopes.
 
 ### v0.12.0 — Cryptographic WORM Audit Log & SIEM Streaming
 - Append-only linear SHA-256 hash chaining over tool execution and HITL decision events.
@@ -235,6 +245,10 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 - Added `subscriptions_listen` tool to stdio facade and `/v1/resources/updates` SSE stream for real-time notifications.
 - Validated RFC 9207 / SEP-2468 `iss` callback verification for OAuth 2.0 flows.
 
+### v0.8.0 — Semantic Vector Embeddings & FastEmbed ONNX Pipeline
+- Integrated FastEmbed ONNX embedding pipeline with dense cosine vector similarity under optional `--features semantic-search`.
+- Hybrid reciprocal rank fusion combining BM25 keyword matching and dense vector search.
+
 ### v0.7.0 — Pragmatic Rust Modernization & Builder Patterns
 Full adoption of Microsoft's Pragmatic Rust Guidelines (`AGENTS.md`). Implemented `Builder Pattern` (`M-INIT-BUILDER`) for core state (`AppStateBuilder`), search filters (`SearchFilterBuilder`), and request context (`RequestContextBuilder`). Enhanced error safety (`M-PANIC-IS-STOP`), structured logging (`M-LOG-STRUCTURED`), canonical documentation (`M-CANONICAL-DOCS`), and flexible trait interop (`M-IMPL-ASREF`).
 
@@ -248,6 +262,7 @@ Structured `RequestContext` (`operation_id`, `work_item_id`, `actor_id`, `grant_
 SHA-256 catalog version. `ETag` headers on all catalog reads, `If-None-Match` conditional requests returning `304 Not Modified`. `GET /v1/catalog/events` change feed with cursor-based pagination.
 
 ### v0.3.0 — Hybrid Search
+`POST /v1/capabilities/search` with BM25 scoring, optional FastEmbed vector embeddings, tag/server-ID filters, and ranked results.
 `POST /v1/capabilities/search` with BM25 scoring, optional FastEmbed vector embeddings, tag/server-ID filters, and ranked results.
 
 ---
