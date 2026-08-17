@@ -1,7 +1,7 @@
 # Warmplane
 
 > **The local control plane that keeps MCP sessions warm.**  
-> v0.14.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.15.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
 
@@ -195,6 +195,16 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 ---
 
 ## Changelog
+
+### v0.15.0 — Fault Tolerance, Boot Resilience & Control Deck Feature Parity
+- **Boot Resilience & Degraded Startup:** Graceful daemon boot when upstream servers (such as Docker, remote SSE endpoints, or unconfigured tools) fail or timeout. Failed servers are flagged as `degraded` without crashing the daemon or blocking other healthy upstreams.
+- **Process Supervisor & Circuit Breakers:** Per-server and global circuit breakers (`failureThreshold`, `cooldownMs`, `autoRestart`, `maxRestarts`) with state tracking (`CLOSED`, `OPEN`, `HALF-OPEN`) and exponential backoff restart supervision.
+- **Full Web UI Feature Parity:** 
+  - Server Hub: Server card edit workflow (`✏️ Edit`), live circuit breaker telemetry badges, and server resilience indicators.
+  - Template Wizard: Fault tolerance and supervisor configuration accordion directly inside 1-click curated server setup.
+  - Interactive Playground: Context distillation controls (`_jsonpath`, `_limit_lines`, `_truncate_bytes`) and execution latency measurements.
+  - Responsive Bento-Grid overview cards with real-time health indicator dots (`connected` 🟢, `degraded` 🟡, `error` 🔴).
+- **CLI Resilience Configuration:** `warmplane config resilience set` and `warmplane config resilience show` for headless circuit breaker management.
 
 ### v0.14.0 — Agent Enrichment Suite: Facade Search, Context Distillation & Multi-Step Batching
 - **MCP Facade Hybrid Search:** Exposed `capability_search` tool over MCP stdio facade with keyword, tag, server ID, and execution mode filters.
