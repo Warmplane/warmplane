@@ -792,9 +792,33 @@ curl -s "http://127.0.0.1:9090/v1/audit/export?format=jsonl" -o audit_export.jso
 
 ---
 
-## 7. Enterprise Operations and Observability
+## 7. Enterprise Operations, UI, and Observability
 
-### 7.1 Health Probes
+### 7.1 Control Deck Web UI Guide
+
+The Control Deck is an embedded, zero-dependency management dashboard served at `http://127.0.0.1:9090/ui` and `http://127.0.0.1:9090/`.
+
+#### Navigation & Views
+
+1. **Overview Cockpit (`#overview`)**:
+   - Live metrics summary: Token savings rate, ETag cache hit rate, active upstreams, and execution latency.
+   - Connected upstreams status grid with real-time health indicator dots (`connected` 🟢, `degraded` 🟡, `disconnected`/`error` 🔴).
+   - Live control plane event stream with millisecond latency timings.
+2. **Server Hub (`#servers`)**:
+   - Displays all registered upstream MCP servers with transport type (`stdio` or `http / sse`), executable/URL, live circuit breaker badges (`CLOSED`, `OPEN`, `HALF-OPEN`), and resilience policies (`failureThreshold`, `cooldownMs`, `autoRestart`).
+   - Server lifecycle actions: **`✏️ Edit`** (reconfigures transport, args, env, and resilience parameters), **`Remove`**, and **`⟳ Reload Config`**.
+   - Global header actions: **`Import Config`** (1-click sync from Claude Desktop, Cursor, Zed), **`+ Add Custom`**, and **`✨ Browse Templates`** (25 curated 1-click server templates with configurable credentials).
+3. **Capability Catalog & Interactive Playground (`#playground`)**:
+   - Full catalog search and discovery by keyword, tag, or server ID.
+   - Interactive testing console with parameter form generator, context distillation inputs (`_jsonpath`, `_limit_lines`, `_truncate_bytes`), and raw JSON response viewer with latency timings.
+4. **Policy & Redaction Rules (`#policy`)**:
+   - Visual allow/deny list rule builder and sensitive payload key redaction management.
+5. **Alias Registry (`#aliases`)**:
+   - Capability, resource, and prompt alias mappings for LLM token optimization.
+6. **WORM Audit Log (`#audit`)**:
+   - Paginated tamper-evident audit viewer with 1-click cryptographic SHA-256 hash chain verification and export (`JSONL`/`CSV`).
+
+### 7.2 Health Probes
 
 Use the `/v1/capabilities` endpoint for HTTP readiness and liveness checks:
 
@@ -802,7 +826,7 @@ Use the `/v1/capabilities` endpoint for HTTP readiness and liveness checks:
 curl -sf http://127.0.0.1:9090/v1/capabilities >/dev/null || exit 1
 ```
 
-### 7.2 OpenTelemetry (OTLP) Tracing
+### 7.3 OpenTelemetry (OTLP) Tracing
 
 Warmplane includes native OpenTelemetry tracing via OTLP gRPC export.
 
