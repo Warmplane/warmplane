@@ -346,8 +346,10 @@ warmplane mcp-server --config mcp_servers.json
 Warmplane exposes lightweight synthetic tools to keep LLM context token usage minimal:
 
 - `capabilities_list`: List compact capability index.
+- `capability_search`: Search capabilities using hybrid lexical BM25 and semantic vector matching with tag/mode filters.
 - `capability_describe`: Fetch full input JSON schema for a capability.
-- `capability_call`: Invoke a capability tool with normalized response envelopes and MRTR support.
+- `capability_call`: Invoke a capability tool with normalized response envelopes, context distillation (`_jsonpath`, `_limit_lines`, `_truncate_bytes`), and MRTR support.
+- `capabilities_batch_call`: Execute multiple sequential capability steps with `$step.field` reference interpolation in a single round-trip.
 - `resources_list`: List compact resource index.
 - `resource_read`: Read upstream resource contents.
 - `prompts_list`: List compact prompt template index.
@@ -425,7 +427,8 @@ All HTTP API endpoints return standard JSON response envelopes.
 | `GET` | `/v1/capabilities` | List compact capability index with `ttl_ms` and `cache_scope` hints. | Yes |
 | `POST` | `/v1/capabilities/search` | Search capabilities via hybrid lexical and semantic ranking. | Yes |
 | `GET` | `/v1/capabilities/:id` | Fetch full input JSON Schema for a specific capability. | Yes |
-| `POST` | `/v1/tools/call` | Execute an upstream tool call with retry and approval handling. | No |
+| `POST` | `/v1/tools/call` | Execute an upstream tool call with retry, approval handling, and optional context distillation (`_jsonpath`, `_limit_lines`, `_truncate_bytes`). | No |
+| `POST` | `/v1/tools/batch_call` | Execute multiple chained capability steps sequentially with variable interpolation. | No |
 | `GET` | `/v1/resources` | List compact resource index with `ttl_ms` and `cache_scope` hints. | Yes |
 | `POST` | `/v1/resources/read` | Read content of an upstream resource URI. | No |
 | `GET` | `/v1/prompts` | List compact prompt index with `ttl_ms` and `cache_scope` hints. | Yes |
@@ -502,7 +505,58 @@ Perform hybrid search combining BM25 lexical ranking and optional FastEmbed vect
 
 ---
 
-### 6.3 Idempotency and Deduplication
+### 6.3 Context Distillation & Truncation
+
+To protect LLM context windows from large tool outputs (e.g. multi-megabyte DB dumps or long log files), Warmplane provides built-in distillation modifiers directly in the invocation payload or MCP arguments:
+
+- `_jsonpath`: Dot-notation and wildcard property selector (e.g., `$.items[*].id` or `user.profile.email`).
+- `_limit_lines`: Truncates multiline string or array outputs to `N` items with an explicit `[... truncated N lines by Warmplane]` marker.
+- `_truncate_bytes`: Enforces a maximum byte-budget limit on the output payload.
+
+**Example Distilled Invocation:**
+
+```bash
+curl -X POST http://127.0.0.1:9090/v1/tools/call \
+  -H "Content-Type: application/json" \
+  -d '{
+    "capability_id": "sqlite.read_query",
+    "args": {
+      "query": "SELECT * FROM large_table LIMIT 1000",
+      "_jsonpath": "$.records[*].name",
+      "_limit_lines": 20
+    }
+  }'
+```
+
+---
+
+### 6.4 Multi-Step Chained Batch Execution (`POST /v1/tools/batch_call`)
+
+Agents can execute multiple dependent tool calls in a single network round-trip using variable reference interpolation (`$step_id.path`):
+
+```bash
+curl -X POST http://127.0.0.1:9090/v1/tools/batch_call \
+  -H "Content-Type: application/json" \
+  -d '{
+    "steps": [
+      {
+        "id": "step1",
+        "capability_id": "db.get_customer",
+        "args": { "customer_id": "cust_123" }
+      },
+      {
+        "id": "step2",
+        "capability_id": "stripe.get_invoice",
+        "args": { "invoice_id": "$step1.latest_invoice_id" },
+        "continue_on_error": false
+      }
+    ]
+  }'
+```
+
+---
+
+### 6.5 Idempotency and Deduplication
 
 To prevent duplicate execution during network retries or concurrent agent calls, pass an `Idempotency-Key` header or `idempotency_key` field in the payload envelope.
 
@@ -524,7 +578,7 @@ curl -X POST http://127.0.0.1:9090/v1/tools/call \
 
 ---
 
-### 6.4 Response Envelope and Multi Round-Trip Requests (MRTR)
+### 6.6 Response Envelope and Multi Round-Trip Requests (MRTR)
 
 Tool execution, resource reading, and prompt fetching return normalized execution envelopes:
 
@@ -575,7 +629,7 @@ Warmplane natively supports MRTR resumption. Clients pass `input_responses` (map
 
 ---
 
-### 6.5 Standard Error Codes
+### 6.7 Standard Error Codes
 
 When `ok` is `false`, the envelope provides a structured error object (`error.code` and `error.message`):
 
@@ -597,7 +651,7 @@ When `ok` is `false`, the envelope provides a structured error object (`error.co
 
 ---
 
-### 6.6 WORM Audit Trail and SIEM API
+### 6.8 WORM Audit Trail and SIEM API
 
 Warmplane provides enterprise audit query, cryptographic hash chain verification, and telemetry export APIs.
 

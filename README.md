@@ -1,7 +1,7 @@
 # Warmplane
 
 > **The local control plane that keeps MCP sessions warm.**  
-> v0.13.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.14.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
 
@@ -83,7 +83,8 @@ Key endpoints:
 | `GET` | `/v1/capabilities` | Compact capability index |
 | `POST` | `/v1/capabilities/search` | Hybrid lexical + semantic search |
 | `GET` | `/v1/capabilities/:id` | On-demand capability detail |
-| `POST` | `/v1/tools/call` | Normalized execution envelope |
+| `POST` | `/v1/tools/call` | Normalized execution envelope (supports `_jsonpath`, `_limit_lines`, `_truncate_bytes`) |
+| `POST` | `/v1/tools/batch_call` | Chained multi-step execution with `$step.field` reference interpolation |
 | `GET` | `/v1/resources` | Resource index |
 | `POST` | `/v1/resources/read` | Read resource |
 | `GET` | `/v1/prompts` | Prompt index |
@@ -97,7 +98,7 @@ Key endpoints:
 warmplane mcp-server --config mcp_servers.json
 ```
 
-Point any MCP-native client at this process. It exposes lightweight facade tools (`capabilities_list`, `capability_call`, `resource_read`, `prompt_get`, …) alongside native `resources/*` and `prompts/*` methods.
+Point any MCP-native client at this process. It exposes lightweight facade tools (`capabilities_list`, `capability_search`, `capability_describe`, `capability_call`, `capabilities_batch_call`, `resource_read`, `prompt_get`, …) alongside native `resources/*` and `prompts/*` methods.
 
 Claude Desktop / Cursor config:
 
@@ -118,9 +119,11 @@ Claude Desktop / Cursor config:
 # Interactive server setup wizard
 warmplane server add
 
-# Add stdio or HTTP upstream servers non-interactively
-warmplane server add github --command npx --arg "-y" --arg "@modelcontextprotocol/server-github"
-warmplane server add context7 --url "https://mcp.context7.ai/sse" --bearer-env "CONTEXT7_API_KEY"
+# Import settings from Claude Desktop or Cursor
+warmplane config import
+
+# Hot-reload in-memory workers from mcp_servers.json without restarting
+warmplane reload
 
 # Inspect & test servers
 warmplane server list
@@ -192,6 +195,15 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 ---
 
 ## Changelog
+
+### v0.14.0 — Agent Enrichment Suite: Facade Search, Context Distillation & Multi-Step Batching
+- **MCP Facade Hybrid Search:** Exposed `capability_search` tool over MCP stdio facade with keyword, tag, server ID, and execution mode filters.
+- **Context Distillation & Truncation:** Added `_jsonpath`, `_limit_lines`, and `_truncate_bytes` modifiers to `/v1/tools/call` and `capability_call` to protect LLM context windows from oversized outputs.
+- **Multi-Step Chained Batch Calls:** Added `POST /v1/tools/batch_call` and `capabilities_batch_call` for single-roundtrip dependent tool executions with `$step.field` reference interpolation.
+
+### v0.12.0 — Cryptographic WORM Audit Log & SIEM Streaming
+- Append-only linear SHA-256 hash chaining over tool execution and HITL decision events.
+- Audit verification and export endpoints (`/v1/audit/...`), Splunk HEC and generic Webhook ingestion.
 
 ### v0.11.0 — Control Deck Web UI & Dynamic Upstream Hot-Reloading
 - **Control Deck Web UI:** Embedded zero-dependency web dashboard at `/ui` and `/` with live telemetry, server manager, interactive tool playground, policy/redaction manager, and alias registry.

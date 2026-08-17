@@ -46,11 +46,12 @@ This paper contributes:
 2. A deterministic execution model across Web UI, CLI, HTTP REST, and MCP-native client modes.
 3. A Human-in-the-Loop governance model providing non-blocking suspension, parameter modification, and signed webhook notifications for sensitive capability execution.
 4. A Write-Once-Read-Many (WORM) cryptographic audit log architecture guaranteeing tamper-evident traceability and seamless SIEM forwarding.
-5. A reproducible token-efficiency evaluation harness and measured baselines across real-world workloads.
-6. Micro-benchmark profiling demonstrating sub-microsecond control-plane overheads.
-7. A hybrid BM25 and ONNX vector search engine for sub-linear capability discovery over dense catalogs.
-8. A deterministic catalog digest model for conditional cache revalidation (`304 Not Modified`) and cursor-based event feeds.
-9. An execution governance framework providing multi-tenant request context propagation, idempotency deduplication, retry safety classification, and active in-flight operation cancellation.
+5. In-flight context distillation (`_jsonpath`, `_limit_lines`, `_truncate_bytes`) and multi-step chained batch execution with reference interpolation (`$step.field`).
+6. A reproducible token-efficiency evaluation harness and measured baselines across real-world workloads.
+7. Micro-benchmark profiling demonstrating sub-microsecond control-plane overheads.
+8. A hybrid BM25 and ONNX vector search engine for sub-linear capability discovery over dense catalogs across HTTP and MCP facade interfaces.
+9. A deterministic catalog digest model for conditional cache revalidation (`304 Not Modified`) and cursor-based event feeds.
+10. An execution governance framework providing multi-tenant request context propagation, idempotency deduplication, retry safety classification, and active in-flight operation cancellation.
 
 ---
 
@@ -138,6 +139,8 @@ Warmplane consists of five major components:
    - Evaluates Human-in-the-Loop (HITL) approval rules (`requireApproval`) and manages suspension states.
    - Applies payload redaction keys in logs and trace spans.
    - Standardizes response envelopes with **Request Context** (`operation_id`, `actor_id`, `grant_id`, `work_item_id`) and **Retry Governance** (`safe|unsafe|idempotent` classification).
+   - In-flight **Context Distillation & Truncation** (`_jsonpath`, `_limit_lines`, `_truncate_bytes`) reducing agent context token consumption.
+   - Multi-step **Chained Batch Execution** (`POST /v1/tools/batch_call`, `capabilities_batch_call`) with `$step.field` reference interpolation.
    - Supports **Multi Round-Trip Requests (MRTR)** with `input_responses` and `request_state` propagation for interactive approvals and missing input elicitation.
 
 4. **Idempotency and Operations Manager**
@@ -152,9 +155,9 @@ Warmplane consists of five major components:
 
 6. **Access Modes**
    - Embedded Control Deck Web UI (`/ui` and `/`).
-   - HTTP `/v1` facade (exposing capabilities, hybrid search, catalog events, approvals, WORM audit verification/export, operation cancellation, SSE resource updates, argument completion, sampling, resources, and prompts).
+   - HTTP `/v1` facade (exposing capabilities, hybrid search, tool execution, batch calls, catalog events, approvals, WORM audit verification/export, operation cancellation, SSE resource updates, argument completion, sampling, resources, and prompts).
    - CLI facade (`warmplane server`, `config`, `approvals`, `search-capabilities`, `list-catalog-events`, `cancel-operation`).
-   - MCP stdio server mode exposing lightweight synthetic tools (`subscriptions_listen`, `completion_complete`, etc.) and native resources/prompts methods.
+   - MCP stdio server mode exposing lightweight synthetic tools (`capability_search`, `capabilities_batch_call`, `subscriptions_listen`, `completion_complete`, etc.) and native resources/prompts methods.
 
 ### 3.2 Transport Model
 

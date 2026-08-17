@@ -1220,7 +1220,7 @@ mod tests {
             .into_iter()
             .map(|t| t.name.to_string())
             .collect::<Vec<_>>();
-        assert_eq!(names.len(), 10);
+        assert_eq!(names.len(), 11);
         assert!(names.contains(&"capabilities_list".to_string()));
         assert!(names.contains(&"capability_search".to_string()));
         assert!(names.contains(&"capability_describe".to_string()));
