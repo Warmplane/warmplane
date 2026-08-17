@@ -9,7 +9,10 @@ use rmcp::{
     ServiceExt,
 };
 use serde_json::{json, Value};
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 use tokio::{process::Command, sync::mpsc, time::timeout};
 use tracing::{error, info, warn};
 
@@ -371,6 +374,8 @@ pub async fn spawn_supervised_stdio_server(
     tokio::spawn(async move {
         let mut client_opt = initial_client_opt;
         let mut restart_count: u32 = 0;
+        let mut last_restart_time: Option<Instant> = None;
+        const STABLE_UPTIME_WINDOW: Duration = Duration::from_secs(60);
 
         while let Some(msg) = rx.recv().await {
             let mut is_alive = false;
@@ -394,8 +399,16 @@ pub async fn spawn_supervised_stdio_server(
 
             // Attempt reconnection if process died
             if !is_alive && client_opt.is_none() && resilience_cfg.auto_restart {
+                let now = Instant::now();
+                if let Some(last_time) = last_restart_time {
+                    if now.duration_since(last_time) >= STABLE_UPTIME_WINDOW {
+                        restart_count = 0;
+                    }
+                }
+
                 if restart_count < resilience_cfg.max_restarts {
                     restart_count += 1;
+                    last_restart_time = Some(now);
                     let backoff_ms = calculate_backoff_ms(restart_count);
                     warn!(
                         server_id = %server_id_owned,
@@ -418,6 +431,9 @@ pub async fn spawn_supervised_stdio_server(
                                 "supervisor successfully restarted stdio child process"
                             );
 
+                            // Actively reset circuit breaker upon successful recovery
+                            state_clone.circuit_breakers.reset(&server_id_owned).await;
+
                             let (new_caps, new_res, new_prompts) = discover_supervisor_items!(
                                 &new_client,
                                 &server_id_owned,
@@ -436,7 +452,6 @@ pub async fn spawn_supervised_stdio_server(
                             .await;
 
                             client_opt = Some(new_client);
-                            restart_count = 0;
                         } else {
                             error!(
                                 server_id = %server_id_owned,
@@ -470,6 +485,8 @@ fn is_connection_closed_error(err: &str) -> bool {
         || lower.contains("connection reset")
         || lower.contains("transport closed")
         || lower.contains("child process exited")
+        || lower.contains("io error")
+        || lower.contains("unexpected eof")
 }
 
 fn calculate_backoff_ms(restart_count: u32) -> u64 {
@@ -486,22 +503,52 @@ async fn reconcile_restarted_catalog(
     new_prompts: Vec<(String, PromptMeta)>,
 ) {
     {
+        let new_cap_map: HashMap<String, CapabilityMeta> = new_capabilities.into_iter().collect();
         let mut caps_guard = state.capabilities.write().await;
-        for (id, meta) in new_capabilities {
+        let stale_keys: Vec<String> = caps_guard
+            .iter()
+            .filter(|(id, meta)| meta.server == server_id && !new_cap_map.contains_key(*id))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for k in stale_keys {
+            caps_guard.remove(&k);
+            state.event_store.record("capability", &k, "removed");
+        }
+        for (id, meta) in new_cap_map {
             caps_guard.insert(id.clone(), meta);
             state.event_store.record("capability", &id, "added");
         }
     }
     {
+        let new_res_map: HashMap<String, ResourceMeta> = new_resources.into_iter().collect();
         let mut res_guard = state.resources.write().await;
-        for (id, meta) in new_resources {
+        let stale_keys: Vec<String> = res_guard
+            .iter()
+            .filter(|(id, meta)| meta.server == server_id && !new_res_map.contains_key(*id))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for k in stale_keys {
+            res_guard.remove(&k);
+            state.event_store.record("resource", &k, "removed");
+        }
+        for (id, meta) in new_res_map {
             res_guard.insert(id.clone(), meta);
             state.event_store.record("resource", &id, "added");
         }
     }
     {
+        let new_prompt_map: HashMap<String, PromptMeta> = new_prompts.into_iter().collect();
         let mut prompts_guard = state.prompts.write().await;
-        for (id, meta) in new_prompts {
+        let stale_keys: Vec<String> = prompts_guard
+            .iter()
+            .filter(|(id, meta)| meta.server == server_id && !new_prompt_map.contains_key(*id))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for k in stale_keys {
+            prompts_guard.remove(&k);
+            state.event_store.record("prompt", &k, "removed");
+        }
+        for (id, meta) in new_prompt_map {
             prompts_guard.insert(id.clone(), meta);
             state.event_store.record("prompt", &id, "added");
         }

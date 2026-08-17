@@ -34,3 +34,8 @@ jobs:
 
       - name: Run Tests
         run: cargo test --all-targets
+
+      - name: Security Audit (cargo-audit)
+        uses: rustsec/audit-check@v1.4.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::audit::chain::{compute_event_hash, verify_record_hash, GENESIS_HASH};
+use crate::audit::chain::{compute_event_hash_with_key, verify_record_hash_with_key, GENESIS_HASH};
 use crate::audit::models::{AuditEvent, AuditEventType, RawAuditEvent, VerificationReport};
 
 /// Query filter options for searching audit events.
@@ -52,16 +52,24 @@ pub struct AuditStore {
     counter: AtomicU64,
     /// Optional file path for appending serialized audit log entries (JSONL).
     file_path: Option<PathBuf>,
+    /// Optional HMAC key for calculating keyed audit event digests.
+    hmac_key: Option<Vec<u8>>,
 }
 
 impl AuditStore {
     /// Creates an empty in-memory audit store.
     pub fn in_memory() -> Self {
+        Self::in_memory_with_key(None)
+    }
+
+    /// Creates an empty in-memory audit store with an optional HMAC key.
+    pub fn in_memory_with_key(hmac_key: Option<Vec<u8>>) -> Self {
         Self {
             events: RwLock::new(Vec::new()),
             latest_hash: RwLock::new(GENESIS_HASH.to_string()),
             counter: AtomicU64::new(1),
             file_path: None,
+            hmac_key,
         }
     }
 
@@ -74,6 +82,14 @@ impl AuditStore {
     /// # Errors
     /// Returns an error if the file exists and its hash chain is corrupted or cannot be read.
     pub fn open_or_create(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_or_create_with_key(path, None)
+    }
+
+    /// Initializes an audit store backed by an append-only JSONL file on disk with an optional HMAC key.
+    pub fn open_or_create_with_key(
+        path: impl AsRef<Path>,
+        hmac_key: Option<Vec<u8>>,
+    ) -> Result<Self> {
         let path_buf = path.as_ref().to_path_buf();
         let mut events = Vec::new();
         let mut latest_hash = GENESIS_HASH.to_string();
@@ -99,7 +115,7 @@ impl AuditStore {
                         event.prev_hash
                     );
                 }
-                if !verify_record_hash(&event) {
+                if !verify_record_hash_with_key(&event, hmac_key.as_deref()) {
                     anyhow::bail!("Tampered audit record detected at event ID '{}'", event.id);
                 }
 
@@ -114,6 +130,7 @@ impl AuditStore {
             latest_hash: RwLock::new(latest_hash),
             counter: AtomicU64::new(max_seq + 1),
             file_path: Some(path_buf),
+            hmac_key,
         })
     }
 
@@ -140,7 +157,8 @@ impl AuditStore {
         let mut latest_hash_guard = self.latest_hash.write().await;
 
         let prev_hash = latest_hash_guard.clone();
-        let hash = compute_event_hash(&prev_hash, &id, now_ns, &raw);
+        let hash =
+            compute_event_hash_with_key(&prev_hash, &id, now_ns, &raw, self.hmac_key.as_deref());
 
         let record = AuditEvent {
             id,
@@ -210,7 +228,13 @@ impl AuditStore {
 
             let id = format!("aud_{:012}", seq);
             let prev_hash = latest_hash_guard.clone();
-            let hash = compute_event_hash(&prev_hash, &id, now_ns, &raw);
+            let hash = compute_event_hash_with_key(
+                &prev_hash,
+                &id,
+                now_ns,
+                &raw,
+                self.hmac_key.as_deref(),
+            );
 
             let record = AuditEvent {
                 id,
@@ -257,6 +281,24 @@ impl AuditStore {
         Ok(out)
     }
 
+    /// Captures an external anchor checkpoint summary of the current tail state of the audit log.
+    pub async fn get_checkpoint(&self) -> crate::audit::models::AuditCheckpoint {
+        let events = self.events.read().await;
+        let latest_hash = self.latest_hash.read().await.clone();
+        let last_event_id = events.last().map(|e| e.id.clone());
+        let now_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+
+        crate::audit::models::AuditCheckpoint {
+            tail_hash: latest_hash,
+            last_event_id,
+            total_records: events.len(),
+            timestamp_ns: now_ns,
+        }
+    }
+
     /// Verifies the complete cryptographic hash chain across all stored events.
     ///
     /// # Returns
@@ -279,7 +321,7 @@ impl AuditStore {
                 };
             }
 
-            if !verify_record_hash(record) {
+            if !verify_record_hash_with_key(record, self.hmac_key.as_deref()) {
                 return VerificationReport {
                     is_valid: false,
                     total_records: events.len(),

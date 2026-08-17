@@ -111,6 +111,7 @@ pub struct CircuitBreaker {
     state: RwLock<CircuitState>,
     consecutive_failures: AtomicU32,
     consecutive_successes: AtomicU32,
+    half_open_probes: AtomicU32,
     last_state_change_ms: AtomicU64,
 }
 
@@ -128,6 +129,7 @@ impl CircuitBreaker {
             state: RwLock::new(CircuitState::Closed),
             consecutive_failures: AtomicU32::new(0),
             consecutive_successes: AtomicU32::new(0),
+            half_open_probes: AtomicU32::new(0),
             last_state_change_ms: AtomicU64::new(now_ms),
         }
     }
@@ -152,6 +154,7 @@ impl CircuitBreaker {
                     *state_guard = CircuitState::HalfOpen;
                     self.last_state_change_ms.store(now, Ordering::Relaxed);
                     self.consecutive_successes.store(0, Ordering::Relaxed);
+                    self.half_open_probes.store(1, Ordering::SeqCst);
                     Ok(())
                 } else {
                     let remaining_ms = self.config.cooldown_ms.saturating_sub(elapsed);
@@ -162,8 +165,31 @@ impl CircuitBreaker {
                     })
                 }
             }
-            CircuitState::HalfOpen => Ok(()),
+            CircuitState::HalfOpen => {
+                let in_flight = self.half_open_probes.fetch_add(1, Ordering::SeqCst);
+                if in_flight > 0 {
+                    self.half_open_probes.fetch_sub(1, Ordering::SeqCst);
+                    Err(CircuitOpenError {
+                        server_id: self.server_id.clone(),
+                        remaining_cooldown_ms: 50,
+                        consecutive_failures: self.consecutive_failures.load(Ordering::Relaxed),
+                    })
+                } else {
+                    Ok(())
+                }
+            }
         }
+    }
+
+    /// Resets the circuit breaker back to Closed state (e.g. upon supervisor reconnection).
+    pub async fn reset(&self) {
+        let mut state_guard = self.state.write().await;
+        *state_guard = CircuitState::Closed;
+        self.consecutive_failures.store(0, Ordering::Relaxed);
+        self.consecutive_successes.store(0, Ordering::Relaxed);
+        self.half_open_probes.store(0, Ordering::Relaxed);
+        self.last_state_change_ms
+            .store(current_time_ms(), Ordering::Relaxed);
     }
 
     /// Records a successful upstream call.
@@ -174,6 +200,7 @@ impl CircuitBreaker {
                 self.consecutive_failures.store(0, Ordering::Relaxed);
             }
             CircuitState::HalfOpen => {
+                self.half_open_probes.store(0, Ordering::Relaxed);
                 let successes = self.consecutive_successes.fetch_add(1, Ordering::Relaxed) + 1;
                 if successes >= self.config.consecutive_successes {
                     *state_guard = CircuitState::Closed;
@@ -201,6 +228,7 @@ impl CircuitBreaker {
                 }
             }
             CircuitState::HalfOpen => {
+                self.half_open_probes.store(0, Ordering::Relaxed);
                 // Any failure in HalfOpen immediately trips back to Open
                 *state_guard = CircuitState::Open;
                 self.last_state_change_ms.store(now, Ordering::Relaxed);
@@ -317,6 +345,23 @@ impl CircuitBreakerRegistry {
         if let Some(cb) = cb {
             cb.record_success().await;
         }
+    }
+
+    /// Resets the circuit breaker state for a server to Closed.
+    pub async fn reset(&self, server_id: &str) {
+        let cb = {
+            let map = self.breakers.read().await;
+            map.get(server_id).cloned()
+        };
+        if let Some(cb) = cb {
+            cb.reset().await;
+        }
+    }
+
+    /// Removes a circuit breaker from the registry (e.g. when unmounted).
+    pub async fn remove(&self, server_id: &str) {
+        let mut map = self.breakers.write().await;
+        map.remove(server_id);
     }
 
     /// Records failure for server.

@@ -71,23 +71,45 @@ pub fn resolve_idempotency_key(payload_key: Option<String>, headers: &HeaderMap)
         .or_else(|| crate::context::extract_header_str(headers, "x-idempotency-key"))
 }
 
+/// Default sensitive key names automatically redacted from log/event payloads.
+pub const DEFAULT_REDACT_KEYS: &[&str] = &[
+    "token",
+    "api_key",
+    "apikey",
+    "password",
+    "secret",
+    "authorization",
+    "auth",
+    "access_token",
+    "private_key",
+    "bearer",
+];
+
 /// Recursively masks sensitive JSON keys according to security policy.
 ///
 /// # Arguments
 /// * `value` - JSON object, array, or primitive value to sanitize.
-/// * `redact_keys` - Slice of lower-case key names whose values should be replaced with `<redacted>`.
+/// * `redact_keys` - Slice of key names whose values should be replaced with `<redacted>`.
 ///
 /// # Returns
 /// Sanitized JSON Value.
 pub fn redact_value(value: Value, redact_keys: &[String]) -> Value {
+    let lower_keys: Vec<String> = redact_keys.iter().map(|k| k.to_lowercase()).collect();
+    redact_value_internal(value, &lower_keys)
+}
+
+fn redact_value_internal(value: Value, lower_keys: &[String]) -> Value {
     match value {
         Value::Object(map) => {
             let mut output = serde_json::Map::new();
             for (key, nested) in map {
-                if redact_keys.iter().any(|k| k == &key.to_lowercase()) {
+                let key_lower = key.to_lowercase();
+                let should_redact = lower_keys.iter().any(|k| k == &key_lower)
+                    || DEFAULT_REDACT_KEYS.iter().any(|&k| k == key_lower);
+                if should_redact {
                     output.insert(key, Value::String("<redacted>".to_string()));
                 } else {
-                    output.insert(key, redact_value(nested, redact_keys));
+                    output.insert(key, redact_value_internal(nested, lower_keys));
                 }
             }
             Value::Object(output)
@@ -95,7 +117,7 @@ pub fn redact_value(value: Value, redact_keys: &[String]) -> Value {
         Value::Array(values) => Value::Array(
             values
                 .into_iter()
-                .map(|entry| redact_value(entry, redact_keys))
+                .map(|entry| redact_value_internal(entry, lower_keys))
                 .collect(),
         ),
         primitive => primitive,

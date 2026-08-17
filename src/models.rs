@@ -30,6 +30,9 @@ pub enum Commands {
         port: Option<u16>,
         #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
         config: String,
+        /// Optional static authentication token protecting mutating daemon API endpoints
+        #[arg(long)]
+        auth_token: Option<String>,
     },
     /// Run as an MCP stdio server exposing the lightweight facade
     McpServer {

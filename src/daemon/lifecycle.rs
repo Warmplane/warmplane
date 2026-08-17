@@ -479,6 +479,7 @@ impl AppState {
             let mut statuses_guard = self.server_statuses.write().await;
             statuses_guard.remove(server_id);
         }
+        self.circuit_breakers.remove(server_id).await;
         {
             let mut caps_guard = self.capabilities.write().await;
             let removed_caps: Vec<String> = caps_guard

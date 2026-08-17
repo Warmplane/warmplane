@@ -163,3 +163,16 @@ pub struct VerificationReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
+
+/// External anchor checkpoint representing the tail integrity state of the audit chain.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AuditCheckpoint {
+    /// SHA256 / HMAC tail hash of the most recent audit event in the chain.
+    pub tail_hash: String,
+    /// ID of the most recent audit event.
+    pub last_event_id: Option<String>,
+    /// Total number of records in the store.
+    pub total_records: usize,
+    /// Unix timestamp in nanoseconds when this checkpoint snapshot was taken.
+    pub timestamp_ns: u64,
+}

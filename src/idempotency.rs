@@ -51,6 +51,9 @@ struct IdempotencyEntry {
     created_at: Instant,
 }
 
+/// Maximum duration an operation can remain in the InProgress state before being treated as abandoned.
+pub const IN_PROGRESS_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// In-memory idempotency deduplication store with configurable time-to-live TTL.
 pub struct IdempotencyStore {
     ttl: Duration,
@@ -94,15 +97,22 @@ impl IdempotencyStore {
         let mut map = self.entries.write().await;
         let now = Instant::now();
 
-        // Check if existing key is expired before returning
+        // Check if existing key is valid before returning
         if let Some(entry) = map.get(key_ref) {
-            if now.duration_since(entry.created_at) < self.ttl {
-                return match &entry.state {
-                    EntryState::Completed(val) => DeduplicateResult::Completed(val.clone()),
-                    EntryState::InProgress(tx) => DeduplicateResult::InProgress(tx.subscribe()),
-                };
+            let age = now.duration_since(entry.created_at);
+            match &entry.state {
+                EntryState::Completed(val) => {
+                    if age < self.ttl {
+                        return DeduplicateResult::Completed(val.clone());
+                    }
+                }
+                EntryState::InProgress(tx) => {
+                    if age < IN_PROGRESS_TIMEOUT {
+                        return DeduplicateResult::InProgress(tx.subscribe());
+                    }
+                }
             }
-            // Expired entry for this specific key, remove it
+            // Expired completed entry or stale/abandoned in-progress entry, remove it
             map.remove(key_ref);
         }
 

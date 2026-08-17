@@ -213,18 +213,18 @@ pub async fn handle_export_audit(
         for e in events {
             csv.push_str(&format!(
                 "{},{},{:?},{},{},{},{},{},{:?},{},{},{}\n",
-                e.id,
+                sanitize_csv_cell(&e.id),
                 e.timestamp_ns,
                 e.event_type,
-                e.trace_id,
-                e.request_id.as_deref().unwrap_or(""),
-                e.actor_id.as_deref().unwrap_or(""),
-                e.server_id.as_deref().unwrap_or(""),
-                e.capability_id.as_deref().unwrap_or(""),
+                sanitize_csv_cell(&e.trace_id),
+                sanitize_csv_cell(e.request_id.as_deref().unwrap_or("")),
+                sanitize_csv_cell(e.actor_id.as_deref().unwrap_or("")),
+                sanitize_csv_cell(e.server_id.as_deref().unwrap_or("")),
+                sanitize_csv_cell(e.capability_id.as_deref().unwrap_or("")),
                 e.status,
                 e.execution_latency_us.unwrap_or(0),
-                e.hash,
-                e.prev_hash,
+                sanitize_csv_cell(&e.hash),
+                sanitize_csv_cell(&e.prev_hash),
             ));
         }
         (StatusCode::OK, headers, csv).into_response()
@@ -248,5 +248,25 @@ pub async fn handle_export_audit(
             }
         }
         (StatusCode::OK, headers, jsonl).into_response()
+    }
+}
+
+fn sanitize_csv_cell(cell: &str) -> String {
+    let trimmed = cell.trim();
+    let escaped = if trimmed.starts_with('=')
+        || trimmed.starts_with('+')
+        || trimmed.starts_with('-')
+        || trimmed.starts_with('@')
+        || trimmed.starts_with('\t')
+        || trimmed.starts_with('\r')
+    {
+        format!("'{}", trimmed)
+    } else {
+        trimmed.to_string()
+    };
+    if escaped.contains(',') || escaped.contains('"') || escaped.contains('\n') {
+        format!("\"{}\"", escaped.replace('"', "\"\""))
+    } else {
+        escaped
     }
 }

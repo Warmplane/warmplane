@@ -64,10 +64,11 @@ pub async fn handle_search_capabilities(
     let caps = state.capabilities.read().await;
     let pol = state.policy.read().await;
     let catalog_ver = state.catalog_version.read().await.clone();
+    let limit = payload.limit.clamp(1, 100);
 
     let results = state
         .search_engine
-        .search(query_str, payload.limit, &filter, &caps, &pol);
+        .search(query_str, limit, &filter, &caps, &pol);
 
     (
         make_etag_header(&catalog_ver),
@@ -445,7 +446,7 @@ pub async fn handle_read_resource(
                 Some(request_id),
                 Some(req_context),
                 crate::idempotency::RetryMetadata::safe("not_started"),
-                "INVALID_ARGS",
+                "POLICY_DENIED",
                 format!("Resource '{}' blocked by policy", payload.resource_id),
                 false,
             )),
@@ -647,7 +648,7 @@ pub async fn handle_get_prompt(
                 Some(request_id),
                 Some(req_context),
                 crate::idempotency::RetryMetadata::safe("not_started"),
-                "INVALID_ARGS",
+                "POLICY_DENIED",
                 format!("Prompt '{}' blocked by policy", payload.prompt_id),
                 false,
             )),

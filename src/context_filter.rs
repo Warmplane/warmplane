@@ -149,6 +149,9 @@ enum PathSegment {
     Wildcard,
 }
 
+/// Maximum number of expanded elements in wildcard JSONPath extraction to prevent memory exhaustion.
+pub const MAX_JSONPATH_WILDCARD_RESULTS: usize = 10_000;
+
 fn extract_path_recursive(val: &Value, segments: &[PathSegment]) -> Value {
     if segments.is_empty() {
         return val.clone();
@@ -173,6 +176,7 @@ fn extract_path_recursive(val: &Value, segments: &[PathSegment]) -> Value {
             Value::Array(arr) => {
                 let results = arr
                     .iter()
+                    .take(MAX_JSONPATH_WILDCARD_RESULTS)
                     .map(|item| extract_path_recursive(item, &segments[1..]))
                     .filter(|v| !v.is_null())
                     .collect::<Vec<_>>();

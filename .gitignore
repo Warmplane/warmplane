@@ -2,4 +2,5 @@
 eval/token-efficiency/output
 .fastembed_cache/
 mcp_servers.json
+docs/legacy/REPO_REVIEW.md
 docs/REPO_REVIEW.md

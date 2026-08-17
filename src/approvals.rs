@@ -335,10 +335,22 @@ pub async fn dispatch_webhook(cfg: &WebhookConfig, event_type: &str, approval: &
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
+    let sanitized_approval = serde_json::json!({
+        "id": approval.id,
+        "capability_id": approval.capability_id,
+        "server_id": approval.server_id,
+        "args": approval.sanitized_args,
+        "request_id": approval.request_id,
+        "context": approval.context,
+        "created_at": approval.created_at,
+        "expires_at": approval.expires_at,
+        "status": approval.status,
+    });
+
     let payload = serde_json::json!({
         "event": event_type,
         "timestamp": now,
-        "approval": approval
+        "approval": sanitized_approval
     });
 
     let payload_str = match serde_json::to_string(&payload) {

@@ -330,9 +330,30 @@ pub async fn run_oauth2_flow(
     }
 
     let auth_url_str = auth_url.to_string();
+    let sanitized_auth_url = {
+        let mut u = auth_url.clone();
+        let query_pairs: Vec<(String, String)> = u
+            .query_pairs()
+            .map(|(k, v)| {
+                if k == "state" || k == "code_challenge" {
+                    (k.to_string(), "********".to_string())
+                } else {
+                    (k.to_string(), v.to_string())
+                }
+            })
+            .collect();
+        u.set_query(None);
+        {
+            let mut serializer = u.query_pairs_mut();
+            for (k, v) in &query_pairs {
+                serializer.append_pair(k, v);
+            }
+        }
+        u.to_string()
+    };
     tracing::warn!(
         server_id = %client_state.server_id,
-        auth_url = %auth_url_str,
+        auth_url = %sanitized_auth_url,
         "Warmplane authorization required for server. Please visit URL in browser to authorize access."
     );
 
@@ -719,12 +740,58 @@ fn local_port_from_url(url_str: &str) -> Option<u16> {
         .and_then(|u: reqwest::Url| u.port())
 }
 
+async fn oauth_proxy_security_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let headers = req.headers();
+
+    // 1. Host Validation (prevents DNS rebinding against loopback)
+    if let Some(host_hdr) = headers.get("host").and_then(|h| h.to_str().ok()) {
+        let host_name = host_hdr.split(':').next().unwrap_or(host_hdr);
+        let is_valid_host = host_name == "127.0.0.1"
+            || host_name == "localhost"
+            || host_name == "::1"
+            || host_name == "[::1]";
+
+        if !is_valid_host {
+            return (
+                StatusCode::FORBIDDEN,
+                "Forbidden: Invalid Host header. Direct loopback access only.",
+            )
+                .into_response();
+        }
+    }
+
+    // 2. Cross-Origin (CSRF) protection for browser requests to /proxy routes
+    if req.uri().path().starts_with("/proxy") {
+        if let Some(origin_hdr) = headers.get("origin").and_then(|h| h.to_str().ok()) {
+            let is_valid_origin = origin_hdr.starts_with("http://127.0.0.1")
+                || origin_hdr.starts_with("http://localhost")
+                || origin_hdr.starts_with("vscode-webview://")
+                || origin_hdr.starts_with("chrome-extension://")
+                || origin_hdr == "null";
+
+            if !is_valid_origin {
+                return (
+                    StatusCode::FORBIDDEN,
+                    "Forbidden: Cross-origin browser requests to OAuth proxy are blocked.",
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    next.run(req).await
+}
+
 // Spawns the central background proxy / callback server on an ephemeral port.
 pub async fn start_oauth_proxy_server(registry: OAuthRegistry) -> Result<u16> {
     let app = Router::new()
         .route("/callback", get(handle_callback))
         .route("/client-metadata/:server_id", get(handle_client_metadata))
         .route("/proxy/:server_id/*path", any(handle_proxy_request))
+        .layer(axum::middleware::from_fn(oauth_proxy_security_middleware))
         .with_state(registry.clone());
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 0));

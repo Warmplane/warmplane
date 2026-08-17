@@ -120,7 +120,7 @@ pub async fn handle_call_capability(
                     Some(request_id),
                     Some(req_context),
                     retry_base("not_started"),
-                    "INVALID_ARGS",
+                    "POLICY_DENIED",
                     format!("Capability '{}' blocked by policy", payload.capability_id),
                     false,
                 )),
@@ -669,12 +669,27 @@ pub async fn handle_cancel_operation(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     let cancelled = state.operation_registry.cancel(&id).await;
+    if !cancelled {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "ok": false,
+                "request_id": id,
+                "cancelled": false,
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": format!("Operation '{}' not found or already completed", id)
+                }
+            })),
+        )
+            .into_response();
+    }
     (
         StatusCode::OK,
         Json(json!({
             "ok": true,
             "request_id": id,
-            "cancelled": cancelled,
+            "cancelled": true,
         })),
     )
         .into_response()
