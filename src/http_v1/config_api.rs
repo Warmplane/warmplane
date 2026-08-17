@@ -22,29 +22,35 @@ pub async fn handle_get_config(State(state): State<AppState>) -> impl IntoRespon
     let etag_hits = state.total_etag_hits.load(Ordering::Relaxed);
     let tool_calls = state.total_tool_calls.load(Ordering::Relaxed);
     let tool_duration_us = state.total_tool_duration_us.load(Ordering::Relaxed);
-    let srv_configs = state.server_configs.read().await.clone();
+    let mut srv_configs = state.server_configs.read().await.clone();
+    for srv in srv_configs.values_mut() {
+        srv.sanitize_secrets();
+    }
     let srv_statuses = state.server_statuses.read().await.clone();
     let circuit_breakers = state.circuit_breakers.all_statuses().await;
 
     match crate::config::load_or_default_config(&state.config_path) {
-        Ok(config) => (
-            StatusCode::OK,
-            Json(json!({
-                "ok": true,
-                "config_path": state.config_path,
-                "config": config,
-                "server_configs": srv_configs,
-                "server_statuses": srv_statuses,
-                "circuit_breakers": circuit_breakers,
-                "metrics": {
-                    "total_catalog_requests": total_reqs,
-                    "total_etag_hits": etag_hits,
-                    "total_tool_calls": tool_calls,
-                    "total_tool_duration_us": tool_duration_us,
-                }
-            })),
-        )
-            .into_response(),
+        Ok(mut config) => {
+            config.sanitize_secrets();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "config_path": state.config_path,
+                    "config": config,
+                    "server_configs": srv_configs,
+                    "server_statuses": srv_statuses,
+                    "circuit_breakers": circuit_breakers,
+                    "metrics": {
+                        "total_catalog_requests": total_reqs,
+                        "total_etag_hits": etag_hits,
+                        "total_tool_calls": tool_calls,
+                        "total_tool_duration_us": tool_duration_us,
+                    }
+                })),
+            )
+                .into_response()
+        }
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "ok": false, "error": err.to_string() })),

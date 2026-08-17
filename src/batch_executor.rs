@@ -84,7 +84,7 @@ pub async fn execute_batch(
     steps: Vec<BatchStep>,
     trace_id: String,
     request_id: Option<String>,
-    _context: Option<crate::context::RequestContext>,
+    context: Option<crate::context::RequestContext>,
 ) -> BatchCallResponse {
     let start_all = std::time::Instant::now();
     let mut step_outputs: HashMap<String, Value> = HashMap::new();
@@ -93,9 +93,9 @@ pub async fn execute_batch(
 
     for step in steps {
         let step_start = std::time::Instant::now();
-        let interpolated_args = interpolate_step_references(&step.args, &step_outputs);
+        let mut interpolated_args = interpolate_step_references(&step.args, &step_outputs);
 
-        // Check policy
+        // Check policy allow/deny
         if !state.policy.read().await.allows(&step.capability_id) {
             results.push(BatchStepResult {
                 id: step.id.clone(),
@@ -136,10 +136,124 @@ pub async fn execute_batch(
             (meta.server.clone(), meta.tool.clone())
         };
 
+        // Enforce HITL approval gate if required
+        let (requires_approval, redact_keys, approval_timeout_secs, webhook_cfg) = {
+            let p = state.policy.read().await;
+            (
+                p.requires_approval(&step.capability_id),
+                p.redact_keys.clone(),
+                p.approval_timeout_secs,
+                p.webhook.clone(),
+            )
+        };
+
+        if requires_approval {
+            let sanitized =
+                crate::http_v1::helpers::redact_value(interpolated_args.clone(), &redact_keys);
+            let (approval_id, rx) = state
+                .approval_registry
+                .create_approval(crate::approvals::CreateApprovalRequest {
+                    capability_id: step.capability_id.clone(),
+                    server_id: server.clone(),
+                    args: interpolated_args.clone(),
+                    sanitized_args: sanitized.clone(),
+                    request_id: request_id.clone(),
+                    context: context.clone(),
+                    timeout_secs: approval_timeout_secs,
+                    webhook: webhook_cfg.as_ref(),
+                })
+                .await;
+
+            state.audit_handle.send(crate::audit::RawAuditEvent {
+                event_type: crate::audit::AuditEventType::ToolInterceptedHitl,
+                trace_id: trace_id.clone(),
+                request_id: request_id.clone(),
+                actor_id: context.as_ref().and_then(|c| c.actor_id.clone()),
+                work_item_id: context.as_ref().and_then(|c| c.work_item_id.clone()),
+                client_ip: None,
+                server_id: Some(server.clone()),
+                capability_id: Some(step.capability_id.clone()),
+                resource_uri: None,
+                sanitized_args: Some(sanitized),
+                sanitized_response: None,
+                execution_latency_us: Some(step_start.elapsed().as_micros() as u64),
+                status: crate::audit::AuditEventStatus::Intercepted,
+                error_code: None,
+                error_message: None,
+                operator_id: None,
+                approval_ticket_id: Some(approval_id),
+            });
+
+            let resolution = match rx.await {
+                Ok(r) => r,
+                Err(_) => crate::approvals::ApprovalResolution::Expired,
+            };
+
+            match resolution {
+                crate::approvals::ApprovalResolution::Approved { modified_args, .. } => {
+                    if let Some(mod_args) = modified_args {
+                        interpolated_args = mod_args;
+                    }
+                }
+                crate::approvals::ApprovalResolution::Rejected { reason, operator } => {
+                    results.push(BatchStepResult {
+                        id: step.id.clone(),
+                        capability_id: step.capability_id.clone(),
+                        ok: false,
+                        data: None,
+                        error: Some(format!(
+                            "HITL approval rejected by operator '{}': {}",
+                            operator,
+                            reason.unwrap_or_else(|| "No reason provided".to_string())
+                        )),
+                        duration_us: step_start.elapsed().as_micros() as u64,
+                    });
+                    overall_ok = false;
+                    if !step.continue_on_error {
+                        break;
+                    }
+                    continue;
+                }
+                crate::approvals::ApprovalResolution::Expired => {
+                    results.push(BatchStepResult {
+                        id: step.id.clone(),
+                        capability_id: step.capability_id.clone(),
+                        ok: false,
+                        data: None,
+                        error: Some("HITL approval expired".to_string()),
+                        duration_us: step_start.elapsed().as_micros() as u64,
+                    });
+                    overall_ok = false;
+                    if !step.continue_on_error {
+                        break;
+                    }
+                    continue;
+                }
+            }
+        }
+
+        // Circuit breaker check
+        if let Err(cb_err) = state.circuit_breakers.check_permission(&server).await {
+            results.push(BatchStepResult {
+                id: step.id.clone(),
+                capability_id: step.capability_id.clone(),
+                ok: false,
+                data: None,
+                error: Some(format!("Circuit open for server '{}': {}", server, cb_err)),
+                duration_us: step_start.elapsed().as_micros() as u64,
+            });
+            overall_ok = false;
+            if !step.continue_on_error {
+                break;
+            }
+            continue;
+        }
+
         // Lookup server sender channel
         let tx = {
             let servers_guard = state.servers.read().await;
             let Some(tx) = servers_guard.get(&server).cloned() else {
+                state.circuit_breakers.record_failure(&server).await;
                 results.push(BatchStepResult {
                     id: step.id.clone(),
                     capability_id: step.capability_id.clone(),
@@ -169,6 +283,7 @@ pub async fn execute_batch(
             .await;
 
         if send_res.is_err() {
+            state.circuit_breakers.record_failure(&server).await;
             results.push(BatchStepResult {
                 id: step.id.clone(),
                 capability_id: step.capability_id.clone(),
@@ -186,6 +301,31 @@ pub async fn execute_batch(
 
         match reply_rx.await {
             Ok(Ok(val)) => {
+                state.circuit_breakers.record_success(&server).await;
+                let sanitized_res =
+                    crate::http_v1::helpers::redact_value(val.clone(), &redact_keys);
+                let sanitized_args =
+                    crate::http_v1::helpers::redact_value(interpolated_args, &redact_keys);
+                state.audit_handle.send(crate::audit::RawAuditEvent {
+                    event_type: crate::audit::AuditEventType::ToolExecution,
+                    trace_id: trace_id.clone(),
+                    request_id: request_id.clone(),
+                    actor_id: context.as_ref().and_then(|c| c.actor_id.clone()),
+                    work_item_id: context.as_ref().and_then(|c| c.work_item_id.clone()),
+                    client_ip: None,
+                    server_id: Some(server),
+                    capability_id: Some(step.capability_id.clone()),
+                    resource_uri: None,
+                    sanitized_args: Some(sanitized_args),
+                    sanitized_response: Some(sanitized_res),
+                    execution_latency_us: Some(step_start.elapsed().as_micros() as u64),
+                    status: crate::audit::AuditEventStatus::Success,
+                    error_code: None,
+                    error_message: None,
+                    operator_id: None,
+                    approval_ticket_id: None,
+                });
+
                 step_outputs.insert(step.id.clone(), val.clone());
                 results.push(BatchStepResult {
                     id: step.id.clone(),
@@ -197,6 +337,7 @@ pub async fn execute_batch(
                 });
             }
             Ok(Err(UpstreamCallError::Timeout)) => {
+                state.circuit_breakers.record_failure(&server).await;
                 results.push(BatchStepResult {
                     id: step.id.clone(),
                     capability_id: step.capability_id.clone(),
@@ -211,6 +352,7 @@ pub async fn execute_batch(
                 }
             }
             Ok(Err(UpstreamCallError::Upstream(err))) => {
+                state.circuit_breakers.record_failure(&server).await;
                 results.push(BatchStepResult {
                     id: step.id.clone(),
                     capability_id: step.capability_id.clone(),
@@ -225,6 +367,7 @@ pub async fn execute_batch(
                 }
             }
             Err(_) => {
+                state.circuit_breakers.record_failure(&server).await;
                 results.push(BatchStepResult {
                     id: step.id.clone(),
                     capability_id: step.capability_id.clone(),

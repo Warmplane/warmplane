@@ -32,9 +32,13 @@ pub struct ResourceUpdateEvent {
     pub server: String,
 }
 
+/// Maximum number of catalog events retained in memory.
+pub const MAX_CATALOG_EVENTS: usize = 5_000;
+
 /// In-memory thread-safe event store recording catalog state changes.
 pub struct CatalogEventStore {
     events: RwLock<Vec<CatalogEvent>>,
+    counter: std::sync::atomic::AtomicU64,
 }
 
 impl Default for CatalogEventStore {
@@ -51,6 +55,7 @@ impl CatalogEventStore {
     pub fn new() -> Self {
         Self {
             events: RwLock::new(Vec::new()),
+            counter: std::sync::atomic::AtomicU64::new(1),
         }
     }
 
@@ -68,12 +73,20 @@ impl CatalogEventStore {
         change_type: impl AsRef<str>,
         detail: Option<impl Into<String>>,
     ) {
-        let mut guard = self.events.write().unwrap_or_else(|e| e.into_inner());
-        let event_id = format!("evt_{}", guard.len() + 1);
+        let seq = self
+            .counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let event_id = format!("evt_{}", seq);
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs().to_string())
             .unwrap_or_else(|_| "0".to_string());
+
+        let mut guard = self.events.write().unwrap_or_else(|e| e.into_inner());
+        if guard.len() >= MAX_CATALOG_EVENTS {
+            let excess = guard.len() - (MAX_CATALOG_EVENTS - 1);
+            guard.drain(0..excess);
+        }
 
         guard.push(CatalogEvent {
             id: event_id,

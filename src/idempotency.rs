@@ -110,6 +110,12 @@ impl IdempotencyStore {
         if map.len() > 1024 {
             let ttl = self.ttl;
             map.retain(|_, entry| now.duration_since(entry.created_at) < ttl);
+            if map.len() >= 4096 {
+                let keys: Vec<String> = map.keys().take(1024).cloned().collect();
+                for k in keys {
+                    map.remove(&k);
+                }
+            }
         }
 
         let (tx, _) = broadcast::channel(1);

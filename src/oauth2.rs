@@ -64,6 +64,8 @@ pub struct OAuthRegistry {
     pub clients: Arc<RwLock<HashMap<String, OAuth2ClientState>>>,
     // Channel to send the code/state back to the waiting flow
     pub pending_auths: Arc<RwLock<HashMap<String, oneshot::Sender<CallbackPayload>>>>,
+    // Port on which the local proxy and callback server is listening
+    pub proxy_port: Arc<std::sync::atomic::AtomicU16>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -668,9 +670,15 @@ async fn handle_proxy_request(
                             if current_scopes.len() > original_size {
                                 info!("received 403 insufficient_scope. Triggering Step-Up authorization...");
                                 // Trigger interactive flow for accumulated scopes
-                                // Temporary local port to fetch callback
-                                let ephemeral_port =
-                                    local_port_from_url(&upstream_url).unwrap_or(9095);
+                                // Local port where the callback server is listening
+                                let bound_port = registry
+                                    .proxy_port
+                                    .load(std::sync::atomic::Ordering::Relaxed);
+                                let ephemeral_port = if bound_port > 0 {
+                                    bound_port
+                                } else {
+                                    local_port_from_url(&upstream_url).unwrap_or(9095)
+                                };
                                 drop(current_scopes); // Release write lock before flow
                                 if let Ok(new_token) =
                                     run_oauth2_flow(&client_state, &registry, ephemeral_port).await
@@ -717,12 +725,15 @@ pub async fn start_oauth_proxy_server(registry: OAuthRegistry) -> Result<u16> {
         .route("/callback", get(handle_callback))
         .route("/client-metadata/:server_id", get(handle_client_metadata))
         .route("/proxy/:server_id/*path", any(handle_proxy_request))
-        .with_state(registry);
+        .with_state(registry.clone());
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 0));
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     let local_addr = listener.local_addr()?;
     let port = local_addr.port();
+    registry
+        .proxy_port
+        .store(port, std::sync::atomic::Ordering::SeqCst);
 
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {

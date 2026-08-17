@@ -174,13 +174,9 @@ pub async fn initialize_state(
 ///
 /// # Errors
 /// Returns an error if binding TCP socket or server execution fails.
-pub async fn run_daemon(
-    port: u16,
-    config: McpConfig,
-    config_path: impl Into<String>,
-) -> Result<()> {
-    let app_state = initialize_state(config, config_path).await?;
-    let app = Router::new()
+/// Builds the Axum router configuring all API routes, state, and security middleware.
+pub fn build_router(app_state: AppState) -> Router {
+    Router::new()
         .route("/v1/capabilities", get(http_v1::handle_list_capabilities))
         .route(
             "/v1/capabilities/search",
@@ -248,7 +244,114 @@ pub async fn run_daemon(
         // Web UI Control Deck
         .route("/ui", get(http_v1::handle_ui_dashboard))
         .route("/", get(http_v1::handle_ui_dashboard))
-        .with_state(app_state);
+        .layer(axum::middleware::from_fn_with_state(
+            app_state.clone(),
+            security_guard_middleware,
+        ))
+        .with_state(app_state)
+}
+
+/// Inbound security middleware enforcing Host header validation (DNS rebinding defense),
+/// browser cross-origin CSRF filtering, and optional API token authorization.
+pub async fn security_guard_middleware(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::{http::StatusCode, response::IntoResponse, Json};
+    let headers = req.headers();
+
+    // 1. Host Validation (prevents DNS rebinding against 127.0.0.1)
+    if let Some(host_hdr) = headers.get("host").and_then(|h| h.to_str().ok()) {
+        let host_name = host_hdr.split(':').next().unwrap_or(host_hdr);
+        let is_valid_host = host_name == "127.0.0.1"
+            || host_name == "localhost"
+            || host_name == "::1"
+            || host_name == "[::1]";
+
+        if !is_valid_host {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "ok": false,
+                    "error": "FORBIDDEN_HOST",
+                    "message": format!("Invalid Host header: '{}'. Loopback direct access only.", host_hdr)
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    // 2. Cross-Origin (CSRF) protection for browser requests
+    if let Some(origin_hdr) = headers.get("origin").and_then(|h| h.to_str().ok()) {
+        let is_valid_origin = origin_hdr.starts_with("http://127.0.0.1")
+            || origin_hdr.starts_with("http://localhost")
+            || origin_hdr.starts_with("vscode-webview://")
+            || origin_hdr.starts_with("chrome-extension://")
+            || origin_hdr == "null";
+
+        if !is_valid_origin {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "ok": false,
+                    "error": "FORBIDDEN_ORIGIN",
+                    "message": "Cross-origin browser requests from untrusted origins are blocked."
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    // 3. Optional Auth Token verification if configured on state
+    if let Some(ref expected_token) = state.auth_token {
+        if !expected_token.trim().is_empty() {
+            let path = req.uri().path();
+            if path.starts_with("/v1/") {
+                let is_authed = headers
+                    .get("authorization")
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(|v| v.strip_prefix("Bearer "))
+                    .map(|t| t == expected_token)
+                    .unwrap_or(false)
+                    || headers
+                        .get("x-warmplane-key")
+                        .and_then(|h| h.to_str().ok())
+                        .map(|t| t == expected_token)
+                        .unwrap_or(false);
+
+                if !is_authed {
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(serde_json::json!({
+                            "ok": false,
+                            "error": "UNAUTHORIZED",
+                            "message": "Valid Bearer token or X-Warmplane-Key required"
+                        })),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    }
+
+    next.run(req).await
+}
+
+/// # Arguments
+/// * `port` - TCP listening port.
+/// * `config` - `McpConfig` configuration struct.
+/// * `config_path` - Path to the config file.
+///
+/// # Errors
+/// Returns an error if binding TCP socket or server execution fails.
+pub async fn run_daemon(
+    port: u16,
+    config: McpConfig,
+    config_path: impl Into<String>,
+) -> Result<()> {
+    let app_state = initialize_state(config, config_path).await?;
+    let app = build_router(app_state);
 
     info!(port, "all upstream servers connected; daemon listening");
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;

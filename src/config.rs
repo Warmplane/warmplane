@@ -314,6 +314,107 @@ impl Default for AuditConfig {
     }
 }
 
+impl McpConfig {
+    /// Sanitizes all confidential credentials and secrets in place for safe API exposure.
+    pub fn sanitize_secrets(&mut self) {
+        if let Some(ref mut policy) = self.policy {
+            policy.sanitize_secrets();
+        }
+        if let Some(ref mut audit) = self.audit {
+            audit.sanitize_secrets();
+        }
+        for server in self.mcp_servers.values_mut() {
+            server.sanitize_secrets();
+        }
+    }
+}
+
+impl PolicyConfig {
+    /// Sanitizes webhook secrets in place.
+    pub fn sanitize_secrets(&mut self) {
+        if let Some(ref mut webhook) = self.webhook {
+            webhook.sanitize_secrets();
+        }
+    }
+}
+
+impl WebhookConfig {
+    /// Sanitizes secrets and auth headers.
+    pub fn sanitize_secrets(&mut self) {
+        if self.secret.is_some() {
+            self.secret = Some("********".to_string());
+        }
+        if self.auth_header.is_some() {
+            self.auth_header = Some("********".to_string());
+        }
+    }
+}
+
+impl AuditConfig {
+    /// Sanitizes SIEM target secrets in place.
+    pub fn sanitize_secrets(&mut self) {
+        if let Some(ref mut siem) = self.siem {
+            siem.sanitize_secrets();
+        }
+    }
+}
+
+impl SiemConfig {
+    /// Sanitizes target secrets in place.
+    pub fn sanitize_secrets(&mut self) {
+        for target in &mut self.targets {
+            match target {
+                SiemTargetConfig::Webhook { auth_header, .. } => {
+                    if auth_header.is_some() {
+                        *auth_header = Some("********".to_string());
+                    }
+                }
+                SiemTargetConfig::SplunkHec { token, .. } => {
+                    *token = "********".to_string();
+                }
+            }
+        }
+    }
+}
+
+impl ServerConfig {
+    /// Sanitizes authentication tokens/passwords and sensitive headers in place.
+    pub fn sanitize_secrets(&mut self) {
+        if let Some(ref mut auth) = self.auth {
+            auth.sanitize_secrets();
+        }
+        for (k, v) in self.headers.iter_mut() {
+            let k_lower = k.to_lowercase();
+            if k_lower.contains("auth")
+                || k_lower.contains("key")
+                || k_lower.contains("secret")
+                || k_lower.contains("token")
+            {
+                *v = "********".to_string();
+            }
+        }
+    }
+}
+
+impl AuthConfig {
+    /// Sanitizes credentials in place.
+    pub fn sanitize_secrets(&mut self) {
+        match self {
+            AuthConfig::Bearer { token, .. } => {
+                if token.is_some() {
+                    *token = Some("********".to_string());
+                }
+            }
+            AuthConfig::Basic { password, .. } => {
+                if password.is_some() {
+                    *password = Some("********".to_string());
+                }
+            }
+            AuthConfig::Oauth2 { .. } => {}
+        }
+    }
+}
+
 /// Loads and validates Warmplane server configuration from JSON file.
 ///
 /// # Arguments
