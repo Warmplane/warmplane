@@ -209,6 +209,7 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 - **Supervisor & Circuit Breaker Coordination:** Automatically reset circuit breakers on successful supervisor reconnection; added single-flight probe limits in `HalfOpen` circuit breaker state; implemented 60-second sliding-window restart backoff; pruned removed items during catalog reconciliation; cleaned up circuit breakers on server unmount.
 - **Resource Caps & Safety Controls:** Enforced `MAX_BATCH_STEPS = 50` and `DEFAULT_BATCH_TIMEOUT_MS = 60_000` execution budget; capped wildcard JSONPath output expansion to 10,000 items and search results to 100; returned `POLICY_DENIED` (HTTP 403) and 404 for unknown operation cancellation; sanitized CSV audit exports against formula injection.
 - **CI Quality Gates & Dependency Audits:** Integrated native `cargo-audit` scanning in GitHub Actions CI; updated dependencies resolving all reported advisories.
+- **CLI Version Flag:** Enabled standard `--version` and `-V` flags in the `warmplane` binary parser.
 
 ### v0.15.0 — Fault Tolerance, Boot Resilience & Control Deck Feature Parity
 - **Boot Resilience & Degraded Startup:** Graceful daemon boot when upstream servers (such as Docker, remote SSE endpoints, or unconfigured tools) fail or timeout. Failed servers are flagged as `degraded` without crashing the daemon or blocking other healthy upstreams.
