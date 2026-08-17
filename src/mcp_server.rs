@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-13
+// Rust guideline compliant 2026-08-17
 
 //! MCP stdio server facade interface exposing compact tools/resources/prompts endpoints.
 
@@ -27,6 +27,7 @@ use crate::{
 };
 
 const TOOL_CAPABILITIES_LIST: &str = "capabilities_list";
+const TOOL_CAPABILITY_SEARCH: &str = "capability_search";
 const TOOL_CAPABILITY_DESCRIBE: &str = "capability_describe";
 const TOOL_CAPABILITY_CALL: &str = "capability_call";
 const TOOL_RESOURCES_LIST: &str = "resources_list";
@@ -76,6 +77,37 @@ impl ServerHandler for FacadeMcpServer {
 
         let output = match request.name.as_ref() {
             TOOL_CAPABILITIES_LIST => self.list_capabilities_value().await,
+            TOOL_CAPABILITY_SEARCH => {
+                let query = args
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string);
+                let server_ids = args.get("server_ids").and_then(Value::as_array).map(|arr| {
+                    arr.iter()
+                        .filter_map(Value::as_str)
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                });
+                let tags = args.get("tags").and_then(Value::as_array).map(|arr| {
+                    arr.iter()
+                        .filter_map(Value::as_str)
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                });
+                let modes = args.get("modes").and_then(Value::as_array).map(|arr| {
+                    arr.iter()
+                        .filter_map(Value::as_str)
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                });
+                let limit = args
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .map(|n| n as usize);
+
+                self.search_capabilities_value(query, server_ids, tags, modes, limit)
+                    .await
+            }
             TOOL_CAPABILITY_DESCRIBE => {
                 let Some(id) = args.get("id").and_then(Value::as_str) else {
                     return Ok(CallToolResponse::Complete(
@@ -431,6 +463,46 @@ impl FacadeMcpServer {
         Ok(json!({
             "version": "v1",
             "capabilities": capabilities,
+        }))
+    }
+
+    async fn search_capabilities_value(
+        &self,
+        query: Option<String>,
+        server_ids: Option<Vec<String>>,
+        tags: Option<Vec<String>>,
+        modes: Option<Vec<String>>,
+        limit: Option<usize>,
+    ) -> std::result::Result<Value, String> {
+        let mut filter_builder = crate::search::SearchFilter::builder();
+        if let Some(servers) = server_ids {
+            filter_builder = filter_builder.server_ids(servers);
+        }
+        if let Some(t) = tags {
+            filter_builder = filter_builder.tags(t);
+        }
+        if let Some(m) = modes {
+            filter_builder = filter_builder.modes(m);
+        }
+        let filter = filter_builder.build();
+
+        let caps = self.state.capabilities.read().await;
+        let pol = self.state.policy.read().await;
+        let catalog_ver = self.state.catalog_version.read().await.clone();
+        let query_str = query.as_deref().unwrap_or("");
+        let limit = limit.unwrap_or(8);
+
+        let results = self
+            .state
+            .search_engine
+            .search(query_str, limit, &filter, &caps, &pol);
+
+        Ok(json!({
+            "version": "v1",
+            "catalog_version": catalog_ver,
+            "query": query_str,
+            "total": results.len(),
+            "capabilities": results,
         }))
     }
 
@@ -913,6 +985,21 @@ fn facade_tools() -> Vec<Tool> {
             schema_object(json!({"type":"object","properties":{},"additionalProperties":false})),
         ),
         Tool::new(
+            TOOL_CAPABILITY_SEARCH,
+            "Search capabilities using hybrid lexical and semantic matching",
+            schema_object(json!({
+                "type":"object",
+                "properties":{
+                    "query":{"type":"string","description":"Search keywords or natural language query"},
+                    "server_ids":{"type":"array","items":{"type":"string"},"description":"Optional server ID filter list"},
+                    "tags":{"type":"array","items":{"type":"string"},"description":"Optional tag filter list"},
+                    "modes":{"type":"array","items":{"type":"string"},"description":"Optional execution mode filter list"},
+                    "limit":{"type":"integer","description":"Maximum number of ranked results to return"}
+                },
+                "additionalProperties":false
+            })),
+        ),
+        Tool::new(
             TOOL_CAPABILITY_DESCRIBE,
             "Describe one capability",
             schema_object(json!({
@@ -1063,8 +1150,9 @@ mod tests {
             .into_iter()
             .map(|t| t.name.to_string())
             .collect::<Vec<_>>();
-        assert_eq!(names.len(), 9);
+        assert_eq!(names.len(), 10);
         assert!(names.contains(&"capabilities_list".to_string()));
+        assert!(names.contains(&"capability_search".to_string()));
         assert!(names.contains(&"capability_describe".to_string()));
         assert!(names.contains(&"capability_call".to_string()));
         assert!(names.contains(&"resources_list".to_string()));
@@ -1082,5 +1170,54 @@ mod tests {
         assert_eq!(payload["error"]["code"], "INVALID_ARGS");
         assert_eq!(payload["error"]["message"], "bad input");
         assert_eq!(payload["data"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn test_facade_search_capabilities() {
+        use crate::daemon::{AppState, CapabilityMeta, Policy};
+        use std::collections::HashMap;
+
+        let mut caps = HashMap::new();
+        caps.insert(
+            "db.query".to_string(),
+            CapabilityMeta {
+                server: "sqlite".to_string(),
+                tool: "read_query".to_string(),
+                summary: "Execute read-only SQL queries".to_string(),
+                description: "Run SQL SELECT queries against SQLite database".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                tags: vec!["database".to_string(), "sql".to_string()],
+                examples: vec![],
+            },
+        );
+        caps.insert(
+            "fs.read".to_string(),
+            CapabilityMeta {
+                server: "fs".to_string(),
+                tool: "read_file".to_string(),
+                summary: "Read file contents from filesystem".to_string(),
+                description: "Read utf-8 contents of a file".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                tags: vec!["filesystem".to_string()],
+                examples: vec![],
+            },
+        );
+
+        let state = AppState::builder()
+            .capabilities(caps)
+            .policy(Policy::default())
+            .catalog_version("test-ver")
+            .build();
+
+        let server = super::FacadeMcpServer { state };
+        let res = server
+            .search_capabilities_value(Some("SQL database".to_string()), None, None, None, Some(5))
+            .await
+            .expect("search should succeed");
+
+        assert_eq!(res["version"], "v1");
+        assert_eq!(res["query"], "SQL database");
+        assert_eq!(res["total"], 1);
+        assert_eq!(res["capabilities"][0]["id"], "db.query");
     }
 }
