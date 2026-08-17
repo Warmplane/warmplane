@@ -329,7 +329,6 @@ pub async fn run_oauth2_flow(
         query.append_pair("resource", &client_state.remote_base_url);
     }
 
-    let auth_url_str = auth_url.to_string();
     let sanitized_auth_url = {
         let mut u = auth_url.clone();
         let query_pairs: Vec<(String, String)> = u
@@ -360,7 +359,15 @@ pub async fn run_oauth2_flow(
     // Open browser securely
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open")
-        .arg(&auth_url_str)
+        .arg(auth_url.as_str())
+        .spawn();
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("xdg-open")
+        .arg(auth_url.as_str())
+        .spawn();
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", "start", auth_url.as_str()])
         .spawn();
 
     // Wait for redirect callback
