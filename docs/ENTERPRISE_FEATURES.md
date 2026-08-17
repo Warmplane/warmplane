@@ -88,7 +88,8 @@ As enterprises deploy autonomous agents in production environments, unmanaged MC
 | Milestone | Feature Pillar | Status | Impact | Complexity | Target Audience |
 | :--- | :--- | :---: | :--- | :--- | :--- |
 | **Phase 1** | **Human-in-the-Loop (HITL) Workflows** | ✅ Released (v0.13.0) | 🟢 Critical | Medium | Security & Compliance Officers |
-| **Phase 2** | **WORM Audit Trail & SIEM Export** | ✅ Released (v0.12.0) | 🟢 High | Low-Medium | SecOps / Enterprise Auditors |
+| **Phase 2** | **WORM Audit Trail & HMAC Integrity** | ✅ Released (v0.16.0) | 🟢 High | Low-Medium | SecOps / Enterprise Auditors |
 | **Phase 3** | **Circuit Breaking & Supervision** | ✅ Released (v0.15.0) | 🟡 High | Medium | AI Platform Teams |
-| **Phase 4** | **Multi-Tenant RBAC & OIDC Auth** | 🔄 Planned | 🟡 High | Medium | Platform Engineers & SREs |
-| **Phase 5** | **FinOps Budgeting & Quota Caps** | 🔄 Planned | 🔵 Medium | Low | FinOps & Engineering Leads |
+| **Phase 4** | **API Token Auth & Proxy Guarding** | ✅ Released (v0.16.0) | 🟢 Critical | Low-Medium | SecOps & Platform Engineers |
+| **Phase 5** | **Multi-Tenant RBAC & OIDC Auth** | 🔄 Planned | 🟡 High | Medium | Platform Engineers & SREs |
+| **Phase 6** | **FinOps Budgeting & Quota Caps** | 🔄 Planned | 🔵 Medium | Low | FinOps & Engineering Leads |

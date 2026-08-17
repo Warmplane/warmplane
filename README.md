@@ -1,7 +1,7 @@
 # Warmplane
 
 > **The local control plane that keeps MCP sessions warm.**  
-> v0.15.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.16.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
 
@@ -173,6 +173,7 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 
 | Feature | Since | Summary |
 |---------|-------|---------|
+| **Security Hardening & WORM Integrity** | v0.16.0 | API token gate, OAuth proxy guard, HMAC audit verification, sliding-window backoff, resource caps |
 | **Fault Tolerance & Supervision** | v0.15.0 | Supervisor restart loop, configurable circuit breakers, and degraded boot |
 | **Agent Enrichment Suite** | v0.14.0 | Facade search, context distillation (`_jsonpath`/`_limit_lines`), and multi-step batch execution |
 | **HITL Approval Engine** | v0.13.0 | Operator gate approval engine, suspension, argument editing, and HMAC webhook dispatch |
@@ -199,6 +200,15 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 ---
 
 ## Changelog
+
+### v0.16.0 — Enterprise Security Hardening, Audit Cryptographic Integrity & Lifecycle Resilience
+- **API Token Authentication & Middleware Guarding:** Added `--auth-token` CLI parameter, `McpConfig.auth_token` configuration field, and `WARMPLANE_AUTH_TOKEN` environment variable support to securely protect daemon endpoints with Bearer/X-Warmplane-Key authentication.
+- **OAuth Proxy Security & Secret Masking:** Hardened the OAuth proxy listener with Host validation and cross-origin browser blocking; masked `state` and PKCE `code_challenge` secrets in log output.
+- **Cryptographic WORM Audit Integrity & HMAC Signing:** Included all 20 persisted metadata fields in hash chain digests (`work_item_id`, `client_ip`, `resource_uri`, `execution_latency_us`, `error_message`); added HMAC-SHA256 keyed digest calculations and checkpoint generation for external cryptographic anchoring.
+- **Secret Sanitization & Redaction:** Enhanced case-insensitive redaction matching with built-in default sensitive key list (`token`, `secret`, `password`, `key`, `authorization`, etc.); restricted external HITL webhook events to only transmit `sanitized_args`; sanitized secrets before printing in CLI commands.
+- **Supervisor & Circuit Breaker Coordination:** Automatically reset circuit breakers on successful supervisor reconnection; added single-flight probe limits in `HalfOpen` circuit breaker state; implemented 60-second sliding-window restart backoff; pruned removed items during catalog reconciliation; cleaned up circuit breakers on server unmount.
+- **Resource Caps & Safety Controls:** Enforced `MAX_BATCH_STEPS = 50` and `DEFAULT_BATCH_TIMEOUT_MS = 60_000` execution budget; capped wildcard JSONPath output expansion to 10,000 items and search results to 100; returned `POLICY_DENIED` (HTTP 403) and 404 for unknown operation cancellation; sanitized CSV audit exports against formula injection.
+- **CI Quality Gates & Dependency Audits:** Integrated native `cargo-audit` scanning in GitHub Actions CI; updated dependencies resolving all reported advisories.
 
 ### v0.15.0 — Fault Tolerance, Boot Resilience & Control Deck Feature Parity
 - **Boot Resilience & Degraded Startup:** Graceful daemon boot when upstream servers (such as Docker, remote SSE endpoints, or unconfigured tools) fail or timeout. Failed servers are flagged as `degraded` without crashing the daemon or blocking other healthy upstreams.
