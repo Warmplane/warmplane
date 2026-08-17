@@ -25,11 +25,15 @@ export function renderOverview(): string {
       const transport = s.command ? 'stdio' : 'http / sse';
       const cmd = s.command ? `${s.command} ${(s.args || []).join(' ')}` : s.url;
       const statusInfo = state.serverStatuses[k] || { status: 'connected', protocol_version: '2026-07-28' };
+      const isDegraded = statusInfo.status === 'degraded';
+      const isError = statusInfo.status === 'error' || statusInfo.status === 'disconnected';
+      const statusColor = isDegraded ? 'var(--amber-400)' : isError ? 'var(--red-400)' : 'var(--green-400)';
+
       return `
-        <div class="bento-card">
+        <div class="bento-card col-4" style="background: var(--surface); border: 1px solid var(--border);">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
             <span style="font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
-              <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--green-400); display: inline-block;"></span>
+              <span style="width: 8px; height: 8px; border-radius: 50%; background: ${statusColor}; display: inline-block;"></span>
               ${escapeHtml(k)}
             </span>
             <span class="brand-badge">${transport}</span>
@@ -38,7 +42,7 @@ export function renderOverview(): string {
             ${escapeHtml(cmd || '')}
           </div>
           <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); border-top: 1px solid var(--border); padding-top: 8px;">
-            <span>Status: <strong style="color: var(--green-400);">${statusInfo.status}</strong></span>
+            <span>Status: <strong style="color: ${statusColor};">${escapeHtml(statusInfo.status)}</strong></span>
             <span>Protocol: ${statusInfo.protocol_version}</span>
           </div>
         </div>
