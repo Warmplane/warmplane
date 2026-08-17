@@ -1004,10 +1004,9 @@ mod tests {
         assert_eq!(get_res.status(), StatusCode::OK);
 
         // Test GET /v1/audit/verify
-        let verify_res =
-            crate::http_v1::audit_api::handle_verify_audit_chain(State(state.clone()))
-                .await
-                .into_response();
+        let verify_res = crate::http_v1::audit_api::handle_verify_audit_chain(State(state.clone()))
+            .await
+            .into_response();
 
         assert_eq!(verify_res.status(), StatusCode::OK);
         let verify_bytes = to_bytes(verify_res.into_body(), usize::MAX).await.unwrap();

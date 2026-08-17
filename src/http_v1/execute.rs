@@ -98,12 +98,18 @@ pub async fn handle_call_capability(
                 server_id: None,
                 capability_id: Some(payload.capability_id.clone()),
                 resource_uri: None,
-                sanitized_args: Some(redact_value(payload.args.clone(), &policy_guard.redact_keys)),
+                sanitized_args: Some(redact_value(
+                    payload.args.clone(),
+                    &policy_guard.redact_keys,
+                )),
                 sanitized_response: None,
                 execution_latency_us: Some(start_time.elapsed().as_micros() as u64),
                 status: crate::audit::AuditEventStatus::Denied,
                 error_code: Some("POLICY_DENIED".to_string()),
-                error_message: Some(format!("Capability '{}' blocked by policy", payload.capability_id)),
+                error_message: Some(format!(
+                    "Capability '{}' blocked by policy",
+                    payload.capability_id
+                )),
                 operator_id: None,
                 approval_ticket_id: None,
             });
@@ -324,7 +330,10 @@ pub async fn handle_call_capability(
                     execution_latency_us: Some(start_time.elapsed().as_micros() as u64),
                     status: crate::audit::AuditEventStatus::Denied,
                     error_code: Some("APPROVAL_TIMEOUT".to_string()),
-                    error_message: Some(format!("Approval request timed out after {}s", approval_timeout_secs)),
+                    error_message: Some(format!(
+                        "Approval request timed out after {}s",
+                        approval_timeout_secs
+                    )),
                     operator_id: None,
                     approval_ticket_id: Some(approval_id),
                 });
@@ -478,12 +487,16 @@ pub async fn handle_call_capability(
                 approval_ticket_id: None,
             });
 
+            let distill_opts =
+                crate::context_filter::DistillationOptions::from_args(Some(&payload.args));
+            let distilled_data = crate::context_filter::distill_value(data, &distill_opts);
+
             let response_json = json!({
                 "ok": true,
                 "request_id": request_id,
                 "context": req_context,
                 "trace_id": trace_id,
-                "data": data,
+                "data": distilled_data,
                 "error": null,
                 "retry": retry_base("completed"),
             });
@@ -520,7 +533,10 @@ pub async fn handle_call_capability(
                 execution_latency_us: Some(elapsed_us),
                 status: crate::audit::AuditEventStatus::Failed,
                 error_code: Some("UPSTREAM_TIMEOUT".to_string()),
-                error_message: Some(format!("Tool call timed out after {}ms", state.tool_timeout_ms)),
+                error_message: Some(format!(
+                    "Tool call timed out after {}ms",
+                    state.tool_timeout_ms
+                )),
                 operator_id: None,
                 approval_ticket_id: None,
             });
