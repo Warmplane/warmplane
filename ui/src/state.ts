@@ -1,5 +1,14 @@
 import { McpConfig, CapabilityItem, PendingApproval, AuditEventItem, VerificationReport, AuditStats, CircuitBreakerSnapshot } from './api';
 
+export interface AuditFiltersState {
+  search: string;
+  status: string;
+  eventType: string;
+  serverId: string;
+  limit: number;
+  offset: number;
+}
+
 export interface AppState {
   configPath: string;
   config: McpConfig;
@@ -8,6 +17,9 @@ export interface AppState {
   capabilities: CapabilityItem[];
   approvals: PendingApproval[];
   auditEvents: AuditEventItem[];
+  auditTotal: number;
+  auditFilters: AuditFiltersState;
+  auditSelectedEvent: AuditEventItem | null;
   auditStats: AuditStats | null;
   auditVerification: VerificationReport | null;
   selectedCapabilityId: string | null;
@@ -33,6 +45,16 @@ class Store {
     capabilities: [],
     approvals: [],
     auditEvents: [],
+    auditTotal: 0,
+    auditFilters: {
+      search: '',
+      status: 'all',
+      eventType: 'all',
+      serverId: 'all',
+      limit: 25,
+      offset: 0,
+    },
+    auditSelectedEvent: null,
     auditStats: null,
     auditVerification: null,
     selectedCapabilityId: null,
@@ -72,3 +94,4 @@ class Store {
 }
 
 export const store = new Store();
+

@@ -28,13 +28,24 @@ class WarmplaneApp {
     });
   }
 
+  private auditSearchTimeout: any = null;
+
   async refreshData() {
     try {
+      const state = store.getState();
+      const filters = state.auditFilters;
       const [configRes, capsRes, apprRes, auditEventsRes, auditStatsRes] = await Promise.all([
         api.getConfig(),
         api.listCapabilities(),
         api.listApprovals(),
-        api.listAuditEvents({ limit: 50 }),
+        api.listAuditEvents({
+          server_id: filters.serverId !== 'all' ? filters.serverId : undefined,
+          event_type: filters.eventType !== 'all' ? filters.eventType : undefined,
+          status: filters.status !== 'all' ? filters.status : undefined,
+          search: filters.search.trim() ? filters.search.trim() : undefined,
+          limit: filters.limit,
+          offset: filters.offset,
+        }),
         api.getAuditStats()
       ]);
 
@@ -67,7 +78,8 @@ class WarmplaneApp {
 
       if (auditEventsRes && Array.isArray(auditEventsRes.events)) {
         store.setState({
-          auditEvents: auditEventsRes.events
+          auditEvents: auditEventsRes.events,
+          auditTotal: auditEventsRes.total ?? auditEventsRes.events.length,
         });
       }
 
@@ -83,12 +95,24 @@ class WarmplaneApp {
 
   async refreshAuditEvents() {
     try {
+      const state = store.getState();
+      const filters = state.auditFilters;
       const [auditEventsRes, auditStatsRes] = await Promise.all([
-        api.listAuditEvents({ limit: 50 }),
+        api.listAuditEvents({
+          server_id: filters.serverId !== 'all' ? filters.serverId : undefined,
+          event_type: filters.eventType !== 'all' ? filters.eventType : undefined,
+          status: filters.status !== 'all' ? filters.status : undefined,
+          search: filters.search.trim() ? filters.search.trim() : undefined,
+          limit: filters.limit,
+          offset: filters.offset,
+        }),
         api.getAuditStats()
       ]);
       if (auditEventsRes && Array.isArray(auditEventsRes.events)) {
-        store.setState({ auditEvents: auditEventsRes.events });
+        store.setState({
+          auditEvents: auditEventsRes.events,
+          auditTotal: auditEventsRes.total ?? auditEventsRes.events.length,
+        });
       }
       if (auditStatsRes && auditStatsRes.ok) {
         store.setState({ auditStats: auditStatsRes });
@@ -96,6 +120,94 @@ class WarmplaneApp {
     } catch (e) {
       console.error('Failed to refresh audit events:', e);
     }
+  }
+
+  handleAuditSearchInput(val: string) {
+    const state = store.getState();
+    const newFilters = { ...state.auditFilters, search: val, offset: 0 };
+    store.setState({ auditFilters: newFilters });
+    clearTimeout(this.auditSearchTimeout);
+    this.auditSearchTimeout = setTimeout(() => {
+      this.refreshAuditEvents();
+    }, 250);
+  }
+
+  handleAuditStatusFilter(status: string) {
+    const state = store.getState();
+    store.setState({ auditFilters: { ...state.auditFilters, status, offset: 0 } });
+    this.refreshAuditEvents();
+  }
+
+  handleAuditEventTypeFilter(eventType: string) {
+    const state = store.getState();
+    store.setState({ auditFilters: { ...state.auditFilters, eventType, offset: 0 } });
+    this.refreshAuditEvents();
+  }
+
+  handleAuditServerFilter(serverId: string) {
+    const state = store.getState();
+    store.setState({ auditFilters: { ...state.auditFilters, serverId, offset: 0 } });
+    this.refreshAuditEvents();
+  }
+
+  handleAuditPageSize(sizeStr: string) {
+    const size = parseInt(sizeStr, 10) || 25;
+    const state = store.getState();
+    store.setState({ auditFilters: { ...state.auditFilters, limit: size, offset: 0 } });
+    this.refreshAuditEvents();
+  }
+
+  clearAuditFilters() {
+    const state = store.getState();
+    store.setState({
+      auditFilters: {
+        search: '',
+        status: 'all',
+        eventType: 'all',
+        serverId: 'all',
+        limit: state.auditFilters.limit || 25,
+        offset: 0,
+      }
+    });
+    this.refreshAuditEvents();
+  }
+
+  auditPrevPage() {
+    const state = store.getState();
+    const { limit, offset } = state.auditFilters;
+    const newOffset = Math.max(0, offset - limit);
+    if (newOffset !== offset) {
+      store.setState({ auditFilters: { ...state.auditFilters, offset: newOffset } });
+      this.refreshAuditEvents();
+    }
+  }
+
+  auditNextPage() {
+    const state = store.getState();
+    const { limit, offset } = state.auditFilters;
+    const total = state.auditTotal;
+    if (offset + limit < total) {
+      store.setState({ auditFilters: { ...state.auditFilters, offset: offset + limit } });
+      this.refreshAuditEvents();
+    }
+  }
+
+  auditGoToPage(pageNumber: number) {
+    const state = store.getState();
+    const { limit } = state.auditFilters;
+    const newOffset = Math.max(0, (pageNumber - 1) * limit);
+    store.setState({ auditFilters: { ...state.auditFilters, offset: newOffset } });
+    this.refreshAuditEvents();
+  }
+
+  selectAuditEvent(id: string | null) {
+    if (!id) {
+      store.setState({ auditSelectedEvent: null });
+      return;
+    }
+    const state = store.getState();
+    const found = state.auditEvents.find(e => e.id === id) || null;
+    store.setState({ auditSelectedEvent: found });
   }
 
   async verifyAuditChain() {

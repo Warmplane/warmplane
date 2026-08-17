@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-15
+// Rust guideline compliant 2026-08-17
 
 //! HTTP v1 handlers for WORM audit log querying, verification, export, and analytics.
 
@@ -16,6 +16,34 @@ use crate::{
     daemon::AppState,
 };
 
+/// Parses a string into an `AuditEventType`.
+fn parse_event_type(et: &str) -> Option<AuditEventType> {
+    match et.trim().to_lowercase().as_str() {
+        "tool_execution" => Some(AuditEventType::ToolExecution),
+        "tool_intercepted_hitl" => Some(AuditEventType::ToolInterceptedHitl),
+        "approval_granted" => Some(AuditEventType::ApprovalGranted),
+        "approval_rejected" => Some(AuditEventType::ApprovalRejected),
+        "approval_expired" => Some(AuditEventType::ApprovalExpired),
+        "policy_violation" => Some(AuditEventType::PolicyViolation),
+        "config_mutation" => Some(AuditEventType::ConfigMutation),
+        "sampling_call" => Some(AuditEventType::SamplingCall),
+        "resource_access" => Some(AuditEventType::ResourceAccess),
+        _ => None,
+    }
+}
+
+/// Parses a string into an `AuditEventStatus`.
+fn parse_event_status(st: &str) -> Option<AuditEventStatus> {
+    match st.trim().to_lowercase().as_str() {
+        "success" => Some(AuditEventStatus::Success),
+        "failed" => Some(AuditEventStatus::Failed),
+        "denied" => Some(AuditEventStatus::Denied),
+        "intercepted" => Some(AuditEventStatus::Intercepted),
+        "cancelled" => Some(AuditEventStatus::Cancelled),
+        _ => None,
+    }
+}
+
 /// Query parameters for GET `/v1/audit/events`.
 #[derive(Debug, Deserialize, Default)]
 pub struct AuditEventsQuery {
@@ -25,14 +53,22 @@ pub struct AuditEventsQuery {
     pub end_time: Option<u64>,
     /// Filter by actor ID.
     pub actor_id: Option<String>,
+    /// Filter by target upstream server ID.
+    pub server_id: Option<String>,
     /// Filter by capability ID.
     pub capability_id: Option<String>,
     /// Filter by event type string.
     pub event_type: Option<String>,
+    /// Filter by outcome status string.
+    pub status: Option<String>,
     /// Filter by trace ID.
     pub trace_id: Option<String>,
     /// Filter by request ID.
     pub request_id: Option<String>,
+    /// General search term or keyword query across multiple fields.
+    pub search: Option<String>,
+    /// Shorthand alias for `search`.
+    pub q: Option<String>,
     /// Page size (default 50).
     pub limit: Option<usize>,
     /// Page offset (default 0).
@@ -50,8 +86,22 @@ pub struct AuditExportQuery {
     pub end_time: Option<u64>,
     /// Filter by actor ID.
     pub actor_id: Option<String>,
+    /// Filter by server ID.
+    pub server_id: Option<String>,
     /// Filter by capability ID.
     pub capability_id: Option<String>,
+    /// Filter by event type string.
+    pub event_type: Option<String>,
+    /// Filter by outcome status string.
+    pub status: Option<String>,
+    /// Filter by trace ID.
+    pub trace_id: Option<String>,
+    /// Filter by request ID.
+    pub request_id: Option<String>,
+    /// General search term or keyword query across multiple fields.
+    pub search: Option<String>,
+    /// Shorthand alias for `search`.
+    pub q: Option<String>,
 }
 
 /// Handles GET `/v1/audit/events` returning paginated audit records matching filters.
@@ -59,27 +109,21 @@ pub async fn handle_list_audit_events(
     State(state): State<AppState>,
     Query(query): Query<AuditEventsQuery>,
 ) -> impl IntoResponse {
-    let parsed_event_type = query.event_type.and_then(|et| match et.as_str() {
-        "tool_execution" => Some(AuditEventType::ToolExecution),
-        "tool_intercepted_hitl" => Some(AuditEventType::ToolInterceptedHitl),
-        "approval_granted" => Some(AuditEventType::ApprovalGranted),
-        "approval_rejected" => Some(AuditEventType::ApprovalRejected),
-        "approval_expired" => Some(AuditEventType::ApprovalExpired),
-        "policy_violation" => Some(AuditEventType::PolicyViolation),
-        "config_mutation" => Some(AuditEventType::ConfigMutation),
-        "sampling_call" => Some(AuditEventType::SamplingCall),
-        "resource_access" => Some(AuditEventType::ResourceAccess),
-        _ => None,
-    });
+    let parsed_event_type = query.event_type.as_deref().and_then(parse_event_type);
+    let parsed_status = query.status.as_deref().and_then(parse_event_status);
+    let search_query = query.search.or(query.q);
 
     let filter = AuditQueryFilter {
         start_time_ns: query.start_time,
         end_time_ns: query.end_time,
         actor_id: query.actor_id,
+        server_id: query.server_id,
         capability_id: query.capability_id,
         event_type: parsed_event_type,
+        status: parsed_status,
         trace_id: query.trace_id,
         request_id: query.request_id,
+        search: search_query,
         limit: query.limit.unwrap_or(50),
         offset: query.offset.unwrap_or(0),
     };
@@ -183,13 +227,23 @@ pub async fn handle_export_audit(
     State(state): State<AppState>,
     Query(query): Query<AuditExportQuery>,
 ) -> impl IntoResponse {
+    let parsed_event_type = query.event_type.as_deref().and_then(parse_event_type);
+    let parsed_status = query.status.as_deref().and_then(parse_event_status);
+    let search_query = query.search.or(query.q);
+
     let filter = AuditQueryFilter {
         start_time_ns: query.start_time,
         end_time_ns: query.end_time,
         actor_id: query.actor_id,
+        server_id: query.server_id,
         capability_id: query.capability_id,
+        event_type: parsed_event_type,
+        status: parsed_status,
+        trace_id: query.trace_id,
+        request_id: query.request_id,
+        search: search_query,
         limit: 100_000,
-        ..Default::default()
+        offset: 0,
     };
 
     let (events, _) = state.audit_store.query(&filter).await;

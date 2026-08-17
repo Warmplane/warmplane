@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-15
+// Rust guideline compliant 2026-08-17
 
 //! Append-only WORM audit log storage engine and query interface.
 //!
@@ -14,7 +14,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::audit::chain::{compute_event_hash_with_key, verify_record_hash_with_key, GENESIS_HASH};
-use crate::audit::models::{AuditEvent, AuditEventType, RawAuditEvent, VerificationReport};
+use crate::audit::models::{
+    AuditEvent, AuditEventStatus, AuditEventType, RawAuditEvent, VerificationReport,
+};
 
 /// Query filter options for searching audit events.
 #[derive(Debug, Clone, Default)]
@@ -25,14 +27,20 @@ pub struct AuditQueryFilter {
     pub end_time_ns: Option<u64>,
     /// Filter by specific actor ID.
     pub actor_id: Option<String>,
+    /// Filter by target upstream server ID.
+    pub server_id: Option<String>,
     /// Filter by target capability ID.
     pub capability_id: Option<String>,
     /// Filter by event type.
     pub event_type: Option<AuditEventType>,
+    /// Filter by event status.
+    pub status: Option<AuditEventStatus>,
     /// Filter by trace ID.
     pub trace_id: Option<String>,
     /// Filter by request ID.
     pub request_id: Option<String>,
+    /// Case-insensitive multi-field search substring query.
+    pub search: Option<String>,
     /// Maximum number of records to return.
     pub limit: usize,
     /// Offset index for pagination.
@@ -355,6 +363,7 @@ impl AuditStore {
     /// (Matching records subset, total matching count).
     pub async fn query(&self, filter: &AuditQueryFilter) -> (Vec<AuditEvent>, usize) {
         let events = self.events.read().await;
+        let search_pattern = filter.search.as_ref().map(|s| s.to_lowercase());
 
         let filtered: Vec<&AuditEvent> = events
             .iter()
@@ -375,6 +384,11 @@ impl AuditStore {
                         return false;
                     }
                 }
+                if let Some(ref srv) = filter.server_id {
+                    if e.server_id.as_deref() != Some(srv.as_str()) {
+                        return false;
+                    }
+                }
                 if let Some(ref cap) = filter.capability_id {
                     if e.capability_id.as_deref() != Some(cap.as_str()) {
                         return false;
@@ -385,6 +399,11 @@ impl AuditStore {
                         return false;
                     }
                 }
+                if let Some(ref st) = filter.status {
+                    if &e.status != st {
+                        return false;
+                    }
+                }
                 if let Some(ref tid) = filter.trace_id {
                     if &e.trace_id != tid {
                         return false;
@@ -392,6 +411,40 @@ impl AuditStore {
                 }
                 if let Some(ref rid) = filter.request_id {
                     if e.request_id.as_deref() != Some(rid.as_str()) {
+                        return false;
+                    }
+                }
+                if let Some(ref needle) = search_pattern {
+                    let matches = e.id.to_lowercase().contains(needle)
+                        || e.trace_id.to_lowercase().contains(needle)
+                        || e.request_id
+                            .as_deref()
+                            .is_some_and(|v| v.to_lowercase().contains(needle))
+                        || e.actor_id
+                            .as_deref()
+                            .is_some_and(|v| v.to_lowercase().contains(needle))
+                        || e.server_id
+                            .as_deref()
+                            .is_some_and(|v| v.to_lowercase().contains(needle))
+                        || e.capability_id
+                            .as_deref()
+                            .is_some_and(|v| v.to_lowercase().contains(needle))
+                        || e.resource_uri
+                            .as_deref()
+                            .is_some_and(|v| v.to_lowercase().contains(needle))
+                        || e.error_code
+                            .as_deref()
+                            .is_some_and(|v| v.to_lowercase().contains(needle))
+                        || e.error_message
+                            .as_deref()
+                            .is_some_and(|v| v.to_lowercase().contains(needle))
+                        || e.operator_id
+                            .as_deref()
+                            .is_some_and(|v| v.to_lowercase().contains(needle))
+                        || e.approval_ticket_id
+                            .as_deref()
+                            .is_some_and(|v| v.to_lowercase().contains(needle));
+                    if !matches {
                         return false;
                     }
                 }
@@ -492,5 +545,138 @@ mod tests {
             .await;
         assert_eq!(total, 1);
         assert_eq!(queried[0].id, ev1.id);
+    }
+
+    #[tokio::test]
+    async fn test_store_filter_status_server_search_and_pagination() {
+        let store = AuditStore::in_memory();
+
+        let raw1 = RawAuditEvent {
+            event_type: AuditEventType::ToolExecution,
+            trace_id: "trace-101".to_string(),
+            request_id: Some("req-101".to_string()),
+            actor_id: Some("agent-alpha".to_string()),
+            work_item_id: None,
+            client_ip: None,
+            server_id: Some("github-mcp".to_string()),
+            capability_id: Some("github-mcp.create_issue".to_string()),
+            resource_uri: None,
+            sanitized_args: Some(serde_json::json!({"title": "Bug in query"})),
+            sanitized_response: None,
+            execution_latency_us: Some(250),
+            status: AuditEventStatus::Success,
+            error_code: None,
+            error_message: None,
+            operator_id: None,
+            approval_ticket_id: None,
+        };
+
+        let raw2 = RawAuditEvent {
+            event_type: AuditEventType::PolicyViolation,
+            trace_id: "trace-102".to_string(),
+            request_id: Some("req-102".to_string()),
+            actor_id: Some("agent-beta".to_string()),
+            work_item_id: None,
+            client_ip: None,
+            server_id: Some("postgres-mcp".to_string()),
+            capability_id: Some("postgres-mcp.drop_table".to_string()),
+            resource_uri: None,
+            sanitized_args: None,
+            sanitized_response: None,
+            execution_latency_us: Some(10),
+            status: AuditEventStatus::Denied,
+            error_code: Some("POLICY_DENY".to_string()),
+            error_message: Some("Dangerous operation forbidden by security policy".to_string()),
+            operator_id: None,
+            approval_ticket_id: None,
+        };
+
+        let raw3 = RawAuditEvent {
+            event_type: AuditEventType::ToolInterceptedHitl,
+            trace_id: "trace-103".to_string(),
+            request_id: Some("req-103".to_string()),
+            actor_id: Some("agent-gamma".to_string()),
+            work_item_id: None,
+            client_ip: None,
+            server_id: Some("postgres-mcp".to_string()),
+            capability_id: Some("postgres-mcp.delete_records".to_string()),
+            resource_uri: None,
+            sanitized_args: None,
+            sanitized_response: None,
+            execution_latency_us: Some(15),
+            status: AuditEventStatus::Intercepted,
+            error_code: None,
+            error_message: None,
+            operator_id: Some("admin-bob".to_string()),
+            approval_ticket_id: Some("ticket-999".to_string()),
+        };
+
+        let ev1 = store.append(raw1).await.unwrap();
+        let ev2 = store.append(raw2).await.unwrap();
+        let ev3 = store.append(raw3).await.unwrap();
+
+        // Filter by status = Denied
+        let (denied, total_denied) = store
+            .query(&AuditQueryFilter {
+                status: Some(AuditEventStatus::Denied),
+                ..Default::default()
+            })
+            .await;
+        assert_eq!(total_denied, 1);
+        assert_eq!(denied[0].id, ev2.id);
+
+        // Filter by server_id = postgres-mcp
+        let (pg_events, total_pg) = store
+            .query(&AuditQueryFilter {
+                server_id: Some("postgres-mcp".to_string()),
+                ..Default::default()
+            })
+            .await;
+        assert_eq!(total_pg, 2);
+        assert_eq!(pg_events[0].id, ev3.id);
+        assert_eq!(pg_events[1].id, ev2.id);
+
+        // Search by keyword "ticket-999"
+        let (searched, total_searched) = store
+            .query(&AuditQueryFilter {
+                search: Some("ticket-999".to_string()),
+                ..Default::default()
+            })
+            .await;
+        assert_eq!(total_searched, 1);
+        assert_eq!(searched[0].id, ev3.id);
+
+        // Search case-insensitively for "FORBIDDEN"
+        let (searched_err, total_err) = store
+            .query(&AuditQueryFilter {
+                search: Some("forbidden".to_string()),
+                ..Default::default()
+            })
+            .await;
+        assert_eq!(total_err, 1);
+        assert_eq!(searched_err[0].id, ev2.id);
+
+        // Pagination: limit 1, offset 1
+        let (paged, total_all) = store
+            .query(&AuditQueryFilter {
+                limit: 1,
+                offset: 1,
+                ..Default::default()
+            })
+            .await;
+        assert_eq!(total_all, 3);
+        assert_eq!(paged.len(), 1);
+        assert_eq!(paged[0].id, ev2.id);
+
+        // Pagination: limit 1, offset 2
+        let (paged2, _) = store
+            .query(&AuditQueryFilter {
+                limit: 1,
+                offset: 2,
+                ..Default::default()
+            })
+            .await;
+        assert_eq!(paged2.len(), 1);
+        assert_eq!(paged2[0].id, ev1.id);
     }
 }
