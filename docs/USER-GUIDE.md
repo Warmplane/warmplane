@@ -338,13 +338,15 @@ You can set global resilience defaults at the root of `mcp_servers.json` or over
 }
 ```
 
-#### Circuit Breaker Parameters
+#### Resilience & Supervisor Parameters
 
 | Field | Type | Required | Default | Description |
 | :--- | :--- | :---: | :--- | :--- |
 | `failureThreshold` | Number | No | `3` | Number of consecutive upstream timeouts or failures required to trip the circuit to `Open`. |
 | `cooldownMs` | Number | No | `30000` | Cooldown period in milliseconds before allowing probe requests in `HalfOpen` state. |
 | `consecutiveSuccesses` | Number | No | `2` | Number of successful probe executions in `HalfOpen` required to fully reset the circuit to `Closed`. |
+| `autoRestart` | Boolean | No | `true` | Automatically restarts crashed stdio child processes in the background with exponential backoff. |
+| `maxRestarts` | Number | No | `5` | Maximum supervisor restart attempts before permanently disabling the crashed process. |
 
 When a circuit is `Open`, calls fast-fail instantly with HTTP 503 and error code `CIRCUIT_OPEN` without contacting the upstream worker:
 
@@ -362,6 +364,12 @@ When a circuit is `Open`, calls fast-fail instantly with HTTP 503 and error code
   }
 }
 ```
+
+#### Self-Healing Process Supervision
+When an upstream child process exits or crashes unexpectedly:
+1. The supervisor catches the transport error and schedules an exponential backoff reconnect ($\min(500 \times 2^{\text{retry}-1}, 30000)\text{ ms}$).
+2. Once re-spawned, Warmplane re-negotiates the MCP protocol handshake and rediscovers tools, resources, and prompts.
+3. Warmplane updates in-memory registries, recomputes the SHA-256 catalog ETag digest, and broadcasts a change event over `GET /v1/resources/updates`.
 
 ---
 

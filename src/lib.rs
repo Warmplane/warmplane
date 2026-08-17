@@ -21,4 +21,5 @@ pub mod models;
 pub mod oauth2;
 pub mod operations;
 pub mod search;
+pub mod supervisor;
 pub mod telemetry;

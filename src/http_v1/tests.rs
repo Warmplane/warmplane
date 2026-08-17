@@ -1067,6 +1067,7 @@ mod tests {
                     failure_threshold: 2,
                     cooldown_ms: 100,
                     consecutive_successes: 1,
+                    ..Default::default()
                 },
             )
             .await;
