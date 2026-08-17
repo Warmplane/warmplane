@@ -693,8 +693,8 @@ class N{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
           <input 
             type="text" 
             id="audit-search-input" 
-            class="input-control" 
-            style="width: 100%; padding-left: 28px; font-size: 12px; height: 32px; background: rgba(0,0,0,0.3); border: 1px solid var(--border);"
+            class="form-input" 
+            style="width: 100%; padding-left: 28px; font-size: 12px; height: 32px;"
             placeholder="Search trace, actor, capability, hash, error..." 
             value="${b(r.search)}"
             oninput="window.app.handleAuditSearchInput(this.value)"
@@ -705,8 +705,8 @@ class N{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         <!-- Status Filter -->
         <div>
           <select 
-            class="input-control" 
-            style="width: 100%; font-size: 12px; height: 32px; background: rgba(0,0,0,0.3); border: 1px solid var(--border);"
+            class="form-input" 
+            style="width: 100%; font-size: 12px; height: 32px;"
             onchange="window.app.handleAuditStatusFilter(this.value)"
           >
             <option value="all" ${r.status==="all"?"selected":""}>All Statuses</option>
@@ -721,8 +721,8 @@ class N{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         <!-- Event Type Filter -->
         <div>
           <select 
-            class="input-control" 
-            style="width: 100%; font-size: 12px; height: 32px; background: rgba(0,0,0,0.3); border: 1px solid var(--border);"
+            class="form-input" 
+            style="width: 100%; font-size: 12px; height: 32px;"
             onchange="window.app.handleAuditEventTypeFilter(this.value)"
           >
             <option value="all" ${r.eventType==="all"?"selected":""}>All Event Types</option>
@@ -741,8 +741,8 @@ class N{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         <!-- Server Filter -->
         <div>
           <select 
-            class="input-control" 
-            style="width: 100%; font-size: 12px; height: 32px; background: rgba(0,0,0,0.3); border: 1px solid var(--border);"
+            class="form-input" 
+            style="width: 100%; font-size: 12px; height: 32px;"
             onchange="window.app.handleAuditServerFilter(this.value)"
           >
             <option value="all" ${r.serverId==="all"?"selected":""}>All MCP Servers</option>
@@ -770,8 +770,8 @@ class N{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         <span style="color: var(--border);">|</span>
         <span>Page Size:</span>
         <select 
-          class="input-control" 
-          style="font-size: 11.5px; padding: 2px 6px; height: 26px; background: rgba(0,0,0,0.3); border: 1px solid var(--border);"
+          class="form-input" 
+          style="font-size: 11.5px; padding: 2px 24px 2px 8px; height: 28px; width: auto;"
           onchange="window.app.handleAuditPageSize(this.value)"
         >
           <option value="10" ${l===10?"selected":""}>10 / page</option>
