@@ -388,14 +388,27 @@ impl AppState {
         }
         {
             let mut statuses_guard = self.server_statuses.write().await;
-            statuses_guard.insert(
-                server_id.to_string(),
-                json!({
-                    "transport": transport_type,
-                    "protocol_version": srv_cfg.protocol_version.as_deref().unwrap_or(DEFAULT_MCP_PROTOCOL_VERSION),
-                    "status": "connected"
-                }),
-            );
+            let is_degraded = srv_cfg.command.is_some()
+                && new_capabilities.is_empty()
+                && new_resources.is_empty()
+                && new_prompts.is_empty();
+
+            let mut status_val = json!({
+                "transport": transport_type,
+                "protocol_version": srv_cfg.protocol_version.as_deref().unwrap_or(DEFAULT_MCP_PROTOCOL_VERSION),
+                "status": if is_degraded { "degraded" } else { "connected" }
+            });
+
+            if is_degraded {
+                if let Some(obj) = status_val.as_object_mut() {
+                    obj.insert(
+                        "error".to_string(),
+                        json!("Initial process spawn or MCP handshake failed; supervisor retrying in background"),
+                    );
+                }
+            }
+
+            statuses_guard.insert(server_id.to_string(), status_val);
         }
         {
             let mut caps_guard = self.capabilities.write().await;
