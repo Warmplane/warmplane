@@ -206,6 +206,37 @@ pub fn interactive_add_server(config_path: &str, preset_name: Option<String>) ->
         }
     }
 
+    let configure_resilience = Confirm::new(
+        "Configure custom fault tolerance & process supervision (circuit breaker, auto-restart)?",
+    )
+    .with_default(false)
+    .prompt()?;
+
+    if configure_resilience {
+        let mut res = crate::circuit_breaker::ResilienceConfig::default();
+
+        let threshold_str = Text::new("Consecutive failure threshold to trip circuit breaker:")
+            .with_default("3")
+            .prompt()?;
+        if let Ok(t) = threshold_str.trim().parse::<u32>() {
+            res.failure_threshold = t;
+        }
+
+        let cooldown_str = Text::new("Cooldown time in milliseconds before probe test:")
+            .with_default("30000")
+            .prompt()?;
+        if let Ok(c) = cooldown_str.trim().parse::<u64>() {
+            res.cooldown_ms = c;
+        }
+
+        let auto_restart = Confirm::new("Automatically restart crashed child processes?")
+            .with_default(true)
+            .prompt()?;
+        res.auto_restart = auto_restart;
+
+        server.resilience = Some(res);
+    }
+
     config.mcp_servers.insert(name.clone(), server);
     save_config(config_path, &config)?;
 
