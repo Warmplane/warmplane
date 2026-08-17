@@ -1,3 +1,84 @@
+export interface ResourceItem {
+  id: string;
+  server: string;
+  uri: string;
+  name: string;
+  description?: string;
+  mime_type?: string;
+  tags?: string[];
+}
+
+export interface ListResourcesResponse {
+  version: string;
+  catalog_version: string;
+  resources: ResourceItem[];
+}
+
+export interface ReadResourceRequest {
+  resource_id: string;
+  request_id?: string;
+  context?: {
+    operation_id?: string;
+    actor_id?: string;
+    grant_id?: string;
+  };
+  input_responses?: Record<string, any>;
+  request_state?: string;
+}
+
+export interface PromptArgument {
+  name: string;
+  description?: string;
+  required?: boolean;
+}
+
+export interface PromptItem {
+  id: string;
+  server: string;
+  name: string;
+  title?: string;
+  description?: string;
+  arguments?: PromptArgument[];
+  tags?: string[];
+}
+
+export interface ListPromptsResponse {
+  version: string;
+  catalog_version: string;
+  prompts: PromptItem[];
+}
+
+export interface GetPromptRequest {
+  prompt_id: string;
+  arguments?: Record<string, any>;
+  request_id?: string;
+  context?: {
+    operation_id?: string;
+    actor_id?: string;
+    grant_id?: string;
+  };
+}
+
+export interface CatalogEventItem {
+  id?: string;
+  cursor?: string;
+  timestamp?: number | string;
+  event_type?: string;
+  type?: string;
+  server?: string;
+  server_id?: string;
+  capability_id?: string;
+  resource_id?: string;
+  prompt_id?: string;
+  details?: Record<string, any>;
+}
+
+export interface CatalogEventsResponse {
+  catalog_version: string;
+  cursor?: string;
+  events: CatalogEventItem[];
+}
+
 export interface PolicyConfig {
   allow?: string[];
   deny?: string[];
@@ -187,6 +268,46 @@ export class WarmplaneClient {
     return res.json();
   }
 
+  async listResources(): Promise<ListResourcesResponse> {
+    const res = await fetch(`${this.baseUrl}/v1/resources`);
+    return res.json();
+  }
+
+  async readResource(req: ReadResourceRequest): Promise<{ status: number; durationMs: number; data: any }> {
+    const start = performance.now();
+    const res = await fetch(`${this.baseUrl}/v1/resources/read`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req)
+    });
+    const durationMs = performance.now() - start;
+    const data = await res.json();
+    return { status: res.status, durationMs, data };
+  }
+
+  async listPrompts(): Promise<ListPromptsResponse> {
+    const res = await fetch(`${this.baseUrl}/v1/prompts`);
+    return res.json();
+  }
+
+  async getPrompt(req: GetPromptRequest): Promise<{ status: number; durationMs: number; data: any }> {
+    const start = performance.now();
+    const res = await fetch(`${this.baseUrl}/v1/prompts/get`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req)
+    });
+    const durationMs = performance.now() - start;
+    const data = await res.json();
+    return { status: res.status, durationMs, data };
+  }
+
+  async getCatalogEvents(after?: string): Promise<CatalogEventsResponse> {
+    const q = after ? `?after=${encodeURIComponent(after)}` : '';
+    const res = await fetch(`${this.baseUrl}/v1/catalog/events${q}`);
+    return res.json();
+  }
+
   async callCapability(req: CallCapabilityRequest): Promise<{ status: number; durationMs: number; data: any }> {
     const start = performance.now();
     const res = await fetch(`${this.baseUrl}/v1/tools/call`, {
@@ -340,4 +461,5 @@ export class WarmplaneClient {
 }
 
 export const api = new WarmplaneClient();
+
 

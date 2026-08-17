@@ -1,4 +1,15 @@
-import { McpConfig, CapabilityItem, PendingApproval, AuditEventItem, VerificationReport, AuditStats, CircuitBreakerSnapshot } from './api';
+import {
+  McpConfig,
+  CapabilityItem,
+  ResourceItem,
+  PromptItem,
+  CatalogEventItem,
+  PendingApproval,
+  AuditEventItem,
+  VerificationReport,
+  AuditStats,
+  CircuitBreakerSnapshot,
+} from './api';
 
 export interface AuditFiltersState {
   search: string;
@@ -15,6 +26,9 @@ export interface AppState {
   serverStatuses: Record<string, { transport: string; protocol_version: string; status: string }>;
   circuitBreakers: CircuitBreakerSnapshot[];
   capabilities: CapabilityItem[];
+  resources: ResourceItem[];
+  prompts: PromptItem[];
+  catalogEvents: CatalogEventItem[];
   approvals: PendingApproval[];
   auditEvents: AuditEventItem[];
   auditTotal: number;
@@ -23,9 +37,14 @@ export interface AppState {
   auditStats: AuditStats | null;
   auditVerification: VerificationReport | null;
   selectedCapabilityId: string | null;
+  selectedResourceId: string | null;
+  selectedPromptId: string | null;
+  playgroundMode: 'tools' | 'resources' | 'prompts';
   activeTab: 'overview' | 'servers' | 'playground' | 'approvals' | 'audit' | 'policy' | 'aliases';
   eventLogs: Array<{ time: string; method: string; target: string; status: string; latency: string }>;
   executionResult: { status: number; durationMs: number; data: any } | null;
+  resourceReadResult: { status: number; durationMs: number; data: any } | null;
+  promptGetResult: { status: number; durationMs: number; data: any } | null;
   metrics: {
     totalCatalogRequests: number;
     totalEtagHits: number;
@@ -43,6 +62,9 @@ class Store {
     serverStatuses: {},
     circuitBreakers: [],
     capabilities: [],
+    resources: [],
+    prompts: [],
+    catalogEvents: [],
     approvals: [],
     auditEvents: [],
     auditTotal: 0,
@@ -58,15 +80,20 @@ class Store {
     auditStats: null,
     auditVerification: null,
     selectedCapabilityId: null,
+    selectedResourceId: null,
+    selectedPromptId: null,
+    playgroundMode: 'tools',
     activeTab: 'overview',
     eventLogs: [],
     executionResult: null,
+    resourceReadResult: null,
+    promptGetResult: null,
     metrics: {
       totalCatalogRequests: 0,
       totalEtagHits: 0,
       totalToolCalls: 0,
-      totalToolDurationUs: 0
-    }
+      totalToolDurationUs: 0,
+    },
   };
   private listeners: Listener[] = [];
 
@@ -94,4 +121,5 @@ class Store {
 }
 
 export const store = new Store();
+
 
