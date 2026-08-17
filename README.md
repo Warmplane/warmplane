@@ -1,7 +1,7 @@
 # Warmplane
 
 > **The local control plane that keeps MCP sessions warm.**  
-> v0.16.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.17.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
 
@@ -173,6 +173,7 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 
 | Feature | Since | Summary |
 |---------|-------|---------|
+| **360° MCP Explorer & Execution Controls** | v0.17.0 | Resources explorer & live reader, prompt template studio, in-flight cancellation, visual batch pipeline builder, WORM multi-field search & pagination |
 | **Security Hardening & WORM Integrity** | v0.16.0 | API token gate, OAuth proxy guard, HMAC audit verification, sliding-window backoff, resource caps |
 | **Fault Tolerance & Supervision** | v0.15.0 | Supervisor restart loop, configurable circuit breakers, and degraded boot |
 | **Agent Enrichment Suite** | v0.14.0 | Facade search, context distillation (`_jsonpath`/`_limit_lines`), and multi-step batch execution |
@@ -200,6 +201,14 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 ---
 
 ## Changelog
+
+### v0.17.0 — 360° MCP Explorer, Visual Batch Pipeline Builder & WORM Audit Pagination
+- **WORM Audit Multi-Field Search & Pagination:** Added case-insensitive substring search across 11 metadata fields, outcome status and server filters, offset/limit pagination slicing (`/v1/audit/events`), and context-aware CSV and JSONL export downloads (`/v1/audit/export`).
+- **MCP Resources Explorer & Live Content Reader:** Added 360° resource discovery browser with protocol scheme badges (`file://`, `postgres://`, `github://`, `memory://`, `sqlite://`, etc.), metadata/MIME viewer, and live content reader supporting context distillation (`_jsonpath`, `_limit_lines`, `_truncate_bytes`).
+- **MCP Prompt Template Studio:** Added dynamic prompt template browsing and argument form generation with `REQUIRED` validation badges, rendering resolved system/user prompt envelopes (`/v1/prompts/get`).
+- **In-Flight Operation Cancellation:** Added interactive UI execution cancellation controls with live execution timers and instant cooperative abort (`POST /v1/operations/:id/cancel`).
+- **Visual Multi-Step Batch Pipeline Builder:** Added interactive modal pipeline editor for chaining tools with parameter variable interpolation (`${steps[0].result.id}`) and per-node fault tolerance (`POST /v1/tools/batch_call`).
+- **Realtime SSE State Synchronization:** Connected `/v1/resources/updates` SSE stream to automatically refresh resources, prompts, and catalog feeds on the Control Deck.
 
 ### v0.16.0 — Enterprise Security Hardening, Audit Cryptographic Integrity & Lifecycle Resilience
 - **API Token Authentication & Middleware Guarding:** Added `--auth-token` CLI parameter, `McpConfig.auth_token` configuration field, and `WARMPLANE_AUTH_TOKEN` environment variable support to securely protect daemon endpoints with Bearer/X-Warmplane-Key authentication.
