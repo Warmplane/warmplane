@@ -1,3 +1,12 @@
+export interface ResilienceConfig {
+  failureThreshold?: number;
+  cooldownMs?: number;
+  consecutiveSuccesses?: number;
+  autoRestart?: boolean;
+  maxRestarts?: number;
+  healthCheckIntervalSecs?: number;
+}
+
 export interface McpServerConfig {
   command?: string;
   args?: string[];
@@ -5,89 +14,15 @@ export interface McpServerConfig {
   url?: string;
   protocolVersion?: string;
   allowStateless?: boolean;
+  resilience?: ResilienceConfig;
 }
 
-export interface WebhookConfig {
-  url: string;
-  secret?: string;
-  secretEnv?: string;
-  authHeader?: string;
-  headers?: Record<string, string>;
-}
-
-export interface PolicyConfig {
-  allow?: string[];
-  deny?: string[];
-  redact_keys?: string[];
-  redactKeys?: string[];
-  requireApproval?: string[];
-  require_approval?: string[];
-  approvalTimeoutSecs?: number;
-  approval_timeout_secs?: number;
-  webhook?: WebhookConfig;
-}
-
-export interface PendingApproval {
-  id: string;
-  capability_id: string;
+export interface CircuitBreakerSnapshot {
   server_id: string;
-  args: Record<string, any>;
-  sanitized_args: Record<string, any>;
-  request_id?: string;
-  context?: {
-    operation_id?: string;
-    actor_id?: string;
-    grant_id?: string;
-  };
-  created_at: number;
-  expires_at: number;
-  status: 'pending' | 'approved' | 'rejected' | 'expired';
-  operator?: string;
-  reason?: string;
-  modified_args?: Record<string, any>;
-  timestamp?: number;
-}
-
-export interface AuditEventItem {
-  id: string;
-  timestamp_ns: number;
-  event_type: string;
-  trace_id: string;
-  request_id?: string;
-  actor_id?: string;
-  work_item_id?: string;
-  client_ip?: string;
-  server_id?: string;
-  capability_id?: string;
-  resource_uri?: string;
-  sanitized_args?: Record<string, any>;
-  sanitized_response?: Record<string, any>;
-  execution_latency_us?: number;
-  status: 'success' | 'failed' | 'denied' | 'intercepted' | 'cancelled';
-  error_code?: string;
-  error_message?: string;
-  operator_id?: string;
-  approval_ticket_id?: string;
-  prev_hash: string;
-  hash: string;
-}
-
-export interface VerificationReport {
-  is_valid: boolean;
-  total_records: number;
-  corrupted_at_index?: number;
-  corrupted_record_id?: string;
-  message?: string;
-}
-
-export interface AuditStats {
-  total_events: number;
-  by_status: {
-    success: number;
-    failed: number;
-    denied: number;
-    intercepted: number;
-  };
+  state: 'closed' | 'open' | 'half_open';
+  consecutive_failures: number;
+  consecutive_successes: number;
+  open_until_epoch_ms?: number;
 }
 
 export interface McpConfig {
@@ -96,6 +31,8 @@ export interface McpConfig {
   resourceAliases?: Record<string, string>;
   promptAliases?: Record<string, string>;
   policy?: PolicyConfig;
+  resilience?: ResilienceConfig;
+  audit?: Record<string, any>;
   toolTimeoutMs?: number;
 }
 
@@ -104,6 +41,7 @@ export interface GetConfigResponse {
   config_path: string;
   config: McpConfig;
   server_statuses?: Record<string, { transport: string; protocol_version: string; status: string }>;
+  circuit_breakers?: CircuitBreakerSnapshot[];
   metrics?: {
     total_catalog_requests: number;
     total_etag_hits: number;
@@ -173,6 +111,18 @@ export class WarmplaneClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req)
+    });
+    const durationMs = performance.now() - start;
+    const data = await res.json();
+    return { status: res.status, durationMs, data };
+  }
+
+  async batchCallCapabilities(steps: Array<{ id: string; capability_id: string; args: Record<string, any>; continue_on_error?: boolean }>): Promise<{ status: number; durationMs: number; data: any }> {
+    const start = performance.now();
+    const res = await fetch(`${this.baseUrl}/v1/tools/batch_call`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ steps })
     });
     const durationMs = performance.now() - start;
     const data = await res.json();

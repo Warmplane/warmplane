@@ -253,6 +253,34 @@
         <label class="form-label">Remote Endpoint URL</label>
         <input type="text" class="form-input" id="modal-srv-url" placeholder="https://api.example.com/sse">
       </div>
+
+      <details style="margin-top: 14px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px;">
+        <summary style="font-size: 11.5px; font-weight: 600; color: var(--amber-400); cursor: pointer;">
+          🛡️ Fault Tolerance &amp; Process Supervision (Optional)
+        </summary>
+        <div style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+          <div>
+            <label class="form-label" style="font-size: 10.5px;">Failure Threshold</label>
+            <input type="number" class="form-input" id="modal-srv-ft" placeholder="3" value="3">
+          </div>
+          <div>
+            <label class="form-label" style="font-size: 10.5px;">Cooldown (ms)</label>
+            <input type="number" class="form-input" id="modal-srv-cd" placeholder="30000" value="30000">
+          </div>
+          <div>
+            <label class="form-label" style="font-size: 10.5px;">Auto-Restart</label>
+            <select class="form-input" id="modal-srv-autorestart">
+              <option value="true">Enabled (Default)</option>
+              <option value="false">Disabled</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label" style="font-size: 10.5px;">Max Restarts</label>
+            <input type="number" class="form-input" id="modal-srv-maxrestarts" placeholder="5" value="5">
+          </div>
+        </div>
+      </details>
+
       <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px;">
         <button class="btn btn-ghost" onclick="window.app.closeModals()">Cancel</button>
         <button class="btn btn-primary" onclick="window.app.submitAddServer()">Save &amp; Connect</button>

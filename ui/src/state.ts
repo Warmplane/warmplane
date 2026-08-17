@@ -1,9 +1,10 @@
-import { McpConfig, CapabilityItem, PendingApproval, AuditEventItem, VerificationReport, AuditStats } from './api';
+import { McpConfig, CapabilityItem, PendingApproval, AuditEventItem, VerificationReport, AuditStats, CircuitBreakerSnapshot } from './api';
 
 export interface AppState {
   configPath: string;
   config: McpConfig;
   serverStatuses: Record<string, { transport: string; protocol_version: string; status: string }>;
+  circuitBreakers: CircuitBreakerSnapshot[];
   capabilities: CapabilityItem[];
   approvals: PendingApproval[];
   auditEvents: AuditEventItem[];
@@ -28,6 +29,7 @@ class Store {
     configPath: 'mcp_servers.json',
     config: { mcpServers: {} },
     serverStatuses: {},
+    circuitBreakers: [],
     capabilities: [],
     approvals: [],
     auditEvents: [],

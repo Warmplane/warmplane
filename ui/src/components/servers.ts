@@ -29,6 +29,19 @@ export function renderServers(): string {
       const statusInfo = state.serverStatuses[k] || { status: 'connected', protocol_version: '2026-07-28' };
       const envKeys = s.env ? Object.keys(s.env).map(e => `${e}=***`).join(', ') : 'None';
 
+      const cb = (state.circuitBreakers || []).find(c => c.server_id === k);
+      let cbBadge = `<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.25);">Circuit: CLOSED</span>`;
+      if (cb) {
+        if (cb.state === 'open') {
+          cbBadge = `<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);">Circuit: OPEN (${cb.consecutive_failures} failures)</span>`;
+        } else if (cb.state === 'half_open') {
+          cbBadge = `<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.1);">Circuit: HALF-OPEN (${cb.consecutive_successes} probe)</span>`;
+        }
+      }
+
+      const res = s.resilience || state.config.resilience;
+      const resDetails = res ? `FT: ${res.failureThreshold || 3} · Cooldown: ${(res.cooldownMs || 30000) / 1000}s · AutoRestart: ${res.autoRestart !== false ? 'ON' : 'OFF'}` : 'Default Resilience';
+
       return `
         <div class="bento-card" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
           <div>
@@ -37,11 +50,15 @@ export function renderServers(): string {
               <span style="font-size: 15px; font-weight: 700; color: var(--text-main);">${escapeHtml(k)}</span>
               <span class="brand-badge">${transport}</span>
               <span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">Protocol: ${statusInfo.protocol_version}</span>
+              ${cbBadge}
             </div>
             <div style="font-family: var(--ff-mono); font-size: 12px; color: var(--text-muted); margin-top: 4px;">
               ${s.command ? 'Command: ' : 'URL: '}<code>${escapeHtml(cmd || '')}</code>
             </div>
-            ${s.env && Object.keys(s.env).length > 0 ? `<div style="font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim); margin-top: 2px;">Env: ${escapeHtml(envKeys)}</div>` : ''}
+            <div style="display: flex; gap: 14px; font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim); margin-top: 4px;">
+              <span>🛡️ ${escapeHtml(resDetails)}</span>
+              ${s.env && Object.keys(s.env).length > 0 ? `<span>Env: ${escapeHtml(envKeys)}</span>` : ''}
+            </div>
           </div>
           <div style="display: flex; gap: 8px;">
             <button class="btn btn-danger" onclick="window.app.deleteServer('${escapeHtml(k)}')">Remove</button>

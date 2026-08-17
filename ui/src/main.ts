@@ -43,6 +43,7 @@ class WarmplaneApp {
           configPath: configRes.config_path,
           config: configRes.config,
           serverStatuses: configRes.server_statuses || {},
+          circuitBreakers: configRes.circuit_breakers || [],
           metrics: {
             totalCatalogRequests: configRes.metrics?.total_catalog_requests || 0,
             totalEtagHits: configRes.metrics?.total_etag_hits || 0,
@@ -276,13 +277,26 @@ class WarmplaneApp {
 
     const argsText = (document.getElementById('pg-args-input') as HTMLTextAreaElement)?.value || '{}';
     const contextVal = (document.getElementById('pg-context-input') as HTMLInputElement)?.value || undefined;
+    const jsonpathVal = (document.getElementById('pg-jsonpath-input') as HTMLInputElement)?.value.trim() || undefined;
+    const limitLinesStr = (document.getElementById('pg-limit-lines-input') as HTMLInputElement)?.value.trim() || undefined;
+    const truncateBytesStr = (document.getElementById('pg-truncate-bytes-input') as HTMLInputElement)?.value.trim() || undefined;
 
-    let parsedArgs = {};
+    let parsedArgs: any = {};
     try {
       parsedArgs = JSON.parse(argsText);
     } catch {
       alert('Invalid arguments JSON object');
       return;
+    }
+
+    if (jsonpathVal) {
+      parsedArgs['_jsonpath'] = jsonpathVal;
+    }
+    if (limitLinesStr && !isNaN(Number(limitLinesStr))) {
+      parsedArgs['_limit_lines'] = Number(limitLinesStr);
+    }
+    if (truncateBytesStr && !isNaN(Number(truncateBytesStr))) {
+      parsedArgs['_truncate_bytes'] = Number(truncateBytesStr);
     }
 
     const statusBadge = document.getElementById('pg-status-badge');
@@ -297,10 +311,8 @@ class WarmplaneApp {
         capability_id: capId,
         args: parsedArgs,
         context: contextVal ? { operation_id: contextVal } : undefined,
-        request_id: `ui-req-${Date.now()}`
       });
 
-      // Update store so result is preserved across re-renders
       store.setState({
         executionResult: {
           status: res.status,
@@ -310,6 +322,12 @@ class WarmplaneApp {
       });
 
       store.addEventLog('POST', `/v1/tools/call → ${capId}`, res.status === 200 ? '200 OK' : `HTTP ${res.status}`, `${res.durationMs.toFixed(1)}ms`);
+
+      api.getConfig().then(cfgRes => {
+        if (cfgRes.ok && cfgRes.circuit_breakers) {
+          store.setState({ circuitBreakers: cfgRes.circuit_breakers });
+        }
+      });
     } catch (e: any) {
       if (statusBadge) {
         statusBadge.textContent = 'ERROR';
@@ -319,6 +337,27 @@ class WarmplaneApp {
         responseJson.textContent = e.toString();
       }
     }
+  }
+
+  toggleBatchPlayground() {
+    const argsInput = document.getElementById('pg-args-input') as HTMLTextAreaElement | null;
+    if (!argsInput) return;
+
+    const sampleBatch = [
+      {
+        "id": "step_1",
+        "capability_id": "sqlite.read_query",
+        "args": { "query": "SELECT * FROM users LIMIT 2" }
+      },
+      {
+        "id": "step_2",
+        "capability_id": "github.issues.search",
+        "args": { "query": "label:bug" },
+        "continue_on_error": true
+      }
+    ];
+
+    argsInput.value = JSON.stringify(sampleBatch, null, 2);
   }
 
   // Policy Actions
@@ -445,6 +484,20 @@ class WarmplaneApp {
         return;
       }
       serverPayload.url = url;
+    }
+
+    const ftVal = (document.getElementById('modal-srv-ft') as HTMLInputElement)?.value.trim();
+    const cdVal = (document.getElementById('modal-srv-cd') as HTMLInputElement)?.value.trim();
+    const autoRestartVal = (document.getElementById('modal-srv-autorestart') as HTMLSelectElement)?.value;
+    const maxRestartsVal = (document.getElementById('modal-srv-maxrestarts') as HTMLInputElement)?.value.trim();
+
+    if (ftVal || cdVal || autoRestartVal || maxRestartsVal) {
+      serverPayload.resilience = {
+        failureThreshold: ftVal ? Number(ftVal) : 3,
+        cooldownMs: cdVal ? Number(cdVal) : 30000,
+        autoRestart: autoRestartVal !== 'false',
+        maxRestarts: maxRestartsVal ? Number(maxRestartsVal) : 5
+      };
     }
 
     const res = await api.upsertServer(name, serverPayload);
