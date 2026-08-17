@@ -7,13 +7,12 @@ use rmcp::{
     model::{CallToolRequestParams, GetPromptRequestParams, ReadResourceRequestParams},
     transport::{
         streamable_http_client::StreamableHttpClientTransportConfig, StreamableHttpClientTransport,
-        TokioChildProcess,
     },
     ServiceExt,
 };
 use serde_json::{json, Value};
 use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::{process::Command, sync::RwLock, time::timeout};
+use tokio::{sync::RwLock, time::timeout};
 use tracing::{info, warn};
 
 use crate::{
@@ -276,37 +275,16 @@ impl AppState {
             "http"
         };
 
-        let (new_capabilities, new_resources, new_prompts, tx) = if let Some(command) =
-            &srv_cfg.command
-        {
-            let mut cmd = Command::new(command);
-            cmd.args(&srv_cfg.args);
-            cmd.envs(&srv_cfg.env);
-
-            let transport = TokioChildProcess::new(cmd)
-                .with_context(|| format!("Failed to spawn process for {}", server_id))?;
-
-            let mcp_client = ().serve(transport).await.with_context(|| {
-                format!("Failed to negotiate stdio MCP connection for {}", server_id)
-            })?;
-
-            let (caps, res, prompts) = discover_upstream_items!(
-                &mcp_client,
+        let (new_capabilities, new_resources, new_prompts, tx) = if srv_cfg.command.is_some() {
+            crate::supervisor::spawn_supervised_stdio_server(
+                self,
                 server_id,
+                srv_cfg,
                 capability_aliases,
                 resource_aliases,
-                prompt_aliases
-            );
-
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<ServerMsg>(32);
-            let per_server_timeout = Duration::from_millis(self.tool_timeout_ms);
-            tokio::spawn(async move {
-                while let Some(msg) = rx.recv().await {
-                    handle_upstream_msg!(&mcp_client, msg, per_server_timeout);
-                }
-            });
-
-            (caps, res, prompts, tx)
+                prompt_aliases,
+            )
+            .await?
         } else if let Some(url) = &srv_cfg.url {
             let mut target_url = url.clone();
 

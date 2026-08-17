@@ -34,6 +34,36 @@ pub struct ResilienceConfig {
         alias = "consecutive_successes"
     )]
     pub consecutive_successes: u32,
+    /// Automatically restart crashed stdio child processes (default: true).
+    #[serde(
+        default = "default_true",
+        rename = "autoRestart",
+        alias = "auto_restart"
+    )]
+    pub auto_restart: bool,
+    /// Maximum restart attempts before giving up (default: 5).
+    #[serde(
+        default = "default_max_restarts",
+        rename = "maxRestarts",
+        alias = "max_restarts"
+    )]
+    pub max_restarts: u32,
+    /// Periodic health check interval in seconds (optional).
+    #[serde(
+        default,
+        rename = "healthCheckIntervalSecs",
+        alias = "health_check_interval_secs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub health_check_interval_secs: Option<u64>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_max_restarts() -> u32 {
+    5
 }
 
 fn default_failure_threshold() -> u32 {
@@ -54,6 +84,9 @@ impl Default for ResilienceConfig {
             failure_threshold: default_failure_threshold(),
             cooldown_ms: default_cooldown_ms(),
             consecutive_successes: default_consecutive_successes(),
+            auto_restart: default_true(),
+            max_restarts: default_max_restarts(),
+            health_check_interval_secs: None,
         }
     }
 }
@@ -325,6 +358,7 @@ mod tests {
             failure_threshold: 2,
             cooldown_ms: 100,
             consecutive_successes: 1,
+            ..Default::default()
         };
         let cb = CircuitBreaker::new("test_server", config);
 
@@ -363,6 +397,7 @@ mod tests {
             failure_threshold: 1,
             cooldown_ms: 50,
             consecutive_successes: 2,
+            ..Default::default()
         };
         let cb = CircuitBreaker::new("flaky", config);
 
