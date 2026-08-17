@@ -24,7 +24,7 @@ pub struct CatalogEventsResponse {
 }
 
 /// Request body for capability execution.
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Default)]
 pub struct CallCapabilityRequest {
     /// Identifier or alias of capability to execute.
     pub capability_id: String,

@@ -625,6 +625,19 @@ impl FacadeMcpServer {
             tx
         };
 
+        // Circuit Breaker Check
+        if let Err(cb_err) = self.state.circuit_breakers.check_permission(&server).await {
+            return Ok(error_envelope(
+                trace_id,
+                request_id,
+                Some(ctx),
+                crate::idempotency::RetryMetadata::safe("not_started"),
+                "CIRCUIT_OPEN",
+                cb_err.to_string(),
+                false,
+            ));
+        }
+
         let distill_opts = crate::context_filter::DistillationOptions::from_args(Some(&args));
 
         let (reply_tx, reply_rx) = oneshot::channel();
@@ -639,6 +652,7 @@ impl FacadeMcpServer {
             .await
             .is_err()
         {
+            self.state.circuit_breakers.record_failure(&server).await;
             return Ok(error_envelope(
                 trace_id,
                 request_id,
@@ -652,6 +666,7 @@ impl FacadeMcpServer {
 
         match reply_rx.await {
             Ok(Ok(data)) => {
+                self.state.circuit_breakers.record_success(&server).await;
                 let distilled_data = crate::context_filter::distill_value(data, &distill_opts);
                 Ok(json!({
                     "ok": true,
@@ -663,33 +678,42 @@ impl FacadeMcpServer {
                     "retry": crate::idempotency::RetryMetadata::unsafe_op("completed"),
                 }))
             }
-            Ok(Err(UpstreamCallError::Timeout)) => Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::unsafe_op("unknown"),
-                "UPSTREAM_TIMEOUT",
-                format!("Tool call timed out after {}ms", self.state.tool_timeout_ms),
-                true,
-            )),
-            Ok(Err(UpstreamCallError::Upstream(err))) => Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::unsafe_op("unknown"),
-                "UPSTREAM_ERROR",
-                err,
-                false,
-            )),
-            Err(_) => Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::unsafe_op("unknown"),
-                "INTERNAL_ERROR",
-                "Daemon actor task died",
-                true,
-            )),
+            Ok(Err(UpstreamCallError::Timeout)) => {
+                self.state.circuit_breakers.record_failure(&server).await;
+                Ok(error_envelope(
+                    trace_id,
+                    request_id,
+                    Some(ctx),
+                    crate::idempotency::RetryMetadata::unsafe_op("unknown"),
+                    "UPSTREAM_TIMEOUT",
+                    format!("Tool call timed out after {}ms", self.state.tool_timeout_ms),
+                    true,
+                ))
+            }
+            Ok(Err(UpstreamCallError::Upstream(err))) => {
+                self.state.circuit_breakers.record_failure(&server).await;
+                Ok(error_envelope(
+                    trace_id,
+                    request_id,
+                    Some(ctx),
+                    crate::idempotency::RetryMetadata::unsafe_op("unknown"),
+                    "UPSTREAM_ERROR",
+                    err,
+                    false,
+                ))
+            }
+            Err(_) => {
+                self.state.circuit_breakers.record_failure(&server).await;
+                Ok(error_envelope(
+                    trace_id,
+                    request_id,
+                    Some(ctx),
+                    crate::idempotency::RetryMetadata::unsafe_op("unknown"),
+                    "SERVER_UNREACHABLE",
+                    format!("Server '{}' dropped reply channel", server),
+                    true,
+                ))
+            }
         }
     }
 

@@ -1038,4 +1038,103 @@ mod tests {
         assert!(csv_str.contains("github.get_repo"));
         assert!(csv_str.contains("agent-compliance"));
     }
+
+    #[tokio::test]
+    async fn test_circuit_breaker_fast_fail_and_recovery() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut servers = HashMap::new();
+        servers.insert("flaky_srv".to_string(), tx);
+
+        let mut caps = HashMap::new();
+        caps.insert(
+            "flaky.error".to_string(),
+            CapabilityMeta {
+                server: "flaky_srv".to_string(),
+                tool: "error".to_string(),
+                summary: "Simulated error tool".to_string(),
+                description: "Simulated error tool".to_string(),
+                input_schema: json!({}),
+                examples: vec![],
+                tags: vec![],
+            },
+        );
+
+        let cb_registry = crate::circuit_breaker::CircuitBreakerRegistry::default();
+        cb_registry
+            .get_or_create(
+                "flaky_srv",
+                crate::circuit_breaker::ResilienceConfig {
+                    failure_threshold: 2,
+                    cooldown_ms: 100,
+                    consecutive_successes: 1,
+                },
+            )
+            .await;
+
+        let state = AppState::builder()
+            .servers(servers)
+            .capabilities(caps)
+            .circuit_breakers(cb_registry)
+            .build();
+
+        // Spawn mock server responder that always errors
+        tokio::spawn(async move {
+            while let Some(msg) = rx.recv().await {
+                if let ServerMsg::CallTool { reply, .. } = msg {
+                    let _ = reply.send(Err(crate::daemon::types::UpstreamCallError::Upstream(
+                        "500 Internal Error".to_string(),
+                    )));
+                }
+            }
+        });
+
+        let headers = HeaderMap::new();
+
+        // Call 1 -> UPSTREAM_ERROR
+        let res1 = handle_call_capability(
+            State(state.clone()),
+            headers.clone(),
+            Json(CallCapabilityRequest {
+                capability_id: "flaky.error".to_string(),
+                args: json!({}),
+                ..Default::default()
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(res1.status(), StatusCode::BAD_GATEWAY);
+
+        // Call 2 -> UPSTREAM_ERROR, trips circuit to OPEN
+        let res2 = handle_call_capability(
+            State(state.clone()),
+            headers.clone(),
+            Json(CallCapabilityRequest {
+                capability_id: "flaky.error".to_string(),
+                args: json!({}),
+                ..Default::default()
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(res2.status(), StatusCode::BAD_GATEWAY);
+
+        // Call 3 -> Fast fail with CIRCUIT_OPEN (no call forwarded)
+        let res3 = handle_call_capability(
+            State(state.clone()),
+            headers.clone(),
+            Json(CallCapabilityRequest {
+                capability_id: "flaky.error".to_string(),
+                args: json!({}),
+                ..Default::default()
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(res3.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = to_bytes(res3.into_body(), usize::MAX).await.unwrap();
+        let payload: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["ok"], false);
+        assert_eq!(payload["error"]["code"], "CIRCUIT_OPEN");
+        assert_eq!(payload["retry"]["upstream_execution_state"], "not_started");
+    }
 }

@@ -24,6 +24,7 @@ pub async fn handle_get_config(State(state): State<AppState>) -> impl IntoRespon
     let tool_duration_us = state.total_tool_duration_us.load(Ordering::Relaxed);
     let srv_configs = state.server_configs.read().await.clone();
     let srv_statuses = state.server_statuses.read().await.clone();
+    let circuit_breakers = state.circuit_breakers.all_statuses().await;
 
     match crate::config::load_or_default_config(&state.config_path) {
         Ok(config) => (
@@ -34,6 +35,7 @@ pub async fn handle_get_config(State(state): State<AppState>) -> impl IntoRespon
                 "config": config,
                 "server_configs": srv_configs,
                 "server_statuses": srv_statuses,
+                "circuit_breakers": circuit_breakers,
                 "metrics": {
                     "total_catalog_requests": total_reqs,
                     "total_etag_hits": etag_hits,

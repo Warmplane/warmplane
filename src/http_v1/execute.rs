@@ -394,6 +394,49 @@ pub async fn handle_call_capability(
         "tool call start"
     );
 
+    // Circuit Breaker Permission Check
+    if let Err(cb_err) = state.circuit_breakers.check_permission(&server_id).await {
+        state.operation_registry.unregister(&request_id).await;
+        if let Some(ref key) = idempotency_key {
+            state.idempotency_store.remove(key).await;
+        }
+        state.audit_handle.send(crate::audit::RawAuditEvent {
+            event_type: crate::audit::AuditEventType::ToolExecution,
+            trace_id: trace_id.clone(),
+            request_id: Some(request_id.clone()),
+            actor_id: req_context.actor_id.clone(),
+            work_item_id: req_context.work_item_id.clone(),
+            client_ip: headers
+                .get("x-forwarded-for")
+                .and_then(|h| h.to_str().ok())
+                .map(|s| s.to_string()),
+            server_id: Some(server_id.clone()),
+            capability_id: Some(payload.capability_id.clone()),
+            resource_uri: None,
+            sanitized_args: Some(redacted_input),
+            sanitized_response: None,
+            execution_latency_us: Some(start_time.elapsed().as_micros() as u64),
+            status: crate::audit::AuditEventStatus::Failed,
+            error_code: Some("CIRCUIT_OPEN".to_string()),
+            error_message: Some(cb_err.to_string()),
+            operator_id: None,
+            approval_ticket_id: None,
+        });
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(error_envelope(
+                trace_id,
+                Some(request_id),
+                Some(req_context),
+                retry_base("not_started"),
+                "CIRCUIT_OPEN",
+                cb_err.to_string(),
+                false,
+            )),
+        )
+            .into_response();
+    }
+
     let (reply_tx, reply_rx) = oneshot::channel();
     if tx
         .send(ServerMsg::CallTool {
@@ -406,6 +449,7 @@ pub async fn handle_call_capability(
         .await
         .is_err()
     {
+        state.circuit_breakers.record_failure(&server_id).await;
         state.operation_registry.unregister(&request_id).await;
         if let Some(ref key) = idempotency_key {
             state.idempotency_store.remove(key).await;
@@ -451,6 +495,7 @@ pub async fn handle_call_capability(
 
     match result {
         Ok(Ok(data)) => {
+            state.circuit_breakers.record_success(&server_id).await;
             let redacted_output = redact_value(data.clone(), &redact_keys);
             info!(
                 trace_id = %trace_id,
@@ -511,6 +556,7 @@ pub async fn handle_call_capability(
             (StatusCode::OK, Json(response_json)).into_response()
         }
         Ok(Err(UpstreamCallError::Timeout)) => {
+            state.circuit_breakers.record_failure(&server_id).await;
             let elapsed_us = start_time.elapsed().as_micros() as u64;
             if let Some(ref key) = idempotency_key {
                 state.idempotency_store.remove(key).await;
@@ -555,6 +601,7 @@ pub async fn handle_call_capability(
                 .into_response()
         }
         Ok(Err(UpstreamCallError::Upstream(err))) => {
+            state.circuit_breakers.record_failure(&server_id).await;
             let elapsed_us = start_time.elapsed().as_micros() as u64;
             if let Some(ref key) = idempotency_key {
                 state.idempotency_store.remove(key).await;

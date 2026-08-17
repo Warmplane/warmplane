@@ -49,6 +49,9 @@ pub struct McpConfig {
     /// Optional WORM audit trail configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audit: Option<AuditConfig>,
+    /// Optional global resilience and circuit breaker configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resilience: Option<crate::circuit_breaker::ResilienceConfig>,
     /// Upstream MCP server definitions keyed by server identifier.
     #[serde(rename = "mcpServers", default)]
     pub mcp_servers: HashMap<String, ServerConfig>,
@@ -89,6 +92,9 @@ pub struct ServerConfig {
     /// Authentication settings for upstream server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthConfig>,
+    /// Optional per-server resilience and circuit breaker overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resilience: Option<crate::circuit_breaker::ResilienceConfig>,
 }
 
 /// Upstream authentication configuration types.
@@ -557,6 +563,7 @@ mod tests {
             allow_stateless: None,
             headers: HashMap::new(),
             auth: None,
+            resilience: None,
         }
     }
 
@@ -571,6 +578,7 @@ mod tests {
             prompt_aliases: HashMap::new(),
             policy: None,
             audit: None,
+            resilience: None,
             mcp_servers,
         }
     }
