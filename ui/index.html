@@ -223,14 +223,14 @@
     </div>
   </main>
 
-  <!-- MODAL: ADD SERVER -->
+  <!-- MODAL: ADD / EDIT SERVER -->
   <div class="modal-backdrop" id="modal-add-server" onclick="if(event.target === this) window.app.closeModals()">
     <div class="modal-box">
       <div class="modal-header">
-        <div class="modal-title">Add Upstream MCP Server</div>
+        <div class="modal-title" id="modal-srv-title">Add Upstream MCP Server</div>
         <button class="btn btn-ghost" onclick="window.app.closeModals()" style="padding: 2px 6px;">✕</button>
       </div>
-      <div style="background: var(--surface-card); border: 1px dashed var(--border); border-radius: var(--radius-sm); padding: 10px 14px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center;">
+      <div id="modal-srv-template-banner" style="background: var(--surface-card); border: 1px dashed var(--border); border-radius: var(--radius-sm); padding: 10px 14px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center;">
         <div style="font-size: 11.5px; color: var(--text-muted);">Looking for popular pre-configured servers (Postgres, GitHub, Playwright, etc.)?</div>
         <button class="btn btn-primary" style="font-size: 11px; padding: 3px 8px;" onclick="window.app.openTemplateCatalog()">Browse 25 Templates →</button>
       </div>

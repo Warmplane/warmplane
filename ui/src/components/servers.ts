@@ -61,7 +61,8 @@ export function renderServers(): string {
             </div>
           </div>
           <div style="display: flex; gap: 8px;">
-            <button class="btn btn-danger" onclick="window.app.deleteServer('${escapeHtml(k)}')">Remove</button>
+            <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openEditServerModal('${escapeHtml(k)}')">✏️ Edit</button>
+            <button class="btn btn-danger" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.deleteServer('${escapeHtml(k)}')">Remove</button>
           </div>
         </div>
       `;

@@ -455,6 +455,88 @@ class WarmplaneApp {
 
   openAddServerModal() {
     this.closeModals();
+    const titleEl = document.getElementById('modal-srv-title');
+    const bannerEl = document.getElementById('modal-srv-template-banner');
+    const nameInput = document.getElementById('modal-srv-name') as HTMLInputElement | null;
+    const transportSelect = document.getElementById('modal-srv-transport') as HTMLSelectElement | null;
+    const cmdInput = document.getElementById('modal-srv-command') as HTMLInputElement | null;
+    const urlInput = document.getElementById('modal-srv-url') as HTMLInputElement | null;
+    const ftInput = document.getElementById('modal-srv-ft') as HTMLInputElement | null;
+    const cdInput = document.getElementById('modal-srv-cd') as HTMLInputElement | null;
+    const autoRestartSelect = document.getElementById('modal-srv-autorestart') as HTMLSelectElement | null;
+    const maxRestartsInput = document.getElementById('modal-srv-maxrestarts') as HTMLInputElement | null;
+
+    if (titleEl) titleEl.textContent = 'Add Upstream MCP Server';
+    if (bannerEl) bannerEl.style.display = 'flex';
+    if (nameInput) {
+      nameInput.value = '';
+      nameInput.disabled = false;
+    }
+    if (transportSelect) transportSelect.value = 'stdio';
+    if (cmdInput) cmdInput.value = '';
+    if (urlInput) urlInput.value = '';
+    const cmdGroup = document.getElementById('modal-group-cmd');
+    const urlGroup = document.getElementById('modal-group-url');
+    if (cmdGroup) cmdGroup.style.display = 'block';
+    if (urlGroup) urlGroup.style.display = 'none';
+
+    if (ftInput) ftInput.value = '3';
+    if (cdInput) cdInput.value = '30000';
+    if (autoRestartSelect) autoRestartSelect.value = 'true';
+    if (maxRestartsInput) maxRestartsInput.value = '5';
+
+    const modal = document.getElementById('modal-add-server');
+    if (modal) modal.classList.add('active');
+  }
+
+  openEditServerModal(serverName: string) {
+    this.closeModals();
+    const state = store.getState();
+    const serverCfg = state.config.mcpServers?.[serverName];
+    if (!serverCfg) {
+      alert(`Server '${serverName}' not found in configuration.`);
+      return;
+    }
+
+    const titleEl = document.getElementById('modal-srv-title');
+    const bannerEl = document.getElementById('modal-srv-template-banner');
+    const nameInput = document.getElementById('modal-srv-name') as HTMLInputElement | null;
+    const transportSelect = document.getElementById('modal-srv-transport') as HTMLSelectElement | null;
+    const cmdInput = document.getElementById('modal-srv-command') as HTMLInputElement | null;
+    const urlInput = document.getElementById('modal-srv-url') as HTMLInputElement | null;
+    const ftInput = document.getElementById('modal-srv-ft') as HTMLInputElement | null;
+    const cdInput = document.getElementById('modal-srv-cd') as HTMLInputElement | null;
+    const autoRestartSelect = document.getElementById('modal-srv-autorestart') as HTMLSelectElement | null;
+    const maxRestartsInput = document.getElementById('modal-srv-maxrestarts') as HTMLInputElement | null;
+
+    if (titleEl) titleEl.textContent = `Edit Server '${serverName}'`;
+    if (bannerEl) bannerEl.style.display = 'none';
+    if (nameInput) {
+      nameInput.value = serverName;
+      nameInput.disabled = true; // Identifier remains immutable during edit
+    }
+
+    const isStdio = !!serverCfg.command;
+    if (transportSelect) transportSelect.value = isStdio ? 'stdio' : 'http';
+
+    const cmdGroup = document.getElementById('modal-group-cmd');
+    const urlGroup = document.getElementById('modal-group-url');
+    if (cmdGroup) cmdGroup.style.display = isStdio ? 'block' : 'none';
+    if (urlGroup) urlGroup.style.display = isStdio ? 'none' : 'block';
+
+    if (cmdInput) {
+      cmdInput.value = isStdio ? `${serverCfg.command} ${(serverCfg.args || []).join(' ')}`.trim() : '';
+    }
+    if (urlInput) {
+      urlInput.value = serverCfg.url || '';
+    }
+
+    const res = serverCfg.resilience || state.config.resilience;
+    if (ftInput) ftInput.value = String(res?.failureThreshold ?? 3);
+    if (cdInput) cdInput.value = String(res?.cooldownMs ?? 30000);
+    if (autoRestartSelect) autoRestartSelect.value = res?.autoRestart === false ? 'false' : 'true';
+    if (maxRestartsInput) maxRestartsInput.value = String(res?.maxRestarts ?? 5);
+
     const modal = document.getElementById('modal-add-server');
     if (modal) modal.classList.add('active');
   }
