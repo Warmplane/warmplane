@@ -26,6 +26,21 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build Web UI
+        working-directory: ui
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Verify Web UI Bundle Synced
+        run: |
+          git diff --exit-code ui/dist/index.html || (echo "Error: ui/dist/index.html is out of sync with ui/src. Run 'bun run build' in ui/ and commit the updated bundle." && exit 1)
+
       - name: Check Formatting
         run: cargo fmt --check
 
