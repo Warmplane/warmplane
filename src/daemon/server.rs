@@ -9,7 +9,7 @@ use axum::{
 };
 use std::{collections::HashMap, sync::Arc};
 use tokio::{net::TcpListener, sync::RwLock};
-use tracing::info;
+use tracing::{error, info};
 
 use crate::{
     config::{AuthConfig, McpConfig, DEFAULT_TOOL_TIMEOUT_MS},
@@ -382,6 +382,41 @@ pub async fn security_guard_middleware(
     next.run(req).await
 }
 
+/// Awaits process termination signals (`SIGINT` or `SIGTERM`) for graceful server shutdown.
+pub async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(err) = tokio::signal::ctrl_c().await {
+            error!(error = %err, "failed to install Ctrl+C signal handler");
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(err) => {
+                error!(error = %err, "failed to install SIGTERM signal handler");
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            info!("received SIGINT (Ctrl+C); initiating graceful shutdown");
+        },
+        _ = terminate => {
+            info!("received SIGTERM; initiating graceful shutdown");
+        },
+    }
+}
+
+/// Runs the Warmplane MCP aggregation daemon.
+///
 /// # Arguments
 /// * `port` - TCP listening port.
 /// * `config` - `McpConfig` configuration struct.
@@ -395,11 +430,16 @@ pub async fn run_daemon(
     config_path: impl Into<String>,
 ) -> Result<()> {
     let app_state = initialize_state(config, config_path).await?;
-    let app = build_router(app_state);
+    let app = build_router(app_state.clone());
 
     info!(port, "all upstream servers connected; daemon listening");
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    info!("HTTP server drained and stopped; shutting down daemon subsystems");
+    app_state.shutdown().await;
 
     Ok(())
 }

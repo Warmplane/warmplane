@@ -167,3 +167,47 @@ async fn test_security_guard_token_auth() {
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn test_app_state_graceful_shutdown() {
+    use crate::audit::{AuditEventStatus, AuditEventType, AuditStore, RawAuditEvent};
+    use std::sync::Arc;
+
+    let audit_store = Arc::new(AuditStore::in_memory());
+    let audit_handle =
+        crate::audit::spawn_audit_worker(audit_store.clone(), None, 100, 10_000, 100);
+
+    let state = AppState::builder()
+        .audit_store(audit_store.clone())
+        .audit_handle(audit_handle.clone())
+        .build();
+
+    // Enqueue an audit event into the daemon state
+    audit_handle.send(RawAuditEvent {
+        event_type: AuditEventType::ToolExecution,
+        trace_id: "trace-shutdown-test".to_string(),
+        request_id: None,
+        actor_id: None,
+        work_item_id: None,
+        client_ip: None,
+        server_id: Some("srv".to_string()),
+        capability_id: Some("srv.tool".to_string()),
+        resource_uri: None,
+        sanitized_args: None,
+        sanitized_response: None,
+        execution_latency_us: None,
+        status: AuditEventStatus::Success,
+        error_code: None,
+        error_message: None,
+        operator_id: None,
+        approval_ticket_id: None,
+    });
+
+    // Execute graceful shutdown
+    state.shutdown().await;
+
+    // Verify audit logs are 100% committed
+    assert_eq!(audit_store.count().await, 1);
+    let report = audit_store.verify_chain().await;
+    assert!(report.is_valid);
+}

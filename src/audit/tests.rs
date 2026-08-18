@@ -122,3 +122,41 @@ async fn test_siem_dispatcher_batch_empty() {
     // Dispatches empty or populated list safely without panic
     dispatcher.dispatch_batch(&[]).await;
 }
+
+#[tokio::test]
+async fn test_audit_handle_shutdown_drains_all_records() {
+    let store = Arc::new(AuditStore::in_memory());
+    // Large batch size and long flush interval so normal background flush doesn't happen during test
+    let handle = spawn_audit_worker(store.clone(), None, 100, 10_000, 1000);
+
+    for i in 0..25 {
+        handle.send(RawAuditEvent {
+            event_type: AuditEventType::ToolExecution,
+            trace_id: format!("drain-trace-{}", i),
+            request_id: None,
+            actor_id: None,
+            work_item_id: None,
+            client_ip: None,
+            server_id: Some("server-drain".to_string()),
+            capability_id: Some("server-drain.tool".to_string()),
+            resource_uri: None,
+            sanitized_args: None,
+            sanitized_response: None,
+            execution_latency_us: None,
+            status: AuditEventStatus::Success,
+            error_code: None,
+            error_message: None,
+            operator_id: None,
+            approval_ticket_id: None,
+        });
+    }
+
+    // Immediately trigger shutdown and wait for drain
+    handle.shutdown().await;
+
+    // All 25 items must be completely committed into the store
+    assert_eq!(store.count().await, 25);
+    let report = store.verify_chain().await;
+    assert!(report.is_valid);
+    assert_eq!(report.total_records, 25);
+}
