@@ -5,7 +5,7 @@
 **Security controls:** [![WORM + HMAC audit](https://img.shields.io/badge/WORM%20%2B%20HMAC-audit-4c1.svg)](docs/OBSERVABILITY.md) [![HITL + policy](https://img.shields.io/badge/HITL%20%2B%20policy-controls-4c1.svg)](docs/ENTERPRISE_FEATURES.md) [![OAuth2 + PKCE](https://img.shields.io/badge/OAuth2%20%2B%20PKCE-protected-4c1.svg)](docs/research/MCP_AUTHORIZATION.md) [![Secret redaction](https://img.shields.io/badge/secret-redaction-4c1.svg)](docs/ENTERPRISE_FEATURES.md) [![SIEM + OTLP](https://img.shields.io/badge/SIEM%20%2B%20OTLP-observable-4c1.svg)](docs/OBSERVABILITY.md)
 
 > **The local control plane that keeps MCP sessions warm.**  
-> v0.18.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.19.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
 
@@ -177,6 +177,7 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 
 | Feature | Since | Summary |
 |---------|-------|---------|
+| **Client-Delegated MCP Sampling** | v0.19.0 | Reverse RPC sampling delegation (`sampling/createMessage`), synchronous long-polling or async ticket lifecycle, persistent `sampling.json` storage, and self-healing HTTP/SSE supervisor |
 | **Persistent State & Graceful Teardown** | v0.18.0 | Restart-resilient atomic storage (`approvals`, `idempotency`, `oauth`, `catalog_events`), SIGINT/SIGTERM handling, audit batch drain, Bun CI UI gate & E2E suite |
 | **360° MCP Explorer & Execution Controls** | v0.17.0 | Resources explorer & live reader, prompt template studio, in-flight cancellation, visual batch pipeline builder, WORM multi-field search & pagination |
 | **Security Hardening & WORM Integrity** | v0.16.0 | API token gate, OAuth proxy guard, HMAC audit verification, sliding-window backoff, resource caps |
@@ -206,6 +207,14 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 ---
 
 ## Changelog
+
+### v0.19.0 — Client-Delegated MCP Sampling, HTTP/SSE Supervisor Loop & Hardening
+- **Client-Delegated MCP Sampling (`sampling/createMessage`):** Implemented client-delegated LLM completion reverse RPC handling (`src/sampling.rs`). Upstream servers or agents submit sampling requests, generating tracked tickets (`samp_<timestamp>_<seq>`) with synchronous long-polling or asynchronous lifecycle endpoints (`POST /v1/sampling/create_message`, `GET /v1/sampling/requests`, `GET /v1/sampling/requests/:id`, `POST /v1/sampling/requests/:id/respond`).
+- **Persistent Sampling State:** Added atomic, restart-resilient disk storage (`sampling.json`) via `AtomicFile<HashMap<String, PendingSamplingRequest>>` with automated expiration reaper tasks.
+- **Self-Healing Streamable HTTP/SSE Supervisor:** Integrated remote HTTP/SSE MCP servers into the supervisor loop with automated reconnection backoff, catalog reconciliation, and degraded boot status reporting.
+- **Security & DoS Hardening:** Capped candidate capability embeddings for semantic vector search to `MAX_VECTOR_SEARCH_CANDIDATES = 250`; bounded audit export queries to `MAX_IN_MEMORY_AUDIT_EVENTS` (20,000); enforced Host header and loopback Origin checks on OAuth proxy requests.
+- **CI Gating & TypeScript Typechecking:** Added automated TypeScript typechecking (`tsc --noEmit`) to Web UI CI pipeline and restricted push triggers to `main` to eliminate duplicate runs.
+- **Pragmatic Rust Compliance:** Achieved 100% adherence across all 51 source files with standard compliance headers (`// Rust guideline compliant YYYY-MM-DD`).
 
 ### v0.18.0 — Persistent State Subsystem, Graceful Teardown, CI UI Automation & E2E Test Suite
 - **Persistent State Subsystem:** Added atomic, restart-resilient disk storage (`AtomicFile<T>` and `StateDirectory`) for Human-in-the-Loop pending approvals (`approvals.json`), idempotent execution records (`idempotency.json`), OAuth2 tokens (`oauth_tokens.json`), and catalog mutation events (`catalog_events.json`). Added `state` block in `McpConfig` and `warmplane config state show/set` CLI commands.
