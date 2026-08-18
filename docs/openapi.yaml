@@ -322,6 +322,45 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SamplingResponse"
+        "202":
+          description: Sampling request accepted asynchronously
+  /v1/sampling/requests:
+    get:
+      summary: List pending or completed sampling delegation tickets
+      operationId: listSamplingRequests
+      responses:
+        "200":
+          description: List of sampling tickets
+  /v1/sampling/requests/{id}:
+    get:
+      summary: Get detailed status of a sampling delegation ticket
+      operationId: getSamplingRequest
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Sampling ticket detail
+        "404":
+          description: Ticket not found
+  /v1/sampling/requests/{id}/respond:
+    post:
+      summary: Provide client LLM completion to resolve a pending sampling ticket
+      operationId: respondSamplingRequest
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Completion accepted
+        "404":
+          description: Ticket not found or not pending
   /v1/config:
     get:
       summary: Get active configuration and metrics
