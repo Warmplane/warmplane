@@ -545,6 +545,26 @@ impl AppState {
             });
     }
 
+    /// Performs graceful shutdown of all upstream servers and background worker queues.
+    pub async fn shutdown(&self) {
+        info!("initiating graceful shutdown of Warmplane daemon subsystems");
+
+        // 1. Collect all active upstream servers and unmount them
+        let server_ids: Vec<String> = {
+            let guard = self.servers.read().await;
+            guard.keys().cloned().collect()
+        };
+
+        for server_id in server_ids {
+            self.unmount_upstream_server(&server_id).await;
+        }
+
+        // 2. Flush and drain audit queue
+        self.audit_handle.shutdown().await;
+
+        info!("graceful shutdown of daemon subsystems completed");
+    }
+
     /// Reconciles the runtime daemon state against the on-disk configuration file.
     ///
     /// # Returns
