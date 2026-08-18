@@ -35,10 +35,39 @@ pub async fn initialize_state(
     let config_path_str = config_path.into();
     let tool_timeout_ms = config.tool_timeout_ms.unwrap_or(DEFAULT_TOOL_TIMEOUT_MS);
     let policy = Policy::from_config(config.policy.clone());
-    let event_store = Arc::new(crate::catalog::CatalogEventStore::new());
+
+    // Resolve persistent state directory if enabled
+    let state_dir_opt = match &config.state {
+        Some(s) if s.enabled => s.dir.as_deref().or(Some(".warmplane/state")),
+        Some(_) => None,
+        None => Some(".warmplane/state"),
+    };
+
+    let (event_store, idempotency_store, oauth_registry, approval_registry) = if let Some(dir_str) =
+        state_dir_opt
+    {
+        let state_dir = crate::storage::StateDirectory::new(dir_str);
+        let _ = state_dir.ensure_exists();
+        let ev = Arc::new(crate::catalog::CatalogEventStore::open_or_create(
+            state_dir.catalog_events_file(),
+        )?);
+        let idm = Arc::new(crate::idempotency::IdempotencyStore::open_or_create(
+            state_dir.idempotency_file(),
+            std::time::Duration::from_secs(3600),
+        )?);
+        let oa = crate::oauth2::OAuthRegistry::open_or_create(state_dir.oauth_tokens_file());
+        let app = crate::approvals::ApprovalRegistry::open_or_create(state_dir.approvals_file())?;
+        (ev, idm, oa, app)
+    } else {
+        (
+            Arc::new(crate::catalog::CatalogEventStore::new()),
+            Arc::new(crate::idempotency::IdempotencyStore::default()),
+            crate::oauth2::OAuthRegistry::default(),
+            crate::approvals::ApprovalRegistry::default(),
+        )
+    };
 
     // Initialize central OAuth registry and proxy server if any server uses OAuth2
-    let oauth_registry = crate::oauth2::OAuthRegistry::default();
     let mut oauth_proxy_port = None;
 
     let has_oauth2 = config
@@ -121,13 +150,14 @@ pub async fn initialize_state(
         .search_engine(search_engine)
         .catalog_version_arc(Arc::new(RwLock::new(String::new())))
         .event_store(event_store)
-        .idempotency_store(Arc::new(crate::idempotency::IdempotencyStore::default()))
+        .idempotency_store(idempotency_store)
         .operation_registry(crate::operations::OperationRegistry::new())
         .config_path(config_path_str)
         .server_configs_arc(Arc::new(RwLock::new(HashMap::new())))
         .server_statuses_arc(Arc::new(RwLock::new(HashMap::new())))
         .oauth_proxy_port(oauth_proxy_port)
         .oauth_registry(oauth_registry)
+        .approval_registry(approval_registry)
         .audit_store(audit_store)
         .audit_handle(audit_handle);
 

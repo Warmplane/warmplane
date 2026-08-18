@@ -10,6 +10,7 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{oneshot, RwLock};
@@ -17,6 +18,7 @@ use tracing::{error, info, warn};
 
 use crate::config::WebhookConfig;
 use crate::context::RequestContext;
+use crate::storage::AtomicFile;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -91,6 +93,7 @@ pub enum ApprovalResolution {
 pub struct ApprovalRegistry {
     pub pending: Arc<RwLock<HashMap<String, PendingApproval>>>,
     pub wait_channels: Arc<RwLock<HashMap<String, oneshot::Sender<ApprovalResolution>>>>,
+    pub storage: Option<AtomicFile<HashMap<String, PendingApproval>>>,
 }
 
 /// Parameters for creating a pending approval ticket.
@@ -115,11 +118,77 @@ pub struct CreateApprovalRequest<'a> {
 }
 
 impl ApprovalRegistry {
-    /// Creates a new empty `ApprovalRegistry`.
+    /// Creates a new empty in-memory `ApprovalRegistry`.
     pub fn new() -> Self {
         Self {
             pending: Arc::new(RwLock::new(HashMap::new())),
             wait_channels: Arc::new(RwLock::new(HashMap::new())),
+            storage: None,
+        }
+    }
+
+    /// Initializes an `ApprovalRegistry` backed by a persistent atomic JSON file.
+    ///
+    /// Loads existing tickets, expires overdue pending tickets, and reschedules
+    /// timeout expiration tasks for any active pending tickets.
+    ///
+    /// # Arguments
+    /// * `path` - Destination path for persistent approval records.
+    ///
+    /// # Errors
+    /// Returns an error if reading or parsing existing storage fails.
+    pub fn open_or_create(path: impl AsRef<Path>) -> Result<Self> {
+        let storage = AtomicFile::new(path);
+        let mut loaded: HashMap<String, PendingApproval> = storage.load_opt()?.unwrap_or_default();
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        let mut expired_any = false;
+        let mut active_pending_timeouts: Vec<(String, u64)> = Vec::new();
+
+        for (id, ticket) in loaded.iter_mut() {
+            if ticket.status == ApprovalStatus::Pending {
+                if now >= ticket.expires_at {
+                    ticket.status = ApprovalStatus::Expired { timestamp: now };
+                    expired_any = true;
+                } else {
+                    let remaining = ticket.expires_at - now;
+                    active_pending_timeouts.push((id.clone(), remaining));
+                }
+            }
+        }
+
+        if expired_any {
+            let _ = storage.save(&loaded);
+        }
+
+        let registry = Self {
+            pending: Arc::new(RwLock::new(loaded)),
+            wait_channels: Arc::new(RwLock::new(HashMap::new())),
+            storage: Some(storage),
+        };
+
+        // Reschedule timeout tasks for pending tickets
+        for (ticket_id, remaining_secs) in active_pending_timeouts {
+            let reg_clone = registry.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(remaining_secs)).await;
+                reg_clone.expire_if_pending(&ticket_id).await;
+            });
+        }
+
+        Ok(registry)
+    }
+
+    async fn sync_to_disk(&self) {
+        if let Some(ref store) = self.storage {
+            let guard = self.pending.read().await;
+            if let Err(e) = store.save(&*guard) {
+                error!(error = %e, path = %store.path().display(), "failed to persist approval registry state to disk");
+            }
         }
     }
 
@@ -174,6 +243,9 @@ impl ApprovalRegistry {
             self_clone.expire_if_pending(&ticket_id).await;
         });
 
+        // Persist ticket to disk
+        self.sync_to_disk().await;
+
         // Dispatch outbound webhook if configured
         if let Some(cfg) = req.webhook {
             let webhook_cfg = cfg.clone();
@@ -217,6 +289,8 @@ impl ApprovalRegistry {
 
         let approval_snapshot = approval.clone();
         drop(pending_guard);
+
+        self.sync_to_disk().await;
 
         // Notify waiting caller
         let mut chan_guard = self.wait_channels.write().await;
@@ -269,6 +343,8 @@ impl ApprovalRegistry {
         let approval_snapshot = approval.clone();
         drop(pending_guard);
 
+        self.sync_to_disk().await;
+
         // Notify waiting caller
         let mut chan_guard = self.wait_channels.write().await;
         if let Some(tx) = chan_guard.remove(id) {
@@ -304,6 +380,8 @@ impl ApprovalRegistry {
 
         approval.status = ApprovalStatus::Expired { timestamp: now };
         drop(pending_guard);
+
+        self.sync_to_disk().await;
 
         let mut chan_guard = self.wait_channels.write().await;
         if let Some(tx) = chan_guard.remove(id) {
@@ -575,6 +653,97 @@ mod tests {
         match ticket.status {
             ApprovalStatus::Expired { .. } => {}
             _ => panic!("Expected Expired status in ticket"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_approval_persistence_across_restarts() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let state_file = temp_dir.path().join("approvals.json");
+
+        // 1. Initialize registry and create pending ticket
+        let registry1 = ApprovalRegistry::open_or_create(&state_file).unwrap();
+        let (id1, _) = registry1
+            .create_approval(CreateApprovalRequest {
+                capability_id: "db.drop_database".to_string(),
+                server_id: "postgres".to_string(),
+                args: json!({"db": "analytics"}),
+                sanitized_args: json!({"db": "analytics"}),
+                request_id: Some("req-persist-1".to_string()),
+                context: None,
+                timeout_secs: 60,
+                webhook: None,
+            })
+            .await;
+
+        let (id2, _) = registry1
+            .create_approval(CreateApprovalRequest {
+                capability_id: "aws.delete_s3".to_string(),
+                server_id: "aws".to_string(),
+                args: json!({"bucket": "backups"}),
+                sanitized_args: json!({"bucket": "backups"}),
+                request_id: Some("req-persist-2".to_string()),
+                context: None,
+                timeout_secs: 60,
+                webhook: None,
+            })
+            .await;
+
+        // Approve ticket 1
+        let approved = registry1
+            .approve(&id1, "operator-bob".to_string(), None, None)
+            .await
+            .unwrap();
+        assert!(approved);
+
+        drop(registry1); // Simulate daemon shutdown
+
+        // 2. Reboot daemon and load from persistent state file
+        let registry2 = ApprovalRegistry::open_or_create(&state_file).unwrap();
+        let ticket1 = registry2
+            .get(&id1)
+            .await
+            .expect("ticket 1 must survive reboot");
+        match ticket1.status {
+            ApprovalStatus::Approved { operator, .. } => {
+                assert_eq!(operator, "operator-bob");
+            }
+            _ => panic!("Expected ticket 1 to be Approved"),
+        }
+
+        let ticket2 = registry2
+            .get(&id2)
+            .await
+            .expect("ticket 2 must survive reboot");
+        assert_eq!(ticket2.status, ApprovalStatus::Pending);
+
+        // Reject ticket 2 after reboot
+        let rejected = registry2
+            .reject(
+                &id2,
+                "operator-alice".to_string(),
+                Some("Not allowed".to_string()),
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(rejected);
+
+        drop(registry2); // Simulate second restart
+
+        // 3. Second reboot verification
+        let registry3 = ApprovalRegistry::open_or_create(&state_file).unwrap();
+        let list = registry3.list().await;
+        assert_eq!(list.len(), 2);
+        let ticket2_final = registry3.get(&id2).await.unwrap();
+        match ticket2_final.status {
+            ApprovalStatus::Rejected {
+                operator, reason, ..
+            } => {
+                assert_eq!(operator, "operator-alice");
+                assert_eq!(reason, Some("Not allowed".to_string()));
+            }
+            _ => panic!("Expected ticket 2 to be Rejected"),
         }
     }
 }

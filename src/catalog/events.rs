@@ -1,10 +1,13 @@
-// Rust guideline compliant 2026-08-13
-
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::sync::RwLock;
+use tracing::error;
+
+use crate::storage::AtomicFile;
 
 /// Represents a single catalog mutation event for capabilities, resources, prompts, or server logs.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CatalogEvent {
     /// Unique identifier for the catalog event.
     pub id: String,
@@ -32,13 +35,21 @@ pub struct ResourceUpdateEvent {
     pub server: String,
 }
 
+/// Serialized state container for catalog event persistence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedCatalogState {
+    pub counter: u64,
+    pub events: Vec<CatalogEvent>,
+}
+
 /// Maximum number of catalog events retained in memory.
 pub const MAX_CATALOG_EVENTS: usize = 5_000;
 
-/// In-memory thread-safe event store recording catalog state changes.
+/// In-memory or disk-persisted event store recording catalog state changes.
 pub struct CatalogEventStore {
     events: RwLock<Vec<CatalogEvent>>,
     counter: std::sync::atomic::AtomicU64,
+    storage: Option<AtomicFile<PersistedCatalogState>>,
 }
 
 impl Default for CatalogEventStore {
@@ -48,7 +59,7 @@ impl Default for CatalogEventStore {
 }
 
 impl CatalogEventStore {
-    /// Creates a new empty `CatalogEventStore`.
+    /// Creates a new empty in-memory `CatalogEventStore`.
     ///
     /// # Returns
     /// An empty `CatalogEventStore` instance.
@@ -56,6 +67,45 @@ impl CatalogEventStore {
         Self {
             events: RwLock::new(Vec::new()),
             counter: std::sync::atomic::AtomicU64::new(1),
+            storage: None,
+        }
+    }
+
+    /// Initializes a `CatalogEventStore` backed by a persistent atomic JSON file.
+    ///
+    /// # Arguments
+    /// * `path` - Destination path for persistent catalog events.
+    ///
+    /// # Errors
+    /// Returns an error if reading or parsing existing storage fails.
+    pub fn open_or_create(path: impl AsRef<Path>) -> Result<Self> {
+        let storage = AtomicFile::new(path);
+        let loaded: Option<PersistedCatalogState> = storage.load_opt()?;
+
+        let (counter_val, events_vec) = match loaded {
+            Some(state) => (state.counter.max(1), state.events),
+            None => (1, Vec::new()),
+        };
+
+        Ok(Self {
+            events: RwLock::new(events_vec),
+            counter: std::sync::atomic::AtomicU64::new(counter_val),
+            storage: Some(storage),
+        })
+    }
+
+    fn sync_to_disk(&self) {
+        if let Some(ref store) = self.storage {
+            let guard = self.events.read().unwrap_or_else(|e| e.into_inner());
+            let current_counter = self.counter.load(std::sync::atomic::Ordering::Relaxed);
+            let state = PersistedCatalogState {
+                counter: current_counter,
+                events: guard.clone(),
+            };
+            drop(guard);
+            if let Err(e) = store.save(&state) {
+                error!(error = %e, path = %store.path().display(), "failed to persist catalog events to disk");
+            }
         }
     }
 
@@ -96,6 +146,9 @@ impl CatalogEventStore {
             change_type: change_type.as_ref().to_string(),
             detail: detail.map(|d| d.into()),
         });
+        drop(guard);
+
+        self.sync_to_disk();
     }
 
     /// Records a catalog mutation event.
@@ -155,5 +208,36 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].id, "evt_2");
         assert_eq!(filtered[0].object_id, "fs.readme");
+    }
+
+    #[test]
+    fn test_catalog_event_store_persistence_across_restarts() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let state_file = temp_dir.path().join("catalog_events.json");
+
+        // 1. Record events on initial instance
+        let store1 = CatalogEventStore::open_or_create(&state_file).unwrap();
+        store1.record("capability", "docker.start", "added");
+        store1.record("capability", "docker.stop", "added");
+
+        let (events1, cursor1) = store1.get_events_after(None);
+        assert_eq!(events1.len(), 2);
+        assert_eq!(cursor1, "evt_2");
+
+        drop(store1); // Simulate restart
+
+        // 2. Re-open and record 3rd event
+        let store2 = CatalogEventStore::open_or_create(&state_file).unwrap();
+        store2.record("resource", "docker.status", "updated");
+
+        let (all_events, cursor2) = store2.get_events_after(None);
+        assert_eq!(all_events.len(), 3);
+        assert_eq!(cursor2, "evt_3");
+
+        // Polling from old cursor `evt_2` returns only `evt_3`
+        let (paged, _) = store2.get_events_after(Some("evt_2"));
+        assert_eq!(paged.len(), 1);
+        assert_eq!(paged[0].id, "evt_3");
+        assert_eq!(paged[0].object_id, "docker.status");
     }
 }

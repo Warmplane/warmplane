@@ -15,7 +15,9 @@ use crate::config_import::{
     discover_sources, import_servers_into_config, parse_standard_mcp_source,
 };
 use crate::interactive::{interactive_add_server, parse_args_string};
-use crate::models::{AliasCommands, ConfigCommands, PolicyCommands, ServerAddArgs, ServerCommands};
+use crate::models::{
+    AliasCommands, ConfigCommands, PolicyCommands, ServerAddArgs, ServerCommands, StateCommands,
+};
 
 /// Dispatches `warmplane server` subcommands.
 pub async fn handle_server_command(cmd: ServerCommands) -> Result<()> {
@@ -441,6 +443,9 @@ pub async fn handle_config_command(cmd: ConfigCommands) -> Result<()> {
         ConfigCommands::Audit { command } => {
             handle_audit_command(command)?;
         }
+        ConfigCommands::State { command } => {
+            handle_state_command(command)?;
+        }
         ConfigCommands::Reload { port, config } => {
             trigger_daemon_reload(port, &config).await?;
         }
@@ -831,6 +836,67 @@ pub fn handle_audit_command(cmd: crate::models::AuditCommands) -> Result<()> {
     Ok(())
 }
 
+/// Dispatches `warmplane config state` subcommands.
+pub fn handle_state_command(cmd: StateCommands) -> Result<()> {
+    match cmd {
+        StateCommands::Set {
+            enabled,
+            dir,
+            config,
+        } => {
+            let mut mcp_config = load_or_default_config(&config)?;
+            let mut state_cfg = mcp_config.state.unwrap_or_default();
+
+            if let Some(en) = enabled {
+                state_cfg.enabled = en;
+            }
+            if let Some(d) = dir {
+                state_cfg.dir = Some(d);
+            }
+
+            mcp_config.state = Some(state_cfg.clone());
+            save_config(&config, &mcp_config)?;
+
+            println!(
+                "{} Updated persistent state configuration in {}",
+                "✔".green().bold(),
+                config.bold()
+            );
+            println!("  • Enabled: {}", state_cfg.enabled.to_string().cyan());
+            println!(
+                "  • Directory: {}",
+                state_cfg
+                    .dir
+                    .as_deref()
+                    .unwrap_or(".warmplane/state")
+                    .cyan()
+            );
+        }
+        StateCommands::Show { config } => {
+            let mcp_config = load_or_default_config(&config)?;
+            println!(
+                "{}",
+                "=== Warmplane Persistent State Settings ===".cyan().bold()
+            );
+            match &mcp_config.state {
+                Some(s) => {
+                    println!("  • Enabled: {}", s.enabled.to_string().cyan());
+                    println!(
+                        "  • Directory: {}",
+                        s.dir.as_deref().unwrap_or(".warmplane/state").cyan()
+                    );
+                }
+                None => {
+                    println!("  (using default persistent state configuration)");
+                    println!("  • Enabled: {}", "true".cyan());
+                    println!("  • Directory: {}", ".warmplane/state".cyan());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn handle_policy_command(cmd: PolicyCommands) -> Result<()> {
     match cmd {
         PolicyCommands::Allow { patterns, config } => {
@@ -1166,6 +1232,28 @@ mod tests {
         assert_eq!(audit.flush_interval_ms, Some(500));
         assert_eq!(audit.max_batch_size, Some(50));
         assert_eq!(audit.siem.unwrap().targets.len(), 1);
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_state_mutation() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("warmplane_state_test_{}", std::process::id()));
+        let config_file = temp_dir.join("mcp_servers.json");
+        let cfg_str = config_file.to_str().unwrap().to_string();
+
+        handle_state_command(crate::models::StateCommands::Set {
+            enabled: Some(true),
+            dir: Some(".custom_state".to_string()),
+            config: cfg_str.clone(),
+        })
+        .unwrap();
+
+        let cfg = load_config(&cfg_str).unwrap();
+        let state = cfg.state.unwrap();
+        assert!(state.enabled);
+        assert_eq!(state.dir, Some(".custom_state".to_string()));
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }

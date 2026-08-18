@@ -314,12 +314,17 @@ impl AppState {
                     remote_base_url: url.clone(),
                 };
 
-                let initial_token =
+                let token = if let Some(saved) =
+                    self.oauth_registry.get_saved_token(server_id).await
+                {
+                    saved
+                } else {
                     crate::oauth2::run_oauth2_flow(&client_state, &self.oauth_registry, proxy_port)
-                        .await?;
+                        .await?
+                };
                 {
                     let mut guard = client_state.token_state.write().await;
-                    *guard = Some(initial_token);
+                    *guard = Some(token);
                 }
 
                 {
