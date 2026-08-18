@@ -1,7 +1,7 @@
 # Warmplane
 
 > **The local control plane that keeps MCP sessions warm.**  
-> v0.17.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.18.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
 
@@ -173,6 +173,7 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 
 | Feature | Since | Summary |
 |---------|-------|---------|
+| **Persistent State & Graceful Teardown** | v0.18.0 | Restart-resilient atomic storage (`approvals`, `idempotency`, `oauth`, `catalog_events`), SIGINT/SIGTERM handling, audit batch drain, Bun CI UI gate & E2E suite |
 | **360° MCP Explorer & Execution Controls** | v0.17.0 | Resources explorer & live reader, prompt template studio, in-flight cancellation, visual batch pipeline builder, WORM multi-field search & pagination |
 | **Security Hardening & WORM Integrity** | v0.16.0 | API token gate, OAuth proxy guard, HMAC audit verification, sliding-window backoff, resource caps |
 | **Fault Tolerance & Supervision** | v0.15.0 | Supervisor restart loop, configurable circuit breakers, and degraded boot |
@@ -201,6 +202,13 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 ---
 
 ## Changelog
+
+### v0.18.0 — Persistent State Subsystem, Graceful Teardown, CI UI Automation & E2E Test Suite
+- **Persistent State Subsystem:** Added atomic, restart-resilient disk storage (`AtomicFile<T>` and `StateDirectory`) for Human-in-the-Loop pending approvals (`approvals.json`), idempotent execution records (`idempotency.json`), OAuth2 tokens (`oauth_tokens.json`), and catalog mutation events (`catalog_events.json`). Added `state` block in `McpConfig` and `warmplane config state show/set` CLI commands.
+- **Graceful Signal Handling & Subsystem Teardown:** Added robust `SIGINT` (Ctrl+C) and `SIGTERM` signal capture on Unix and Windows, integrated graceful HTTP server draining, async audit worker flushes (`AuditWorkerMsg::FlushAndShutdown`), and clean stdio subprocess process termination on shutdown.
+- **Pragmatic Rust Compliance:** Achieved 100% adherence across all 48 source files with standard compliance headers (`// Rust guideline compliant YYYY-MM-DD`).
+- **CI Automated Web UI Build & Drift Gate:** Integrated Bun into GitHub Actions CI (`ci.yml`) and release pipelines (`release-artifacts.yml`), with automated build steps and strict `git diff --exit-code ui/dist/index.html` drift detection.
+- **Comprehensive End-to-End Integration Suite:** Implemented dedicated E2E test harness (`tests/e2e_tests.rs`) exercising stdio MCP protocol handshakes, live TCP SSE streaming, config hot-reloading, mock OAuth2 RFC 8414 provider round-trips with silent 401 token refresh, and supervisor recovery.
 
 ### v0.17.0 — 360° MCP Explorer, Visual Batch Pipeline Builder & WORM Audit Pagination
 - **WORM Audit Multi-Field Search & Pagination:** Added case-insensitive substring search across 11 metadata fields, outcome status and server filters, offset/limit pagination slicing (`/v1/audit/events`), and context-aware CSV and JSONL export downloads (`/v1/audit/export`).
