@@ -1,3 +1,5 @@
+// Rust guideline compliant 2026-08-18
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;

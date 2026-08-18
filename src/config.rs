@@ -1,3 +1,5 @@
+// Rust guideline compliant 2026-08-18
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, io::ErrorKind, path::PathBuf};
