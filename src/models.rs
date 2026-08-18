@@ -302,6 +302,11 @@ pub enum ConfigCommands {
         #[command(subcommand)]
         command: AuditCommands,
     },
+    /// Manage persistent runtime state configuration
+    State {
+        #[command(subcommand)]
+        command: StateCommands,
+    },
     /// Hot-reload daemon configuration and upstream servers from disk
     Reload {
         #[arg(short = 'p', long)]
@@ -381,6 +386,29 @@ pub enum AuditCommands {
         config: String,
     },
     /// Show current WORM audit logging and SIEM configuration
+    Show {
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+}
+
+/// Persistent runtime state management subcommands.
+#[derive(Subcommand, Debug, Clone)]
+pub enum StateCommands {
+    /// Configure runtime state persistence settings
+    Set {
+        /// Enable or disable state persistence
+        #[arg(long)]
+        enabled: Option<bool>,
+        /// State directory path
+        #[arg(long)]
+        dir: Option<String>,
+        /// Path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Show persistent runtime state configuration
     Show {
         /// Path to Warmplane configuration file
         #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]

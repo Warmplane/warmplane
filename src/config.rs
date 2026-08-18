@@ -52,6 +52,9 @@ pub struct McpConfig {
     /// Optional global resilience and circuit breaker configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resilience: Option<crate::circuit_breaker::ResilienceConfig>,
+    /// Optional persistent runtime state configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<StateConfig>,
     /// Optional static API auth token protecting mutating/admin control-plane endpoints.
     #[serde(
         default,
@@ -63,6 +66,30 @@ pub struct McpConfig {
     /// Upstream MCP server definitions keyed by server identifier.
     #[serde(rename = "mcpServers", default)]
     pub mcp_servers: HashMap<String, ServerConfig>,
+}
+
+/// Persistent runtime state configuration.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub struct StateConfig {
+    /// Whether persistent state is enabled (default: true).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Directory path for storing persistent state files (default: ".warmplane/state").
+    #[serde(default = "default_state_dir", skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
+}
+
+fn default_state_dir() -> Option<String> {
+    Some(".warmplane/state".to_string())
+}
+
+impl Default for StateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            dir: default_state_dir(),
+        }
+    }
 }
 
 /// Upstream server configuration definition.

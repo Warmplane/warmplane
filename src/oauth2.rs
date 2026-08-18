@@ -36,7 +36,7 @@ pub struct DiscoveryMetadata {
 }
 
 /// Active OAuth2 access and refresh token state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OAuth2TokenState {
     /// Bearer access token string.
     pub access_token: String,
@@ -66,6 +66,41 @@ pub struct OAuthRegistry {
     pub pending_auths: Arc<RwLock<HashMap<String, oneshot::Sender<CallbackPayload>>>>,
     // Port on which the local proxy and callback server is listening
     pub proxy_port: Arc<std::sync::atomic::AtomicU16>,
+    // Optional persistent storage for OAuth token states
+    pub token_storage: Option<crate::storage::AtomicFile<HashMap<String, OAuth2TokenState>>>,
+}
+
+impl OAuthRegistry {
+    /// Initializes an `OAuthRegistry` backed by a persistent atomic JSON file.
+    pub fn open_or_create(path: impl AsRef<std::path::Path>) -> Self {
+        Self {
+            clients: Arc::new(RwLock::new(HashMap::new())),
+            pending_auths: Arc::new(RwLock::new(HashMap::new())),
+            proxy_port: Arc::new(std::sync::atomic::AtomicU16::new(0)),
+            token_storage: Some(crate::storage::AtomicFile::new(path)),
+        }
+    }
+
+    /// Persists an OAuth token state for a given upstream server ID.
+    pub async fn save_token(&self, server_id: &str, state: &OAuth2TokenState) {
+        if let Some(ref store) = self.token_storage {
+            let mut map = store.load_opt().unwrap_or_default().unwrap_or_default();
+            map.insert(server_id.to_string(), state.clone());
+            if let Err(e) = store.save(&map) {
+                error!(error = %e, server_id = %server_id, "failed to persist oauth token to disk");
+            }
+        }
+    }
+
+    /// Retrieves persisted OAuth token state for a given upstream server ID if present.
+    pub async fn get_saved_token(&self, server_id: &str) -> Option<OAuth2TokenState> {
+        if let Some(ref store) = self.token_storage {
+            let map = store.load_opt().ok().flatten().unwrap_or_default();
+            map.get(server_id).cloned()
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -433,6 +468,10 @@ pub async fn run_oauth2_flow(
         scopes,
     };
 
+    registry
+        .save_token(&client_state.server_id, &token_state)
+        .await;
+
     Ok(token_state)
 }
 
@@ -440,7 +479,10 @@ pub async fn run_oauth2_flow(
 // Phase 6: Silent token refresh
 // ----------------------------------------------------
 
-pub async fn refresh_access_token(client_state: &OAuth2ClientState) -> Result<OAuth2TokenState> {
+pub async fn refresh_access_token(
+    client_state: &OAuth2ClientState,
+    registry: Option<&OAuthRegistry>,
+) -> Result<OAuth2TokenState> {
     let current_token_state = {
         let guard = client_state.token_state.read().await;
         guard.clone()
@@ -502,6 +544,12 @@ pub async fn refresh_access_token(client_state: &OAuth2ClientState) -> Result<OA
 
     let mut guard = client_state.token_state.write().await;
     *guard = Some(new_token_state.clone());
+    drop(guard);
+
+    if let Some(reg) = registry {
+        reg.save_token(&client_state.server_id, &new_token_state)
+            .await;
+    }
 
     Ok(new_token_state)
 }
@@ -665,7 +713,10 @@ async fn handle_proxy_request(
         // Phase 5: Silent token refresh on 401 Unauthorized
         if status == StatusCode::UNAUTHORIZED && attempt < max_attempts {
             info!("received 401 Unauthorized. Attempting silent token refresh...");
-            if refresh_access_token(&client_state).await.is_ok() {
+            if refresh_access_token(&client_state, Some(&registry))
+                .await
+                .is_ok()
+            {
                 continue;
             }
         }
@@ -844,5 +895,38 @@ mod tests {
         let pkce = generate_pkce();
         assert_eq!(pkce.verifier.len(), 64);
         assert!(pkce.challenge.len() > 30);
+    }
+
+    #[tokio::test]
+    async fn test_oauth_token_persistence_across_restarts() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let token_file = temp_dir.path().join("oauth_tokens.json");
+
+        let reg1 = OAuthRegistry::open_or_create(&token_file);
+        let mut scopes = HashSet::new();
+        scopes.insert("read:tools".to_string());
+        scopes.insert("write:tools".to_string());
+
+        let token_state = OAuth2TokenState {
+            access_token: "access-token-xyz".to_string(),
+            refresh_token: Some("refresh-token-abc".to_string()),
+            scopes: scopes.clone(),
+        };
+
+        reg1.save_token("github_srv", &token_state).await;
+
+        drop(reg1); // Simulate restart
+
+        let reg2 = OAuthRegistry::open_or_create(&token_file);
+        let restored = reg2
+            .get_saved_token("github_srv")
+            .await
+            .expect("token should exist");
+        assert_eq!(restored.access_token, "access-token-xyz");
+        assert_eq!(
+            restored.refresh_token,
+            Some("refresh-token-abc".to_string())
+        );
+        assert_eq!(restored.scopes, scopes);
     }
 }

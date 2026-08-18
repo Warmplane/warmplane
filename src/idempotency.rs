@@ -1,10 +1,13 @@
-// Rust guideline compliant 2026-08-13
-
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::path::Path;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, RwLock};
+use tracing::error;
+
+use crate::storage::AtomicFile;
 
 /// Metadata attached to responses indicating retry safety and upstream execution status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -49,15 +52,25 @@ enum EntryState {
 struct IdempotencyEntry {
     state: EntryState,
     created_at: Instant,
+    created_at_epoch_secs: u64,
+}
+
+/// Serialized record for persistent idempotency cache storage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedIdempotencyRecord {
+    pub key: String,
+    pub response: Value,
+    pub created_at_epoch_secs: u64,
 }
 
 /// Maximum duration an operation can remain in the InProgress state before being treated as abandoned.
 pub const IN_PROGRESS_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// In-memory idempotency deduplication store with configurable time-to-live TTL.
+/// In-memory or disk-persisted idempotency deduplication store with configurable TTL.
 pub struct IdempotencyStore {
     ttl: Duration,
     entries: RwLock<HashMap<String, IdempotencyEntry>>,
+    storage: Option<AtomicFile<HashMap<String, PersistedIdempotencyRecord>>>,
 }
 
 /// Result of checking or starting an idempotent request execution.
@@ -71,17 +84,97 @@ pub enum DeduplicateResult {
 }
 
 impl IdempotencyStore {
-    /// Creates a new `IdempotencyStore` with specified entry TTL duration.
+    /// Creates a new in-memory `IdempotencyStore` with specified entry TTL duration.
     ///
     /// # Arguments
     /// * `ttl` - Entry expiry duration.
     ///
     /// # Returns
-    /// An empty `IdempotencyStore`.
+    /// An empty in-memory `IdempotencyStore`.
     pub fn new(ttl: Duration) -> Self {
         Self {
             ttl,
             entries: RwLock::new(HashMap::new()),
+            storage: None,
+        }
+    }
+
+    /// Initializes an `IdempotencyStore` backed by a persistent atomic JSON file.
+    ///
+    /// Loads existing completed records, pruning those older than the TTL.
+    ///
+    /// # Arguments
+    /// * `path` - Destination path for persistent idempotency cache.
+    /// * `ttl` - Cache expiration duration.
+    ///
+    /// # Errors
+    /// Returns an error if reading or parsing existing storage fails.
+    pub fn open_or_create(path: impl AsRef<Path>, ttl: Duration) -> Result<Self> {
+        let storage = AtomicFile::new(path);
+        let loaded: HashMap<String, PersistedIdempotencyRecord> =
+            storage.load_opt()?.unwrap_or_default();
+
+        let now_epoch_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let now_instant = Instant::now();
+
+        let mut in_memory_map = HashMap::new();
+        let mut valid_persisted = HashMap::new();
+        let mut pruned_any = false;
+
+        for (k, record) in loaded {
+            let age_secs = now_epoch_secs.saturating_sub(record.created_at_epoch_secs);
+            if age_secs < ttl.as_secs() {
+                let age_dur = Duration::from_secs(age_secs);
+                let created_instant = now_instant.checked_sub(age_dur).unwrap_or(now_instant);
+
+                in_memory_map.insert(
+                    k.clone(),
+                    IdempotencyEntry {
+                        state: EntryState::Completed(record.response.clone()),
+                        created_at: created_instant,
+                        created_at_epoch_secs: record.created_at_epoch_secs,
+                    },
+                );
+                valid_persisted.insert(k, record);
+            } else {
+                pruned_any = true;
+            }
+        }
+
+        if pruned_any {
+            let _ = storage.save(&valid_persisted);
+        }
+
+        Ok(Self {
+            ttl,
+            entries: RwLock::new(in_memory_map),
+            storage: Some(storage),
+        })
+    }
+
+    async fn sync_to_disk(&self) {
+        if let Some(ref store) = self.storage {
+            let guard = self.entries.read().await;
+            let mut persisted = HashMap::new();
+            for (k, entry) in guard.iter() {
+                if let EntryState::Completed(ref val) = entry.state {
+                    persisted.insert(
+                        k.clone(),
+                        PersistedIdempotencyRecord {
+                            key: k.clone(),
+                            response: val.clone(),
+                            created_at_epoch_secs: entry.created_at_epoch_secs,
+                        },
+                    );
+                }
+            }
+            drop(guard);
+            if let Err(e) = store.save(&persisted) {
+                error!(error = %e, path = %store.path().display(), "failed to persist idempotency cache to disk");
+            }
         }
     }
 
@@ -96,6 +189,10 @@ impl IdempotencyStore {
         let key_ref = key.as_ref();
         let mut map = self.entries.write().await;
         let now = Instant::now();
+        let now_epoch_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
 
         // Check if existing key is valid before returning
         if let Some(entry) = map.get(key_ref) {
@@ -134,6 +231,7 @@ impl IdempotencyStore {
             IdempotencyEntry {
                 state: EntryState::InProgress(tx),
                 created_at: now,
+                created_at_epoch_secs: now_epoch_secs,
             },
         );
         DeduplicateResult::New
@@ -153,11 +251,15 @@ impl IdempotencyStore {
             }
             entry.state = EntryState::Completed(result);
         }
+        drop(map);
+        self.sync_to_disk().await;
     }
 
     pub async fn remove(&self, key: &str) {
         let mut map = self.entries.write().await;
         map.remove(key);
+        drop(map);
+        self.sync_to_disk().await;
     }
 }
 
@@ -207,6 +309,37 @@ mod tests {
         match store_arc.check_or_start(key).await {
             DeduplicateResult::Completed(cached) => assert_eq!(cached, res_value),
             _ => panic!("Expected Completed"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_idempotency_persistence_across_restarts() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cache_file = temp_dir.path().join("idempotency.json");
+        let ttl = Duration::from_secs(300);
+
+        // 1. First run: Start and complete an idempotent key
+        let store1 = IdempotencyStore::open_or_create(&cache_file, ttl).unwrap();
+        let key = "idem-restart-key";
+        match store1.check_or_start(key).await {
+            DeduplicateResult::New => {}
+            _ => panic!("Expected New"),
+        }
+        let completed_payload = serde_json::json!({
+            "status": "success",
+            "transaction_id": "tx-999"
+        });
+        store1.complete(key, completed_payload.clone()).await;
+
+        drop(store1); // Simulate daemon restart
+
+        // 2. Second run: Re-open from disk and check key
+        let store2 = IdempotencyStore::open_or_create(&cache_file, ttl).unwrap();
+        match store2.check_or_start(key).await {
+            DeduplicateResult::Completed(cached) => {
+                assert_eq!(cached, completed_payload);
+            }
+            _ => panic!("Expected Completed payload from persisted store"),
         }
     }
 }
