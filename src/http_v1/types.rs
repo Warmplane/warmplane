@@ -132,16 +132,50 @@ pub struct CompletionRequest {
 }
 
 /// Request body for sampling LLM completion delegation.
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct SamplingRequest {
     /// Server identifier originating the sampling request.
     pub server_id: String,
-    /// System prompt or context messages array.
+    /// Conversation messages array.
     #[serde(default)]
-    pub messages: Vec<Value>,
+    pub messages: Vec<crate::sampling::SamplingMessage>,
+    /// Optional model selection hints and preferences.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_preferences: Option<crate::sampling::ModelPreferences>,
+    /// Optional system instruction prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    /// Optional context inclusion mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_context: Option<String>,
     /// Optional max tokens limit.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<usize>,
+    /// Optional stop sequences.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stop_sequences: Vec<String>,
+    /// Optional metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+    /// Optional asynchronous mode (if true, returns ticket immediately without blocking).
+    #[serde(default)]
+    pub async_mode: Option<bool>,
+}
+
+/// Request body for resolving a pending sampling ticket.
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct RespondSamplingRequest {
+    /// Generated assistant completion result.
+    pub result: crate::sampling::CreateMessageResult,
+}
+
+/// Query parameters for listing sampling requests.
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct SamplingListQuery {
+    /// Optional server identifier filter.
+    pub server_id: Option<String>,
+    /// Optional status filter (`pending`, `completed`, `expired`, `rejected`).
+    pub status: Option<String>,
 }
 
 /// Request payload for adding or updating an upstream server.

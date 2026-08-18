@@ -20,6 +20,7 @@ pub mod mcp_server;
 pub mod models;
 pub mod oauth2;
 pub mod operations;
+pub mod sampling;
 pub mod search;
 pub mod storage;
 pub mod supervisor;

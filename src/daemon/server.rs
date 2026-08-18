@@ -43,29 +43,32 @@ pub async fn initialize_state(
         None => Some(".warmplane/state"),
     };
 
-    let (event_store, idempotency_store, oauth_registry, approval_registry) = if let Some(dir_str) =
-        state_dir_opt
-    {
-        let state_dir = crate::storage::StateDirectory::new(dir_str);
-        let _ = state_dir.ensure_exists();
-        let ev = Arc::new(crate::catalog::CatalogEventStore::open_or_create(
-            state_dir.catalog_events_file(),
-        )?);
-        let idm = Arc::new(crate::idempotency::IdempotencyStore::open_or_create(
-            state_dir.idempotency_file(),
-            std::time::Duration::from_secs(3600),
-        )?);
-        let oa = crate::oauth2::OAuthRegistry::open_or_create(state_dir.oauth_tokens_file());
-        let app = crate::approvals::ApprovalRegistry::open_or_create(state_dir.approvals_file())?;
-        (ev, idm, oa, app)
-    } else {
-        (
-            Arc::new(crate::catalog::CatalogEventStore::new()),
-            Arc::new(crate::idempotency::IdempotencyStore::default()),
-            crate::oauth2::OAuthRegistry::default(),
-            crate::approvals::ApprovalRegistry::default(),
-        )
-    };
+    let (event_store, idempotency_store, oauth_registry, approval_registry, sampling_registry) =
+        if let Some(dir_str) = state_dir_opt {
+            let state_dir = crate::storage::StateDirectory::new(dir_str);
+            let _ = state_dir.ensure_exists();
+            let ev = Arc::new(crate::catalog::CatalogEventStore::open_or_create(
+                state_dir.catalog_events_file(),
+            )?);
+            let idm = Arc::new(crate::idempotency::IdempotencyStore::open_or_create(
+                state_dir.idempotency_file(),
+                std::time::Duration::from_secs(3600),
+            )?);
+            let oa = crate::oauth2::OAuthRegistry::open_or_create(state_dir.oauth_tokens_file());
+            let app =
+                crate::approvals::ApprovalRegistry::open_or_create(state_dir.approvals_file())?;
+            let samp =
+                crate::sampling::SamplingRegistry::open_or_create(state_dir.sampling_file())?;
+            (ev, idm, oa, app, samp)
+        } else {
+            (
+                Arc::new(crate::catalog::CatalogEventStore::new()),
+                Arc::new(crate::idempotency::IdempotencyStore::default()),
+                crate::oauth2::OAuthRegistry::default(),
+                crate::approvals::ApprovalRegistry::default(),
+                crate::sampling::SamplingRegistry::new(),
+            )
+        };
 
     // Initialize central OAuth registry and proxy server if any server uses OAuth2
     let mut oauth_proxy_port = None;
@@ -158,6 +161,7 @@ pub async fn initialize_state(
         .oauth_proxy_port(oauth_proxy_port)
         .oauth_registry(oauth_registry)
         .approval_registry(approval_registry)
+        .sampling_registry(sampling_registry)
         .audit_store(audit_store)
         .audit_handle(audit_handle);
 
@@ -252,6 +256,18 @@ pub fn build_router(app_state: AppState) -> Router {
         .route(
             "/v1/sampling/create_message",
             post(http_v1::handle_sampling_create_message),
+        )
+        .route(
+            "/v1/sampling/requests",
+            get(http_v1::handle_list_sampling_requests),
+        )
+        .route(
+            "/v1/sampling/requests/:id",
+            get(http_v1::handle_get_sampling_request),
+        )
+        .route(
+            "/v1/sampling/requests/:id/respond",
+            post(http_v1::handle_respond_sampling_request),
         )
         // Configuration & Control Deck Endpoints
         .route("/v1/config", get(http_v1::handle_get_config))

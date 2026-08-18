@@ -70,6 +70,8 @@ pub struct AppState {
     pub audit_handle: crate::audit::AuditHandle,
     /// Upstream circuit breaker registry for fault tolerance.
     pub circuit_breakers: crate::circuit_breaker::CircuitBreakerRegistry,
+    /// Model Context Protocol (MCP) sampling delegation registry.
+    pub sampling_registry: crate::sampling::SamplingRegistry,
     /// Optional static API bearer token / key for authenticating incoming requests.
     pub auth_token: Option<String>,
 }
@@ -102,6 +104,7 @@ pub struct AppStateBuilder {
     oauth_proxy_port: Option<u16>,
     oauth_registry: Option<crate::oauth2::OAuthRegistry>,
     approval_registry: Option<crate::approvals::ApprovalRegistry>,
+    sampling_registry: Option<crate::sampling::SamplingRegistry>,
     audit_store: Option<crate::audit::SharedAuditStore>,
     audit_handle: Option<crate::audit::AuditHandle>,
     circuit_breakers: Option<crate::circuit_breaker::CircuitBreakerRegistry>,
@@ -274,6 +277,12 @@ impl AppStateBuilder {
         self
     }
 
+    /// Sets MCP sampling delegation registry.
+    pub fn sampling_registry(mut self, registry: crate::sampling::SamplingRegistry) -> Self {
+        self.sampling_registry = Some(registry);
+        self
+    }
+
     /// Sets append-only WORM audit store.
     pub fn audit_store(mut self, store: crate::audit::SharedAuditStore) -> Self {
         self.audit_store = Some(store);
@@ -341,6 +350,7 @@ impl AppStateBuilder {
             oauth_proxy_port: self.oauth_proxy_port,
             oauth_registry: self.oauth_registry.unwrap_or_default(),
             approval_registry: self.approval_registry.unwrap_or_default(),
+            sampling_registry: self.sampling_registry.unwrap_or_default(),
             audit_store,
             audit_handle,
             circuit_breakers: self.circuit_breakers.unwrap_or_default(),

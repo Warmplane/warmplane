@@ -27,7 +27,8 @@ use crate::{
         },
         types::{
             error_envelope, CatalogEventsQuery, CatalogEventsResponse, CompletionRequest,
-            GetPromptRequest, ReadResourceRequest, SamplingRequest, SearchCapabilitiesRequest,
+            GetPromptRequest, ReadResourceRequest, RespondSamplingRequest, SamplingListQuery,
+            SamplingRequest, SearchCapabilitiesRequest,
         },
     },
 };
@@ -183,20 +184,172 @@ pub async fn handle_sampling_create_message(
             .into_response();
     }
 
+    let is_async = payload.async_mode.unwrap_or(false);
+    let timeout_secs = (state.tool_timeout_ms / 1000).max(10);
+    let server_id = payload.server_id.clone();
+
+    let params = crate::sampling::CreateMessageParams {
+        server_id: payload.server_id.clone(),
+        messages: payload.messages,
+        model_preferences: payload.model_preferences,
+        system_prompt: payload.system_prompt,
+        include_context: payload.include_context,
+        max_tokens: payload.max_tokens,
+        stop_sequences: payload.stop_sequences,
+        metadata: payload.metadata,
+    };
+
+    let (ticket_id, rx) = state
+        .sampling_registry
+        .create_request(server_id, params, timeout_secs)
+        .await;
+
+    if is_async {
+        return (
+            StatusCode::ACCEPTED,
+            make_etag_header(&catalog_ver),
+            Json(json!({
+                "ok": true,
+                "trace_id": trace_id,
+                "ticket_id": ticket_id,
+                "status": "pending",
+                "message": "Sampling request suspended; awaiting client completion callback."
+            })),
+        )
+            .into_response();
+    }
+
+    // Synchronous long-polling: await client response
+    match rx.await {
+        Ok(Ok(result)) => (
+            StatusCode::OK,
+            make_etag_header(&catalog_ver),
+            Json(json!({
+                "ok": true,
+                "trace_id": trace_id,
+                "ticket_id": ticket_id,
+                "data": result,
+                "error": null,
+            })),
+        )
+            .into_response(),
+        Ok(Err(err)) => (
+            StatusCode::BAD_REQUEST,
+            make_etag_header(&catalog_ver),
+            Json(json!({
+                "ok": false,
+                "trace_id": trace_id,
+                "ticket_id": ticket_id,
+                "data": null,
+                "error": {
+                    "code": "SAMPLING_FAILED",
+                    "message": err
+                }
+            })),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::GATEWAY_TIMEOUT,
+            make_etag_header(&catalog_ver),
+            Json(json!({
+                "ok": false,
+                "trace_id": trace_id,
+                "ticket_id": ticket_id,
+                "data": null,
+                "error": {
+                    "code": "SAMPLING_TIMEOUT",
+                    "message": "Sampling request timed out awaiting client completion"
+                }
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// Handles HTTP GET `/v1/sampling/requests` listing pending or historical sampling delegation tickets.
+pub async fn handle_list_sampling_requests(
+    State(state): State<AppState>,
+    Query(query): Query<SamplingListQuery>,
+) -> impl IntoResponse {
+    let requests = state
+        .sampling_registry
+        .list_requests(query.server_id.as_deref(), query.status.as_deref())
+        .await;
+
     (
-        StatusCode::NOT_IMPLEMENTED,
-        make_etag_header(&catalog_ver),
+        StatusCode::OK,
         Json(json!({
-            "ok": false,
-            "trace_id": trace_id,
-            "data": null,
-            "error": {
-                "code": "SAMPLING_NOT_SUPPORTED",
-                "message": "Warmplane acts as a local control plane and does not provide an embedded sampling LLM. Configure an external MCP client or sampling provider."
-            }
+            "ok": true,
+            "total": requests.len(),
+            "requests": requests
         })),
     )
         .into_response()
+}
+
+/// Handles HTTP GET `/v1/sampling/requests/:id` retrieving a single sampling delegation ticket.
+pub async fn handle_get_sampling_request(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.sampling_registry.get_request(&id).await {
+        Some(req) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "request": req
+            })),
+        )
+            .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "ok": false,
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": format!("Sampling ticket '{}' not found", id)
+                }
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// Handles HTTP POST `/v1/sampling/requests/:id/respond` resolving a pending sampling ticket with LLM completion.
+pub async fn handle_respond_sampling_request(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(payload): Json<RespondSamplingRequest>,
+) -> impl IntoResponse {
+    let success = state
+        .sampling_registry
+        .respond_to_request(&id, payload.result)
+        .await;
+
+    if success {
+        (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "ticket_id": id,
+                "status": "completed",
+                "message": "Sampling completion accepted and delivered to caller."
+            })),
+        )
+            .into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "ok": false,
+                "error": {
+                    "code": "TICKET_NOT_FOUND_OR_NOT_PENDING",
+                    "message": format!("Sampling ticket '{}' not found or not in pending status", id)
+                }
+            })),
+        )
+            .into_response()
+    }
 }
 
 /// Handles HTTP GET `/v1/capabilities` listing all registered capabilities.
