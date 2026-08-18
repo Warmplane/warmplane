@@ -579,3 +579,52 @@ async fn test_e2e_supervisor_crash_detection_and_degraded_status() {
     assert_eq!(status["status"], "degraded");
     assert!(status["error"].is_string());
 }
+
+// ============================================================================
+// Test 6: HTTP Supervisor Degraded Boot on Unreachable Endpoint
+// ============================================================================
+
+#[tokio::test]
+async fn test_e2e_http_supervisor_degraded_boot_on_unreachable_endpoint() {
+    let temp_config = NamedTempFile::new().unwrap();
+    let config_path = temp_config.path().to_str().unwrap().to_string();
+
+    let mut mcp_servers = HashMap::new();
+    // HTTP server pointing to an offline port
+    mcp_servers.insert(
+        "offline_http_server".to_string(),
+        ServerConfig {
+            command: None,
+            args: vec![],
+            env: HashMap::new(),
+            url: Some("http://127.0.0.1:59999/mcp".to_string()),
+            auth: None,
+            protocol_version: None,
+            allow_stateless: Some(true),
+            headers: HashMap::new(),
+            resilience: None,
+        },
+    );
+
+    let initial_config = McpConfig {
+        mcp_servers,
+        ..Default::default()
+    };
+    save_config(&config_path, &initial_config).unwrap();
+
+    // Verify daemon boots without error even though the HTTP server is unreachable
+    let state = initialize_state(initial_config, &config_path)
+        .await
+        .expect("Daemon must boot cleanly with unreachable HTTP server");
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let statuses = state.server_statuses.read().await;
+    let status = statuses
+        .get("offline_http_server")
+        .expect("server status must be recorded for offline_http_server");
+
+    assert_eq!(status["status"], "degraded");
+    assert_eq!(status["transport"], "http");
+    assert!(status["error"].is_string());
+}

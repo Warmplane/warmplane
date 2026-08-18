@@ -1,25 +1,30 @@
-// Rust guideline compliant 2026-08-17
+// Rust guideline compliant 2026-08-18
 
 //! Upstream process supervisor and self-healing actor manager (`M-CANONICAL-DOCS`).
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use rmcp::{
     model::{CallToolRequestParams, GetPromptRequestParams, ReadResourceRequestParams},
-    transport::TokioChildProcess,
+    transport::{
+        streamable_http_client::StreamableHttpClientTransportConfig, StreamableHttpClientTransport,
+        TokioChildProcess,
+    },
     ServiceExt,
 };
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
+    sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::{process::Command, sync::mpsc, time::timeout};
+use tokio::{process::Command, sync::mpsc, sync::RwLock, time::timeout};
 use tracing::{error, info, warn};
 
 use crate::{
-    config::ServerConfig,
+    config::{AuthConfig, ServerConfig},
     daemon::{
         state::{compute_catalog_version, AppState},
+        transport::build_http_headers,
         types::{CapabilityMeta, PromptMeta, ResourceMeta, ServerMsg, UpstreamCallError},
     },
 };
@@ -203,7 +208,7 @@ macro_rules! discover_supervisor_items {
                             .and_then(|v| v.as_str())
                             .map(ToString::to_string);
                         let mime_type = resource
-                            .get("mimeType")
+                            .get("mime_type")
                             .and_then(|v| v.as_str())
                             .map(ToString::to_string);
 
@@ -281,6 +286,94 @@ macro_rules! discover_supervisor_items {
 
         (new_capabilities, new_resources, new_prompts)
     }};
+}
+
+/// Helper function to establish a streamable HTTP connection to a remote MCP server.
+///
+/// # Arguments
+/// * `state` - Shared application state reference.
+/// * `server_id` - Server identifier string.
+/// * `srv_cfg` - Server configuration parameters.
+///
+/// # Returns
+/// Active rmcp Client instance.
+///
+/// # Errors
+/// Returns an error if transport creation or handshake fails.
+async fn connect_http_mcp_client(
+    state: &AppState,
+    server_id: &str,
+    srv_cfg: &ServerConfig,
+) -> Result<rmcp::service::RunningService<rmcp::RoleClient, ()>> {
+    let url = srv_cfg
+        .url
+        .as_ref()
+        .context("URL required for HTTP server")?;
+
+    let mut target_url = url.clone();
+
+    if let Some(AuthConfig::Oauth2 {
+        client_id,
+        authorization_server_url,
+        scopes,
+        client_metadata_url,
+    }) = &srv_cfg.auth
+    {
+        let proxy_port = state
+            .oauth_proxy_port
+            .ok_or_else(|| anyhow!("OAuth proxy server not running"))?;
+
+        let discovery =
+            crate::oauth2::discover_auth_server(url, Some(authorization_server_url)).await?;
+
+        let client_state = crate::oauth2::OAuth2ClientState {
+            server_id: server_id.to_string(),
+            client_id: client_id.clone(),
+            _authorization_server_url: authorization_server_url.clone(),
+            scopes: Arc::new(RwLock::new(scopes.iter().cloned().collect())),
+            token_state: Arc::new(RwLock::new(None)),
+            discovery,
+            client_metadata_url: client_metadata_url.clone(),
+            remote_base_url: url.clone(),
+        };
+
+        let token = if let Some(saved) = state.oauth_registry.get_saved_token(server_id).await {
+            saved
+        } else {
+            crate::oauth2::run_oauth2_flow(&client_state, &state.oauth_registry, proxy_port).await?
+        };
+        {
+            let mut guard = client_state.token_state.write().await;
+            *guard = Some(token);
+        }
+
+        {
+            let mut clients = state.oauth_registry.clients.write().await;
+            clients.insert(server_id.to_string(), client_state);
+        }
+
+        target_url = format!("http://127.0.0.1:{}/proxy/{}/", proxy_port, server_id);
+    }
+
+    let headers = build_http_headers(server_id, srv_cfg)?;
+    let http_client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .with_context(|| format!("Failed to build HTTP client for {}", server_id))?;
+
+    let mut transport_config = StreamableHttpClientTransportConfig::with_uri(target_url);
+    if let Some(allow_stateless) = srv_cfg.allow_stateless {
+        transport_config.allow_stateless = allow_stateless;
+    }
+    let transport = StreamableHttpClientTransport::with_client(http_client, transport_config);
+    let mcp_client = ().serve(transport).await.with_context(|| {
+        format!(
+            "Failed to negotiate streamable HTTP MCP connection for {}",
+            server_id
+        )
+    })?;
+
+    Ok(mcp_client)
 }
 
 /// Spawns an auto-restarting supervisor for an upstream stdio child process.
@@ -384,6 +477,18 @@ pub async fn spawn_supervised_stdio_server(
                 is_alive = handle_supervisor_msg!(client, msg, tool_timeout);
                 if !is_alive {
                     client_opt = None;
+                    let mut statuses_guard = state_clone.server_statuses.write().await;
+                    if let Some(status_val) = statuses_guard.get_mut(&server_id_owned) {
+                        if let Some(obj) = status_val.as_object_mut() {
+                            obj.insert("status".to_string(), json!("degraded"));
+                            obj.insert(
+                                "error".to_string(),
+                                json!(
+                                    "stdio child process exited; supervisor retrying in background"
+                                ),
+                            );
+                        }
+                    }
                 }
             } else {
                 match msg {
@@ -451,6 +556,16 @@ pub async fn spawn_supervised_stdio_server(
                             )
                             .await;
 
+                            {
+                                let mut statuses_guard = state_clone.server_statuses.write().await;
+                                if let Some(status_val) = statuses_guard.get_mut(&server_id_owned) {
+                                    if let Some(obj) = status_val.as_object_mut() {
+                                        obj.insert("status".to_string(), json!("connected"));
+                                        obj.remove("error");
+                                    }
+                                }
+                            }
+
                             client_opt = Some(new_client);
                         } else {
                             error!(
@@ -478,6 +593,209 @@ pub async fn spawn_supervised_stdio_server(
     Ok((initial_caps, initial_res, initial_prompts, tx))
 }
 
+/// Spawns an auto-restarting supervisor for an upstream Streamable HTTP / SSE MCP server.
+///
+/// # Arguments
+/// * `state` - Shared application state reference.
+/// * `server_id` - Server identifier string.
+/// * `srv_cfg` - Server configuration and authentication parameters.
+/// * `capability_aliases` - Aliases mapping for capabilities.
+/// * `resource_aliases` - Aliases mapping for resources.
+/// * `prompt_aliases` - Aliases mapping for prompts.
+///
+/// # Returns
+/// Discovered initial capabilities, resources, and prompts, plus the server sender mailbox.
+pub async fn spawn_supervised_http_server(
+    state: &AppState,
+    server_id: &str,
+    srv_cfg: &ServerConfig,
+    capability_aliases: &HashMap<String, String>,
+    resource_aliases: &HashMap<String, String>,
+    prompt_aliases: &HashMap<String, String>,
+) -> Result<(
+    Vec<(String, CapabilityMeta)>,
+    Vec<(String, ResourceMeta)>,
+    Vec<(String, PromptMeta)>,
+    mpsc::Sender<ServerMsg>,
+)> {
+    let handshake_timeout = Duration::from_millis(5000);
+    let initial_attempt = timeout(
+        handshake_timeout,
+        connect_http_mcp_client(state, server_id, srv_cfg),
+    )
+    .await;
+
+    let (initial_client_opt, initial_caps, initial_res, initial_prompts) = match initial_attempt {
+        Ok(Ok(client)) => {
+            let (caps, res, prompts) = discover_supervisor_items!(
+                &client,
+                server_id,
+                capability_aliases,
+                resource_aliases,
+                prompt_aliases
+            );
+            (Some(client), caps, res, prompts)
+        }
+        Ok(Err(err)) => {
+            warn!(
+                server_id = %server_id,
+                error = %err,
+                "Failed to negotiate initial streamable HTTP MCP connection; supervisor will retry in background"
+            );
+            (None, Vec::new(), Vec::new(), Vec::new())
+        }
+        Err(_) => {
+            warn!(
+                server_id = %server_id,
+                "Streamable HTTP MCP handshake timed out after 5000ms; supervisor will retry in background"
+            );
+            (None, Vec::new(), Vec::new(), Vec::new())
+        }
+    };
+
+    let (tx, mut rx) = mpsc::channel::<ServerMsg>(32);
+
+    let resilience_cfg = srv_cfg.resilience.clone().unwrap_or_default();
+    let server_id_owned = server_id.to_string();
+    let srv_cfg_owned = srv_cfg.clone();
+    let cap_aliases_owned = capability_aliases.clone();
+    let res_aliases_owned = resource_aliases.clone();
+    let prompt_aliases_owned = prompt_aliases.clone();
+    let tool_timeout = Duration::from_millis(state.tool_timeout_ms);
+    let state_clone = state.clone();
+
+    tokio::spawn(async move {
+        let mut client_opt = initial_client_opt;
+        let mut restart_count: u32 = 0;
+        let mut last_restart_time: Option<Instant> = None;
+        const STABLE_UPTIME_WINDOW: Duration = Duration::from_secs(60);
+
+        while let Some(msg) = rx.recv().await {
+            let mut is_alive = false;
+
+            if let Some(client) = &client_opt {
+                is_alive = handle_supervisor_msg!(client, msg, tool_timeout);
+                if !is_alive {
+                    client_opt = None;
+                    let mut statuses_guard = state_clone.server_statuses.write().await;
+                    if let Some(status_val) = statuses_guard.get_mut(&server_id_owned) {
+                        if let Some(obj) = status_val.as_object_mut() {
+                            obj.insert("status".to_string(), json!("degraded"));
+                            obj.insert(
+                                "error".to_string(),
+                                json!("Remote HTTP connection dropped; supervisor retrying in background"),
+                            );
+                        }
+                    }
+                }
+            } else {
+                match msg {
+                    ServerMsg::CallTool { reply, .. }
+                    | ServerMsg::ReadResource { reply, .. }
+                    | ServerMsg::GetPrompt { reply, .. } => {
+                        let _ = reply.send(Err(UpstreamCallError::Upstream(
+                            "Remote HTTP server is reconnecting".to_string(),
+                        )));
+                    }
+                }
+            }
+
+            // Attempt reconnection if client dropped or initial connection was deferred
+            if !is_alive && client_opt.is_none() && resilience_cfg.auto_restart {
+                let now = Instant::now();
+                if let Some(last_time) = last_restart_time {
+                    if now.duration_since(last_time) >= STABLE_UPTIME_WINDOW {
+                        restart_count = 0;
+                    }
+                }
+
+                if restart_count < resilience_cfg.max_restarts {
+                    restart_count += 1;
+                    last_restart_time = Some(now);
+                    let backoff_ms = calculate_backoff_ms(restart_count);
+                    warn!(
+                        server_id = %server_id_owned,
+                        restart_attempt = restart_count,
+                        backoff_ms = backoff_ms,
+                        "Remote HTTP server disconnected; supervisor scheduling reconnect"
+                    );
+
+                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+
+                    let reconnect_attempt = timeout(
+                        handshake_timeout,
+                        connect_http_mcp_client(&state_clone, &server_id_owned, &srv_cfg_owned),
+                    )
+                    .await;
+
+                    match reconnect_attempt {
+                        Ok(Ok(new_client)) => {
+                            info!(
+                                server_id = %server_id_owned,
+                                restart_attempt = restart_count,
+                                "supervisor successfully reconnected remote HTTP MCP server"
+                            );
+
+                            // Actively reset circuit breaker upon successful recovery
+                            state_clone.circuit_breakers.reset(&server_id_owned).await;
+
+                            let (new_caps, new_res, new_prompts) = discover_supervisor_items!(
+                                &new_client,
+                                &server_id_owned,
+                                &cap_aliases_owned,
+                                &res_aliases_owned,
+                                &prompt_aliases_owned
+                            );
+
+                            reconcile_restarted_catalog(
+                                &state_clone,
+                                &server_id_owned,
+                                new_caps,
+                                new_res,
+                                new_prompts,
+                            )
+                            .await;
+
+                            {
+                                let mut statuses_guard = state_clone.server_statuses.write().await;
+                                if let Some(status_val) = statuses_guard.get_mut(&server_id_owned) {
+                                    if let Some(obj) = status_val.as_object_mut() {
+                                        obj.insert("status".to_string(), json!("connected"));
+                                        obj.remove("error");
+                                    }
+                                }
+                            }
+
+                            client_opt = Some(new_client);
+                        }
+                        Ok(Err(err)) => {
+                            error!(
+                                server_id = %server_id_owned,
+                                error = %err,
+                                "supervisor failed to reconnect HTTP MCP server"
+                            );
+                        }
+                        Err(_) => {
+                            error!(
+                                server_id = %server_id_owned,
+                                "supervisor HTTP reconnect attempt timed out"
+                            );
+                        }
+                    }
+                } else {
+                    error!(
+                        server_id = %server_id_owned,
+                        max_restarts = resilience_cfg.max_restarts,
+                        "supervisor exceeded maximum reconnect attempts for HTTP server"
+                    );
+                }
+            }
+        }
+    });
+
+    Ok((initial_caps, initial_res, initial_prompts, tx))
+}
+
 fn is_connection_closed_error(err: &str) -> bool {
     let lower = err.to_lowercase();
     lower.contains("channel closed")
@@ -487,6 +805,15 @@ fn is_connection_closed_error(err: &str) -> bool {
         || lower.contains("child process exited")
         || lower.contains("io error")
         || lower.contains("unexpected eof")
+        || lower.contains("connection refused")
+        || lower.contains("connect error")
+        || lower.contains("error sending request")
+        || lower.contains("stream closed")
+        || lower.contains("status code: 502")
+        || lower.contains("status code: 503")
+        || lower.contains("status code: 504")
+        || lower.contains("hyper::error")
+        || lower.contains("reqwest::error")
 }
 
 fn calculate_backoff_ms(restart_count: u32) -> u64 {
@@ -595,6 +922,14 @@ mod tests {
         assert!(is_connection_closed_error("channel closed"));
         assert!(is_connection_closed_error("Broken pipe (os error 32)"));
         assert!(is_connection_closed_error("transport closed"));
+        assert!(is_connection_closed_error("connection refused"));
+        assert!(is_connection_closed_error(
+            "error sending request for url (http://localhost:8000/): connection reset by peer"
+        ));
+        assert!(is_connection_closed_error(
+            "HTTP status code: 502 Bad Gateway"
+        ));
         assert!(!is_connection_closed_error("invalid params"));
+        assert!(!is_connection_closed_error("method not found"));
     }
 }
