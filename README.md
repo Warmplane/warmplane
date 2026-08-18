@@ -1,4 +1,5 @@
 # Warmplane
+[![CI](https://github.com/Warmplane/warmplane/actions/workflows/ci.yml/badge.svg)](https://github.com/Warmplane/warmplane/actions/workflows/ci.yml) [![Latest Release](https://img.shields.io/github/v/release/Warmplane/warmplane)](https://github.com/Warmplane/warmplane/releases/latest) [![crates.io](https://img.shields.io/crates/v/warmplane.svg)](https://crates.io/crates/warmplane) [![docs.rs](https://docs.rs/warmplane/badge.svg)](https://docs.rs/warmplane) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/Warmplane/warmplane)
 
 > **The local control plane that keeps MCP sessions warm.**  
 > v0.18.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
