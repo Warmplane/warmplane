@@ -19,7 +19,7 @@ rmcp = { version = "3.1.2", features = ["client", "server", "transport-child-pro
 tokio = { version = "1.40", features = ["full"] }
 tokio-util = "0.7"
 axum = "0.7"
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "form"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "form", "stream"] }
 futures = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
