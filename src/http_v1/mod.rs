@@ -24,8 +24,10 @@ pub use audit_api::{
 };
 pub use catalog::{
     handle_catalog_events, handle_completion, handle_describe_capability, handle_get_prompt,
-    handle_list_capabilities, handle_list_prompts, handle_list_resources, handle_read_resource,
-    handle_resource_updates, handle_sampling_create_message, handle_search_capabilities,
+    handle_get_sampling_request, handle_list_capabilities, handle_list_prompts,
+    handle_list_resources, handle_list_sampling_requests, handle_read_resource,
+    handle_resource_updates, handle_respond_sampling_request, handle_sampling_create_message,
+    handle_search_capabilities,
 };
 pub use config_api::{
     handle_delete_server, handle_get_config, handle_get_ecosystem_sources, handle_import_config,
@@ -40,7 +42,7 @@ pub use helpers::{
 pub use types::{
     error_envelope, ApproveTicketRequest, CallCapabilityRequest, CatalogEventsQuery,
     CatalogEventsResponse, CompletionRequest, GetPromptRequest, ImportConfigRequest,
-    ReadResourceRequest, RejectTicketRequest, SamplingRequest, SearchCapabilitiesRequest,
-    UpdateAliasRequest, UpsertServerRequest,
+    ReadResourceRequest, RejectTicketRequest, RespondSamplingRequest, SamplingListQuery,
+    SamplingRequest, SearchCapabilitiesRequest, UpdateAliasRequest, UpsertServerRequest,
 };
 pub use ui::handle_ui_dashboard;

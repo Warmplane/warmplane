@@ -213,6 +213,11 @@ impl StateDirectory {
     pub fn catalog_events_file(&self) -> PathBuf {
         self.base_dir.join("catalog_events.json")
     }
+
+    /// Returns the file path for persistent sampling delegation requests.
+    pub fn sampling_file(&self) -> PathBuf {
+        self.base_dir.join("sampling.json")
+    }
 }
 
 #[cfg(test)]

@@ -8,8 +8,9 @@ use crate::{
         approvals_api::{handle_approve_ticket, handle_list_approvals, handle_reject_ticket},
         catalog::{
             handle_catalog_events, handle_completion, handle_get_prompt, handle_list_capabilities,
-            handle_list_prompts, handle_list_resources, handle_read_resource,
-            handle_sampling_create_message, handle_search_capabilities,
+            handle_list_prompts, handle_list_resources, handle_list_sampling_requests,
+            handle_read_resource, handle_respond_sampling_request, handle_sampling_create_message,
+            handle_search_capabilities,
         },
         config_api::{
             handle_get_config, handle_get_ecosystem_sources, handle_reload_config,
@@ -19,12 +20,13 @@ use crate::{
         helpers::redact_value,
         types::{
             ApproveTicketRequest, CallCapabilityRequest, CatalogEventsQuery, CompletionRequest,
-            GetPromptRequest, ReadResourceRequest, RejectTicketRequest, SamplingRequest,
-            SearchCapabilitiesRequest, UpsertServerRequest,
+            GetPromptRequest, ReadResourceRequest, RejectTicketRequest, RespondSamplingRequest,
+            SamplingListQuery, SamplingRequest, SearchCapabilitiesRequest, UpsertServerRequest,
         },
         ui::handle_ui_dashboard,
     },
 };
+use axum::extract::Path;
 use axum::{
     body::to_bytes,
     extract::{Query, State},
@@ -84,7 +86,7 @@ async fn test_completion_endpoint() {
 }
 
 #[tokio::test]
-async fn test_sampling_endpoint() {
+async fn test_sampling_async_delegation_flow() {
     let mut servers = HashMap::new();
     let (tx, _rx) = mpsc::channel(1);
     servers.insert("srv".to_string(), tx);
@@ -93,14 +95,138 @@ async fn test_sampling_endpoint() {
 
     let req = SamplingRequest {
         server_id: "srv".to_string(),
-        messages: vec![json!({"role": "user", "content": "hello"})],
+        messages: vec![crate::sampling::SamplingMessage {
+            role: "user".to_string(),
+            content: crate::sampling::SamplingContent::Text {
+                text: "Analyze logs".to_string(),
+            },
+        }],
+        model_preferences: None,
+        system_prompt: None,
+        include_context: None,
         max_tokens: Some(100),
+        stop_sequences: vec![],
+        metadata: None,
+        async_mode: Some(true),
     };
 
-    let response = handle_sampling_create_message(State(state), Json(req))
+    // 1. Submit async sampling request
+    let response = handle_sampling_create_message(State(state.clone()), Json(req))
         .await
         .into_response();
-    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+    // 2. List pending sampling requests
+    let list_resp = handle_list_sampling_requests(
+        State(state.clone()),
+        Query(SamplingListQuery {
+            server_id: Some("srv".to_string()),
+            status: Some("pending".to_string()),
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(list_resp.status(), StatusCode::OK);
+
+    let all_requests = state
+        .sampling_registry
+        .list_requests(Some("srv"), Some("pending"))
+        .await;
+    assert_eq!(all_requests.len(), 1);
+    let ticket_id = all_requests[0].id.clone();
+
+    // 3. Respond to sampling request
+    let respond_req = RespondSamplingRequest {
+        result: crate::sampling::CreateMessageResult {
+            role: "assistant".to_string(),
+            content: crate::sampling::SamplingContent::Text {
+                text: "Log analysis complete: no errors found.".to_string(),
+            },
+            model: "claude-3-5-sonnet".to_string(),
+            stop_reason: Some("endTurn".to_string()),
+        },
+    };
+
+    let respond_resp = handle_respond_sampling_request(
+        State(state.clone()),
+        Path(ticket_id.clone()),
+        Json(respond_req),
+    )
+    .await
+    .into_response();
+    assert_eq!(respond_resp.status(), StatusCode::OK);
+
+    // 4. Verify ticket is now completed
+    let ticket = state
+        .sampling_registry
+        .get_request(&ticket_id)
+        .await
+        .unwrap();
+    assert!(matches!(
+        ticket.status,
+        crate::sampling::SamplingRequestStatus::Completed { .. }
+    ));
+}
+
+#[tokio::test]
+async fn test_sampling_sync_long_poll_flow() {
+    let mut servers = HashMap::new();
+    let (tx, _rx) = mpsc::channel(1);
+    servers.insert("srv".to_string(), tx);
+
+    let state = AppState::builder().servers(servers).build();
+
+    let req = SamplingRequest {
+        server_id: "srv".to_string(),
+        messages: vec![crate::sampling::SamplingMessage {
+            role: "user".to_string(),
+            content: crate::sampling::SamplingContent::Text {
+                text: "Quick summary".to_string(),
+            },
+        }],
+        model_preferences: None,
+        system_prompt: None,
+        include_context: None,
+        max_tokens: Some(50),
+        stop_sequences: vec![],
+        metadata: None,
+        async_mode: Some(false),
+    };
+
+    let state_for_spawn = state.clone();
+    let spawn_handle = tokio::spawn(async move {
+        handle_sampling_create_message(State(state_for_spawn), Json(req))
+            .await
+            .into_response()
+    });
+
+    // Wait briefly for ticket to be registered
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let pending = state
+        .sampling_registry
+        .list_requests(Some("srv"), Some("pending"))
+        .await;
+    assert_eq!(pending.len(), 1);
+    let ticket_id = pending[0].id.clone();
+
+    // Complete ticket
+    let respond_req = RespondSamplingRequest {
+        result: crate::sampling::CreateMessageResult {
+            role: "assistant".to_string(),
+            content: crate::sampling::SamplingContent::Text {
+                text: "Done summary.".to_string(),
+            },
+            model: "gpt-4o".to_string(),
+            stop_reason: Some("endTurn".to_string()),
+        },
+    };
+    state
+        .sampling_registry
+        .respond_to_request(&ticket_id, respond_req.result)
+        .await;
+
+    let response = spawn_handle.await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]

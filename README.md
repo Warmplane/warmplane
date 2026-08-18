@@ -210,7 +210,7 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 ### v0.18.0 — Persistent State Subsystem, Graceful Teardown, CI UI Automation & E2E Test Suite
 - **Persistent State Subsystem:** Added atomic, restart-resilient disk storage (`AtomicFile<T>` and `StateDirectory`) for Human-in-the-Loop pending approvals (`approvals.json`), idempotent execution records (`idempotency.json`), OAuth2 tokens (`oauth_tokens.json`), and catalog mutation events (`catalog_events.json`). Added `state` block in `McpConfig` and `warmplane config state show/set` CLI commands.
 - **Graceful Signal Handling & Subsystem Teardown:** Added robust `SIGINT` (Ctrl+C) and `SIGTERM` signal capture on Unix and Windows, integrated graceful HTTP server draining, async audit worker flushes (`AuditWorkerMsg::FlushAndShutdown`), and clean stdio subprocess process termination on shutdown.
-- **Pragmatic Rust Compliance:** Achieved 100% adherence across all 50 source files with standard compliance headers (`// Rust guideline compliant YYYY-MM-DD`).
+- **Pragmatic Rust Compliance:** Achieved 100% adherence across all 51 source files with standard compliance headers (`// Rust guideline compliant YYYY-MM-DD`).
 - **CI Automated Web UI Build & Drift Gate:** Integrated Bun into GitHub Actions CI (`ci.yml`) and release pipelines (`release-artifacts.yml`), with automated build steps and strict `git diff --exit-code ui/dist/index.html` drift detection.
 - **Comprehensive End-to-End Integration Suite:** Implemented dedicated E2E test harness (`tests/e2e_tests.rs`) exercising stdio MCP protocol handshakes, live TCP SSE streaming, config hot-reloading, mock OAuth2 RFC 8414 provider round-trips with silent 401 token refresh, and supervisor recovery.
 
