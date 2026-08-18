@@ -100,7 +100,7 @@ async fn test_sampling_endpoint() {
     let response = handle_sampling_create_message(State(state), Json(req))
         .await
         .into_response();
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
 }
 
 #[tokio::test]

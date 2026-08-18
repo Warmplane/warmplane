@@ -184,21 +184,15 @@ pub async fn handle_sampling_create_message(
     }
 
     (
-        StatusCode::OK,
+        StatusCode::NOT_IMPLEMENTED,
         make_etag_header(&catalog_ver),
         Json(json!({
-            "ok": true,
+            "ok": false,
             "trace_id": trace_id,
-            "data": {
-                "role": "assistant",
-                "content": {
-                    "type": "text",
-                    "text": "Warmplane sampling proxy response."
-                },
-                "model": "warmplane-sampling-v1",
-                "stop_reason": "end_turn",
-                "messages_count": payload.messages.len(),
-                "max_tokens": payload.max_tokens
+            "data": null,
+            "error": {
+                "code": "SAMPLING_NOT_SUPPORTED",
+                "message": "Warmplane acts as a local control plane and does not provide an embedded sampling LLM. Configure an external MCP client or sampling provider."
             }
         })),
     )

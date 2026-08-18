@@ -17,7 +17,7 @@ mod tests;
 pub use chain::{compute_event_hash, verify_record_hash, GENESIS_HASH};
 pub use models::{AuditEvent, AuditEventStatus, AuditEventType, RawAuditEvent, VerificationReport};
 pub use siem::SiemDispatcher;
-pub use store::{AuditQueryFilter, AuditStore, SharedAuditStore};
+pub use store::{AuditQueryFilter, AuditStore, SharedAuditStore, MAX_IN_MEMORY_AUDIT_EVENTS};
 pub use worker::{
     spawn_audit_worker, AuditHandle, DEFAULT_AUDIT_BUFFER_CAPACITY,
     DEFAULT_AUDIT_FLUSH_INTERVAL_MS, DEFAULT_AUDIT_MAX_BATCH_SIZE,

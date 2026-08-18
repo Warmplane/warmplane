@@ -118,10 +118,18 @@ export interface PolicyConfig {
 
 export interface PendingApproval {
   id: string;
-  tool?: string;
-  capability_id?: string;
+  capability_id: string;
+  server_id: string;
   args?: Record<string, any>;
-  created_at?: string | number;
+  sanitized_args?: Record<string, any>;
+  request_id?: string;
+  context?: {
+    operation_id?: string;
+    actor_id?: string;
+    work_item_id?: string;
+  };
+  created_at: number;
+  expires_at: number;
   status: 'pending' | 'approved' | 'rejected' | 'expired' | string;
   operator?: string;
   reason?: string;

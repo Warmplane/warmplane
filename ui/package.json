@@ -3,6 +3,7 @@
   "version": "0.18.0",
   "private": true,
   "scripts": {
+    "typecheck": "tsc --noEmit",
     "build": "bun build ./src/main.ts --outfile=./dist/bundle.js --minify && bun run ./build.ts"
   },
   "devDependencies": {

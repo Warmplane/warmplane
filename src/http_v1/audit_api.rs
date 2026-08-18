@@ -242,7 +242,7 @@ pub async fn handle_export_audit(
         trace_id: query.trace_id,
         request_id: query.request_id,
         search: search_query,
-        limit: 100_000,
+        limit: crate::audit::MAX_IN_MEMORY_AUDIT_EVENTS,
         offset: 0,
     };
 

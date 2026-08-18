@@ -8,3 +8,5 @@ let inlined = htmlTemplate
 
 await Bun.write("./dist/index.html", inlined);
 console.log("Built standalone production bundle at ui/dist/index.html (" + inlined.length + " bytes)");
+
+export {};

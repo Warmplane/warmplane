@@ -31,10 +31,11 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Build Web UI
+      - name: Build and Typecheck Web UI
         working-directory: ui
         run: |
           bun install --frozen-lockfile
+          bun run typecheck
           bun run build
 
       - name: Verify Web UI Bundle Synced
@@ -49,6 +50,37 @@ jobs:
 
       - name: Run Tests
         run: cargo test --all-targets
+
+  compliance-check:
+    name: Rust Guideline Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify Rust guideline markers
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=0
+          while IFS= read -r file; do
+            IFS= read -r first_line < "$file" || first_line=""
+            if [[ "$first_line" != "// Rust guideline compliant "????-??-?? ]]; then
+              echo "Missing Rust guideline marker: $file"
+              failed=1
+            fi
+          done < <(git ls-files 'src/*.rs' 'src/**/*.rs')
+          exit "$failed"
+
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-audit
         uses: taiki-e/install-action@cargo-audit
