@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --bg-app: #0c0d10;
   --surface: #13151a;
   --surface-card: #181b22;
@@ -36,7 +37,8 @@
   padding: 0;
 }
 
-body {
+html, body {
+  color-scheme: dark;
   background-color: var(--bg-app);
   color: var(--text-main);
   font-family: var(--ff-sans);
@@ -124,7 +126,7 @@ code, pre {
   background: rgba(248, 113, 113, 0.2);
 }
 
-/* Form inputs */
+/* Form inputs & Select dropdowns */
 .form-group {
   margin-bottom: 14px;
 }
@@ -139,19 +141,40 @@ code, pre {
   margin-bottom: 6px;
 }
 
-.form-input, .form-textarea, select.form-input {
+.form-input, .form-textarea, .input-control, select, select.form-input {
   width: 100%;
   background: var(--surface);
+  background-color: var(--surface);
   border: 1px solid var(--border);
   padding: 8px 12px;
   border-radius: var(--radius-sm);
   color: var(--text-main);
+  color-scheme: dark;
   font-family: var(--ff-mono);
   font-size: 12px;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  -webkit-appearance: none;
+  appearance: none;
 }
 
-.form-input:focus, .form-textarea:focus, select.form-input:focus {
+select, select.form-input, select.input-control {
+  cursor: pointer;
+  background-color: var(--surface);
+  color: var(--text-main);
+  color-scheme: dark;
+  padding-right: 28px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
+select option {
+  background-color: #181b22;
+  color: #f3f4f6;
+  padding: 6px 10px;
+}
+
+.form-input:focus, .form-textarea:focus, .input-control:focus, select:focus, select.form-input:focus {
   outline: none;
   border-color: var(--amber-400);
   box-shadow: 0 0 0 2px var(--amber-glow);

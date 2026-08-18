@@ -73,8 +73,8 @@ export function renderAudit(): string {
           <input 
             type="text" 
             id="audit-search-input" 
-            class="input-control" 
-            style="width: 100%; padding-left: 28px; font-size: 12px; height: 32px; background: rgba(0,0,0,0.3); border: 1px solid var(--border);"
+            class="form-input" 
+            style="width: 100%; padding-left: 28px; font-size: 12px; height: 32px;"
             placeholder="Search trace, actor, capability, hash, error..." 
             value="${escapeHtml(filters.search)}"
             oninput="window.app.handleAuditSearchInput(this.value)"
@@ -85,8 +85,8 @@ export function renderAudit(): string {
         <!-- Status Filter -->
         <div>
           <select 
-            class="input-control" 
-            style="width: 100%; font-size: 12px; height: 32px; background: rgba(0,0,0,0.3); border: 1px solid var(--border);"
+            class="form-input" 
+            style="width: 100%; font-size: 12px; height: 32px;"
             onchange="window.app.handleAuditStatusFilter(this.value)"
           >
             <option value="all" ${filters.status === 'all' ? 'selected' : ''}>All Statuses</option>
@@ -101,8 +101,8 @@ export function renderAudit(): string {
         <!-- Event Type Filter -->
         <div>
           <select 
-            class="input-control" 
-            style="width: 100%; font-size: 12px; height: 32px; background: rgba(0,0,0,0.3); border: 1px solid var(--border);"
+            class="form-input" 
+            style="width: 100%; font-size: 12px; height: 32px;"
             onchange="window.app.handleAuditEventTypeFilter(this.value)"
           >
             <option value="all" ${filters.eventType === 'all' ? 'selected' : ''}>All Event Types</option>
@@ -121,8 +121,8 @@ export function renderAudit(): string {
         <!-- Server Filter -->
         <div>
           <select 
-            class="input-control" 
-            style="width: 100%; font-size: 12px; height: 32px; background: rgba(0,0,0,0.3); border: 1px solid var(--border);"
+            class="form-input" 
+            style="width: 100%; font-size: 12px; height: 32px;"
             onchange="window.app.handleAuditServerFilter(this.value)"
           >
             <option value="all" ${filters.serverId === 'all' ? 'selected' : ''}>All MCP Servers</option>
@@ -153,8 +153,8 @@ export function renderAudit(): string {
         <span style="color: var(--border);">|</span>
         <span>Page Size:</span>
         <select 
-          class="input-control" 
-          style="font-size: 11.5px; padding: 2px 6px; height: 26px; background: rgba(0,0,0,0.3); border: 1px solid var(--border);"
+          class="form-input" 
+          style="font-size: 11.5px; padding: 2px 24px 2px 8px; height: 28px; width: auto;"
           onchange="window.app.handleAuditPageSize(this.value)"
         >
           <option value="10" ${limit === 10 ? 'selected' : ''}>10 / page</option>

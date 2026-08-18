@@ -3,15 +3,18 @@ import { AppState } from '../state';
 export function renderApprovals(state: AppState): string {
   const pending = state.approvals.filter(a => a.status === 'pending');
   const history = state.approvals.filter(a => a.status !== 'pending');
+  const approvedCount = state.approvals.filter(a => a.status === 'approved').length;
+  const rejectedCount = state.approvals.filter(a => a.status === 'rejected').length;
+  const requireApproval = state.config.policy?.require_approval || state.config.policy?.requireApproval || [];
 
   const pendingHtml = pending.length === 0 ? `
-    <div style="padding: 40px 20px; text-align: center; background: var(--surface-card); border-radius: var(--radius-md); border: 1px dashed var(--border);">
-      <div style="width: 44px; height: 44px; border-radius: 50%; background: rgba(52, 211, 153, 0.12); border: 1px solid rgba(52, 211, 153, 0.3); display: flex; align-items: center; justify-content: center; margin: 0 auto 12px; color: var(--green-400); font-size: 18px; font-weight: 700;">
+    <div style="padding: 48px 24px; text-align: center; background: var(--surface-card); border-radius: var(--radius-md); border: 1px dashed var(--border);">
+      <div style="width: 48px; height: 48px; border-radius: 50%; background: rgba(52, 211, 153, 0.12); border: 1px solid rgba(52, 211, 153, 0.3); display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; color: var(--green-400); font-size: 20px; font-weight: 700;">
         ✓
       </div>
-      <div style="font-size: 14px; font-weight: 600; color: var(--text-main); margin-bottom: 4px;">All Clear — No Pending Approvals</div>
-      <div style="font-size: 11.5px; color: var(--text-dim); max-width: 460px; margin: 0 auto;">
-        Tool calls intercepted by <code style="color: var(--amber-300); font-family: var(--ff-mono);">require_approval</code> policy rules will appear here for review and execution gating.
+      <div style="font-size: 15px; font-weight: 600; color: var(--text-main); margin-bottom: 6px;">All Clear — No Pending Approvals</div>
+      <div style="font-size: 12px; color: var(--text-dim); max-width: 520px; margin: 0 auto; line-height: 1.6;">
+        Tool invocations intercepted by <code style="color: var(--amber-300); font-family: var(--ff-mono);">require_approval</code> governance rules will suspend execution and appear here for operator inspection, argument modification, and cryptographic gating.
       </div>
     </div>
   ` : pending.map(appr => `
@@ -72,39 +75,62 @@ export function renderApprovals(state: AppState): string {
     </div>
   `).join('');
 
-  const historyHtml = history.length === 0 ? '' : `
-    <div style="margin-top: 32px; border-top: 1px solid var(--border); padding-top: 18px;">
-      <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">
-        Recent History (${history.length})
-      </div>
-      <div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; font-family: var(--ff-mono); font-size: 11.5px;">
-        ${history.map(h => `
-          <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border);">
-            <div style="display: flex; align-items: center; gap: 10px;">
-              <span class="brand-badge" style="${
-                h.status === 'approved'
-                  ? 'background: rgba(52, 211, 153, 0.12); color: var(--green-400); border-color: rgba(52, 211, 153, 0.3);'
-                  : h.status === 'rejected'
-                  ? 'background: rgba(248, 113, 113, 0.12); color: var(--red-400); border-color: rgba(248, 113, 113, 0.3);'
-                  : 'background: var(--surface-hover); color: var(--text-dim);'
-              }">
-                ${h.status.toUpperCase()}
-              </span>
-              <span style="font-weight: 600; color: var(--text-main);">${escapeHtml(h.capability_id)}</span>
-              <span style="color: var(--text-dim); font-size: 10.5px;">${escapeHtml(h.id)}</span>
-            </div>
-            <div style="display: flex; align-items: center; gap: 16px; color: var(--text-dim);">
-              ${h.operator ? `<span>Operator: <span style="color: var(--text-muted);">${escapeHtml(h.operator)}</span></span>` : ''}
-              ${h.reason ? `<span style="color: var(--red-400); font-style: italic;">"${escapeHtml(h.reason)}"</span>` : ''}
-              <span>${new Date(h.created_at * 1000).toLocaleTimeString()}</span>
-            </div>
-          </div>
-        `).join('')}
-      </div>
+  const rulesListHtml = requireApproval.length === 0 ? `
+    <div style="color: var(--text-dim); font-size: 11.5px; line-height: 1.5; padding: 8px 0;">
+      No explicit <code style="color: var(--amber-400);">require_approval</code> rules active. All non-denied capabilities execute immediately.
+    </div>
+  ` : requireApproval.map(rule => `
+    <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface); padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); margin-bottom: 6px;">
+      <span style="font-family: var(--ff-mono); font-size: 11.5px; color: var(--amber-300); font-weight: 500;">🛡️ ${escapeHtml(rule)}</span>
+      <span class="brand-badge" style="font-size: 9.5px; padding: 1px 5px;">GATED</span>
+    </div>
+  `).join('');
+
+  const historyHtml = history.length === 0 ? `
+    <div style="padding: 24px; text-align: center; color: var(--text-dim); font-size: 12px;">
+      No historical operator decisions recorded in this session.
+    </div>
+  ` : `
+    <div style="overflow-x: auto;">
+      <table style="width: 100%; border-collapse: collapse; font-family: var(--ff-mono); font-size: 11.5px; text-align: left;">
+        <thead>
+          <tr style="border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 10.5px; text-transform: uppercase;">
+            <th style="padding: 10px 14px;">Status</th>
+            <th style="padding: 10px 14px;">Capability / Tool</th>
+            <th style="padding: 10px 14px;">Approval ID</th>
+            <th style="padding: 10px 14px;">Operator</th>
+            <th style="padding: 10px 14px;">Reason / Notes</th>
+            <th style="padding: 10px 14px; text-align: right;">Timestamp</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${history.map(h => `
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.03); transition: background 0.15s;" onmouseover="this.style.background='var(--surface-hover)'" onmouseout="this.style.background='transparent'">
+              <td style="padding: 10px 14px;">
+                <span class="brand-badge" style="${
+                  h.status === 'approved'
+                    ? 'background: rgba(52, 211, 153, 0.12); color: var(--green-400); border-color: rgba(52, 211, 153, 0.3);'
+                    : h.status === 'rejected'
+                    ? 'background: rgba(248, 113, 113, 0.12); color: var(--red-400); border-color: rgba(248, 113, 113, 0.3);'
+                    : 'background: var(--surface-hover); color: var(--text-dim);'
+                }">
+                  ${h.status.toUpperCase()}
+                </span>
+              </td>
+              <td style="padding: 10px 14px; font-weight: 600; color: var(--text-main);">${escapeHtml(h.capability_id)}</td>
+              <td style="padding: 10px 14px; color: var(--text-dim); font-size: 10.5px;">${escapeHtml(h.id)}</td>
+              <td style="padding: 10px 14px; color: var(--text-muted);">${escapeHtml(h.operator || 'system')}</td>
+              <td style="padding: 10px 14px; color: ${h.reason ? 'var(--red-400)' : 'var(--text-dim)'};">${h.reason ? `"${escapeHtml(h.reason)}"` : '—'}</td>
+              <td style="padding: 10px 14px; text-align: right; color: var(--text-dim);">${new Date(h.created_at * 1000).toLocaleTimeString()}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
     </div>
   `;
 
   return `
+    <!-- Header -->
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 14px; border-bottom: 1px solid var(--border);">
       <div>
         <div style="font-size: 16px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 8px;">
@@ -123,19 +149,75 @@ export function renderApprovals(state: AppState): string {
       </button>
     </div>
 
-    <div style="font-size: 11px; font-weight: 700; color: var(--amber-400); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
-      <span>⚡ Awaiting Operator Decision (${pending.length})</span>
+    <!-- Top Bento Metrics (Full 12-column span) -->
+    <div class="bento-grid">
+      <div class="bento-card col-3">
+        <div class="stat-label">Pending Decisions</div>
+        <div class="stat-value" style="color: ${pending.length > 0 ? 'var(--amber-400)' : 'var(--text-main)'};">${pending.length}</div>
+        <div class="stat-sub">Suspended in-flight executions</div>
+      </div>
+      <div class="bento-card col-3">
+        <div class="stat-label">Approved Executions</div>
+        <div class="stat-value" style="color: var(--green-400);">${approvedCount}</div>
+        <div class="stat-sub">Operator sanctioned calls</div>
+      </div>
+      <div class="bento-card col-3">
+        <div class="stat-label">Rejected Requests</div>
+        <div class="stat-value" style="color: var(--red-400);">${rejectedCount}</div>
+        <div class="stat-sub">Blocked &amp; reported to agent</div>
+      </div>
+      <div class="bento-card col-3">
+        <div class="stat-label">Active Gating Rules</div>
+        <div class="stat-value" style="color: var(--cyan-400);">${requireApproval.length}</div>
+        <div class="stat-sub">require_approval patterns</div>
+      </div>
     </div>
 
-    <div>
-      ${pendingHtml}
+    <!-- Main Content Bento Split (8 cols queue / 4 cols rules) -->
+    <div class="bento-grid">
+      <!-- Left Column: Pending Queue -->
+      <div class="col-8">
+        <div style="font-size: 11px; font-weight: 700; color: var(--amber-400); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+          <span>⚡ Awaiting Operator Decision (${pending.length})</span>
+        </div>
+        <div>
+          ${pendingHtml}
+        </div>
+      </div>
+
+      <!-- Right Column: Active Rules & Guidelines -->
+      <div class="col-4">
+        <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+          <span>🛡️ Gating Policy Rules</span>
+          <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10.5px;" onclick="window.app.switchTab('policy')">Edit in Policy →</button>
+        </div>
+        <div class="bento-card" style="margin-bottom: 14px;">
+          ${rulesListHtml}
+        </div>
+
+        <div class="bento-card">
+          <div class="stat-label" style="margin-bottom: 8px;">Security Notice</div>
+          <div style="font-size: 11.5px; color: var(--text-dim); line-height: 1.5;">
+            Warmplane enforces an HMAC-SHA256 signature on external webhook approval dispatches. Intercepted payloads are securely held until sanctioned by an operator.
+          </div>
+        </div>
+      </div>
     </div>
 
-    ${historyHtml}
+    <!-- Bottom History (Full 12 columns) -->
+    <div class="bento-card col-12" style="margin-top: 10px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">
+          📜 Recent Decision History (${history.length})
+        </div>
+      </div>
+      ${historyHtml}
+    </div>
   `;
 }
 
 function escapeHtml(str: string): string {
   return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+
 
