@@ -11,6 +11,9 @@ pub struct VectorMatchResult {
     pub score: f32,
 }
 
+/// Maximum number of candidate capabilities embedded per semantic vector search query to prevent CPU/memory DoS.
+pub const MAX_VECTOR_SEARCH_CANDIDATES: usize = 250;
+
 /// Semantic vector search index wrapping embedding models when enabled.
 #[cfg(feature = "semantic-search")]
 pub struct VectorSearchIndex {
@@ -57,7 +60,14 @@ impl VectorSearchIndex {
             return vec![];
         }
 
-        let doc_texts: Vec<String> = capabilities
+        // Bound candidate count to prevent CPU/memory exhaustion on large catalogs
+        let capped_capabilities = if capabilities.len() > MAX_VECTOR_SEARCH_CANDIDATES {
+            &capabilities[..MAX_VECTOR_SEARCH_CANDIDATES]
+        } else {
+            capabilities
+        };
+
+        let doc_texts: Vec<String> = capped_capabilities
             .iter()
             .map(|(id, meta)| format!("{}: {}. {}", id, meta.summary, meta.description))
             .collect();
@@ -66,14 +76,14 @@ impl VectorSearchIndex {
         all_texts.extend(doc_texts);
 
         let embeddings = match self.model.embed(all_texts, None) {
-            Ok(emb) if emb.len() == capabilities.len() + 1 => emb,
+            Ok(emb) if emb.len() == capped_capabilities.len() + 1 => emb,
             _ => return vec![],
         };
 
         let query_emb = &embeddings[0];
         let mut results = Vec::new();
 
-        for (i, (id, _)) in capabilities.iter().enumerate() {
+        for (i, (id, _)) in capped_capabilities.iter().enumerate() {
             let doc_emb = &embeddings[i + 1];
             let sim = cosine_similarity(query_emb, doc_emb);
             if sim > 0.15 {

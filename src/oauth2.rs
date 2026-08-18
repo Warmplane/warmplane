@@ -631,6 +631,38 @@ async fn handle_proxy_request(
     headers: AxumHeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    // 1. Host header validation: ensure only direct loopback access is permitted
+    if let Some(host_hdr) = headers.get("host").and_then(|h| h.to_str().ok()) {
+        let is_valid_host = host_hdr.starts_with("127.0.0.1")
+            || host_hdr.starts_with("localhost")
+            || host_hdr.starts_with("[::1]");
+        if !is_valid_host {
+            return (
+                StatusCode::FORBIDDEN,
+                "Invalid Host header. Loopback direct access only.".to_string(),
+            )
+                .into_response();
+        }
+    }
+
+    // 2. Cross-Origin (CSRF) protection: block untrusted external origins from relaying stored tokens
+    if let Some(origin_hdr) = headers.get("origin").and_then(|h| h.to_str().ok()) {
+        let is_valid_origin = origin_hdr.starts_with("http://127.0.0.1")
+            || origin_hdr.starts_with("http://localhost")
+            || origin_hdr.starts_with("vscode-webview://")
+            || origin_hdr.starts_with("chrome-extension://")
+            || origin_hdr == "null";
+
+        if !is_valid_origin {
+            return (
+                StatusCode::FORBIDDEN,
+                "Cross-origin browser requests to OAuth proxy from untrusted origins are blocked."
+                    .to_string(),
+            )
+                .into_response();
+        }
+    }
+
     let client_state = {
         let clients = registry.clients.read().await;
         let Some(c) = clients.get(&server_id) else {
