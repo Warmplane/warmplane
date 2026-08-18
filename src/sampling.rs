@@ -390,7 +390,7 @@ impl SamplingRegistry {
             .cloned()
             .collect();
 
-        list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        list.sort_by_key(|b| std::cmp::Reverse(b.created_at));
         list
     }
 
