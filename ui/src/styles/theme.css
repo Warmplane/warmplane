@@ -29,6 +29,11 @@
   
   --ff-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --ff-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Transitions */
+  --ease-out-snappy: cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-fast: 0.12s var(--ease-out-snappy);
+  --transition-normal: 0.18s var(--ease-out-snappy);
 }
 
 * {
@@ -61,6 +66,7 @@ html, body {
 ::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 3px;
+  transition: background-color var(--transition-fast);
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--surface-elevated);
@@ -80,6 +86,7 @@ code, pre {
   color: var(--amber-400);
   border: 1px solid rgba(245, 158, 11, 0.25);
   font-family: var(--ff-mono);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
 }
 
 /* Buttons */
@@ -93,8 +100,13 @@ code, pre {
   font-weight: 500;
   cursor: pointer;
   border: 1px solid transparent;
-  transition: all 0.15s ease;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast), transform 0.08s ease;
   font-family: var(--ff-sans);
+  user-select: none;
+}
+
+.btn:active {
+  transform: translateY(1px);
 }
 
 .btn-primary {
@@ -105,6 +117,9 @@ code, pre {
 .btn-primary:hover {
   background: var(--amber-400);
   box-shadow: 0 0 12px var(--amber-glow);
+}
+.btn-primary:active {
+  background: var(--amber-500);
 }
 
 .btn-ghost {
@@ -124,6 +139,7 @@ code, pre {
 }
 .btn-danger:hover {
   background: rgba(248, 113, 113, 0.2);
+  border-color: rgba(248, 113, 113, 0.4);
 }
 
 /* Form inputs & Select dropdowns */
@@ -152,7 +168,7 @@ code, pre {
   color-scheme: dark;
   font-family: var(--ff-mono);
   font-size: 12px;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background-color var(--transition-fast);
   -webkit-appearance: none;
   appearance: none;
 }
@@ -194,7 +210,7 @@ select option {
   border-radius: var(--radius-md);
   padding: 16px 18px;
   position: relative;
-  transition: border-color 0.2s;
+  transition: border-color var(--transition-normal), background-color var(--transition-normal), box-shadow var(--transition-normal);
 }
 
 .col-3 { grid-column: span 3; }
@@ -224,20 +240,27 @@ select option {
   color: var(--text-dim);
 }
 
-/* Modals */
+/* Modals with smooth fade & scale */
 .modal-backdrop {
   position: fixed;
   inset: 0;
   background: rgba(0,0,0,0.75);
   backdrop-filter: blur(6px);
-  display: none;
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
   align-items: center;
   justify-content: center;
   z-index: 100;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--transition-normal), visibility var(--transition-normal);
 }
 
 .modal-backdrop.active {
-  display: flex;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .modal-box {
@@ -247,6 +270,12 @@ select option {
   border-radius: var(--radius-lg);
   padding: 24px;
   box-shadow: 0 20px 40px rgba(0,0,0,0.8);
+  transform: scale(0.97) translateY(4px);
+  transition: transform var(--transition-normal);
+}
+
+.modal-backdrop.active .modal-box {
+  transform: scale(1) translateY(0);
 }
 
 .modal-header {
@@ -260,4 +289,15 @@ select option {
   font-size: 16px;
   font-weight: 700;
   color: var(--text-main);
+}
+
+/* Prefers Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
