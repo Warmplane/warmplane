@@ -260,7 +260,7 @@ async fn list_resources_returns_sorted_ids() {
         .catalog_version("sha256:test")
         .build();
 
-    let response = handle_list_resources(State(state), HeaderMap::new())
+    let response = handle_list_resources(State(state), axum::extract::Extension(None), HeaderMap::new())
         .await
         .into_response();
     assert_eq!(response.status(), StatusCode::OK);
@@ -335,7 +335,7 @@ async fn list_prompts_returns_sorted_ids() {
         .catalog_version("sha256:test")
         .build();
 
-    let response = handle_list_prompts(State(state), HeaderMap::new())
+    let response = handle_list_prompts(State(state), axum::extract::Extension(None), HeaderMap::new())
         .await
         .into_response();
     assert_eq!(response.status(), StatusCode::OK);
@@ -452,6 +452,7 @@ async fn handle_search_capabilities_returns_matched_results() {
 
     let response = handle_search_capabilities(
         State(state),
+        axum::extract::Extension(None),
         Json(SearchCapabilitiesRequest {
             query: Some("issues".to_string()),
             limit: 5,
@@ -488,7 +489,7 @@ async fn if_none_match_returns_304_not_modified() {
         HeaderValue::from_static("\"sha256:abc1234\""),
     );
 
-    let response = handle_list_capabilities(State(state), headers)
+    let response = handle_list_capabilities(State(state), axum::extract::Extension(None), headers)
         .await
         .into_response();
     assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
@@ -631,7 +632,7 @@ async fn test_mrtr_call_capability_round_trip() {
     let req: CallCapabilityRequest =
         serde_json::from_value(request_json).expect("valid CallCapabilityRequest JSON");
 
-    let response = handle_call_capability(State(state), HeaderMap::new(), Json(req))
+    let response = handle_call_capability(State(state), axum::extract::Extension(None), HeaderMap::new(), Json(req))
         .await
         .into_response();
 
@@ -907,7 +908,7 @@ async fn test_hitl_approval_flow_and_endpoints() {
         request_state: None,
     };
 
-    let async_res = handle_call_capability(State(state.clone()), headers, Json(req))
+    let async_res = handle_call_capability(State(state.clone()), axum::extract::Extension(None), headers, Json(req))
         .await
         .into_response();
 
@@ -988,7 +989,7 @@ async fn test_hitl_approval_flow_and_endpoints() {
         }
     });
 
-    let sync_res = handle_call_capability(State(state.clone()), HeaderMap::new(), Json(sync_req))
+    let sync_res = handle_call_capability(State(state.clone()), axum::extract::Extension(None), HeaderMap::new(), Json(sync_req))
         .await
         .into_response();
 
@@ -1061,7 +1062,7 @@ async fn test_hitl_rejection_returns_structured_envelope() {
         request_state: None,
     };
 
-    let res = handle_call_capability(State(state), HeaderMap::new(), Json(req))
+    let res = handle_call_capability(State(state), axum::extract::Extension(None), HeaderMap::new(), Json(req))
         .await
         .into_response();
 
@@ -1120,7 +1121,7 @@ async fn test_tool_call_emits_audit_events_and_hash_chain() {
         request_state: None,
     };
 
-    let res = handle_call_capability(State(state.clone()), HeaderMap::new(), Json(req))
+    let res = handle_call_capability(State(state.clone()), axum::extract::Extension(None), HeaderMap::new(), Json(req))
         .await
         .into_response();
 
@@ -1333,6 +1334,7 @@ async fn test_circuit_breaker_fast_fail_and_recovery() {
     // Call 1 -> UPSTREAM_ERROR
     let res1 = handle_call_capability(
         State(state.clone()),
+        axum::extract::Extension(None),
         headers.clone(),
         Json(CallCapabilityRequest {
             capability_id: "flaky.error".to_string(),
@@ -1347,6 +1349,7 @@ async fn test_circuit_breaker_fast_fail_and_recovery() {
     // Call 2 -> UPSTREAM_ERROR, trips circuit to OPEN
     let res2 = handle_call_capability(
         State(state.clone()),
+        axum::extract::Extension(None),
         headers.clone(),
         Json(CallCapabilityRequest {
             capability_id: "flaky.error".to_string(),
@@ -1361,6 +1364,7 @@ async fn test_circuit_breaker_fast_fail_and_recovery() {
     // Call 3 -> Fast fail with CIRCUIT_OPEN (no call forwarded)
     let res3 = handle_call_capability(
         State(state.clone()),
+        axum::extract::Extension(None),
         headers.clone(),
         Json(CallCapabilityRequest {
             capability_id: "flaky.error".to_string(),

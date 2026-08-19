@@ -100,7 +100,7 @@ async fn test_hitl_end_to_end_wildcard_matching_and_approval() {
         request_state: None,
     };
 
-    let res = handle_call_capability(State(state), HeaderMap::new(), Json(req))
+    let res = handle_call_capability(State(state), axum::extract::Extension(None), HeaderMap::new(), Json(req))
         .await
         .into_response();
 

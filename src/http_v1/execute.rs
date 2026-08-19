@@ -24,6 +24,7 @@ use crate::{
 /// Handles HTTP POST `/v1/tools/call` executing an MCP tool capability.
 pub async fn handle_call_capability(
     State(state): State<AppState>,
+    req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
     headers: HeaderMap,
     Json(payload): Json<CallCapabilityRequest>,
 ) -> impl IntoResponse {
@@ -32,7 +33,18 @@ pub async fn handle_call_capability(
     let trace_id = next_trace_id();
     let request_id =
         crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
-    let req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
+    let mut req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
+
+    // Bind authenticated tenant/actor if available
+    if let Some(ref tenant_ctx) = req_ext.0 {
+        if let Some(ref actor) = tenant_ctx.actor_id {
+            req_context.actor_id = Some(actor.clone());
+        }
+        if let Some(ref grant) = tenant_ctx.grant_id {
+            req_context.grant_id = Some(grant.clone());
+        }
+    }
+
     let idempotency_key = resolve_idempotency_key(payload.idempotency_key.clone(), &headers);
 
     let retry_base = if idempotency_key.is_some() {
@@ -79,8 +91,14 @@ pub async fn handle_call_capability(
     }
 
     let (requires_approval, approval_timeout_secs, webhook_cfg, redact_keys) = {
-        let policy_guard = state.policy.read().await;
-        if !policy_guard.allows(&payload.capability_id) {
+        let base_pol = state.policy.read().await;
+        let pol = req_ext
+            .0
+            .as_ref()
+            .map(|ctx| ctx.effective_policy.clone())
+            .unwrap_or_else(|| base_pol.clone());
+
+        if !pol.allows(&payload.capability_id) {
             state.operation_registry.unregister(&request_id).await;
             if let Some(ref key) = idempotency_key {
                 state.idempotency_store.remove(key).await;
@@ -100,7 +118,7 @@ pub async fn handle_call_capability(
                 resource_uri: None,
                 sanitized_args: Some(redact_value(
                     payload.args.clone(),
-                    &policy_guard.redact_keys,
+                    &pol.redact_keys,
                 )),
                 sanitized_response: None,
                 execution_latency_us: Some(start_time.elapsed().as_micros() as u64),
@@ -128,10 +146,10 @@ pub async fn handle_call_capability(
                 .into_response();
         }
         (
-            policy_guard.requires_approval(&payload.capability_id),
-            policy_guard.approval_timeout_secs,
-            policy_guard.webhook.clone(),
-            policy_guard.redact_keys.clone(),
+            pol.requires_approval(&payload.capability_id),
+            pol.approval_timeout_secs,
+            pol.webhook.clone(),
+            pol.redact_keys.clone(),
         )
     };
 
@@ -698,13 +716,30 @@ pub async fn handle_cancel_operation(
 /// Handles HTTP POST `/v1/tools/batch_call` executing multiple chained tool capabilities.
 pub async fn handle_batch_call_capabilities(
     State(state): State<AppState>,
+    req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
     headers: HeaderMap,
     Json(payload): Json<crate::batch_executor::BatchCallRequest>,
 ) -> impl IntoResponse {
     let trace_id = next_trace_id();
     let request_id =
         crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
-    let req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
+    let mut req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
+
+    if let Some(ref tenant_ctx) = req_ext.0 {
+        if let Some(ref actor) = tenant_ctx.actor_id {
+            req_context.actor_id = Some(actor.clone());
+        }
+        if let Some(ref grant) = tenant_ctx.grant_id {
+            req_context.grant_id = Some(grant.clone());
+        }
+    }
+
+    let base_pol = state.policy.read().await;
+    let pol = req_ext
+        .0
+        .as_ref()
+        .map(|ctx| ctx.effective_policy.clone())
+        .unwrap_or_else(|| base_pol.clone());
 
     let response = crate::batch_executor::execute_batch(
         &state,
@@ -712,6 +747,7 @@ pub async fn handle_batch_call_capabilities(
         trace_id,
         Some(request_id),
         Some(req_context),
+        &pol,
     )
     .await;
 

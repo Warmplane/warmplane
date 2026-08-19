@@ -65,6 +65,9 @@ pub struct McpConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub auth_token: Option<String>,
+    /// Optional Multi-Tenant Role-Based Access Control (RBAC) configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rbac: Option<crate::rbac::RbacConfig>,
     /// Upstream MCP server definitions keyed by server identifier.
     #[serde(rename = "mcpServers", default)]
     pub mcp_servers: HashMap<String, ServerConfig>,
@@ -721,6 +724,23 @@ fn validate_config(config: &McpConfig) -> Result<()> {
             }
         }
     }
+
+    if let Some(rbac) = &config.rbac {
+        if rbac.enabled {
+            if rbac.default_role.trim().is_empty() {
+                anyhow::bail!("RBAC configuration requires a non-empty 'defaultRole'");
+            }
+            for (token, assignment) in &rbac.tokens {
+                if token.trim().is_empty() {
+                    anyhow::bail!("RBAC token map contains an empty token key");
+                }
+                if assignment.role.trim().is_empty() {
+                    anyhow::bail!("RBAC token assignment for token '{}' must specify a non-empty role", token);
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 

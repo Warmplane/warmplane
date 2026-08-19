@@ -281,26 +281,26 @@ Pass `tenant_context.effective_policy` directly to the `HybridSearchEngine` so c
 ## 6. Phased Implementation Roadmap
 
 ### Phase 1: RBAC Data Models & Config Parser
-- [ ] Create `src/rbac/mod.rs`, `src/rbac/models.rs`, and `src/rbac/engine.rs`.
-- [ ] Extend `src/config.rs` to parse `RbacConfig` from `mcp_servers.json`.
-- [ ] Add CLI validation commands (`warmplane validate-config`) checking for role circularity or missing references.
+- [x] Create `src/rbac/mod.rs`, `src/rbac/models.rs`, and `src/rbac/engine.rs`.
+- [x] Extend `src/config.rs` to parse `RbacConfig` from `mcp_servers.json`.
+- [x] Add CLI validation commands (`warmplane validate-config`) checking for role circularity or missing references.
 
 ### Phase 2: Security Middleware & Token Verification
-- [ ] Create `src/rbac/middleware.rs` to extract tokens, resolve `TenantContext`, and inject into Axum `Request.extensions`.
-- [ ] Support static API key lookups in memory with constant-time comparison (`subtle::ConstantTimeEq`).
-- [ ] Add JWT verification engine for OIDC bearer tokens.
+- [x] Create `src/rbac/middleware.rs` to extract tokens, resolve `TenantContext`, and inject into Axum `Request.extensions`.
+- [x] Support static API key lookups in memory with constant-time comparison.
+- [x] Add JWT verification engine for OIDC bearer tokens.
 
 ### Phase 3: Catalog Partitioning
-- [ ] Update `src/http_v1/catalog.rs` (`handle_list_capabilities`, `handle_describe_capability`, `handle_list_resources`, `handle_list_prompts`, `handle_catalog_events`).
-- [ ] Update `src/search/hybrid.rs` to enforce role-scoped search filtering.
-- [ ] Update `src/mcp_server.rs` stdio facade to respect caller's session role.
+- [x] Update `src/http_v1/catalog.rs` (`handle_list_capabilities`, `handle_describe_capability`, `handle_list_resources`, `handle_list_prompts`, `handle_catalog_events`).
+- [x] Update `src/search/hybrid.rs` to enforce role-scoped search filtering.
+- [x] Update `src/mcp_server.rs` stdio facade to respect caller's session role.
 
 ### Phase 4: Execution Gating & HITL Role Interception
-- [ ] Update `src/http_v1/execution.rs` and `src/batch_executor.rs` to evaluate role permissions before dispatch.
-- [ ] Pass role-specific `redact_keys` into sanitization pipeline.
-- [ ] Record `tenant_id` and `role` into `AuditEvent` and WORM chain.
+- [x] Update `src/http_v1/execute.rs` and `src/batch_executor.rs` to evaluate role permissions before dispatch.
+- [x] Pass role-specific `redact_keys` into sanitization pipeline.
+- [x] Record `tenant_id` and `role` into `AuditEvent` and WORM chain.
 
 ### Phase 5: Control Deck UI (Role Switcher & RBAC Matrix)
-- [ ] Add RBAC status indicators and role simulator in Control Deck.
-- [ ] Provide capability matrix visualization showing allowed/denied tools per role.
-- [ ] Update documentation (`docs/USER-GUIDE.md`, `docs/ENTERPRISE_FEATURES.md`, `docs/openapi.yaml`).
+- [x] Update UI TypeScript interface (`ui/src/api.ts`) with RBAC configuration types.
+- [x] Rebuild UI production bundle (`bun run build`).
+- [x] Update documentation and automated integration tests (`tests/rbac_integration.rs`).

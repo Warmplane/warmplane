@@ -74,6 +74,8 @@ pub struct AppState {
     pub sampling_registry: crate::sampling::SamplingRegistry,
     /// Optional static API bearer token / key for authenticating incoming requests.
     pub auth_token: Option<String>,
+    /// Multi-Tenant Role-Based Access Control (RBAC) engine.
+    pub rbac_engine: crate::rbac::RbacEngine,
 }
 
 impl AppState {
@@ -109,10 +111,16 @@ pub struct AppStateBuilder {
     audit_handle: Option<crate::audit::AuditHandle>,
     circuit_breakers: Option<crate::circuit_breaker::CircuitBreakerRegistry>,
     auth_token: Option<String>,
+    rbac_engine: Option<crate::rbac::RbacEngine>,
 }
 
 #[allow(dead_code)]
 impl AppStateBuilder {
+    /// Sets the RBAC engine.
+    pub fn rbac_engine(mut self, engine: crate::rbac::RbacEngine) -> Self {
+        self.rbac_engine = Some(engine);
+        self
+    }
     /// Sets static auth token for inbound authentication.
     pub fn auth_token(mut self, token: impl Into<String>) -> Self {
         self.auth_token = Some(token.into());
@@ -355,6 +363,9 @@ impl AppStateBuilder {
             audit_handle,
             circuit_breakers: self.circuit_breakers.unwrap_or_default(),
             auth_token: self.auth_token,
+            rbac_engine: self
+                .rbac_engine
+                .unwrap_or_else(|| crate::rbac::RbacEngine::new(None)),
         }
     }
 }

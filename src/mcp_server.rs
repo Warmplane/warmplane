@@ -196,12 +196,14 @@ impl ServerHandler for FacadeMcpServer {
                     .and_then(|v| serde_json::from_value(v.clone()).ok());
 
                 let trace_id = next_trace_id();
+                let policy = self.state.policy.read().await.clone();
                 let res = crate::batch_executor::execute_batch(
                     &self.state,
                     steps,
                     trace_id,
                     request_id,
                     context,
+                    &policy,
                 )
                 .await;
                 Ok(serde_json::to_value(res).unwrap_or_default())

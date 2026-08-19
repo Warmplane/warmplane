@@ -53,6 +53,7 @@ pub async fn handle_catalog_events(
 /// Handles HTTP POST `/v1/capabilities/search` hybrid semantic and lexical capability search.
 pub async fn handle_search_capabilities(
     State(state): State<AppState>,
+    req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
     Json(payload): Json<SearchCapabilitiesRequest>,
 ) -> impl IntoResponse {
     let query_str = payload.query.as_deref().unwrap_or("");
@@ -63,7 +64,12 @@ pub async fn handle_search_capabilities(
         .build();
 
     let caps = state.capabilities.read().await;
-    let pol = state.policy.read().await;
+    let base_pol = state.policy.read().await;
+    let pol = req_ext
+        .0
+        .as_ref()
+        .map(|ctx| ctx.effective_policy.clone())
+        .unwrap_or_else(|| base_pol.clone());
     let catalog_ver = state.catalog_version.read().await.clone();
     let limit = payload.limit.clamp(1, 100);
 
@@ -355,9 +361,17 @@ pub async fn handle_respond_sampling_request(
 /// Handles HTTP GET `/v1/capabilities` listing all registered capabilities.
 pub async fn handle_list_capabilities(
     State(state): State<AppState>,
+    req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     state.total_catalog_requests.fetch_add(1, Ordering::Relaxed);
+
+    let base_pol = state.policy.read().await;
+    let pol = req_ext
+        .0
+        .as_ref()
+        .map(|ctx| &ctx.effective_policy)
+        .unwrap_or(&base_pol);
 
     let catalog_ver = state.catalog_version.read().await.clone();
 
@@ -374,6 +388,7 @@ pub async fn handle_list_capabilities(
     let caps_guard = state.capabilities.read().await;
     let mut capabilities = caps_guard
         .iter()
+        .filter(|(id, _)| pol.allows(id))
         .map(|(id, meta)| {
             json!({
                 "id": id,
@@ -408,9 +423,34 @@ pub async fn handle_list_capabilities(
 /// Handles HTTP GET `/v1/capabilities/:id` describing a capability schema and metadata.
 pub async fn handle_describe_capability(
     State(state): State<AppState>,
+    req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    let base_pol = state.policy.read().await;
+    let pol = req_ext
+        .0
+        .as_ref()
+        .map(|ctx| &ctx.effective_policy)
+        .unwrap_or(&base_pol);
+
+    if !pol.allows(&id) {
+        return (
+            StatusCode::FORBIDDEN,
+            make_etag_header(""),
+            Json(error_envelope(
+                next_trace_id(),
+                None,
+                None,
+                crate::idempotency::RetryMetadata::safe("not_started"),
+                "CAPABILITY_UNAUTHORIZED",
+                format!("Access to capability '{}' is denied by role policy", id),
+                false,
+            )),
+        )
+            .into_response();
+    }
+
     let catalog_ver = state.catalog_version.read().await.clone();
 
     if check_if_none_match(&headers, &catalog_ver) {
@@ -469,8 +509,16 @@ pub async fn handle_describe_capability(
 /// Handles HTTP GET `/v1/resources` listing all registered resources.
 pub async fn handle_list_resources(
     State(state): State<AppState>,
+    req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    let base_pol = state.policy.read().await;
+    let pol = req_ext
+        .0
+        .as_ref()
+        .map(|ctx| &ctx.effective_policy)
+        .unwrap_or(&base_pol);
+
     let catalog_ver = state.catalog_version.read().await.clone();
 
     if check_if_none_match(&headers, &catalog_ver) {
@@ -485,6 +533,7 @@ pub async fn handle_list_resources(
     let res_guard = state.resources.read().await;
     let mut resources = res_guard
         .iter()
+        .filter(|(id, _)| pol.allows(id))
         .map(|(id, meta)| {
             json!({
                 "id": id,
@@ -521,8 +570,16 @@ pub async fn handle_list_resources(
 /// Handles HTTP GET `/v1/prompts` listing all registered prompt templates.
 pub async fn handle_list_prompts(
     State(state): State<AppState>,
+    req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    let base_pol = state.policy.read().await;
+    let pol = req_ext
+        .0
+        .as_ref()
+        .map(|ctx| &ctx.effective_policy)
+        .unwrap_or(&base_pol);
+
     let catalog_ver = state.catalog_version.read().await.clone();
 
     if check_if_none_match(&headers, &catalog_ver) {
@@ -537,6 +594,7 @@ pub async fn handle_list_prompts(
     let prompts_guard = state.prompts.read().await;
     let mut prompts = prompts_guard
         .iter()
+        .filter(|(id, _)| pol.allows(id))
         .map(|(id, meta)| {
             json!({
                 "id": id,

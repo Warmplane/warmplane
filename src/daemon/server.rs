@@ -143,6 +143,8 @@ pub async fn initialize_state(
             .filter(|t| !t.trim().is_empty())
     });
 
+    let rbac_engine = crate::rbac::RbacEngine::new(config.rbac.clone());
+
     let mut state_builder = AppState::builder()
         .servers_arc(Arc::new(RwLock::new(HashMap::new())))
         .capabilities_arc(Arc::new(RwLock::new(HashMap::new())))
@@ -163,7 +165,8 @@ pub async fn initialize_state(
         .approval_registry(approval_registry)
         .sampling_registry(sampling_registry)
         .audit_store(audit_store)
-        .audit_handle(audit_handle);
+        .audit_handle(audit_handle)
+        .rbac_engine(rbac_engine);
 
     if let Some(token) = auth_token {
         state_builder = state_builder.auth_token(token);
@@ -315,7 +318,7 @@ pub fn build_router(app_state: AppState) -> Router {
 /// browser cross-origin CSRF filtering, and optional API token authorization.
 pub async fn security_guard_middleware(
     axum::extract::State(state): axum::extract::State<AppState>,
-    req: axum::extract::Request,
+    mut req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     use axum::{http::StatusCode, response::IntoResponse, Json};
@@ -363,37 +366,69 @@ pub async fn security_guard_middleware(
         }
     }
 
-    // 3. Optional Auth Token verification if configured on state
-    if let Some(ref expected_token) = state.auth_token {
-        if !expected_token.trim().is_empty() {
-            let path = req.uri().path();
-            if path.starts_with("/v1/") {
-                let is_authed = headers
-                    .get("authorization")
-                    .and_then(|h| h.to_str().ok())
-                    .and_then(|v| v.strip_prefix("Bearer "))
-                    .map(|t| t == expected_token)
-                    .unwrap_or(false)
-                    || headers
+    // 3. RBAC & Auth Token verification
+    let mut tenant_ctx = None;
+    let path = req.uri().path();
+
+    if state.rbac_engine.is_enabled() {
+        if path.starts_with("/v1/") {
+            let token = headers
+                .get("authorization")
+                .and_then(|h| h.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")))
+                .or_else(|| {
+                    headers
                         .get("x-warmplane-key")
                         .and_then(|h| h.to_str().ok())
-                        .map(|t| t == expected_token)
-                        .unwrap_or(false);
+                });
 
-                if !is_authed {
+            let base_pol = state.policy.read().await.clone();
+            match state.rbac_engine.authenticate(token, &base_pol) {
+                Ok(ctx) => {
+                    tenant_ctx = Some(ctx);
+                }
+                Err(err_code) => {
                     return (
                         StatusCode::UNAUTHORIZED,
                         Json(serde_json::json!({
                             "ok": false,
-                            "error": "UNAUTHORIZED",
-                            "message": "Valid Bearer token or X-Warmplane-Key required"
+                            "error": err_code,
+                            "message": "Valid Bearer token, JWT, or X-Warmplane-Key required"
                         })),
                     )
                         .into_response();
                 }
             }
         }
+    } else if let Some(ref expected_token) = state.auth_token {
+        if !expected_token.trim().is_empty() && path.starts_with("/v1/") {
+            let is_authed = headers
+                .get("authorization")
+                .and_then(|h| h.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")))
+                .map(|t| t == expected_token)
+                .unwrap_or(false)
+                || headers
+                    .get("x-warmplane-key")
+                    .and_then(|h| h.to_str().ok())
+                    .map(|t| t == expected_token)
+                    .unwrap_or(false);
+
+            if !is_authed {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({
+                        "ok": false,
+                        "error": "UNAUTHORIZED",
+                        "message": "Valid Bearer token or X-Warmplane-Key required"
+                    })),
+                )
+                    .into_response();
+            }
+        }
     }
+
+    req.extensions_mut().insert(tenant_ctx);
 
     next.run(req).await
 }

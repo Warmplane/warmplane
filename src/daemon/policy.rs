@@ -5,7 +5,7 @@
 use crate::config::PolicyConfig;
 
 /// Active security policy rules governing capability/resource access and approvals.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, PartialEq)]
 pub struct Policy {
     /// List of wildcard patterns allowed for execution.
     pub allow: Vec<String>,

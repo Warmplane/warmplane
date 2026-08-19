@@ -82,6 +82,7 @@ pub const DEFAULT_BATCH_TIMEOUT_MS: u64 = 60_000;
 /// * `trace_id` - Trace ID for the batch.
 /// * `request_id` - Optional request ID.
 /// * `context` - Optional request context.
+/// * `policy` - Effective security policy.
 ///
 /// # Returns
 /// A `BatchCallResponse` summarizing all step executions.
@@ -91,6 +92,7 @@ pub async fn execute_batch(
     trace_id: String,
     request_id: Option<String>,
     context: Option<crate::context::RequestContext>,
+    policy: &crate::daemon::Policy,
 ) -> BatchCallResponse {
     let start_all = std::time::Instant::now();
 
@@ -142,7 +144,7 @@ pub async fn execute_batch(
         let mut interpolated_args = interpolate_step_references(&step.args, &step_outputs);
 
         // Check policy allow/deny
-        if !state.policy.read().await.allows(&step.capability_id) {
+        if !policy.allows(&step.capability_id) {
             results.push(BatchStepResult {
                 id: step.id.clone(),
                 capability_id: step.capability_id.clone(),
