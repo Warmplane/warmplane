@@ -127,3 +127,5 @@ pub type SharedCatalogVersion = Arc<RwLock<String>>;
 pub type SharedServerConfigs = Arc<RwLock<HashMap<String, ServerConfig>>>;
 /// Thread-safe map of server status envelopes.
 pub type SharedServerStatuses = Arc<RwLock<HashMap<String, Value>>>;
+/// Thread-safe map of active profile configurations.
+pub type SharedProfiles = Arc<RwLock<HashMap<String, crate::config::ProfileConfig>>>;

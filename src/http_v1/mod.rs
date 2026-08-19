@@ -37,7 +37,8 @@ pub use execute::{
     handle_batch_call_capabilities, handle_call_capability, handle_cancel_operation,
 };
 pub use helpers::{
-    check_if_none_match, make_etag_header, next_trace_id, redact_value, resolve_idempotency_key,
+    check_if_none_match, get_profile_scoped_catalog_version, make_etag_header, next_trace_id,
+    redact_value, resolve_idempotency_key, resolve_profile_context, ProfileQuery,
 };
 pub use types::{
     error_envelope, ApproveTicketRequest, CallCapabilityRequest, CatalogEventsQuery,

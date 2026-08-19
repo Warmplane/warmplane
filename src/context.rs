@@ -169,3 +169,47 @@ mod tests {
         assert_eq!(resolved_ctx.work_item_id, None);
     }
 }
+
+/// Active profile context resolved from incoming request headers, query parameters, or CLI flags.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ProfileContext {
+    /// Active profile identifier, or `None` if unrestricted / all servers.
+    pub profile_id: Option<String>,
+    /// Set of allowed server identifiers under this profile constellation.
+    pub allowed_servers: Option<std::collections::HashSet<String>>,
+}
+
+impl ProfileContext {
+    /// Creates an unrestricted `ProfileContext` (all servers allowed).
+    pub fn unrestricted() -> Self {
+        Self {
+            profile_id: None,
+            allowed_servers: None,
+        }
+    }
+
+    /// Creates a scoped `ProfileContext` with a specific profile ID and server whitelist.
+    pub fn scoped(
+        profile_id: impl Into<String>,
+        servers: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        let set: std::collections::HashSet<String> = servers.into_iter().map(Into::into).collect();
+        Self {
+            profile_id: Some(profile_id.into()),
+            allowed_servers: Some(set),
+        }
+    }
+
+    /// Returns `true` if the given upstream server is allowed in this profile constellation.
+    pub fn is_server_allowed(&self, server: &str) -> bool {
+        match &self.allowed_servers {
+            Some(set) => set.contains(server),
+            None => true,
+        }
+    }
+
+    /// Returns `true` if a specific profile constellation is actively selected.
+    pub fn is_scoped(&self) -> bool {
+        self.profile_id.is_some()
+    }
+}

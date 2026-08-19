@@ -68,9 +68,22 @@ pub struct McpConfig {
     /// Optional Multi-Tenant Role-Based Access Control (RBAC) configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rbac: Option<crate::rbac::RbacConfig>,
+    /// Named server constellations (profiles) for task-specific catalog partitioning.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub profiles: HashMap<String, ProfileConfig>,
     /// Upstream MCP server definitions keyed by server identifier.
     #[serde(rename = "mcpServers", default)]
     pub mcp_servers: HashMap<String, ServerConfig>,
+}
+
+/// Profile configuration defining a named constellation of upstream MCP servers.
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq)]
+pub struct ProfileConfig {
+    /// Whitelist of upstream server identifiers included in this constellation.
+    pub servers: Vec<String>,
+    /// Optional human-readable description of this profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Persistent runtime state configuration.
@@ -744,6 +757,21 @@ fn validate_config(config: &McpConfig) -> Result<()> {
         }
     }
 
+    for (profile_name, profile) in &config.profiles {
+        if profile_name.trim().is_empty() {
+            anyhow::bail!("Profile name cannot be empty");
+        }
+        for server_id in &profile.servers {
+            if !config.mcp_servers.contains_key(server_id) {
+                anyhow::bail!(
+                    "Profile '{}' references unknown server '{}' (not defined in 'mcpServers')",
+                    profile_name,
+                    server_id
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -897,5 +925,50 @@ mod tests {
         assert_eq!(config, loaded);
 
         let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_validate_profiles() {
+        use super::ProfileConfig;
+
+        let mut srv = empty_server();
+        srv.command = Some("echo".to_string());
+        let mut servers = HashMap::new();
+        servers.insert("srv_a".to_string(), srv.clone());
+        servers.insert("srv_b".to_string(), srv);
+
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "valid_prof".to_string(),
+            ProfileConfig {
+                servers: vec!["srv_a".to_string()],
+                description: Some("test profile".to_string()),
+            },
+        );
+
+        let config = McpConfig {
+            mcp_servers: servers.clone(),
+            profiles: profiles.clone(),
+            ..Default::default()
+        };
+        assert!(validate_config(&config).is_ok());
+
+        // Invalid: references unknown server
+        profiles.insert(
+            "invalid_prof".to_string(),
+            ProfileConfig {
+                servers: vec!["srv_c".to_string()],
+                description: None,
+            },
+        );
+        let bad_config = McpConfig {
+            mcp_servers: servers,
+            profiles,
+            ..Default::default()
+        };
+        let err = validate_config(&bad_config).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("references unknown server 'srv_c'"));
     }
 }

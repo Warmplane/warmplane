@@ -55,6 +55,72 @@ pub fn make_etag_header(catalog_version: impl AsRef<str>) -> HeaderMap {
     headers
 }
 
+/// Query parameters containing optional profile selector.
+#[derive(serde::Deserialize, Debug, Clone, Default)]
+pub struct ProfileQuery {
+    /// Optional profile constellation identifier.
+    #[serde(default)]
+    pub profile: Option<String>,
+}
+
+/// Resolves effective `ProfileContext` from HTTP request headers and query parameters.
+///
+/// Precedence:
+/// 1. `X-Warmplane-Profile` header
+/// 2. `?profile=` query parameter
+///
+/// # Returns
+/// - `Ok(ProfileContext)`: If no profile requested (unrestricted) or requested profile is found in `state.profiles`.
+/// - `Err((StatusCode, Value))`: If requested profile does not exist in `state.profiles` (`PROFILE_NOT_FOUND`).
+pub async fn resolve_profile_context(
+    state: &crate::daemon::AppState,
+    headers: &HeaderMap,
+    query: Option<&ProfileQuery>,
+) -> Result<crate::context::ProfileContext, (axum::http::StatusCode, Value)> {
+    let requested_profile = crate::context::extract_header_str(headers, "x-warmplane-profile")
+        .or_else(|| {
+            query
+                .and_then(|q| q.profile.as_ref().map(|p| p.trim().to_string()))
+                .filter(|s| !s.is_empty())
+        });
+
+    let Some(profile_id) = requested_profile else {
+        return Ok(crate::context::ProfileContext::unrestricted());
+    };
+
+    let profiles_guard = state.profiles.read().await;
+    match profiles_guard.get(&profile_id) {
+        Some(profile_cfg) => Ok(crate::context::ProfileContext::scoped(
+            profile_id,
+            profile_cfg.servers.clone(),
+        )),
+        None => {
+            let trace_id = next_trace_id();
+            let err_val = crate::http_v1::types::error_envelope(
+                trace_id,
+                None,
+                None,
+                crate::idempotency::RetryMetadata::safe("not_started"),
+                "PROFILE_NOT_FOUND",
+                format!("Profile '{}' is not defined in configuration", profile_id),
+                false,
+            );
+            Err((axum::http::StatusCode::NOT_FOUND, err_val))
+        }
+    }
+}
+
+/// Computes profile-scoped catalog version string given active ProfileContext.
+pub fn get_profile_scoped_catalog_version(
+    base_version: impl AsRef<str>,
+    profile_ctx: &crate::context::ProfileContext,
+) -> String {
+    match &profile_ctx.profile_id {
+        Some(pid) => format!("{}-p:{}", base_version.as_ref(), pid),
+        None => base_version.as_ref().to_string(),
+    }
+}
+
 /// Resolves idempotency key from payload body or standard HTTP headers.
 ///
 /// # Arguments

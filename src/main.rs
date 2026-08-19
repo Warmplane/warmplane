@@ -54,17 +54,25 @@ async fn main() -> Result<()> {
             let resolved_port = port.or(config_data.port).unwrap_or(DEFAULT_PORT);
             daemon::run_daemon(resolved_port, config_data, config).await?;
         }
-        Commands::McpServer { config } => {
+        Commands::McpServer { config, profile } => {
             let config_data = load_config(&config)?;
-            mcp_server::run_mcp_server(config_data, config).await?;
+            mcp_server::run_mcp_server(config_data, config, profile).await?;
         }
-        Commands::ListCapabilities { port, config } => {
+        Commands::ListCapabilities {
+            port,
+            config,
+            profile,
+        } => {
             let resolved_port = resolve_client_port(port, &config)?;
-            let res = reqwest::get(format!(
+            let client = reqwest::Client::new();
+            let mut req = client.get(format!(
                 "http://127.0.0.1:{}/v1/capabilities",
                 resolved_port
-            ))
-            .await?;
+            ));
+            if let Some(prof) = profile {
+                req = req.header("x-warmplane-profile", prof);
+            }
+            let res = req.send().await?;
             println!("{}", res.text().await?);
         }
         Commands::SearchCapabilities {
@@ -74,6 +82,7 @@ async fn main() -> Result<()> {
             limit,
             server,
             tag,
+            profile,
         } => {
             let resolved_port = resolve_client_port(port, &config)?;
             let payload = json!({
@@ -84,23 +93,34 @@ async fn main() -> Result<()> {
             });
 
             let client = reqwest::Client::new();
-            let res = client
+            let mut req = client
                 .post(format!(
                     "http://127.0.0.1:{}/v1/capabilities/search",
                     resolved_port
                 ))
-                .json(&payload)
-                .send()
-                .await?;
+                .json(&payload);
+            if let Some(prof) = profile {
+                req = req.header("x-warmplane-profile", prof);
+            }
+            let res = req.send().await?;
             println!("{}", res.text().await?);
         }
-        Commands::DescribeCapability { port, config, id } => {
+        Commands::DescribeCapability {
+            port,
+            config,
+            id,
+            profile,
+        } => {
             let resolved_port = resolve_client_port(port, &config)?;
-            let res = reqwest::get(format!(
+            let client = reqwest::Client::new();
+            let mut req = client.get(format!(
                 "http://127.0.0.1:{}/v1/capabilities/{}",
                 resolved_port, id
-            ))
-            .await?;
+            ));
+            if let Some(prof) = profile {
+                req = req.header("x-warmplane-profile", prof);
+            }
+            let res = req.send().await?;
             println!("{}", res.text().await?);
         }
         Commands::CallCapability {
@@ -114,6 +134,7 @@ async fn main() -> Result<()> {
             actor_id,
             grant_id,
             idempotency_key,
+            profile,
             jsonpath,
             limit_lines,
             truncate_bytes,
@@ -150,11 +171,13 @@ async fn main() -> Result<()> {
             });
 
             let client = reqwest::Client::new();
-            let res = client
+            let mut req = client
                 .post(format!("http://127.0.0.1:{}/v1/tools/call", resolved_port))
-                .json(&payload)
-                .send()
-                .await?;
+                .json(&payload);
+            if let Some(prof) = profile {
+                req = req.header("x-warmplane-profile", prof);
+            }
+            let res = req.send().await?;
             println!("{}", res.text().await?);
         }
         Commands::BatchCallCapabilities {
@@ -162,6 +185,7 @@ async fn main() -> Result<()> {
             config,
             steps,
             file,
+            profile,
         } => {
             let resolved_port = resolve_client_port(port, &config)?;
             let steps_json: Value = if let Some(path) = file {
@@ -181,20 +205,30 @@ async fn main() -> Result<()> {
             };
 
             let client = reqwest::Client::new();
-            let res = client
+            let mut req = client
                 .post(format!(
                     "http://127.0.0.1:{}/v1/tools/batch_call",
                     resolved_port
                 ))
-                .json(&payload)
-                .send()
-                .await?;
+                .json(&payload);
+            if let Some(prof) = profile {
+                req = req.header("x-warmplane-profile", prof);
+            }
+            let res = req.send().await?;
             println!("{}", res.text().await?);
         }
-        Commands::ListResources { port, config } => {
+        Commands::ListResources {
+            port,
+            config,
+            profile,
+        } => {
             let resolved_port = resolve_client_port(port, &config)?;
-            let res =
-                reqwest::get(format!("http://127.0.0.1:{}/v1/resources", resolved_port)).await?;
+            let client = reqwest::Client::new();
+            let mut req = client.get(format!("http://127.0.0.1:{}/v1/resources", resolved_port));
+            if let Some(prof) = profile {
+                req = req.header("x-warmplane-profile", prof);
+            }
+            let res = req.send().await?;
             println!("{}", res.text().await?);
         }
         Commands::ReadResource {
@@ -206,6 +240,7 @@ async fn main() -> Result<()> {
             work_item_id,
             actor_id,
             grant_id,
+            profile,
         } => {
             let resolved_port = resolve_client_port(port, &config)?;
             let context = RequestContext {
@@ -222,20 +257,30 @@ async fn main() -> Result<()> {
             });
 
             let client = reqwest::Client::new();
-            let res = client
+            let mut req = client
                 .post(format!(
                     "http://127.0.0.1:{}/v1/resources/read",
                     resolved_port
                 ))
-                .json(&payload)
-                .send()
-                .await?;
+                .json(&payload);
+            if let Some(prof) = profile {
+                req = req.header("x-warmplane-profile", prof);
+            }
+            let res = req.send().await?;
             println!("{}", res.text().await?);
         }
-        Commands::ListPrompts { port, config } => {
+        Commands::ListPrompts {
+            port,
+            config,
+            profile,
+        } => {
             let resolved_port = resolve_client_port(port, &config)?;
-            let res =
-                reqwest::get(format!("http://127.0.0.1:{}/v1/prompts", resolved_port)).await?;
+            let client = reqwest::Client::new();
+            let mut req = client.get(format!("http://127.0.0.1:{}/v1/prompts", resolved_port));
+            if let Some(prof) = profile {
+                req = req.header("x-warmplane-profile", prof);
+            }
+            let res = req.send().await?;
             println!("{}", res.text().await?);
         }
         Commands::GetPrompt {
@@ -248,6 +293,7 @@ async fn main() -> Result<()> {
             work_item_id,
             actor_id,
             grant_id,
+            profile,
         } => {
             let resolved_port = resolve_client_port(port, &config)?;
             let parsed_arguments: Value =
@@ -268,11 +314,13 @@ async fn main() -> Result<()> {
             });
 
             let client = reqwest::Client::new();
-            let res = client
+            let mut req = client
                 .post(format!("http://127.0.0.1:{}/v1/prompts/get", resolved_port))
-                .json(&payload)
-                .send()
-                .await?;
+                .json(&payload);
+            if let Some(prof) = profile {
+                req = req.header("x-warmplane-profile", prof);
+            }
+            let res = req.send().await?;
             println!("{}", res.text().await?);
         }
         Commands::ListCatalogEvents {

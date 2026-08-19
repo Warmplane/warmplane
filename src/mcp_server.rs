@@ -43,6 +43,7 @@ static TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone)]
 struct FacadeMcpServer {
     state: AppState,
+    profile: Option<String>,
 }
 
 impl ServerHandler for FacadeMcpServer {
@@ -197,6 +198,7 @@ impl ServerHandler for FacadeMcpServer {
 
                 let trace_id = next_trace_id();
                 let policy = self.state.policy.read().await.clone();
+                let prof_ctx = self.profile_context().await;
                 let res = crate::batch_executor::execute_batch(
                     &self.state,
                     steps,
@@ -204,6 +206,7 @@ impl ServerHandler for FacadeMcpServer {
                     request_id,
                     context,
                     &policy,
+                    &prof_ctx,
                 )
                 .await;
                 Ok(serde_json::to_value(res).unwrap_or_default())
@@ -479,10 +482,25 @@ impl ServerHandler for FacadeMcpServer {
 }
 
 impl FacadeMcpServer {
+    async fn profile_context(&self) -> crate::context::ProfileContext {
+        if let Some(ref prof_id) = self.profile {
+            let profiles_guard = self.state.profiles.read().await;
+            if let Some(prof_cfg) = profiles_guard.get(prof_id) {
+                return crate::context::ProfileContext::scoped(
+                    prof_id.clone(),
+                    prof_cfg.servers.clone(),
+                );
+            }
+        }
+        crate::context::ProfileContext::unrestricted()
+    }
+
     async fn list_capabilities_value(&self) -> std::result::Result<Value, String> {
+        let prof_ctx = self.profile_context().await;
         let caps_guard = self.state.capabilities.read().await;
         let mut capabilities = caps_guard
             .iter()
+            .filter(|(_, meta)| prof_ctx.is_server_allowed(&meta.server))
             .map(|(id, meta)| {
                 json!({
                     "id": id,
@@ -514,9 +532,21 @@ impl FacadeMcpServer {
         modes: Option<Vec<String>>,
         limit: Option<usize>,
     ) -> std::result::Result<Value, String> {
+        let prof_ctx = self.profile_context().await;
         let mut filter_builder = crate::search::SearchFilter::builder();
-        if let Some(servers) = server_ids {
-            filter_builder = filter_builder.server_ids(servers);
+        let effective_servers = match &prof_ctx.allowed_servers {
+            Some(allowed) => match server_ids {
+                Some(servers) => servers
+                    .into_iter()
+                    .filter(|s| allowed.contains(s))
+                    .collect(),
+                None => allowed.iter().cloned().collect(),
+            },
+            None => server_ids.unwrap_or_default(),
+        };
+
+        if !effective_servers.is_empty() {
+            filter_builder = filter_builder.server_ids(effective_servers);
         }
         if let Some(t) = tags {
             filter_builder = filter_builder.tags(t);
@@ -528,7 +558,9 @@ impl FacadeMcpServer {
 
         let caps = self.state.capabilities.read().await;
         let pol = self.state.policy.read().await;
-        let catalog_ver = self.state.catalog_version.read().await.clone();
+        let base_ver = self.state.catalog_version.read().await.clone();
+        let catalog_ver =
+            crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
         let query_str = query.as_deref().unwrap_or("");
         let limit = limit.unwrap_or(8);
 
@@ -547,9 +579,10 @@ impl FacadeMcpServer {
     }
 
     async fn describe_capability_value(&self, id: String) -> std::result::Result<Value, String> {
+        let prof_ctx = self.profile_context().await;
         let caps_guard = self.state.capabilities.read().await;
         match caps_guard.get(&id) {
-            Some(meta) => Ok(json!({
+            Some(meta) if prof_ctx.is_server_allowed(&meta.server) => Ok(json!({
                 "version": "v1",
                 "capability": {
                     "id": id,
@@ -560,7 +593,7 @@ impl FacadeMcpServer {
                     "examples": meta.examples,
                 }
             })),
-            None => Ok(error_envelope(
+            _ => Ok(error_envelope(
                 next_trace_id(),
                 None,
                 None,
@@ -581,6 +614,7 @@ impl FacadeMcpServer {
         input_responses: Option<std::collections::BTreeMap<String, Value>>,
         request_state: Option<String>,
     ) -> std::result::Result<Value, String> {
+        let prof_ctx = self.profile_context().await;
         let trace_id = next_trace_id();
         let ctx = context.unwrap_or_default();
         if !self.state.policy.read().await.allows(&capability_id) {
@@ -608,6 +642,22 @@ impl FacadeMcpServer {
                     false,
                 ));
             };
+
+            if !prof_ctx.is_server_allowed(&meta.server) {
+                return Ok(error_envelope(
+                    trace_id,
+                    request_id,
+                    Some(ctx),
+                    crate::idempotency::RetryMetadata::unsafe_op("not_started"),
+                    "TOOL_NOT_IN_PROFILE",
+                    format!(
+                        "Capability '{}' belongs to server '{}' which is not in active profile",
+                        capability_id, meta.server
+                    ),
+                    false,
+                ));
+            }
+
             (meta.server.clone(), meta.tool.clone())
         };
 
@@ -720,9 +770,11 @@ impl FacadeMcpServer {
     }
 
     async fn list_resources_value(&self) -> std::result::Result<Value, String> {
+        let prof_ctx = self.profile_context().await;
         let res_guard = self.state.resources.read().await;
         let mut resources = res_guard
             .iter()
+            .filter(|(_, meta)| prof_ctx.is_server_allowed(&meta.server))
             .map(|(id, meta)| {
                 json!({
                     "id": id,
@@ -756,6 +808,7 @@ impl FacadeMcpServer {
         input_responses: Option<std::collections::BTreeMap<String, Value>>,
         request_state: Option<String>,
     ) -> std::result::Result<Value, String> {
+        let prof_ctx = self.profile_context().await;
         let trace_id = next_trace_id();
         let ctx = context.unwrap_or_default();
         if !self.state.policy.read().await.allows(&resource_id) {
@@ -783,6 +836,19 @@ impl FacadeMcpServer {
                     false,
                 ));
             };
+
+            if !prof_ctx.is_server_allowed(&meta.server) {
+                return Ok(error_envelope(
+                    trace_id,
+                    request_id,
+                    Some(ctx),
+                    crate::idempotency::RetryMetadata::safe("not_started"),
+                    "RESOURCE_NOT_FOUND",
+                    format!("Resource '{}' not available in active profile", resource_id),
+                    false,
+                ));
+            }
+
             (meta.server.clone(), meta.uri.clone())
         };
 
@@ -868,9 +934,11 @@ impl FacadeMcpServer {
     }
 
     async fn list_prompts_value(&self) -> std::result::Result<Value, String> {
+        let prof_ctx = self.profile_context().await;
         let prompts_guard = self.state.prompts.read().await;
         let mut prompts = prompts_guard
             .iter()
+            .filter(|(_, meta)| prof_ctx.is_server_allowed(&meta.server))
             .map(|(id, meta)| {
                 json!({
                     "id": id,
@@ -905,6 +973,7 @@ impl FacadeMcpServer {
         input_responses: Option<std::collections::BTreeMap<String, Value>>,
         request_state: Option<String>,
     ) -> std::result::Result<Value, String> {
+        let prof_ctx = self.profile_context().await;
         let trace_id = next_trace_id();
         let ctx = context.unwrap_or_default();
         if !self.state.policy.read().await.allows(&prompt_id) {
@@ -932,6 +1001,19 @@ impl FacadeMcpServer {
                     false,
                 ));
             };
+
+            if !prof_ctx.is_server_allowed(&meta.server) {
+                return Ok(error_envelope(
+                    trace_id,
+                    request_id,
+                    Some(ctx),
+                    crate::idempotency::RetryMetadata::safe("not_started"),
+                    "PROMPT_NOT_FOUND",
+                    format!("Prompt '{}' not available in active profile", prompt_id),
+                    false,
+                ));
+            }
+
             (meta.server.clone(), meta.name.clone())
         };
 
@@ -1225,12 +1307,22 @@ fn error_envelope(
 /// # Arguments
 /// * `config` - Loaded `McpConfig` configuration struct.
 /// * `config_path` - Path to the config file.
+/// * `profile` - Optional named server constellation (profile) to restrict exposed capabilities.
 ///
 /// # Errors
 /// Returns an error if initializing upstream state or stdio transport fails.
-pub async fn run_mcp_server(config: McpConfig, config_path: impl Into<String>) -> Result<()> {
+pub async fn run_mcp_server(
+    config: McpConfig,
+    config_path: impl Into<String>,
+    profile: Option<String>,
+) -> Result<()> {
+    if let Some(ref prof_id) = profile {
+        if !config.profiles.contains_key(prof_id) {
+            anyhow::bail!("Profile '{}' is not defined in configuration", prof_id);
+        }
+    }
     let state = initialize_state(config, config_path).await?;
-    let server = FacadeMcpServer { state };
+    let server = FacadeMcpServer { state, profile };
     let running = server.serve(stdio()).await?;
     let _ = running.waiting().await?;
     Ok(())
@@ -1306,7 +1398,10 @@ mod tests {
             .catalog_version("test-ver")
             .build();
 
-        let server = super::FacadeMcpServer { state };
+        let server = super::FacadeMcpServer {
+            state,
+            profile: None,
+        };
         let res = server
             .search_capabilities_value(Some("SQL database".to_string()), None, None, None, Some(5))
             .await
@@ -1316,5 +1411,79 @@ mod tests {
         assert_eq!(res["query"], "SQL database");
         assert_eq!(res["total"], 1);
         assert_eq!(res["capabilities"][0]["id"], "db.query");
+    }
+
+    #[tokio::test]
+    async fn test_facade_profile_partitioning() {
+        use crate::config::ProfileConfig;
+        use crate::daemon::{AppState, CapabilityMeta, Policy};
+        use std::collections::HashMap;
+
+        let mut caps = HashMap::new();
+        caps.insert(
+            "db.query".to_string(),
+            CapabilityMeta {
+                server: "sqlite".to_string(),
+                tool: "read_query".to_string(),
+                summary: "Execute read-only SQL queries".to_string(),
+                description: "Run SQL SELECT queries".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                tags: vec![],
+                examples: vec![],
+            },
+        );
+        caps.insert(
+            "fs.read".to_string(),
+            CapabilityMeta {
+                server: "fs".to_string(),
+                tool: "read_file".to_string(),
+                summary: "Read file contents".to_string(),
+                description: "Read utf-8 contents".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                tags: vec![],
+                examples: vec![],
+            },
+        );
+
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "db_only".to_string(),
+            ProfileConfig {
+                servers: vec!["sqlite".to_string()],
+                description: None,
+            },
+        );
+
+        let state = AppState::builder()
+            .capabilities(caps)
+            .profiles(profiles)
+            .policy(Policy::default())
+            .catalog_version("test-ver")
+            .build();
+
+        let server_scoped = super::FacadeMcpServer {
+            state: state.clone(),
+            profile: Some("db_only".to_string()),
+        };
+
+        let list_res = server_scoped.list_capabilities_value().await.unwrap();
+        let list_arr = list_res["capabilities"].as_array().unwrap();
+        assert_eq!(list_arr.len(), 1);
+        assert_eq!(list_arr[0]["id"], "db.query");
+
+        // Calling capability outside profile should fail with TOOL_NOT_IN_PROFILE
+        let call_res = server_scoped
+            .call_capability_value(
+                "fs.read".to_string(),
+                serde_json::json!({}),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(call_res["ok"], false);
+        assert_eq!(call_res["error"]["code"], "TOOL_NOT_IN_PROFILE");
     }
 }

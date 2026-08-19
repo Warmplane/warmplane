@@ -93,6 +93,7 @@ pub async fn execute_batch(
     request_id: Option<String>,
     context: Option<crate::context::RequestContext>,
     policy: &crate::daemon::Policy,
+    prof_ctx: &crate::context::ProfileContext,
 ) -> BatchCallResponse {
     let start_all = std::time::Instant::now();
 
@@ -181,6 +182,26 @@ pub async fn execute_batch(
                 }
                 continue;
             };
+
+            if !prof_ctx.is_server_allowed(&meta.server) {
+                results.push(BatchStepResult {
+                    id: step.id.clone(),
+                    capability_id: step.capability_id.clone(),
+                    ok: false,
+                    data: None,
+                    error: Some(format!(
+                        "Capability '{}' belongs to server '{}' which is not in active profile",
+                        step.capability_id, meta.server
+                    )),
+                    duration_us: step_start.elapsed().as_micros() as u64,
+                });
+                overall_ok = false;
+                if !step.continue_on_error {
+                    break;
+                }
+                continue;
+            }
+
             (meta.server.clone(), meta.tool.clone())
         };
 

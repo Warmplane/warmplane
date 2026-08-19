@@ -25,9 +25,11 @@ use crate::{
 pub async fn handle_call_capability(
     State(state): State<AppState>,
     req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
+    prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
     headers: HeaderMap,
     Json(payload): Json<CallCapabilityRequest>,
 ) -> impl IntoResponse {
+    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
     let start_time = std::time::Instant::now();
     state.total_tool_calls.fetch_add(1, Ordering::Relaxed);
     let trace_id = next_trace_id();
@@ -172,6 +174,30 @@ pub async fn handle_call_capability(
             )
                 .into_response();
         };
+
+        if !prof_ctx.is_server_allowed(&meta.server) {
+            state.operation_registry.unregister(&request_id).await;
+            if let Some(ref key) = idempotency_key {
+                state.idempotency_store.remove(key).await;
+            }
+            return (
+                StatusCode::FORBIDDEN,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    retry_base("not_started"),
+                    "TOOL_NOT_IN_PROFILE",
+                    format!(
+                        "Capability '{}' belongs to server '{}' which is not in active profile",
+                        payload.capability_id, meta.server
+                    ),
+                    false,
+                )),
+            )
+                .into_response();
+        }
+
         (meta.server.clone(), meta.tool.clone())
     };
 
@@ -715,9 +741,11 @@ pub async fn handle_cancel_operation(
 pub async fn handle_batch_call_capabilities(
     State(state): State<AppState>,
     req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
+    prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
     headers: HeaderMap,
     Json(payload): Json<crate::batch_executor::BatchCallRequest>,
 ) -> impl IntoResponse {
+    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
     let trace_id = next_trace_id();
     let request_id =
         crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
@@ -747,6 +775,7 @@ pub async fn handle_batch_call_capabilities(
         Some(request_id),
         Some(req_context),
         &pol,
+        &prof_ctx,
     )
     .await;
 
