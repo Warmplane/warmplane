@@ -55,11 +55,9 @@ export function renderAliases(): string {
   }
 
   return `
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px;">
-      <div>
-        <div style="font-size: 16px; font-weight: 700; color: var(--text-main);">Facade &amp; Alias Studio</div>
-        <div style="font-size: 11px; color: var(--text-dim);">Shorten capability IDs to prune prompt tokens and create stable public interfaces</div>
-      </div>
+    <!-- Sub-header -->
+    <div style="margin-bottom: 16px; font-size: 12px; color: var(--text-dim);">
+      Shorten capability IDs to prune prompt tokens and create stable public interfaces.
     </div>
 
     <!-- Quick Add Form -->

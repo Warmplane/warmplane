@@ -68,8 +68,9 @@
       cursor: pointer;
       font-size: 12.5px;
       font-weight: 500;
-      transition: all 0.15s ease;
+      transition: background-color var(--transition-fast), color var(--transition-fast), border-left-color var(--transition-fast);
       margin-bottom: 2px;
+      border-left: 2.5px solid transparent;
     }
 
     .nav-item:hover {
@@ -81,12 +82,13 @@
       background: var(--surface-card);
       color: var(--amber-400);
       font-weight: 600;
-      border-left: 2.5px solid var(--amber-400);
+      border-left-color: var(--amber-400);
     }
 
     .nav-item svg {
       width: 16px;
       height: 16px;
+      transition: transform var(--transition-fast);
     }
 
     .main-wrapper {
@@ -121,7 +123,8 @@
       border-radius: var(--radius-sm);
       cursor: pointer;
       margin-bottom: 2px;
-      transition: all 0.15s ease;
+      transition: background-color var(--transition-fast), border-left-color var(--transition-fast);
+      border-left: 2px solid transparent;
     }
 
     .cap-item:hover {
@@ -130,7 +133,7 @@
 
     .cap-item.active {
       background: var(--surface-card);
-      border-left: 2px solid var(--amber-400);
+      border-left-color: var(--amber-400);
     }
 
     .feed-row {
@@ -139,6 +142,11 @@
       border-bottom: 1px solid rgba(255,255,255,0.03);
       align-items: center;
       font-size: 11.5px;
+      transition: background-color var(--transition-fast);
+    }
+
+    .feed-row:hover {
+      background: var(--surface-hover);
     }
   </style>
 </head>
@@ -322,7 +330,7 @@
 
   <!-- MODAL: TEMPLATE CATALOG -->
   <div class="modal-backdrop" id="modal-templates" onclick="if(event.target === this) window.app.closeModals()">
-    <div class="modal-box" style="width: 820px; max-width: 95vw; max-height: 88vh; display: flex; flex-direction: column;">
+    <div class="modal-box" style="width: 880px; max-width: 95vw; max-height: 88vh; display: flex; flex-direction: column;">
       <div class="modal-header" style="margin-bottom: 12px;">
         <div>
           <div class="modal-title" style="display: flex; align-items: center; gap: 8px;">
@@ -338,8 +346,8 @@
 
       <!-- Filters & Search -->
       <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 14px;">
-        <input type="text" class="form-input" id="tmpl-search-input" placeholder="Search templates (e.g. postgres, github, playwright, redis)..." oninput="window.app.filterTemplates(this.value)" style="flex: 1;">
-        <div style="display: flex; gap: 4px;" id="tmpl-category-tabs">
+        <input type="text" class="form-input" id="tmpl-search-input" placeholder="Search templates (e.g. postgres, github, playwright, redis)..." oninput="window.app.filterTemplates(this.value)" style="flex: 1; min-width: 0;">
+        <div style="display: flex; gap: 4px; flex-shrink: 0;" id="tmpl-category-tabs">
           <button class="btn btn-ghost tmpl-cat-btn active" data-category="all" onclick="window.app.setTemplateCategory('all')">All</button>
           <button class="btn btn-ghost tmpl-cat-btn" data-category="devtools" onclick="window.app.setTemplateCategory('devtools')">DevTools</button>
           <button class="btn btn-ghost tmpl-cat-btn" data-category="browser" onclick="window.app.setTemplateCategory('browser')">Browser &amp; Search</button>
@@ -350,7 +358,7 @@
       </div>
 
       <!-- Template Grid List -->
-      <div style="flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; padding-right: 4px;" id="tmpl-grid">
+      <div style="flex: 1; overflow-y: auto; overflow-x: hidden; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding-right: 4px;" id="tmpl-grid">
         <!-- Rendered dynamically -->
       </div>
 

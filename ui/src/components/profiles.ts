@@ -77,12 +77,10 @@ export function renderProfiles(): string {
   }
 
   return `
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px;">
-      <div>
-        <div style="font-size: 16px; font-weight: 700; color: var(--text-main);">Server Constellation Profiles</div>
-        <div style="font-size: 11px; color: var(--text-dim);">
-          Define named subsets of servers for task-specific agent interactions, dynamic per-request switching, and scoped ETag caching
-        </div>
+    <!-- Sub-header & Actions -->
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <div style="font-size: 12px; color: var(--text-dim);">
+        Define named subsets of servers for task-specific agent interactions, dynamic per-request switching, and scoped ETag caching.
       </div>
       <div style="display: flex; gap: 8px;">
         <button class="btn btn-primary" onclick="window.app.openAddProfileModal()">+ Create Profile</button>

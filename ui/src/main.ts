@@ -817,11 +817,23 @@ class WarmplaneApp {
   }
 
   async submitAddServer() {
-    const name = (document.getElementById('modal-srv-name') as HTMLInputElement)?.value.trim();
+    const nameInput = document.getElementById('modal-srv-name') as HTMLInputElement | null;
+    const name = nameInput?.value.trim();
     const transport = (document.getElementById('modal-srv-transport') as HTMLSelectElement)?.value;
     if (!name) {
       alert('Server name is required');
       return;
+    }
+
+    // Only prompt overwrite check if user is adding a new server (input not disabled for edit)
+    if (nameInput && !nameInput.disabled) {
+      const state = store.getState();
+      const existingServers = state.config.mcpServers || {};
+      if (existingServers[name]) {
+        if (!confirm(`Server '${name}' already exists in configuration. Do you want to overwrite it?`)) {
+          return;
+        }
+      }
     }
 
     let serverPayload: any = {};
@@ -929,14 +941,14 @@ class WarmplaneApp {
       const cmdPreview = `${t.command} ${t.defaultArgs.join(' ')}`;
 
       return `
-        <div class="bento-card" style="display: flex; flex-direction: column; justify-content: space-between; padding: 14px; background: var(--surface); border: 1px solid var(--border); transition: transform 0.15s, border-color 0.15s;">
+        <div class="bento-card" style="display: flex; flex-direction: column; justify-content: space-between; padding: 14px; background: var(--surface); border: 1px solid var(--border); min-width: 0; transition: transform 0.15s, border-color 0.15s;">
           <div>
             <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
-              <div style="display: flex; align-items: center; gap: 8px;">
-                <span style="font-weight: 700; font-size: 13.5px; color: var(--text-main);">${escapeHtml(t.name)}</span>
-                <span class="brand-badge" style="font-size: 9.5px; padding: 1px 6px;">${escapeHtml(t.badge)}</span>
+              <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+                <span style="font-weight: 700; font-size: 13.5px; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(t.name)}</span>
+                <span class="brand-badge" style="font-size: 9.5px; padding: 1px 6px; flex-shrink: 0;">${escapeHtml(t.badge)}</span>
               </div>
-              ${isAlreadyConfigured ? '<span style="font-size: 10px; color: var(--green-400); font-weight: 600;">CONNECTED</span>' : ''}
+              ${isAlreadyConfigured ? '<span style="font-size: 10px; color: var(--green-400); font-weight: 600; flex-shrink: 0;">CONNECTED</span>' : ''}
             </div>
             <div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.4; margin-bottom: 8px;">
               ${escapeHtml(t.description)}
@@ -945,9 +957,9 @@ class WarmplaneApp {
               <code>${escapeHtml(cmdPreview)}</code>
             </div>
             ${t.envFields.length > 0 ? `
-              <div style="font-size: 10.5px; color: var(--amber-400); margin-top: 6px; display: flex; align-items: center; gap: 4px;">
+              <div style="font-size: 10.5px; color: var(--amber-400); margin-top: 6px; display: flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                 <span>⚡ Needs:</span>
-                <code>${t.envFields.map(e => escapeHtml(e.key)).join(', ')}</code>
+                <code style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${t.envFields.map(e => escapeHtml(e.key)).join(', ')}</code>
               </div>
             ` : ''}
           </div>
@@ -978,6 +990,17 @@ class WarmplaneApp {
     if (titleEl) titleEl.textContent = `Configure ${tmpl.name} Server`;
     if (descEl) descEl.textContent = tmpl.description;
 
+    // Auto-derive unique identifier if server already exists
+    const configuredServers = store.getState().config.mcpServers || {};
+    let initialServerId = tmpl.id;
+    if (configuredServers[initialServerId]) {
+      let counter = 2;
+      while (configuredServers[`${tmpl.id}-${counter}`]) {
+        counter++;
+      }
+      initialServerId = `${tmpl.id}-${counter}`;
+    }
+
     if (formEl) {
       let envHtml = '';
       if (tmpl.envFields.length > 0) {
@@ -998,7 +1021,8 @@ class WarmplaneApp {
       formEl.innerHTML = `
         <div class="form-group">
           <label class="form-label">Server Identifier (Name)</label>
-          <input type="text" class="form-input" id="cfg-srv-id" value="${escapeHtml(tmpl.id)}">
+          <input type="text" class="form-input" id="cfg-srv-id" value="${escapeHtml(initialServerId)}">
+          <div style="font-size: 10.5px; color: var(--text-dim); margin-top: 3px;">Must be unique across all configured servers.</div>
         </div>
         <div class="form-group">
           <label class="form-label">Command Line Arguments</label>
@@ -1045,6 +1069,14 @@ class WarmplaneApp {
     if (!serverId) {
       alert('Server identifier is required');
       return;
+    }
+
+    const state = store.getState();
+    const existingServers = state.config.mcpServers || {};
+    if (existingServers[serverId]) {
+      if (!confirm(`Server '${serverId}' already exists. Do you want to overwrite its configuration?`)) {
+        return;
+      }
     }
 
     const args = argsStr ? argsStr.split(/\s+/).filter(Boolean) : [];

@@ -353,12 +353,10 @@ export function renderAudit(): string {
   }
 
   return `
-    <div class="content-header" style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
-      <div>
-        <h1 style="font-size: 20px; font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">
-          <span>🔒 WORM Audit Trail & Compliance Log</span>
-        </h1>
-        <p style="font-size: 12.5px; color: var(--text-dim);">Cryptographically tamper-evident, append-only execution log for SOC2 & ISO 27001 compliance.</p>
+    <!-- Sub-header & Actions -->
+    <div style="margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center;">
+      <div style="font-size: 12px; color: var(--text-dim);">
+        Cryptographically tamper-evident, append-only execution log for SOC2 & ISO 27001 compliance.
       </div>
       <div style="display: flex; gap: 8px; align-items: center;">
         ${verificationBadge}

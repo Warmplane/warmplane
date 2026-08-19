@@ -130,18 +130,15 @@ export function renderApprovals(state: AppState): string {
   `;
 
   return `
-    <!-- Header -->
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 14px; border-bottom: 1px solid var(--border);">
-      <div>
-        <div style="font-size: 16px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 8px;">
-          <span>🛡️ Human-in-the-Loop Review Queue</span>
-          <span class="brand-badge" style="font-size: 10px; padding: 2px 8px;">
-            ${pending.length} Pending
-          </span>
-        </div>
-        <div style="font-size: 11.5px; color: var(--text-dim); margin-top: 3px;">
+    <!-- Sub-header & Actions -->
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span class="brand-badge" style="font-size: 11px; padding: 3px 10px; color: ${pending.length > 0 ? 'var(--amber-300)' : 'var(--green-400)'}; border-color: ${pending.length > 0 ? 'rgba(245, 158, 11, 0.4)' : 'rgba(52, 211, 153, 0.4)'}; background: ${pending.length > 0 ? 'rgba(245, 158, 11, 0.1)' : 'rgba(52, 211, 153, 0.1)'};">
+          ${pending.length} PENDING DECISION${pending.length === 1 ? '' : 'S'}
+        </span>
+        <span style="font-size: 12px; color: var(--text-dim);">
           Inspect, parameter-tweak, and approve or reject sensitive capability executions in real-time.
-        </div>
+        </span>
       </div>
       <button class="btn btn-ghost" onclick="window.app.refreshApprovals()" style="font-size: 11.5px;">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
