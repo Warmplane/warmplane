@@ -63,6 +63,52 @@ export function renderPlayground(): string {
   `;
 }
 
+export function generateSampleArgsFromSchema(schema: any, onlyRequired: boolean = false): Record<string, any> {
+  if (!schema || !schema.properties) return {};
+  const props = schema.properties || {};
+  const requiredList: string[] = Array.isArray(schema.required) ? schema.required : [];
+  const result: Record<string, any> = {};
+
+  for (const [key, propDef] of Object.entries<any>(props)) {
+    const isRequired = requiredList.includes(key);
+    if (onlyRequired && !isRequired) continue;
+
+    if (propDef.default !== undefined) {
+      result[key] = propDef.default;
+    } else if (Array.isArray(propDef.enum) && propDef.enum.length > 0) {
+      result[key] = propDef.enum[0];
+    } else if (propDef.examples && Array.isArray(propDef.examples) && propDef.examples.length > 0) {
+      result[key] = propDef.examples[0];
+    } else if (propDef.example !== undefined) {
+      result[key] = propDef.example;
+    } else {
+      const type = propDef.type || 'string';
+      switch (type) {
+        case 'string':
+          result[key] = isRequired ? `sample_${key}` : '';
+          break;
+        case 'number':
+        case 'integer':
+          result[key] = 0;
+          break;
+        case 'boolean':
+          result[key] = true;
+          break;
+        case 'array':
+          result[key] = [];
+          break;
+        case 'object':
+          result[key] = {};
+          break;
+        default:
+          result[key] = `sample_${key}`;
+      }
+    }
+  }
+
+  return result;
+}
+
 function renderToolsPlayground(state: any): string {
   const caps = state.capabilities || [];
   const selectedId = state.selectedCapabilityId || (caps.length > 0 ? caps[0].id : null);
@@ -91,7 +137,47 @@ function renderToolsPlayground(state: any): string {
     }).join('');
   }
 
-  const initialArgs = selectedCap && selectedCap.input_schema ? JSON.stringify(selectedCap.input_schema.properties || {}, null, 2) : '{}';
+  // Schema properties inspection & badges
+  const schema = selectedCap?.input_schema;
+  const properties = schema?.properties || {};
+  const requiredKeys: string[] = Array.isArray(schema?.required) ? schema.required : [];
+  const propEntries = Object.entries<any>(properties);
+
+  let schemaPillsHtml = '';
+  if (propEntries.length > 0) {
+    schemaPillsHtml = `
+      <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; align-items: center;">
+        <span style="font-size: 10px; font-weight: 700; color: var(--text-dim); text-transform: uppercase;">Fields:</span>
+        ${propEntries.map(([key, def]) => {
+          const isReq = requiredKeys.includes(key);
+          const typeStr = def.type || (def.enum ? 'enum' : 'any');
+          const pillColor = isReq ? 'rgba(239, 68, 68, 0.15)' : 'rgba(148, 163, 184, 0.1)';
+          const textColor = isReq ? 'var(--red-400)' : 'var(--text-muted)';
+          const borderColor = isReq ? 'rgba(239, 68, 68, 0.3)' : 'var(--border)';
+          const desc = def.description ? ` - ${def.description}` : '';
+          return `
+            <button 
+              type="button" 
+              class="btn" 
+              style="padding: 2px 7px; font-size: 10.5px; font-family: var(--ff-mono); background: ${pillColor}; color: ${textColor}; border: 1px solid ${borderColor}; border-radius: var(--radius-sm);" 
+              title="Click to insert '${key}' (${typeStr}${desc})" 
+              onclick="window.app.insertPlaygroundArgKey('${escapeHtml(key)}', '${escapeHtml(typeStr)}', ${escapeHtml(JSON.stringify(def.default ?? null))})"
+            >
+              + ${escapeHtml(key)} <span style="font-size: 9px; opacity: 0.7;">(${typeStr}${isReq ? ' *' : ''})</span>
+            </button>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  let initialArgs = '{}';
+  if (selectedId && state.playgroundArgs && state.playgroundArgs[selectedId] !== undefined) {
+    initialArgs = state.playgroundArgs[selectedId];
+  } else {
+    const samplePayload = generateSampleArgsFromSchema(schema, false);
+    initialArgs = JSON.stringify(samplePayload, null, 2);
+  }
 
   return `
     <div style="display: grid; grid-template-columns: 320px 1fr; gap: 16px; height: calc(100vh - 165px);">
@@ -141,13 +227,21 @@ function renderToolsPlayground(state: any): string {
         <div style="flex: 1; display: grid; grid-template-columns: 1fr 1fr; overflow: hidden;">
           <!-- Request Builder -->
           <div style="padding: 16px; border-right: 1px solid var(--border); overflow-y: auto;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-              <label class="form-label" style="margin: 0;">Arguments JSON (Object)</label>
-              <div style="display: flex; gap: 8px;">
-                <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 11px;" onclick="window.app.openBatchModal()">⚡ Visual Pipeline Builder</button>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <label class="form-label" style="margin: 0;">Arguments JSON</label>
+              <div style="display: flex; gap: 6px;">
+                <button type="button" class="btn btn-ghost" style="padding: 2px 7px; font-size: 10.5px;" title="Fill sample payload from schema" onclick="window.app.fillPlaygroundSampleArgs(false)">✨ Sample Template</button>
+                ${requiredKeys.length > 0 ? `
+                  <button type="button" class="btn btn-ghost" style="padding: 2px 7px; font-size: 10.5px;" title="Fill only required schema fields" onclick="window.app.fillPlaygroundSampleArgs(true)">🧹 Required Only</button>
+                ` : ''}
+                <button type="button" class="btn btn-ghost" style="padding: 2px 7px; font-size: 10.5px;" title="Format JSON" onclick="window.app.formatPlaygroundArgs()">📋 Format</button>
+                <button type="button" class="btn btn-ghost" style="padding: 2px 8px; font-size: 11px;" onclick="window.app.openBatchModal()">⚡ Pipeline Builder</button>
               </div>
             </div>
-            <textarea class="form-textarea" rows="7" id="pg-args-input">${escapeHtml(initialArgs)}</textarea>
+
+            ${schemaPillsHtml}
+
+            <textarea class="form-textarea" rows="7" id="pg-args-input" oninput="window.app.updatePlaygroundArgs(this.value)">${escapeHtml(initialArgs)}</textarea>
 
             <div style="margin-top: 12px; padding: 10px; background: rgba(0,0,0,0.2); border-radius: var(--radius-sm); border: 1px solid var(--border);">
               <div style="font-size: 11px; font-weight: 700; color: var(--cyan-400); margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
@@ -175,7 +269,10 @@ function renderToolsPlayground(state: any): string {
             </div>
             ${selectedCap && selectedCap.input_schema ? `
               <div style="margin-top: 14px;">
-                <label class="form-label">Input JSON Schema</label>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                  <label class="form-label" style="margin: 0;">Input JSON Schema</label>
+                  <span style="font-size: 10px; color: var(--text-dim); font-family: var(--ff-mono);">${propEntries.length} field${propEntries.length === 1 ? '' : 's'} (${requiredKeys.length} required)</span>
+                </div>
                 <pre style="background: var(--surface); padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); font-size: 11px; color: var(--text-muted); max-height: 140px; overflow-y: auto;">${escapeHtml(JSON.stringify(selectedCap.input_schema, null, 2))}</pre>
               </div>
             ` : ''}
@@ -424,11 +521,38 @@ function renderBatchModal(state: any): string {
   const steps = state.batchSteps || [];
 
   const stepsHtml = steps.map((step: any, idx: number) => {
+    const stepCap = caps.find((c: any) => c.id === step.capability_id);
+    const stepSchema = stepCap?.input_schema;
+    const stepProps = stepSchema?.properties || {};
+    const stepReqs: string[] = Array.isArray(stepSchema?.required) ? stepSchema.required : [];
+    const stepPropEntries = Object.entries<any>(stepProps);
+
     const optionsHtml = caps.map((c: any) => `
       <option value="${escapeHtml(c.id)}" ${c.id === step.capability_id ? 'selected' : ''}>
         ${escapeHtml(c.id)} (${escapeHtml(c.server || 'local')})
       </option>
     `).join('');
+
+    let stepSchemaBadgesHtml = '';
+    if (stepPropEntries.length > 0) {
+      stepSchemaBadgesHtml = `
+        <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; margin-bottom: 6px; align-items: center;">
+          <span style="font-size: 9.5px; font-weight: 700; color: var(--text-dim); text-transform: uppercase;">Parameters:</span>
+          ${stepPropEntries.map(([k, def]) => {
+            const isReq = stepReqs.includes(k);
+            const typeStr = def.type || (def.enum ? 'enum' : 'any');
+            const pillColor = isReq ? 'rgba(239, 68, 68, 0.15)' : 'rgba(148, 163, 184, 0.1)';
+            const textColor = isReq ? 'var(--red-400)' : 'var(--text-muted)';
+            const borderColor = isReq ? 'rgba(239, 68, 68, 0.3)' : 'var(--border)';
+            return `
+              <span style="font-size: 9.5px; font-family: var(--ff-mono); padding: 1px 5px; background: ${pillColor}; color: ${textColor}; border: 1px solid ${borderColor}; border-radius: 3px;" title="${escapeHtml(def.description || '')}">
+                ${escapeHtml(k)} (${typeStr}${isReq ? ' *' : ''})
+              </span>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
 
     return `
       <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; margin-bottom: 12px;">
@@ -442,7 +566,7 @@ function renderBatchModal(state: any): string {
           </button>
         </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 10px;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 6px;">
           <div class="form-group" style="margin: 0;">
             <label class="form-label" style="font-size: 11px;">Target Capability</label>
             <select class="form-input" style="font-size: 11.5px;" onchange="window.app.updateBatchStepCapability(${idx}, this.value)">
@@ -458,9 +582,16 @@ function renderBatchModal(state: any): string {
           </div>
         </div>
 
+        ${stepSchemaBadgesHtml}
+
         <div class="form-group" style="margin: 0;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-            <label class="form-label" style="margin: 0; font-size: 11px;">Step Arguments JSON</label>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <label class="form-label" style="margin: 0; font-size: 11px;">Step Arguments JSON</label>
+              ${stepCap ? `
+                <button type="button" class="btn btn-ghost" style="padding: 1px 6px; font-size: 9.5px;" onclick="window.app.fillBatchStepSampleArgs(${idx})">✨ Sample Args</button>
+              ` : ''}
+            </div>
             <div style="display: flex; gap: 6px; font-size: 10px; color: var(--cyan-400); font-family: var(--ff-mono);">
               <span>Helpers:</span>
               <code style="cursor: pointer; background: rgba(0,0,0,0.3); padding: 1px 4px; border-radius: 2px;" onclick="window.app.appendBatchVariable(${idx}, '\${steps[0].result.id}')">\${steps[0].result.id}</code>
@@ -480,7 +611,7 @@ function renderBatchModal(state: any): string {
   }).join('');
 
   return `
-    <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 24px;">
+    <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 24px;" onclick="if(event.target === this) window.app.closeBatchModal()">
       <div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); width: 840px; max-width: 95vw; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
         <div style="padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
           <div>

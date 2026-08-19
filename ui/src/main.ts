@@ -2,7 +2,7 @@ import { store } from './state';
 import { api } from './api';
 import { renderOverview } from './components/overview';
 import { renderServers } from './components/servers';
-import { renderPlayground } from './components/playground';
+import { renderPlayground, generateSampleArgsFromSchema } from './components/playground';
 import { renderApprovals } from './components/approvals';
 import { renderAudit } from './components/audit';
 import { renderPolicy } from './components/policy';
@@ -378,8 +378,254 @@ class WarmplaneApp {
   }
 
   // Action Handlers
+  setPlaygroundMode(mode: 'tools' | 'resources' | 'prompts') {
+    store.setState({ playgroundMode: mode });
+  }
+
   selectCapability(id: string) {
     store.setState({ selectedCapabilityId: id });
+    const cap = store.getState().capabilities.find(c => c.id === id);
+    const textarea = document.getElementById('pg-args-input') as HTMLTextAreaElement | null;
+    if (cap) {
+      const sample = generateSampleArgsFromSchema(cap.input_schema, false);
+      const jsonStr = JSON.stringify(sample, null, 2);
+      if (textarea) textarea.value = jsonStr;
+      const pgArgs = { ...(store.getState().playgroundArgs || {}) };
+      pgArgs[id] = jsonStr;
+      store.getState().playgroundArgs = pgArgs;
+    }
+  }
+
+  selectResource(id: string) {
+    store.setState({ selectedResourceId: id });
+  }
+
+  selectPrompt(id: string) {
+    store.setState({ selectedPromptId: id });
+  }
+
+  filterResources(query: string) {
+    const q = query.toLowerCase().trim();
+    const allRes = store.getState().resources || [];
+    const filtered = allRes.filter(r =>
+      r.id.toLowerCase().includes(q) ||
+      (r.name && r.name.toLowerCase().includes(q)) ||
+      (r.uri && r.uri.toLowerCase().includes(q)) ||
+      (r.server && r.server.toLowerCase().includes(q))
+    );
+    const listEl = document.getElementById('pg-res-list');
+    if (listEl) {
+      if (filtered.length === 0) {
+        listEl.innerHTML = `
+          <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
+            No resources match "${escapeHtml(query)}"
+          </div>
+        `;
+      } else {
+        listEl.innerHTML = filtered.map(r => {
+          const active = r.id === store.getState().selectedResourceId ? 'active' : '';
+          const scheme = r.uri ? r.uri.split(':')[0] : 'res';
+          return `
+            <div class="cap-item ${active}" onclick="window.app.selectResource('${escapeHtml(r.id)}')">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${escapeHtml(r.name || r.id)}</span>
+                <span class="badge" style="font-size: 9.5px; background: rgba(56, 189, 248, 0.15); color: var(--cyan-400);">${escapeHtml(scheme)}</span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(r.uri)}</div>
+              <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+                <span>server: ${escapeHtml(r.server || 'local')}</span>
+                <span>${escapeHtml(r.mime_type || 'text/plain')}</span>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+  }
+
+  filterPrompts(query: string) {
+    const q = query.toLowerCase().trim();
+    const allPrompts = store.getState().prompts || [];
+    const filtered = allPrompts.filter(p =>
+      p.id.toLowerCase().includes(q) ||
+      (p.name && p.name.toLowerCase().includes(q)) ||
+      (p.description && p.description.toLowerCase().includes(q)) ||
+      (p.server && p.server.toLowerCase().includes(q))
+    );
+    const listEl = document.getElementById('pg-prompt-list');
+    if (listEl) {
+      if (filtered.length === 0) {
+        listEl.innerHTML = `
+          <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
+            No prompts match "${escapeHtml(query)}"
+          </div>
+        `;
+      } else {
+        listEl.innerHTML = filtered.map(p => {
+          const active = p.id === store.getState().selectedPromptId ? 'active' : '';
+          const argCount = p.arguments ? p.arguments.length : 0;
+          return `
+            <div class="cap-item ${active}" onclick="window.app.selectPrompt('${escapeHtml(p.id)}')">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${escapeHtml(p.name || p.id)}</span>
+                <span class="badge" style="font-size: 9.5px; background: rgba(168, 85, 247, 0.15); color: var(--purple-400);">${argCount} args</span>
+              </div>
+              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">${escapeHtml(p.description || p.title || 'Prompt template')}</div>
+              <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">server: ${escapeHtml(p.server || 'local')}</div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+  }
+
+  updatePlaygroundArgs(val: string) {
+    const state = store.getState();
+    const capId = state.selectedCapabilityId || (state.capabilities[0] ? state.capabilities[0].id : null);
+    if (!capId) return;
+    const pgArgs = { ...(state.playgroundArgs || {}) };
+    pgArgs[capId] = val;
+    // Update store state directly without triggering full re-render on each keystroke
+    state.playgroundArgs = pgArgs;
+  }
+
+  fillPlaygroundSampleArgs(onlyRequired: boolean = false) {
+    const state = store.getState();
+    const capId = state.selectedCapabilityId || (state.capabilities[0] ? state.capabilities[0].id : null);
+    const cap = state.capabilities.find(c => c.id === capId);
+    const textarea = document.getElementById('pg-args-input') as HTMLTextAreaElement | null;
+    if (!textarea) return;
+
+    if (!cap || !cap.input_schema) {
+      textarea.value = '{}';
+      if (capId) {
+        const pgArgs = { ...(state.playgroundArgs || {}) };
+        pgArgs[capId] = '{}';
+        state.playgroundArgs = pgArgs;
+      }
+      return;
+    }
+
+    const sample = generateSampleArgsFromSchema(cap.input_schema, onlyRequired);
+    const jsonStr = JSON.stringify(sample, null, 2);
+    textarea.value = jsonStr;
+    if (capId) {
+      const pgArgs = { ...(state.playgroundArgs || {}) };
+      pgArgs[capId] = jsonStr;
+      state.playgroundArgs = pgArgs;
+    }
+  }
+
+  formatPlaygroundArgs() {
+    const state = store.getState();
+    const capId = state.selectedCapabilityId || (state.capabilities[0] ? state.capabilities[0].id : null);
+    const textarea = document.getElementById('pg-args-input') as HTMLTextAreaElement | null;
+    if (textarea) {
+      try {
+        const parsed = JSON.parse(textarea.value || '{}');
+        const formatted = JSON.stringify(parsed, null, 2);
+        textarea.value = formatted;
+        if (capId) {
+          const pgArgs = { ...(state.playgroundArgs || {}) };
+          pgArgs[capId] = formatted;
+          state.playgroundArgs = pgArgs;
+        }
+      } catch (e: any) {
+        alert(`Cannot format JSON: ${e.message}`);
+      }
+    }
+  }
+
+  insertPlaygroundArgKey(key: string, type: string, defaultVal: any) {
+    const state = store.getState();
+    const capId = state.selectedCapabilityId || (state.capabilities[0] ? state.capabilities[0].id : null);
+    const textarea = document.getElementById('pg-args-input') as HTMLTextAreaElement | null;
+    if (textarea) {
+      let currentObj: Record<string, any> = {};
+      try {
+        currentObj = JSON.parse(textarea.value || '{}');
+      } catch {
+        currentObj = {};
+      }
+
+      if (currentObj[key] === undefined) {
+        if (defaultVal !== null && defaultVal !== undefined) {
+          currentObj[key] = defaultVal;
+        } else {
+          switch (type) {
+            case 'string':
+              currentObj[key] = `sample_${key}`;
+              break;
+            case 'number':
+            case 'integer':
+              currentObj[key] = 0;
+              break;
+            case 'boolean':
+              currentObj[key] = true;
+              break;
+            case 'array':
+              currentObj[key] = [];
+              break;
+            case 'object':
+              currentObj[key] = {};
+              break;
+            default:
+              currentObj[key] = `sample_${key}`;
+          }
+        }
+      }
+      const newVal = JSON.stringify(currentObj, null, 2);
+      textarea.value = newVal;
+      if (capId) {
+        const pgArgs = { ...(state.playgroundArgs || {}) };
+        pgArgs[capId] = newVal;
+        state.playgroundArgs = pgArgs;
+      }
+    }
+  }
+
+  fillBatchStepSampleArgs(idx: number) {
+    const state = store.getState();
+    const steps = [...(state.batchSteps || [])];
+    const step = steps[idx];
+    if (!step || !step.capability_id) return;
+    const cap = state.capabilities.find(c => c.id === step.capability_id);
+    if (!cap || !cap.input_schema) return;
+
+    const props = cap.input_schema.properties || {};
+    const sample: Record<string, any> = {};
+    for (const [key, propDef] of Object.entries<any>(props)) {
+      if (propDef.default !== undefined) {
+        sample[key] = propDef.default;
+      } else if (Array.isArray(propDef.enum) && propDef.enum.length > 0) {
+        sample[key] = propDef.enum[0];
+      } else {
+        const type = propDef.type || 'string';
+        switch (type) {
+          case 'string':
+            sample[key] = `sample_${key}`;
+            break;
+          case 'number':
+          case 'integer':
+            sample[key] = 0;
+            break;
+          case 'boolean':
+            sample[key] = true;
+            break;
+          case 'array':
+            sample[key] = [];
+            break;
+          case 'object':
+            sample[key] = {};
+            break;
+          default:
+            sample[key] = `sample_${key}`;
+        }
+      }
+    }
+    const sampleStr = JSON.stringify(sample, null, 2);
+    steps[idx] = { ...steps[idx], argsJson: sampleStr };
+    store.setState({ batchSteps: steps });
   }
 
   filterCapabilities(query: string) {
@@ -482,6 +728,99 @@ class WarmplaneApp {
           data: { error: e.toString() }
         }
       });
+    }
+  }
+
+  openBatchModal() {
+    const state = store.getState();
+    let steps = state.batchSteps;
+    // If no steps exist or first step is unconfigured, pre-fill with selected capability
+    if (!steps || steps.length === 0) {
+      const defaultCap = state.selectedCapabilityId || (state.capabilities[0] ? state.capabilities[0].id : '');
+      steps = [
+        { id: 'step_1', capability_id: defaultCap, argsJson: '{}', continue_on_error: false },
+        { id: 'step_2', capability_id: '', argsJson: '{}', continue_on_error: true }
+      ];
+      store.setState({ batchSteps: steps });
+    }
+    store.setState({ isBatchModalOpen: true });
+  }
+
+  closeBatchModal() {
+    store.setState({ isBatchModalOpen: false });
+  }
+
+  addBatchStep() {
+    const state = store.getState();
+    const steps = [...(state.batchSteps || [])];
+    const newIdx = steps.length + 1;
+    steps.push({
+      id: `step_${newIdx}`,
+      capability_id: '',
+      argsJson: '{}',
+      continue_on_error: false
+    });
+    store.setState({ batchSteps: steps });
+  }
+
+  removeBatchStep(idx: number) {
+    const state = store.getState();
+    const steps = [...(state.batchSteps || [])];
+    if (steps.length <= 1) {
+      alert('Pipeline must contain at least one execution step.');
+      return;
+    }
+    steps.splice(idx, 1);
+    // Re-index step IDs
+    const reindexed = steps.map((s, i) => ({
+      ...s,
+      id: `step_${i + 1}`
+    }));
+    store.setState({ batchSteps: reindexed });
+  }
+
+  updateBatchStepCapability(idx: number, capId: string) {
+    const state = store.getState();
+    const steps = [...(state.batchSteps || [])];
+    if (steps[idx]) {
+      steps[idx] = { ...steps[idx], capability_id: capId };
+      store.setState({ batchSteps: steps });
+    }
+  }
+
+  updateBatchStepContinueOnError(idx: number, continueOnError: boolean) {
+    const state = store.getState();
+    const steps = [...(state.batchSteps || [])];
+    if (steps[idx]) {
+      steps[idx] = { ...steps[idx], continue_on_error: continueOnError };
+      store.setState({ batchSteps: steps });
+    }
+  }
+
+  updateBatchStepArgs(idx: number, argsJson: string) {
+    const state = store.getState();
+    const steps = [...(state.batchSteps || [])];
+    if (steps[idx]) {
+      steps[idx] = { ...steps[idx], argsJson };
+      // Update in-place without triggering full re-render on each keystroke
+      state.batchSteps[idx].argsJson = argsJson;
+    }
+  }
+
+  appendBatchVariable(idx: number, varStr: string) {
+    const state = store.getState();
+    const steps = [...(state.batchSteps || [])];
+    const textarea = document.getElementById(`batch-step-args-${idx}`) as HTMLTextAreaElement | null;
+    if (textarea) {
+      const currentVal = textarea.value;
+      const start = textarea.selectionStart || currentVal.length;
+      const end = textarea.selectionEnd || currentVal.length;
+      const newVal = currentVal.substring(0, start) + varStr + currentVal.substring(end);
+      textarea.value = newVal;
+      if (steps[idx]) {
+        steps[idx] = { ...steps[idx], argsJson: newVal };
+        store.setState({ batchSteps: steps });
+      }
     }
   }
 

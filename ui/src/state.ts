@@ -47,6 +47,7 @@ export interface AppState {
   selectedResourceId: string | null;
   selectedPromptId: string | null;
   playgroundMode: 'tools' | 'resources' | 'prompts';
+  playgroundArgs: Record<string, string>;
   isExecuting: boolean;
   activeRequestId: string | null;
   isBatchModalOpen: boolean;
@@ -95,6 +96,7 @@ class Store {
     selectedResourceId: null,
     selectedPromptId: null,
     playgroundMode: 'tools',
+    playgroundArgs: {},
     isExecuting: false,
     activeRequestId: null,
     isBatchModalOpen: false,

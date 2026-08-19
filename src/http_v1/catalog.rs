@@ -420,9 +420,12 @@ pub async fn handle_list_capabilities(
             json!({
                 "id": id,
                 "summary": meta.summary,
+                "description": meta.description,
                 "server": meta.server,
                 "tool": meta.tool,
                 "tags": meta.tags,
+                "input_schema": meta.input_schema,
+                "examples": meta.examples,
             })
         })
         .collect::<Vec<_>>();
