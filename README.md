@@ -6,7 +6,7 @@
 
 > **The Local control plane that keeps MCP sessions warm with compact capability/resource/prompt facades.**
 > 
-> v0.21.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.22.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
 
@@ -257,6 +257,13 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 ---
 
 ## Changelog
+
+### v0.22.0 — Streamable HTTP/SSE MCP Transport, Interactive Playground & UI Polish
+- **Streamable HTTP/SSE MCP Server Transport (`mcp-http-server`):** Built standalone and daemon-co-hosted HTTP/SSE MCP server endpoints (`/mcp/sse`, `/mcp/messages`), allowing remote AI agents and IDEs (Cursor, Windsurf, Claude Desktop) to connect over standard HTTP/SSE networks with automatic keep-alives and zero client drift.
+- **Daemon Co-hosting & Configuration (`mcpHttpServer`):** Added first-class configuration support (`mcpHttpServer`) enabling automatic background initialization of HTTP/SSE MCP server instances directly alongside the core `/v1` HTTP daemon.
+- **Profile Restriction & Bound Auth Gate:** Integrated profile restriction (`profile`) on the MCP server transport, strictly isolating tools and resources exposed to remote clients. Automatically enforced bearer token authentication when binding to public non-loopback network interfaces (`0.0.0.0` / external IPs).
+- **Interactive MCP Playground Ergonomics:** Added sample template injection, dynamic format switching, schema-driven argument generation, and live parameter validation in the Web Control Deck MCP Playground.
+- **UI Transitions, Collision Checks & Polish:** Deduplicated page headers across dashboard tabs, introduced buttery-smooth CSS cubic-bezier transitions, animated modal backdrops with `prefers-reduced-motion` accessibility support, and added collision guards with automatic unique server ID derivation.
 
 ### v0.21.0 — Named Server Constellations (Profiles), Signal Lifecycle & Integrator Ecosystem
 - **Named Server Constellations (Profiles):** Added first-class profile support (`ProfileConfig`) allowing task-relevant subsets of upstream MCP servers to be grouped into named constellations (e.g. `coding`, `research`, `data_science`).
