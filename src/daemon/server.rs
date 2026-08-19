@@ -287,6 +287,11 @@ pub fn build_router(app_state: AppState) -> Router {
         .route("/v1/config/import", post(http_v1::handle_import_config))
         .route("/v1/config/alias", post(http_v1::handle_update_alias))
         .route("/v1/config/policy", post(http_v1::handle_update_policy))
+        .route("/v1/config/profiles", post(http_v1::handle_upsert_profile))
+        .route(
+            "/v1/config/profiles/:id",
+            axum::routing::delete(http_v1::handle_delete_profile),
+        )
         .route("/v1/config/reload", post(http_v1::handle_reload_config))
         // Human-in-the-Loop (HITL) Approvals Endpoints
         .route("/v1/approvals", get(http_v1::handle_list_approvals))

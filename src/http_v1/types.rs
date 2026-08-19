@@ -207,6 +207,18 @@ pub struct UpdateAliasRequest {
     pub target: Option<String>,
 }
 
+/// Request body for creating or updating a server profile constellation.
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct UpsertProfileRequest {
+    /// Profile identifier.
+    pub name: String,
+    /// List of upstream server identifiers included in constellation.
+    pub servers: Vec<String>,
+    /// Optional human-readable description.
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
 /// Request body for approving a pending capability execution.
 #[derive(Deserialize, Debug, Clone)]
 pub struct ApproveTicketRequest {

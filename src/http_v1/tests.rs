@@ -13,15 +13,16 @@ use crate::{
             handle_search_capabilities,
         },
         config_api::{
-            handle_get_config, handle_get_ecosystem_sources, handle_reload_config,
-            handle_upsert_server,
+            handle_delete_profile, handle_get_config, handle_get_ecosystem_sources,
+            handle_reload_config, handle_upsert_profile, handle_upsert_server,
         },
         execute::handle_call_capability,
         helpers::redact_value,
         types::{
             ApproveTicketRequest, CallCapabilityRequest, CatalogEventsQuery, CompletionRequest,
             GetPromptRequest, ReadResourceRequest, RejectTicketRequest, RespondSamplingRequest,
-            SamplingListQuery, SamplingRequest, SearchCapabilitiesRequest, UpsertServerRequest,
+            SamplingListQuery, SamplingRequest, SearchCapabilitiesRequest, UpsertProfileRequest,
+            UpsertServerRequest,
         },
         ui::handle_ui_dashboard,
     },
@@ -1429,4 +1430,87 @@ async fn test_circuit_breaker_fast_fail_and_recovery() {
     assert_eq!(payload["ok"], false);
     assert_eq!(payload["error"]["code"], "CIRCUIT_OPEN");
     assert_eq!(payload["retry"]["upstream_execution_state"], "not_started");
+}
+
+#[tokio::test]
+async fn test_ui_config_profiles_crud() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let config_path = tmp.path().to_str().unwrap().to_string();
+
+    let mut mcp_servers = HashMap::new();
+    mcp_servers.insert(
+        "s1".to_string(),
+        crate::config::ServerConfig {
+            command: Some("echo".to_string()),
+            args: vec![],
+            env: HashMap::new(),
+            url: None,
+            protocol_version: None,
+            allow_stateless: None,
+            headers: HashMap::new(),
+            auth: None,
+            resilience: None,
+        },
+    );
+
+    let initial_cfg = crate::config::McpConfig {
+        mcp_servers,
+        ..Default::default()
+    };
+    crate::config::save_config(&config_path, &initial_cfg).unwrap();
+
+    let profiles = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+    let state = AppState::builder()
+        .config_path(config_path.clone())
+        .profiles_arc(profiles.clone())
+        .build();
+
+    // 1. Create profile "dev"
+    let create_res = handle_upsert_profile(
+        State(state.clone()),
+        Json(UpsertProfileRequest {
+            name: "dev".to_string(),
+            servers: vec!["s1".to_string()],
+            description: Some("Developer tools".to_string()),
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(create_res.status(), StatusCode::OK);
+
+    // Verify in-memory state and disk
+    {
+        let prof_guard = profiles.read().await;
+        assert!(prof_guard.contains_key("dev"));
+        assert_eq!(prof_guard["dev"].servers, vec!["s1".to_string()]);
+    }
+    let loaded = crate::config::load_or_default_config(&config_path).unwrap();
+    assert!(loaded.profiles.contains_key("dev"));
+
+    // 2. Reject unknown server
+    let reject_res = handle_upsert_profile(
+        State(state.clone()),
+        Json(UpsertProfileRequest {
+            name: "invalid".to_string(),
+            servers: vec!["nonexistent_srv".to_string()],
+            description: None,
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(reject_res.status(), StatusCode::BAD_REQUEST);
+
+    // 3. Delete profile "dev"
+    let del_res =
+        handle_delete_profile(State(state.clone()), axum::extract::Path("dev".to_string()))
+            .await
+            .into_response();
+    assert_eq!(del_res.status(), StatusCode::OK);
+
+    {
+        let prof_guard = profiles.read().await;
+        assert!(!prof_guard.contains_key("dev"));
+    }
+    let loaded_after = crate::config::load_or_default_config(&config_path).unwrap();
+    assert!(!loaded_after.profiles.contains_key("dev"));
 }

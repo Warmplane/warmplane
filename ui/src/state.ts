@@ -51,7 +51,8 @@ export interface AppState {
   activeRequestId: string | null;
   isBatchModalOpen: boolean;
   batchSteps: BatchStepState[];
-  activeTab: 'overview' | 'servers' | 'playground' | 'approvals' | 'audit' | 'policy' | 'aliases';
+  activeTab: 'overview' | 'servers' | 'playground' | 'approvals' | 'audit' | 'policy' | 'aliases' | 'profiles';
+  activeProfile: string | null;
   eventLogs: Array<{ time: string; method: string; target: string; status: string; latency: string }>;
   executionResult: { status: number; durationMs: number; data: any } | null;
   resourceReadResult: { status: number; durationMs: number; data: any } | null;
@@ -102,6 +103,7 @@ class Store {
       { id: 'step_2', capability_id: '', argsJson: '{}', continue_on_error: true }
     ],
     activeTab: 'overview',
+    activeProfile: null,
     eventLogs: [],
     executionResult: null,
     resourceReadResult: null,

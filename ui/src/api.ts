@@ -245,6 +245,11 @@ export interface RbacConfig {
   roles?: Record<string, RolePolicyConfig>;
 }
 
+export interface ProfileConfig {
+  servers: string[];
+  description?: string;
+}
+
 export interface McpConfig {
   mcpServers?: Record<string, McpServerConfig>;
   capabilityAliases?: Record<string, string>;
@@ -252,6 +257,7 @@ export interface McpConfig {
   promptAliases?: Record<string, string>;
   policy?: PolicyConfig;
   rbac?: RbacConfig;
+  profiles?: Record<string, ProfileConfig>;
   resilience?: ResilienceConfig;
   audit?: Record<string, any>;
   toolTimeoutMs?: number;
@@ -321,21 +327,27 @@ export class WarmplaneClient {
     return res.json();
   }
 
-  async listCapabilities(): Promise<ListCapabilitiesResponse> {
-    const res = await fetch(`${this.baseUrl}/v1/capabilities`);
+  async listCapabilities(profile?: string): Promise<ListCapabilitiesResponse> {
+    const headers: Record<string, string> = {};
+    if (profile) headers['X-Warmplane-Profile'] = profile;
+    const res = await fetch(`${this.baseUrl}/v1/capabilities`, { headers });
     return res.json();
   }
 
-  async listResources(): Promise<ListResourcesResponse> {
-    const res = await fetch(`${this.baseUrl}/v1/resources`);
+  async listResources(profile?: string): Promise<ListResourcesResponse> {
+    const headers: Record<string, string> = {};
+    if (profile) headers['X-Warmplane-Profile'] = profile;
+    const res = await fetch(`${this.baseUrl}/v1/resources`, { headers });
     return res.json();
   }
 
-  async readResource(req: ReadResourceRequest): Promise<{ status: number; durationMs: number; data: any }> {
+  async readResource(req: ReadResourceRequest, profile?: string): Promise<{ status: number; durationMs: number; data: any }> {
     const start = performance.now();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (profile) headers['X-Warmplane-Profile'] = profile;
     const res = await fetch(`${this.baseUrl}/v1/resources/read`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(req)
     });
     const durationMs = performance.now() - start;
@@ -343,16 +355,20 @@ export class WarmplaneClient {
     return { status: res.status, durationMs, data };
   }
 
-  async listPrompts(): Promise<ListPromptsResponse> {
-    const res = await fetch(`${this.baseUrl}/v1/prompts`);
+  async listPrompts(profile?: string): Promise<ListPromptsResponse> {
+    const headers: Record<string, string> = {};
+    if (profile) headers['X-Warmplane-Profile'] = profile;
+    const res = await fetch(`${this.baseUrl}/v1/prompts`, { headers });
     return res.json();
   }
 
-  async getPrompt(req: GetPromptRequest): Promise<{ status: number; durationMs: number; data: any }> {
+  async getPrompt(req: GetPromptRequest, profile?: string): Promise<{ status: number; durationMs: number; data: any }> {
     const start = performance.now();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (profile) headers['X-Warmplane-Profile'] = profile;
     const res = await fetch(`${this.baseUrl}/v1/prompts/get`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(req)
     });
     const durationMs = performance.now() - start;
@@ -366,11 +382,13 @@ export class WarmplaneClient {
     return res.json();
   }
 
-  async callCapability(req: CallCapabilityRequest): Promise<{ status: number; durationMs: number; data: any }> {
+  async callCapability(req: CallCapabilityRequest, profile?: string): Promise<{ status: number; durationMs: number; data: any }> {
     const start = performance.now();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (profile) headers['X-Warmplane-Profile'] = profile;
     const res = await fetch(`${this.baseUrl}/v1/tools/call`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(req)
     });
     const durationMs = performance.now() - start;
@@ -378,11 +396,13 @@ export class WarmplaneClient {
     return { status: res.status, durationMs, data };
   }
 
-  async batchCallCapabilities(steps: Array<{ id: string; capability_id: string; args: Record<string, any>; continue_on_error?: boolean }>): Promise<{ status: number; durationMs: number; data: any }> {
+  async batchCallCapabilities(steps: Array<{ id: string; capability_id: string; args: Record<string, any>; continue_on_error?: boolean }>, profile?: string): Promise<{ status: number; durationMs: number; data: any }> {
     const start = performance.now();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (profile) headers['X-Warmplane-Profile'] = profile;
     const res = await fetch(`${this.baseUrl}/v1/tools/batch_call`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ steps })
     });
     const durationMs = performance.now() - start;
@@ -417,6 +437,22 @@ export class WarmplaneClient {
 
   async deleteServer(name: string): Promise<{ ok: boolean; error?: string }> {
     const res = await fetch(`${this.baseUrl}/v1/config/servers/${encodeURIComponent(name)}`, {
+      method: 'DELETE'
+    });
+    return res.json();
+  }
+
+  async upsertProfile(name: string, servers: string[], description?: string): Promise<{ ok: boolean; error?: string }> {
+    const res = await fetch(`${this.baseUrl}/v1/config/profiles`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, servers, description })
+    });
+    return res.json();
+  }
+
+  async deleteProfile(name: string): Promise<{ ok: boolean; error?: string }> {
+    const res = await fetch(`${this.baseUrl}/v1/config/profiles/${encodeURIComponent(name)}`, {
       method: 'DELETE'
     });
     return res.json();
