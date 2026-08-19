@@ -4,8 +4,9 @@
 
 **Security controls:** [![WORM + HMAC audit](https://img.shields.io/badge/WORM%20%2B%20HMAC-audit-4c1.svg)](docs/OBSERVABILITY.md) [![HITL + policy](https://img.shields.io/badge/HITL%20%2B%20policy-controls-4c1.svg)](docs/ENTERPRISE_FEATURES.md) [![OAuth2 + PKCE](https://img.shields.io/badge/OAuth2%20%2B%20PKCE-protected-4c1.svg)](docs/research/MCP_AUTHORIZATION.md) [![Secret redaction](https://img.shields.io/badge/secret-redaction-4c1.svg)](docs/ENTERPRISE_FEATURES.md) [![SIEM + OTLP](https://img.shields.io/badge/SIEM%20%2B%20OTLP-observable-4c1.svg)](docs/OBSERVABILITY.md)
 
-> **The local control plane that keeps MCP sessions warm.**  
-> v0.20.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> **The Local control plane that keeps MCP sessions warm with compact capability/resource/prompt facades.**
+> 
+> v0.21.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
 
@@ -184,6 +185,7 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 
 | Feature | Since | Summary |
 |---------|-------|---------|
+| **Signal Handling & Graceful Teardown** | v0.21.0 | Immediate signal cancellation (`CancellationToken`), instant SSE stream termination, clean stdio child orphan protection (`kill_on_drop`), and bounded drain safety timeouts |
 | **Named Server Constellations (Profiles)** | v0.20.0 | Task-relevant server constellation slicing (`profiles`), dynamic per-request selection (`X-Warmplane-Profile` / `?profile=`), profile-partitioned ETag caching (`-p:<profile_id>`), and stdio MCP proxy filtering (`--profile`) |
 | **Multi-Tenant RBAC & Catalog Partitioning** | v0.20.0 | Tenant-scoped authorization (`TenantContext`), static token & HMAC-SHA256 JWT auth, per-role policy overrides, dynamic catalog/search pruning, and WORM audit identity binding |
 | **Client-Delegated MCP Sampling** | v0.19.0 | Reverse RPC sampling delegation (`sampling/createMessage`), synchronous long-polling or async ticket lifecycle, persistent `sampling.json` storage, and self-healing HTTP/SSE supervisor |
@@ -216,6 +218,13 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 ---
 
 ## Changelog
+
+### v0.21.0 — Signal Lifecycle & Graceful Process Termination Hardening
+- **Immediate Signal Cancellation Propagation:** Integrated unified `tokio_util::sync::CancellationToken` triggered synchronously upon interception of `SIGINT` (Ctrl-C) or `SIGTERM`, instantly notifying all background supervisor loops, HTTP listeners, and worker tasks to shut down.
+- **Unblocking SSE & Stream Draining:** Updated Server-Sent Events (SSE) notification streams (`/v1/resources/updates`) and long-polling endpoints to monitor the cancellation token and terminate immediately, resolving connection drain deadlocks during Axum graceful shutdown.
+- **Child Process Orphan Prevention:** Configured `cmd.kill_on_drop(true)` across stdio child process supervisor commands, ensuring background MCP servers terminate cleanly upon parent exit and preventing supervisor auto-restart loops during system shutdown.
+- **OAuth Proxy Lifecycle Synchronization:** Wired cancellation token directly into the ephemeral OAuth proxy server listener to prevent dangling background proxy processes.
+- **Bounded Teardown Safety Timeout:** Added a 3-second bounded safety timeout on daemon subsystem teardown (`app_state.shutdown()`) to guarantee prompt process exit.
 
 ### v0.20.0 — Multi-Tenant RBAC & Deterministic Catalog Partitioning
 - **Multi-Tenant RBAC Engine (`src/rbac`):** Built role-based access control engine with support for static API tokens, token-to-role mappings in configuration (`rbac.tokens`), and cryptographic HMAC-SHA256 symmetric JWT signature verification with configurable secret key (`rbac.jwt_secret`).
