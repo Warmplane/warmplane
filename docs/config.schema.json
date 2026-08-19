@@ -114,6 +114,52 @@
       "additionalProperties": {
         "$ref": "#/$defs/serverConfig"
       }
+    },
+    "mcpHttpServer": {
+      "type": "object",
+      "description": "Streamable HTTP/SSE MCP server facade. When present the daemon co-hosts a second MCP listener. Non-loopback bind requires authToken or rbac.",
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 9191,
+          "description": "TCP port to listen on."
+        },
+        "bind": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Bind address. Use 0.0.0.0 for network access (requires authToken or rbac)."
+        },
+        "sseKeepAliveMs": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "default": 15000,
+          "description": "SSE keep-alive ping interval in milliseconds. null disables pings."
+        },
+        "jsonResponse": {
+          "type": "boolean",
+          "default": true,
+          "description": "Prefer application/json responses for simple request/response. Falls back to SSE when streaming is required."
+        },
+        "profile": {
+          "type": ["string", "null"],
+          "description": "Optional profile name restricting the exposed capability surface."
+        },
+        "allowedHosts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Additional Host header values to accept. Loopback addresses are always permitted."
+        },
+        "allowedOrigins": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Browser origins (Origin header) to accept. Empty list disables origin checking."
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false,

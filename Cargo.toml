@@ -13,7 +13,7 @@ categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
 # MCP protocol
-rmcp = { version = "3.1.2", features = ["client", "server", "transport-child-process", "transport-io", "transport-streamable-http-client-reqwest"] }
+rmcp = { version = "3.1.2", features = ["client", "server", "transport-child-process", "transport-io", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
 
 # Async runtime & HTTP
 tokio = { version = "1.40", features = ["full"] }

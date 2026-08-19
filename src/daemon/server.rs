@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-15
+// Rust guideline compliant 2026-08-19
 
 //! Daemon HTTP service initialization, routing, and TCP listener runtime.
 
@@ -525,12 +525,90 @@ pub async fn run_daemon(
     config: McpConfig,
     config_path: impl Into<String>,
 ) -> Result<()> {
+    let mcp_http_cfg = config.mcp_http_server.clone();
     let app_state = initialize_state(config, config_path).await?;
     let app = build_router(app_state.clone());
 
     info!(port, "all upstream servers connected; daemon listening");
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
     let shutdown_token = app_state.shutdown_token.clone();
+
+    // Co-host the Streamable HTTP MCP facade on a separate port when configured
+    if let Some(mcp_cfg) = mcp_http_cfg {
+        use rmcp::transport::streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService,
+        };
+        use std::time::Duration;
+
+        let bind_addr = mcp_cfg.bind.clone();
+        let mcp_port = mcp_cfg.port;
+        let profile = mcp_cfg.profile.clone();
+        let sse_keep_alive = mcp_cfg.sse_keep_alive_ms.map(Duration::from_millis);
+        let json_response = mcp_cfg.json_response;
+
+        let mut allowed_hosts = mcp_cfg.allowed_hosts.clone();
+        for loopback in &["127.0.0.1", "::1", "localhost"] {
+            if !allowed_hosts.iter().any(|h| h == loopback) {
+                allowed_hosts.push((*loopback).to_string());
+            }
+        }
+        if !matches!(
+            bind_addr.as_str(),
+            "127.0.0.1" | "::1" | "localhost" | "0.0.0.0" | "::"
+        ) {
+            allowed_hosts.push(bind_addr.clone());
+        }
+
+        let state_for_factory = app_state.clone();
+        let profile_for_factory = profile.clone();
+        let ct = shutdown_token.clone();
+
+        let mut mcp_server_cfg = StreamableHttpServerConfig::default();
+        mcp_server_cfg.sse_keep_alive = sse_keep_alive;
+        mcp_server_cfg.json_response = json_response;
+        mcp_server_cfg.cancellation_token = ct.clone();
+        mcp_server_cfg.allowed_hosts = allowed_hosts;
+        mcp_server_cfg.allowed_origins = mcp_cfg.allowed_origins.clone();
+
+        let mcp_service = StreamableHttpService::new(
+            move || {
+                let s = state_for_factory.clone();
+                let p = profile_for_factory.clone();
+                Ok(crate::mcp_server::FacadeMcpServer::new(s, p))
+            },
+            Arc::new(rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default()),
+            mcp_server_cfg,
+        );
+
+        let mcp_router = axum::Router::new()
+            .route_service("/mcp", mcp_service.clone())
+            .route_service("/", mcp_service);
+
+        let mcp_listen = format!("{}:{}", bind_addr, mcp_port);
+        match TcpListener::bind(&mcp_listen).await {
+            Ok(mcp_listener) => {
+                info!(
+                    bind = %mcp_listen,
+                    profile = ?profile,
+                    "daemon co-hosting Streamable HTTP MCP facade"
+                );
+                tokio::spawn(async move {
+                    let server_fut = axum::serve(mcp_listener, mcp_router)
+                        .with_graceful_shutdown(ct.cancelled_owned());
+                    if let Err(err) = server_fut.await {
+                        error!(error = %err, "co-hosted MCP HTTP server error");
+                    }
+                });
+            }
+            Err(err) => {
+                error!(
+                    bind = %mcp_listen,
+                    error = %err,
+                    "failed to bind co-hosted MCP HTTP facade; continuing without it"
+                );
+            }
+        }
+    }
 
     let server_fut =
         axum::serve(listener, app).with_graceful_shutdown(shutdown_signal(shutdown_token));

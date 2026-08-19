@@ -18,12 +18,13 @@ Warmplane optimizes AI agent tool execution across three core technical dimensio
 
 ### Client Interfaces
 
-Warmplane exposes four client interfaces backed by shared daemon state:
+Warmplane exposes five client interfaces backed by shared daemon state:
 
 1. **Control Deck Web UI (`/ui` and `/`)**: Embedded zero-dependency web management interface for runtime telemetry, upstream server lifecycle, interactive tool execution playground, and security policy rules.
 2. **HTTP REST API (`/v1/...`)**: Low-overhead HTTP JSON API for web applications, microservices, and orchestration gateways.
 3. **MCP Stdio Server Mode (`mcp-server`)**: Standard MCP stdio interface for direct integration with MCP-native AI clients (Claude Desktop, Cursor, Zed).
-4. **CLI Facade (`warmplane <command>`)**: Command-line interface for administrative scripting, server hot-reloading (`warmplane reload`), health checks, and manual debugging.
+4. **MCP HTTP/SSE Server Mode (`mcp-http-server`)**: Streamable HTTP/SSE MCP server for remote MCP clients connecting over a network socket (CI pipelines, multi-host agent clusters, remote desktop clients).
+5. **CLI Facade (`warmplane <command>`)**: Command-line interface for administrative scripting, server hot-reloading (`warmplane reload`), health checks, and manual debugging.
 
 ---
 
@@ -111,6 +112,7 @@ The configuration file (default: `mcp_servers.json`) controls upstream server co
 | `policy` | Object | No | `null` | Access control rules, approval workflows, and data redaction settings. |
 | `audit` | Object | No | `null` | Cryptographic WORM audit logging and SIEM exporter settings. |
 | `profiles` | Object | No | `{}` | Named server constellations for task-specific catalog partitioning. |
+| `mcpHttpServer` | Object | No | `null` | Streamable HTTP/SSE MCP facade server configuration. When present the daemon co-hosts a second MCP listener on port 9191. See [§4.7](#47-mcp-httparse-server-configuration-mcphttpserver). |
 | `mcpServers` | Object | Yes | `{}` | Upstream server definitions keyed by server identifier string. |
 
 ---
@@ -402,6 +404,50 @@ The `profiles` block defines named server constellations. Profiles allow a singl
 
 ---
 
+### 4.7 MCP HTTP/SSE Server Configuration (`mcpHttpServer`)
+
+The optional `mcpHttpServer` block exposes the Warmplane facade as a **Streamable HTTP/SSE MCP server** that remote MCP clients (Claude Desktop via network, Cursor, CI pipelines) can connect to over TCP.
+
+When this block is present in `mcp_servers.json` the daemon automatically co-hosts the MCP server on a separate port alongside the control-plane REST API. The MCP server can also be started independently via `warmplane mcp-http-server`.
+
+#### Configuration Fields
+
+| Field | Type | Required | Default | Description |
+| :--- | :--- | :---: | :--- | :--- |
+| `port` | Number | No | `9191` | TCP port for the HTTP/SSE MCP facade listener. |
+| `bind` | String | No | `"127.0.0.1"` | Bind address. Use `"0.0.0.0"` for network access. Non-loopback requires `authToken` or `rbac`. |
+| `sseKeepAliveMs` | Number | No | `15000` | SSE keep-alive ping interval in milliseconds. `null` disables pings. |
+| `jsonResponse` | Boolean | No | `true` | Prefer `application/json` responses for simple request/response. Falls back to SSE automatically when streaming is required. |
+| `profile` | String | No | `null` | Optional profile name restricting the exposed capability surface. |
+| `allowedHosts` | Array | No | `[]` | Additional hostnames or `host:port` pairs accepted in the `Host` header. Loopback addresses are always permitted. |
+| `allowedOrigins` | Array | No | `[]` | Browser origins accepted in the `Origin` header (CORS). Empty list disables origin checking. |
+
+> **Security constraint**: Setting `bind` to a non-loopback address (`0.0.0.0`, a public hostname, etc.) without also configuring `authToken` or `rbac` is rejected as a startup validation error. This prevents accidentally exposing an unauthenticated MCP server on the network.
+
+#### Local-only Example (default)
+
+```json
+"mcpHttpServer": {
+  "port": 9191
+}
+```
+
+#### Network-accessible Example
+
+```json
+"authToken": "my-strong-secret-token",
+"mcpHttpServer": {
+  "port": 9191,
+  "bind": "0.0.0.0",
+  "sseKeepAliveMs": 15000,
+  "jsonResponse": true,
+  "allowedHosts": ["myserver.example.com"],
+  "allowedOrigins": ["https://myapp.example.com"]
+}
+```
+
+---
+
 ## 5. Execution Modes
 
 ### 5.1 HTTP Daemon Mode
@@ -414,7 +460,9 @@ warmplane daemon --config mcp_servers.json --port 9090
 
 By default, the daemon binds to `127.0.0.1:<port>`.
 
-### 5.2 Stdio MCP Server Mode
+If `mcpHttpServer` is configured in the config file, the daemon automatically co-hosts the Streamable HTTP MCP facade on the configured port (default 9191) in the same process.
+
+### 5.2 MCP Stdio Server Mode
 
 Run Warmplane as a stdio MCP server for native integration with desktop AI clients (Claude Desktop, Cursor, VS Code):
 
@@ -453,7 +501,84 @@ Warmplane exposes lightweight synthetic tools to keep LLM context token usage mi
 
 ---
 
-### 5.3 CLI Management and Operations
+### 5.3 MCP HTTP/SSE Server Mode
+
+Run Warmplane as a **Streamable HTTP/SSE MCP server** that network-reachable MCP clients can connect to directly:
+
+```bash
+# Local-only (default, no auth required)
+warmplane mcp-http-server --config mcp_servers.json
+
+# Custom port
+warmplane mcp-http-server --config mcp_servers.json --port 9191
+
+# Network-accessible (requires authToken in config)
+warmplane mcp-http-server --config mcp_servers.json --bind 0.0.0.0 --port 9191
+
+# With profile restriction
+warmplane mcp-http-server --config mcp_servers.json --profile coding
+```
+
+#### CLI Flags
+
+| Flag | Default | Description |
+| :--- | :--- | :--- |
+| `--port`, `-p` | `9191` (or `mcpHttpServer.port`) | TCP port override. |
+| `--bind` | `127.0.0.1` (or `mcpHttpServer.bind`) | Bind address override. |
+| `--profile` | `null` (or `mcpHttpServer.profile`) | Profile restriction override. |
+| `--config`, `-c` | `mcp_servers.json` | Config file path. |
+
+CLI flags override the corresponding `mcpHttpServer` config block fields, which in turn override the built-in defaults.
+
+#### MCP Endpoint URLs
+
+After startup the server listens on two equivalent paths:
+
+- `http://<bind>:<port>/mcp` — recommended path (standard MCP over HTTP)
+- `http://<bind>:<port>/` — root alias for clients that omit the path suffix
+
+#### Remote Client Configuration Example
+
+Point a remote MCP client at the running server using a URL-based server entry:
+
+```json
+{
+  "mcpServers": {
+    "warmplane": {
+      "url": "http://localhost:9191/mcp"
+    }
+  }
+}
+```
+
+For a network-accessible deployment with bearer token authentication:
+
+```json
+{
+  "mcpServers": {
+    "warmplane-remote": {
+      "url": "http://myserver.example.com:9191/mcp",
+      "auth": {
+        "type": "bearer",
+        "tokenEnv": "WARMPLANE_TOKEN"
+      }
+    }
+  }
+}
+```
+
+#### Daemon Co-hosting vs Standalone
+
+Two deployment topologies are supported:
+
+| Topology | How | When to use |
+| :--- | :--- | :--- |
+| **Standalone** | `warmplane mcp-http-server` | Separate process, independent lifecycle, useful for testing or isolated deployments. |
+| **Daemon co-hosted** | Add `mcpHttpServer` block to `mcp_servers.json`, start `warmplane daemon` | Single process, shared `AppState`, coordinated shutdown. Preferred for production — one process to manage. |
+
+---
+
+### 5.4 CLI Management and Operations
 
 Run single-shot CLI commands for administration, configuration management, approvals, debugging, and automation scripts.
 
@@ -901,6 +1026,18 @@ cargo test
 
 ```bash
 ./scripts/smoke_mcp_server.sh
+```
+
+### Test MCP HTTP/SSE Server
+
+Start the server on a random port and verify the facade tools are reachable:
+
+```bash
+warmplane mcp-http-server --config mcp_servers.json --port 9191 &
+# Wait for startup, then call via curl or an MCP HTTP client
+curl -s http://127.0.0.1:9191/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}'
 ```
 
 ---

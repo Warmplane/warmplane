@@ -124,6 +124,44 @@ Claude Desktop / Cursor config:
 }
 ```
 
+### MCP Server (HTTP/SSE)
+
+Exposes the same facade over Streamable HTTP/SSE so remote clients — CI pipelines, multi-host agent clusters, or remote desktop clients — can connect without a local process:
+
+```bash
+# Local-only (default, no auth required)
+warmplane mcp-http-server --config mcp_servers.json
+
+# Network-accessible (requires authToken in config)
+warmplane mcp-http-server --config mcp_servers.json --bind 0.0.0.0 --port 9191
+
+# Profile-restricted
+warmplane mcp-http-server --config mcp_servers.json --profile coding
+```
+
+Connect from any MCP HTTP client:
+
+```json
+{
+  "mcpServers": {
+    "warmplane": {
+      "url": "http://localhost:9191/mcp"
+    }
+  }
+}
+```
+
+Alternatively, add an `mcpHttpServer` block to `mcp_servers.json` and the **daemon will co-host both servers** in one process:
+
+```json
+{
+  "mcpHttpServer": { "port": 9191 },
+  "mcpServers": { ... }
+}
+```
+
+See [§4.7 of the User Guide](docs/USER-GUIDE.md#47-mcp-httparse-server-configuration-mcphttpserver) for the full config reference.
+
 ### CLI Configuration & Operations
 
 ```bash
@@ -185,6 +223,7 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 
 | Feature | Since | Summary |
 |---------|-------|---------|
+| **MCP HTTP/SSE Server Mode** | v0.22.0 | Streamable HTTP/SSE MCP server (`mcp-http-server`) for remote network clients; daemon co-hosting via `mcpHttpServer` config block; profile restriction, auth enforcement on non-loopback bind, graceful shared-state shutdown |
 | **Signal Handling & Graceful Teardown** | v0.21.0 | Immediate signal cancellation (`CancellationToken`), instant SSE stream termination, clean stdio child orphan protection (`kill_on_drop`), and bounded drain safety timeouts |
 | **Named Server Constellations (Profiles)** | v0.21.0 | Task-relevant server constellation slicing (`profiles`), dynamic per-request selection (`X-Warmplane-Profile` / `?profile=`), profile-partitioned ETag caching (`-p:<profile_id>`), and stdio MCP proxy filtering (`--profile`) |
 | **Multi-Tenant RBAC & Catalog Partitioning** | v0.20.0 | Tenant-scoped authorization (`TenantContext`), static token & HMAC-SHA256 JWT auth, per-role policy overrides, dynamic catalog/search pruning, and WORM audit identity binding |
