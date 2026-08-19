@@ -375,12 +375,11 @@ pub async fn security_guard_middleware(
             let token = headers
                 .get("authorization")
                 .and_then(|h| h.to_str().ok())
-                .and_then(|v| v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")))
-                .or_else(|| {
-                    headers
-                        .get("x-warmplane-key")
-                        .and_then(|h| h.to_str().ok())
-                });
+                .and_then(|v| {
+                    v.strip_prefix("Bearer ")
+                        .or_else(|| v.strip_prefix("bearer "))
+                })
+                .or_else(|| headers.get("x-warmplane-key").and_then(|h| h.to_str().ok()));
 
             let base_pol = state.policy.read().await.clone();
             match state.rbac_engine.authenticate(token, &base_pol) {
@@ -405,7 +404,10 @@ pub async fn security_guard_middleware(
             let is_authed = headers
                 .get("authorization")
                 .and_then(|h| h.to_str().ok())
-                .and_then(|v| v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")))
+                .and_then(|v| {
+                    v.strip_prefix("Bearer ")
+                        .or_else(|| v.strip_prefix("bearer "))
+                })
                 .map(|t| t == expected_token)
                 .unwrap_or(false)
                 || headers

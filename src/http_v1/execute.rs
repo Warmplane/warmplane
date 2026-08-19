@@ -33,7 +33,8 @@ pub async fn handle_call_capability(
     let trace_id = next_trace_id();
     let request_id =
         crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
-    let mut req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
+    let mut req_context =
+        crate::context::resolve_request_context(payload.context.clone(), &headers);
 
     // Bind authenticated tenant/actor if available
     if let Some(ref tenant_ctx) = req_ext.0 {
@@ -116,10 +117,7 @@ pub async fn handle_call_capability(
                 server_id: None,
                 capability_id: Some(payload.capability_id.clone()),
                 resource_uri: None,
-                sanitized_args: Some(redact_value(
-                    payload.args.clone(),
-                    &pol.redact_keys,
-                )),
+                sanitized_args: Some(redact_value(payload.args.clone(), &pol.redact_keys)),
                 sanitized_response: None,
                 execution_latency_us: Some(start_time.elapsed().as_micros() as u64),
                 status: crate::audit::AuditEventStatus::Denied,
@@ -723,7 +721,8 @@ pub async fn handle_batch_call_capabilities(
     let trace_id = next_trace_id();
     let request_id =
         crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
-    let mut req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
+    let mut req_context =
+        crate::context::resolve_request_context(payload.context.clone(), &headers);
 
     if let Some(ref tenant_ctx) = req_ext.0 {
         if let Some(ref actor) = tenant_ctx.actor_id {

@@ -150,20 +150,28 @@ impl RbacEngine {
     }
 
     /// Verifies HMAC-SHA256 symmetric JWT signature and extracts claims.
-    fn verify_jwt_symmetric(&self, token: &str, base_policy: &Policy) -> Result<TenantContext, String> {
+    fn verify_jwt_symmetric(
+        &self,
+        token: &str,
+        base_policy: &Policy,
+    ) -> Result<TenantContext, String> {
         let parts: Vec<&str> = token.split('.').collect();
         if parts.len() != 3 {
             return Err("MALFORMED_JWT".to_string());
         }
 
-        let secret = self.jwt_secret.as_deref().ok_or_else(|| "JWT_SECRET_NOT_CONFIGURED".to_string())?;
+        let secret = self
+            .jwt_secret
+            .as_deref()
+            .ok_or_else(|| "JWT_SECRET_NOT_CONFIGURED".to_string())?;
 
         use hmac::{Hmac, Mac};
         use sha2::Sha256;
         type HmacSha256 = Hmac<Sha256>;
 
         let signing_input = format!("{}.{}", parts[0], parts[1]);
-        let signature_bytes = base64_url_decode(parts[2]).map_err(|_| "INVALID_SIGNATURE_ENCODING".to_string())?;
+        let signature_bytes =
+            base64_url_decode(parts[2]).map_err(|_| "INVALID_SIGNATURE_ENCODING".to_string())?;
 
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
             .map_err(|e| format!("HMAC_INIT_ERROR: {}", e))?;
@@ -174,7 +182,8 @@ impl RbacEngine {
         }
 
         // Decode payload
-        let payload_bytes = base64_url_decode(parts[1]).map_err(|_| "INVALID_PAYLOAD_ENCODING".to_string())?;
+        let payload_bytes =
+            base64_url_decode(parts[1]).map_err(|_| "INVALID_PAYLOAD_ENCODING".to_string())?;
         let payload_val: serde_json::Value = serde_json::from_slice(&payload_bytes)
             .map_err(|_| "INVALID_PAYLOAD_JSON".to_string())?;
 
@@ -216,7 +225,10 @@ impl RbacEngine {
             tenant_id,
             role,
             actor_id,
-            grant_id: payload_val.get("jti").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            grant_id: payload_val
+                .get("jti")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
             effective_policy,
         })
     }

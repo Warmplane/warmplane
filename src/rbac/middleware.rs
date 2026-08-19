@@ -28,12 +28,11 @@ pub async fn rbac_auth_middleware(
     let token = headers
         .get("authorization")
         .and_then(|h| h.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")))
-        .or_else(|| {
-            headers
-                .get("x-warmplane-key")
-                .and_then(|h| h.to_str().ok())
-        });
+        .and_then(|v| {
+            v.strip_prefix("Bearer ")
+                .or_else(|| v.strip_prefix("bearer "))
+        })
+        .or_else(|| headers.get("x-warmplane-key").and_then(|h| h.to_str().ok()));
 
     let base_policy = state.policy.read().await.clone();
 

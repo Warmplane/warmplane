@@ -735,7 +735,10 @@ fn validate_config(config: &McpConfig) -> Result<()> {
                     anyhow::bail!("RBAC token map contains an empty token key");
                 }
                 if assignment.role.trim().is_empty() {
-                    anyhow::bail!("RBAC token assignment for token '{}' must specify a non-empty role", token);
+                    anyhow::bail!(
+                        "RBAC token assignment for token '{}' must specify a non-empty role",
+                        token
+                    );
                 }
             }
         }

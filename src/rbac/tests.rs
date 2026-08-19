@@ -77,22 +77,31 @@ fn test_rbac_static_token_lookup() {
     let base_policy = Policy::default();
 
     // Valid admin token
-    let admin_ctx = engine.authenticate(Some("admin_key_123"), &base_policy).unwrap();
+    let admin_ctx = engine
+        .authenticate(Some("admin_key_123"), &base_policy)
+        .unwrap();
     assert_eq!(admin_ctx.role, "admin");
     assert_eq!(admin_ctx.tenant_id, "corp");
     assert_eq!(admin_ctx.actor_id.as_deref(), Some("agent-admin"));
     assert!(admin_ctx.effective_policy.allows("docker.run"));
 
     // Valid analyst token
-    let analyst_ctx = engine.authenticate(Some("analyst_key_456"), &base_policy).unwrap();
+    let analyst_ctx = engine
+        .authenticate(Some("analyst_key_456"), &base_policy)
+        .unwrap();
     assert_eq!(analyst_ctx.role, "analyst");
     assert_eq!(analyst_ctx.tenant_id, "analytics");
     assert!(analyst_ctx.effective_policy.allows("db.query"));
     assert!(analyst_ctx.effective_policy.allows("fs.read_file"));
     assert!(!analyst_ctx.effective_policy.allows("docker.run"));
     assert!(!analyst_ctx.effective_policy.allows("db.write_record"));
-    assert!(analyst_ctx.effective_policy.requires_approval("db.query_large"));
-    assert!(analyst_ctx.effective_policy.redact_keys.contains(&"ssn".to_string()));
+    assert!(analyst_ctx
+        .effective_policy
+        .requires_approval("db.query_large"));
+    assert!(analyst_ctx
+        .effective_policy
+        .redact_keys
+        .contains(&"ssn".to_string()));
 
     // Invalid token
     let err = engine.authenticate(Some("invalid_token_999"), &base_policy);

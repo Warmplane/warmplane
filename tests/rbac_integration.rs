@@ -58,7 +58,12 @@ fn create_test_rbac_state() -> AppState {
         "analyst".to_string(),
         RolePolicyConfig {
             description: Some("Data analyst restricted scope".to_string()),
-            allow: vec!["db.query".to_string(), "fs.read_*".to_string(), "prompt.analytics_*".to_string(), "res.public_*".to_string()],
+            allow: vec![
+                "db.query".to_string(),
+                "fs.read_*".to_string(),
+                "prompt.analytics_*".to_string(),
+                "res.public_*".to_string(),
+            ],
             deny: vec!["*.delete_*".to_string(), "docker.*".to_string()],
             require_approval: vec!["db.query_large".to_string()],
             redact_keys: vec!["password".to_string(), "ssn".to_string()],
@@ -280,7 +285,11 @@ async fn test_rbac_search_pruning_by_role() {
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     let payload: Value = serde_json::from_slice(&bytes).unwrap();
     let results = payload["capabilities"].as_array().unwrap();
-    assert_eq!(results.len(), 0, "Analyst search should prune docker capabilities");
+    assert_eq!(
+        results.len(),
+        0,
+        "Analyst search should prune docker capabilities"
+    );
 }
 
 #[tokio::test]

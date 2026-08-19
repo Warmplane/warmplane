@@ -100,9 +100,14 @@ async fn test_hitl_end_to_end_wildcard_matching_and_approval() {
         request_state: None,
     };
 
-    let res = handle_call_capability(State(state), axum::extract::Extension(None), HeaderMap::new(), Json(req))
-        .await
-        .into_response();
+    let res = handle_call_capability(
+        State(state),
+        axum::extract::Extension(None),
+        HeaderMap::new(),
+        Json(req),
+    )
+    .await
+    .into_response();
 
     assert_eq!(res.status(), StatusCode::OK);
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
