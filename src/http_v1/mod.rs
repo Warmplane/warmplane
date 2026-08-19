@@ -30,19 +30,22 @@ pub use catalog::{
     handle_search_capabilities,
 };
 pub use config_api::{
-    handle_delete_server, handle_get_config, handle_get_ecosystem_sources, handle_import_config,
-    handle_reload_config, handle_update_alias, handle_update_policy, handle_upsert_server,
+    handle_delete_profile, handle_delete_server, handle_get_config, handle_get_ecosystem_sources,
+    handle_import_config, handle_reload_config, handle_update_alias, handle_update_policy,
+    handle_upsert_profile, handle_upsert_server,
 };
 pub use execute::{
     handle_batch_call_capabilities, handle_call_capability, handle_cancel_operation,
 };
 pub use helpers::{
-    check_if_none_match, make_etag_header, next_trace_id, redact_value, resolve_idempotency_key,
+    check_if_none_match, get_profile_scoped_catalog_version, make_etag_header, next_trace_id,
+    redact_value, resolve_idempotency_key, resolve_profile_context, ProfileQuery,
 };
 pub use types::{
     error_envelope, ApproveTicketRequest, CallCapabilityRequest, CatalogEventsQuery,
     CatalogEventsResponse, CompletionRequest, GetPromptRequest, ImportConfigRequest,
     ReadResourceRequest, RejectTicketRequest, RespondSamplingRequest, SamplingListQuery,
-    SamplingRequest, SearchCapabilitiesRequest, UpdateAliasRequest, UpsertServerRequest,
+    SamplingRequest, SearchCapabilitiesRequest, UpdateAliasRequest, UpsertProfileRequest,
+    UpsertServerRequest,
 };
 pub use ui::handle_ui_dashboard;

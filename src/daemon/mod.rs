@@ -19,6 +19,6 @@ pub use state::{compute_catalog_version, AppState, AppStateBuilder};
 pub use transport::{build_http_headers, resolve_secret, DEFAULT_MCP_PROTOCOL_VERSION};
 pub use types::{
     CapabilityMeta, PromptMeta, ResourceMeta, ServerMsg, SharedCapabilities, SharedCatalogVersion,
-    SharedPolicy, SharedPrompts, SharedResources, SharedServerConfigs, SharedServerStatuses,
-    SharedServers, UpstreamCallError,
+    SharedPolicy, SharedProfiles, SharedPrompts, SharedResources, SharedServerConfigs,
+    SharedServerStatuses, SharedServers, UpstreamCallError,
 };

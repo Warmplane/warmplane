@@ -110,6 +110,7 @@ The configuration file (default: `mcp_servers.json`) controls upstream server co
 | `promptAliases` | Object | No | `{}` | Map of upstream prompt names to canonical public prompt IDs. |
 | `policy` | Object | No | `null` | Access control rules, approval workflows, and data redaction settings. |
 | `audit` | Object | No | `null` | Cryptographic WORM audit logging and SIEM exporter settings. |
+| `profiles` | Object | No | `{}` | Named server constellations for task-specific catalog partitioning. |
 | `mcpServers` | Object | Yes | `{}` | Upstream server definitions keyed by server identifier string. |
 
 ---
@@ -374,6 +375,33 @@ When an upstream child process exits or crashes unexpectedly:
 
 ---
 
+### 4.6 Named Server Constellations (Profiles)
+
+The `profiles` block defines named server constellations. Profiles allow a single running Warmplane daemon to expose filtered, task-specific views of connected upstream servers to different agents or clients.
+
+```json
+"profiles": {
+  "coding": {
+    "servers": ["github", "filesystem", "sqlite"],
+    "description": "Software engineering, code search, and schema exploration"
+  },
+  "support": {
+    "servers": ["zendesk", "slack"],
+    "description": "Customer support and messaging tools"
+  }
+}
+```
+
+#### Key Characteristics
+- **Dynamic Slicing**: Omitting a profile presents the full unrestricted catalog. Specifying a profile restricts `/v1/capabilities`, `/v1/resources`, `/v1/prompts`, search queries, and tool execution strictly to servers in the constellation whitelist.
+- **Per-Request Selection**: HTTP clients select profiles dynamically via the `X-Warmplane-Profile: <name>` request header or the `?profile=<name>` query parameter.
+- **Partitioned ETag Caching**: Catalog ETags are automatically partitioned (`<sha256>-p:<profile_id>`), allowing conditional `If-None-Match` $\rightarrow$ `304 Not Modified` checks to function independently per profile.
+- **Composition with RBAC & Policy**: Profiles intersect cleanly with RBAC roles and policies:
+  $$\text{Visible Surface} = \text{Full Catalog} \cap \text{Profile Servers} \cap \text{RBAC Role Scopes} \cap \text{Policy}$$
+- **Execution Gating**: Tool invocations or chained batch steps targeting servers outside the active profile return `403 TOOL_NOT_IN_PROFILE` without forwarding requests upstream.
+
+---
+
 ## 5. Execution Modes
 
 ### 5.1 HTTP Daemon Mode
@@ -399,9 +427,9 @@ warmplane mcp-server --config mcp_servers.json
 ```json
 {
   "mcpServers": {
-    "warmplane": {
+    "warmplane-coding": {
       "command": "warmplane",
-      "args": ["mcp-server", "--config", "/path/to/mcp_servers.json"]
+      "args": ["mcp-server", "--config", "/path/to/mcp_servers.json", "--profile", "coding"]
     }
   }
 }
@@ -535,6 +563,12 @@ All HTTP API endpoints return standard JSON response envelopes.
 Catalog read endpoints (`/v1/capabilities`, `/v1/capabilities/:id`, `/v1/resources`, `/v1/prompts`) return an `ETag` header containing the SHA-256 catalog checksum alongside `ttl_ms` and `cache_scope` metadata in the response body.
 
 Pass the returned `ETag` in subsequent requests using the `If-None-Match` header. If the catalog has not changed, Warmplane returns `HTTP 304 Not Modified` with zero response body bytes.
+
+#### Profile-Scoped Requests and Caching
+When operating with profiles:
+- Supply the `X-Warmplane-Profile: <profile_id>` header or the `?profile=<profile_id>` query parameter.
+- The returned `ETag` is automatically scoped to the active constellation (`<base_sha256>-p:<profile_id>`).
+- If an unknown profile is requested, Warmplane returns `HTTP 404 Not Found` with error code `PROFILE_NOT_FOUND`.
 
 ---
 

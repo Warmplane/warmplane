@@ -153,13 +153,24 @@ Warmplane consists of five major components:
    - Houses an asynchronous background batching queue with automatic SIEM dispatchers (Splunk HEC, HTTP Webhooks).
    - Exposes mathematical integrity verification (`/v1/audit/verify`) and streaming exports (`/v1/audit/export`).
 
-6. **Access Modes**
+6. **Access Modes & Profiles**
    - Embedded Control Deck Web UI (`/ui` and `/`).
    - HTTP `/v1` facade (exposing capabilities, hybrid search, tool execution, batch calls, catalog events, approvals, WORM audit verification/export, operation cancellation, SSE resource updates, argument completion, sampling, resources, and prompts).
    - CLI facade (`warmplane server`, `config`, `approvals`, `search-capabilities`, `list-catalog-events`, `cancel-operation`).
    - MCP stdio server mode exposing lightweight synthetic tools (`capability_search`, `capabilities_batch_call`, `subscriptions_listen`, `completion_complete`, etc.) and native resources/prompts methods.
+   - **Named Server Constellations (Profiles)**: Dynamic per-request (`X-Warmplane-Profile` / `?profile=`) or stdio-scoped (`--profile`) subset partitioning of upstream MCP servers with independent ETag caching (`-p:<profile_id>`).
 
-### 3.2 Transport Model
+### 3.2 Named Server Constellations ("Profiles")
+
+While Multi-Tenant RBAC enforces identity and role authorization boundaries (*who* can call *what*), **Profiles** provide task-relevant view selection (*which constellation of tools is relevant to a task*):
+
+1. **Keep-Warm Persistence**: All upstream servers remain connected and active in the background. Slicing into a profile does not disconnect or restart upstream processes.
+2. **Deterministic Partitioning**: Catalog discovery (`/v1/capabilities`, `/v1/resources`, `/v1/prompts`), hybrid search, and execution boundaries are filtered to the declared subset of servers.
+3. **Partitioned Cache Versioning**: ETags are derived deterministically per active profile ($\text{ETag}_{\text{profile}} = \text{base\_version} \mathbin{\Vert} \text{"-p:"} \mathbin{\Vert} \text{profile\_id}$), preserving zero-token `304 Not Modified` validations across independent client constellations.
+4. **Clean Algebraic Composition**: Profiles compose with RBAC and policy evaluation:
+   $$\text{Visible Capabilities} = \text{Full Catalog} \cap \text{Profile Servers} \cap \text{RBAC Scopes} \cap \text{Policy}$$
+
+### 3.3 Transport Model
 
 Per upstream server, transport is inferred by strict configuration:
 

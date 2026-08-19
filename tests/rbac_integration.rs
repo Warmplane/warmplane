@@ -209,6 +209,7 @@ async fn test_rbac_catalog_partitioning_by_role() {
     let res = handle_list_capabilities(
         State(state.clone()),
         axum::extract::Extension(Some(anon_ctx)),
+        None,
         HeaderMap::new(),
     )
     .await
@@ -227,6 +228,7 @@ async fn test_rbac_catalog_partitioning_by_role() {
     let res = handle_list_capabilities(
         State(state.clone()),
         axum::extract::Extension(Some(analyst_ctx.clone())),
+        None,
         HeaderMap::new(),
     )
     .await
@@ -246,6 +248,7 @@ async fn test_rbac_catalog_partitioning_by_role() {
     let res = handle_list_capabilities(
         State(state.clone()),
         axum::extract::Extension(Some(admin_ctx)),
+        None,
         HeaderMap::new(),
     )
     .await
@@ -270,6 +273,7 @@ async fn test_rbac_search_pruning_by_role() {
     let res = handle_search_capabilities(
         State(state.clone()),
         axum::extract::Extension(Some(analyst_ctx)),
+        None,
         Json(SearchCapabilitiesRequest {
             query: Some("docker".to_string()),
             limit: 10,
@@ -316,6 +320,7 @@ async fn test_rbac_execution_boundary_enforcement() {
     let res = handle_call_capability(
         State(state.clone()),
         axum::extract::Extension(Some(analyst_ctx)),
+        None,
         HeaderMap::new(),
         Json(req),
     )

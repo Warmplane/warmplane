@@ -365,6 +365,97 @@ pub async fn handle_update_policy(
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 
+/// Handles POST `/v1/config/profiles` to add or update a profile constellation.
+pub async fn handle_upsert_profile(
+    State(state): State<AppState>,
+    Json(payload): Json<crate::http_v1::types::UpsertProfileRequest>,
+) -> impl IntoResponse {
+    let mut config = match crate::config::load_or_default_config(&state.config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    // Validate that all referenced servers exist in mcp_servers
+    for srv in &payload.servers {
+        if !config.mcp_servers.contains_key(srv) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "ok": false,
+                    "error": format!("Profile references unknown upstream server '{}'", srv)
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    let prof_cfg = crate::config::ProfileConfig {
+        servers: payload.servers,
+        description: payload.description,
+    };
+
+    config
+        .profiles
+        .insert(payload.name.clone(), prof_cfg.clone());
+
+    if let Err(e) = crate::config::save_config(&state.config_path, &config) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    // Sync in-memory active profiles state
+    {
+        let mut prof_guard = state.profiles.write().await;
+        prof_guard.insert(payload.name, prof_cfg);
+    }
+
+    (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}
+
+/// Handles DELETE `/v1/config/profiles/:id` to remove a profile constellation.
+pub async fn handle_delete_profile(
+    State(state): State<AppState>,
+    Path(profile_id): Path<String>,
+) -> impl IntoResponse {
+    let mut config = match crate::config::load_or_default_config(&state.config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    config.profiles.remove(&profile_id);
+
+    if let Err(e) = crate::config::save_config(&state.config_path, &config) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    // Sync in-memory active profiles state
+    {
+        let mut prof_guard = state.profiles.write().await;
+        prof_guard.remove(&profile_id);
+    }
+
+    (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}
+
 /// Handles POST `/v1/config/reload` explicitly triggering a hot-reloading reconciliation from disk.
 pub async fn handle_reload_config(State(state): State<AppState>) -> impl IntoResponse {
     match state.reload_from_disk().await {

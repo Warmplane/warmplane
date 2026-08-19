@@ -7,6 +7,7 @@ import { renderApprovals } from './components/approvals';
 import { renderAudit } from './components/audit';
 import { renderPolicy } from './components/policy';
 import { renderAliases } from './components/aliases';
+import { renderProfiles } from './components/profiles';
 import { SERVER_TEMPLATES, ServerTemplate } from './templates';
 
 class WarmplaneApp {
@@ -34,11 +35,12 @@ class WarmplaneApp {
     try {
       const state = store.getState();
       const filters = state.auditFilters;
+      const prof = state.activeProfile || undefined;
       const [configRes, capsRes, resRes, promptsRes, eventsRes, apprRes, auditEventsRes, auditStatsRes] = await Promise.all([
         api.getConfig(),
-        api.listCapabilities(),
-        api.listResources(),
-        api.listPrompts(),
+        api.listCapabilities(prof),
+        api.listResources(prof),
+        api.listPrompts(prof),
         api.getCatalogEvents(),
         api.listApprovals(),
         api.listAuditEvents({
@@ -265,7 +267,7 @@ class WarmplaneApp {
     }
   }
 
-  switchTab(tab: 'overview' | 'servers' | 'playground' | 'approvals' | 'audit' | 'policy' | 'aliases') {
+  switchTab(tab: 'overview' | 'servers' | 'playground' | 'approvals' | 'audit' | 'policy' | 'aliases' | 'profiles') {
     store.setState({ activeTab: tab });
     this.refreshData();
   }
@@ -301,9 +303,13 @@ class WarmplaneApp {
       approvals: 'Human-in-the-Loop Review Queue',
       audit: 'WORM Audit & Compliance Ledger',
       policy: 'Security Governance & Redaction',
-      aliases: 'Facade & Alias Studio'
+      aliases: 'Facade & Alias Studio',
+      profiles: 'Server Constellation Profiles'
     };
     if (titleEl) titleEl.textContent = titles[state.activeTab];
+
+    // Update top bar profile selector
+    this.renderTopProfileSelector();
 
     switch (state.activeTab) {
       case 'overview':
@@ -326,6 +332,9 @@ class WarmplaneApp {
         break;
       case 'aliases':
         mainEl.innerHTML = renderAliases();
+        break;
+      case 'profiles':
+        mainEl.innerHTML = renderProfiles();
         break;
     }
   }
@@ -435,6 +444,7 @@ class WarmplaneApp {
     const opReqId = `op-${Date.now()}`;
     store.setState({ isExecuting: true, activeRequestId: opReqId });
 
+    const prof = state.activeProfile || undefined;
     try {
       const res = await api.callCapability({
         capability_id: capId,
@@ -443,7 +453,7 @@ class WarmplaneApp {
         context: {
           operation_id: contextVal || opReqId,
         },
-      });
+      }, prof);
 
       store.setState({
         isExecuting: false,
@@ -475,109 +485,6 @@ class WarmplaneApp {
     }
   }
 
-  async cancelActiveOperation() {
-    const state = store.getState();
-    const reqId = state.activeRequestId;
-    if (reqId) {
-      try {
-        await api.cancelOperation(reqId);
-        store.addEventLog('POST', `/v1/operations/${reqId}/cancel`, 'CANCELLED', '0.1ms');
-      } catch (e) {
-        console.error('Failed to cancel operation:', e);
-      }
-    }
-    store.setState({
-      isExecuting: false,
-      activeRequestId: null,
-      executionResult: {
-        status: 499,
-        durationMs: 0,
-        data: {
-          ok: false,
-          cancelled: true,
-          message: `Operation '${reqId || 'unknown'}' cancelled by user.`
-        }
-      }
-    });
-  }
-
-  // Visual Multi-Step Batch Pipeline Actions
-  openBatchModal() {
-    const state = store.getState();
-    const caps = state.capabilities || [];
-    let steps = state.batchSteps;
-    if (!steps || steps.length === 0) {
-      steps = [
-        { id: 'step_1', capability_id: caps[0] ? caps[0].id : '', argsJson: '{}', continue_on_error: false },
-        { id: 'step_2', capability_id: caps[1] ? caps[1].id : (caps[0] ? caps[0].id : ''), argsJson: '{\n  "ref_id": "${steps[0].result.id}"\n}', continue_on_error: true }
-      ];
-    }
-    store.setState({ isBatchModalOpen: true, batchSteps: steps });
-  }
-
-  closeBatchModal() {
-    store.setState({ isBatchModalOpen: false });
-  }
-
-  addBatchStep() {
-    const state = store.getState();
-    const steps = [...(state.batchSteps || [])];
-    const caps = state.capabilities || [];
-    steps.push({
-      id: `step_${steps.length + 1}`,
-      capability_id: caps[0] ? caps[0].id : '',
-      argsJson: '{}',
-      continue_on_error: false
-    });
-    store.setState({ batchSteps: steps });
-  }
-
-  removeBatchStep(idx: number) {
-    const state = store.getState();
-    const steps = [...(state.batchSteps || [])];
-    if (steps.length <= 1) {
-      alert('A batch pipeline requires at least one step.');
-      return;
-    }
-    steps.splice(idx, 1);
-    store.setState({ batchSteps: steps });
-  }
-
-  updateBatchStepCapability(idx: number, capId: string) {
-    const state = store.getState();
-    const steps = [...(state.batchSteps || [])];
-    if (steps[idx]) {
-      steps[idx].capability_id = capId;
-      store.setState({ batchSteps: steps });
-    }
-  }
-
-  updateBatchStepArgs(idx: number, argsJson: string) {
-    const state = store.getState();
-    const steps = [...(state.batchSteps || [])];
-    if (steps[idx]) {
-      steps[idx].argsJson = argsJson;
-      // Do not trigger full re-render on every keystroke to preserve focus
-    }
-  }
-
-  updateBatchStepContinueOnError(idx: number, checked: boolean) {
-    const state = store.getState();
-    const steps = [...(state.batchSteps || [])];
-    if (steps[idx]) {
-      steps[idx].continue_on_error = checked;
-      store.setState({ batchSteps: steps });
-    }
-  }
-
-  appendBatchVariable(idx: number, varStr: string) {
-    const textarea = document.getElementById(`batch-step-args-${idx}`) as HTMLTextAreaElement | null;
-    if (textarea) {
-      textarea.value += varStr;
-      this.updateBatchStepArgs(idx, textarea.value);
-    }
-  }
-
   async executeBatchPipeline() {
     const state = store.getState();
     const steps = state.batchSteps || [];
@@ -606,8 +513,9 @@ class WarmplaneApp {
 
     store.setState({ isBatchModalOpen: false });
 
+    const prof = state.activeProfile || undefined;
     try {
-      const res = await api.batchCallCapabilities(formattedSteps);
+      const res = await api.batchCallCapabilities(formattedSteps, prof);
       store.setState({
         executionResult: {
           status: res.status,
@@ -627,52 +535,6 @@ class WarmplaneApp {
     }
   }
 
-  setPlaygroundMode(mode: 'tools' | 'resources' | 'prompts') {
-    store.setState({ playgroundMode: mode });
-  }
-
-  selectResource(id: string) {
-    store.setState({ selectedResourceId: id, resourceReadResult: null });
-  }
-
-  filterResources(query: string) {
-    const q = query.toLowerCase().trim();
-    const all = store.getState().resources || [];
-    const filtered = all.filter(r => 
-      r.id.toLowerCase().includes(q) ||
-      (r.name && r.name.toLowerCase().includes(q)) ||
-      (r.uri && r.uri.toLowerCase().includes(q)) ||
-      (r.server && r.server.toLowerCase().includes(q))
-    );
-    const listEl = document.getElementById('pg-res-list');
-    if (listEl) {
-      if (filtered.length === 0) {
-        listEl.innerHTML = `
-          <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
-            No resources match "${escapeHtml(query)}"
-          </div>
-        `;
-      } else {
-        listEl.innerHTML = filtered.map(r => {
-          const scheme = r.uri ? r.uri.split(':')[0] : 'res';
-          return `
-            <div class="cap-item ${r.id === store.getState().selectedResourceId ? 'active' : ''}" onclick="window.app.selectResource('${escapeHtml(r.id)}')">
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${escapeHtml(r.name || r.id)}</span>
-                <span class="badge" style="font-size: 9.5px; background: rgba(56, 189, 248, 0.15); color: var(--cyan-400);">${escapeHtml(scheme)}</span>
-              </div>
-              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(r.uri)}</div>
-              <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 4px;">
-                <span>server: ${escapeHtml(r.server || 'local')}</span>
-                <span>${escapeHtml(r.mime_type || 'text/plain')}</span>
-              </div>
-            </div>
-          `;
-        }).join('');
-      }
-    }
-  }
-
   async executeReadResource() {
     const state = store.getState();
     const resId = state.selectedResourceId || (state.resources[0] ? state.resources[0].id : null);
@@ -687,8 +549,12 @@ class WarmplaneApp {
     if (lines && !isNaN(Number(lines))) reqPayload['_limit_lines'] = Number(lines);
     if (bytes && !isNaN(Number(bytes))) reqPayload['_truncate_bytes'] = Number(bytes);
 
+    const prof = state.activeProfile || undefined;
     try {
-      const res = await api.readResource(reqPayload);
+      const res = await api.readResource({
+        resource_id: resId,
+        input_responses: reqPayload
+      }, prof);
       store.setState({
         resourceReadResult: {
           status: res.status,
@@ -708,45 +574,6 @@ class WarmplaneApp {
     }
   }
 
-  selectPrompt(id: string) {
-    store.setState({ selectedPromptId: id, promptGetResult: null });
-  }
-
-  filterPrompts(query: string) {
-    const q = query.toLowerCase().trim();
-    const all = store.getState().prompts || [];
-    const filtered = all.filter(p => 
-      p.id.toLowerCase().includes(q) ||
-      (p.name && p.name.toLowerCase().includes(q)) ||
-      (p.description && p.description.toLowerCase().includes(q)) ||
-      (p.server && p.server.toLowerCase().includes(q))
-    );
-    const listEl = document.getElementById('pg-prompt-list');
-    if (listEl) {
-      if (filtered.length === 0) {
-        listEl.innerHTML = `
-          <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
-            No prompts match "${escapeHtml(query)}"
-          </div>
-        `;
-      } else {
-        listEl.innerHTML = filtered.map(p => {
-          const argCount = p.arguments ? p.arguments.length : 0;
-          return `
-            <div class="cap-item ${p.id === store.getState().selectedPromptId ? 'active' : ''}" onclick="window.app.selectPrompt('${escapeHtml(p.id)}')">
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${escapeHtml(p.name || p.id)}</span>
-                <span class="badge" style="font-size: 9.5px; background: rgba(168, 85, 247, 0.15); color: var(--purple-400);">${argCount} args</span>
-              </div>
-              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">${escapeHtml(p.description || p.title || 'Prompt template')}</div>
-              <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">server: ${escapeHtml(p.server || 'local')}</div>
-            </div>
-          `;
-        }).join('');
-      }
-    }
-  }
-
   async executeGetPrompt() {
     const state = store.getState();
     const promptId = state.selectedPromptId || (state.prompts[0] ? state.prompts[0].id : null);
@@ -762,11 +589,12 @@ class WarmplaneApp {
       }
     });
 
+    const prof = state.activeProfile || undefined;
     try {
       const res = await api.getPrompt({
         prompt_id: promptId,
         arguments: args
-      });
+      }, prof);
       store.setState({
         promptGetResult: {
           status: res.status,
@@ -1398,6 +1226,151 @@ class WarmplaneApp {
       alert(`Error reaching daemon: ${e.message}`);
     }
     await this.refreshData();
+  }
+
+  renderTopProfileSelector() {
+    const selectorEl = document.getElementById('top-profile-selector');
+    if (!selectorEl) return;
+
+    const state = store.getState();
+    const profiles = state.config.profiles || {};
+    const profKeys = Object.keys(profiles);
+    const activeProf = state.activeProfile;
+
+    let optionsHtml = `<option value="">All Servers (Unrestricted)</option>`;
+    for (const k of profKeys) {
+      const selected = activeProf === k ? 'selected' : '';
+      optionsHtml += `<option value="${escapeHtml(k)}" ${selected}>Profile: ${escapeHtml(k)}</option>`;
+    }
+
+    selectorEl.innerHTML = optionsHtml;
+  }
+
+  async setActiveProfile(profileId: string | null) {
+    store.setState({ activeProfile: profileId || null });
+    await this.refreshData();
+  }
+
+  openAddProfileModal() {
+    const titleEl = document.getElementById('modal-prof-title');
+    if (titleEl) titleEl.textContent = 'Create Server Constellation Profile';
+
+    const nameInput = document.getElementById('modal-prof-name') as HTMLInputElement | null;
+    const descInput = document.getElementById('modal-prof-desc') as HTMLInputElement | null;
+    const modeInput = document.getElementById('modal-prof-mode') as HTMLInputElement | null;
+
+    if (nameInput) {
+      nameInput.value = '';
+      nameInput.disabled = false;
+    }
+    if (descInput) descInput.value = '';
+    if (modeInput) modeInput.value = 'create';
+
+    this.renderProfileServerCheckboxes([]);
+
+    const modal = document.getElementById('modal-add-profile');
+    if (modal) modal.classList.add('active');
+  }
+
+  openEditProfileModal(profileName: string) {
+    const state = store.getState();
+    const prof = state.config.profiles?.[profileName];
+    if (!prof) return;
+
+    const titleEl = document.getElementById('modal-prof-title');
+    if (titleEl) titleEl.textContent = `Edit Profile: ${profileName}`;
+
+    const nameInput = document.getElementById('modal-prof-name') as HTMLInputElement | null;
+    const descInput = document.getElementById('modal-prof-desc') as HTMLInputElement | null;
+    const modeInput = document.getElementById('modal-prof-mode') as HTMLInputElement | null;
+
+    if (nameInput) {
+      nameInput.value = profileName;
+      nameInput.disabled = true;
+    }
+    if (descInput) descInput.value = prof.description || '';
+    if (modeInput) modeInput.value = 'edit';
+
+    this.renderProfileServerCheckboxes(prof.servers || []);
+
+    const modal = document.getElementById('modal-add-profile');
+    if (modal) modal.classList.add('active');
+  }
+
+  renderProfileServerCheckboxes(selectedServers: string[]) {
+    const container = document.getElementById('modal-prof-servers-list');
+    if (!container) return;
+
+    const state = store.getState();
+    const allServers = Object.keys(state.config.mcpServers || {});
+
+    if (allServers.length === 0) {
+      container.innerHTML = `<div style="font-size: 11.5px; color: var(--text-dim);">No MCP servers configured yet. Add servers first.</div>`;
+      return;
+    }
+
+    container.innerHTML = allServers.map(s => {
+      const isChecked = selectedServers.includes(s) ? 'checked' : '';
+      return `
+        <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer; padding: 4px 6px; border-radius: var(--radius-sm); transition: background 0.15s;" onmouseover="this.style.background='var(--surface-hover)'" onmouseout="this.style.background='transparent'">
+          <input type="checkbox" class="prof-server-checkbox" value="${escapeHtml(s)}" ${isChecked} style="accent-color: var(--amber-400);">
+          <span style="font-family: var(--ff-mono); font-weight: 600; color: var(--text-main);">${escapeHtml(s)}</span>
+        </label>
+      `;
+    }).join('');
+  }
+
+  async saveProfile() {
+    const nameInput = document.getElementById('modal-prof-name') as HTMLInputElement | null;
+    const descInput = document.getElementById('modal-prof-desc') as HTMLInputElement | null;
+    const name = nameInput?.value.trim();
+    const desc = descInput?.value.trim();
+
+    if (!name) {
+      alert('Please enter a profile name');
+      return;
+    }
+
+    const checkboxes = document.querySelectorAll('.prof-server-checkbox:checked');
+    const servers: string[] = [];
+    checkboxes.forEach((cb) => {
+      servers.push((cb as HTMLInputElement).value);
+    });
+
+    if (servers.length === 0) {
+      alert('Please select at least one server to include in this constellation');
+      return;
+    }
+
+    try {
+      const res = await api.upsertProfile(name, servers, desc || undefined);
+      if (res.ok) {
+        this.closeModals();
+        await this.refreshData();
+      } else {
+        alert(`Failed to save profile: ${res.error || 'Unknown error'}`);
+      }
+    } catch (e: any) {
+      alert(`Error saving profile: ${e.message}`);
+    }
+  }
+
+  async deleteProfile(name: string) {
+    if (!confirm(`Are you sure you want to delete profile '${name}'?`)) return;
+
+    try {
+      const res = await api.deleteProfile(name);
+      if (res.ok) {
+        if (store.getState().activeProfile === name) {
+          store.setState({ activeProfile: null });
+        }
+        await this.refreshData();
+      } else {
+        alert(`Failed to delete profile: ${res.error || 'Unknown error'}`);
+      }
+    } catch (e: any) {
+      alert(`Error deleting profile: ${e.message}`);
+    }
   }
 
   closeModals() {

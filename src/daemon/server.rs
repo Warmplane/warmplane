@@ -166,7 +166,8 @@ pub async fn initialize_state(
         .sampling_registry(sampling_registry)
         .audit_store(audit_store)
         .audit_handle(audit_handle)
-        .rbac_engine(rbac_engine);
+        .rbac_engine(rbac_engine)
+        .profiles(config.profiles.clone());
 
     if let Some(token) = auth_token {
         state_builder = state_builder.auth_token(token);
@@ -286,6 +287,11 @@ pub fn build_router(app_state: AppState) -> Router {
         .route("/v1/config/import", post(http_v1::handle_import_config))
         .route("/v1/config/alias", post(http_v1::handle_update_alias))
         .route("/v1/config/policy", post(http_v1::handle_update_policy))
+        .route("/v1/config/profiles", post(http_v1::handle_upsert_profile))
+        .route(
+            "/v1/config/profiles/:id",
+            axum::routing::delete(http_v1::handle_delete_profile),
+        )
         .route("/v1/config/reload", post(http_v1::handle_reload_config))
         // Human-in-the-Loop (HITL) Approvals Endpoints
         .route("/v1/approvals", get(http_v1::handle_list_approvals))
@@ -428,6 +434,34 @@ pub async fn security_guard_middleware(
                     .into_response();
             }
         }
+    }
+
+    // 4. Resolve ProfileContext
+    if path.starts_with("/v1/") {
+        let query_profile = req.uri().query().and_then(|q| {
+            for param in q.split('&') {
+                if let Some((k, v)) = param.split_once('=') {
+                    if k == "profile" {
+                        return Some(crate::http_v1::ProfileQuery {
+                            profile: Some(v.to_string()),
+                        });
+                    }
+                }
+            }
+            None
+        });
+        match crate::http_v1::resolve_profile_context(&state, headers, query_profile.as_ref()).await
+        {
+            Ok(prof_ctx) => {
+                req.extensions_mut().insert(prof_ctx);
+            }
+            Err((status, err_val)) => {
+                return (status, Json(err_val)).into_response();
+            }
+        }
+    } else {
+        req.extensions_mut()
+            .insert(crate::context::ProfileContext::unrestricted());
     }
 
     req.extensions_mut().insert(tenant_ctx);

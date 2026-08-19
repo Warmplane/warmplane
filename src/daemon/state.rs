@@ -76,6 +76,8 @@ pub struct AppState {
     pub auth_token: Option<String>,
     /// Multi-Tenant Role-Based Access Control (RBAC) engine.
     pub rbac_engine: crate::rbac::RbacEngine,
+    /// Active named server constellations (profiles).
+    pub profiles: crate::daemon::types::SharedProfiles,
 }
 
 impl AppState {
@@ -112,6 +114,7 @@ pub struct AppStateBuilder {
     circuit_breakers: Option<crate::circuit_breaker::CircuitBreakerRegistry>,
     auth_token: Option<String>,
     rbac_engine: Option<crate::rbac::RbacEngine>,
+    profiles: Option<crate::daemon::types::SharedProfiles>,
 }
 
 #[allow(dead_code)]
@@ -312,6 +315,18 @@ impl AppStateBuilder {
         self
     }
 
+    /// Sets profiles map from raw HashMap.
+    pub fn profiles(mut self, profiles: HashMap<String, crate::config::ProfileConfig>) -> Self {
+        self.profiles = Some(Arc::new(RwLock::new(profiles)));
+        self
+    }
+
+    /// Sets profiles map from Arc.
+    pub fn profiles_arc(mut self, profiles: crate::daemon::types::SharedProfiles) -> Self {
+        self.profiles = Some(profiles);
+        self
+    }
+
     /// Builds the `AppState` struct instance with defaults for unspecified fields.
     pub fn build(self) -> AppState {
         let audit_store = self
@@ -366,6 +381,7 @@ impl AppStateBuilder {
             rbac_engine: self
                 .rbac_engine
                 .unwrap_or_else(|| crate::rbac::RbacEngine::new(None)),
+            profiles: self.profiles.unwrap_or_default(),
         }
     }
 }

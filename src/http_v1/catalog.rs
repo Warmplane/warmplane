@@ -54,11 +54,30 @@ pub async fn handle_catalog_events(
 pub async fn handle_search_capabilities(
     State(state): State<AppState>,
     req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
+    prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
     Json(payload): Json<SearchCapabilitiesRequest>,
 ) -> impl IntoResponse {
     let query_str = payload.query.as_deref().unwrap_or("");
+    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
+
+    // Intersect server_ids with profile allowed_servers if profile is active
+    let effective_server_ids = match &prof_ctx.allowed_servers {
+        Some(allowed) => {
+            if payload.server_ids.is_empty() {
+                allowed.iter().cloned().collect()
+            } else {
+                payload
+                    .server_ids
+                    .into_iter()
+                    .filter(|s| allowed.contains(s))
+                    .collect()
+            }
+        }
+        None => payload.server_ids,
+    };
+
     let filter = crate::search::SearchFilter::builder()
-        .server_ids(payload.server_ids)
+        .server_ids(effective_server_ids)
         .tags(payload.tags)
         .modes(payload.modes)
         .build();
@@ -70,7 +89,9 @@ pub async fn handle_search_capabilities(
         .as_ref()
         .map(|ctx| ctx.effective_policy.clone())
         .unwrap_or_else(|| base_pol.clone());
-    let catalog_ver = state.catalog_version.read().await.clone();
+    let base_ver = state.catalog_version.read().await.clone();
+    let catalog_ver =
+        crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
     let limit = payload.limit.clamp(1, 100);
 
     let results = state
@@ -362,6 +383,7 @@ pub async fn handle_respond_sampling_request(
 pub async fn handle_list_capabilities(
     State(state): State<AppState>,
     req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
+    prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     state.total_catalog_requests.fetch_add(1, Ordering::Relaxed);
@@ -373,7 +395,10 @@ pub async fn handle_list_capabilities(
         .map(|ctx| &ctx.effective_policy)
         .unwrap_or(&base_pol);
 
-    let catalog_ver = state.catalog_version.read().await.clone();
+    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
+    let base_ver = state.catalog_version.read().await.clone();
+    let catalog_ver =
+        crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
 
     if check_if_none_match(&headers, &catalog_ver) {
         state.total_etag_hits.fetch_add(1, Ordering::Relaxed);
@@ -388,7 +413,7 @@ pub async fn handle_list_capabilities(
     let caps_guard = state.capabilities.read().await;
     let mut capabilities = caps_guard
         .iter()
-        .filter(|(id, _)| pol.allows(id))
+        .filter(|(id, meta)| pol.allows(id) && prof_ctx.is_server_allowed(&meta.server))
         .map(|(id, meta)| {
             json!({
                 "id": id,
@@ -424,6 +449,7 @@ pub async fn handle_list_capabilities(
 pub async fn handle_describe_capability(
     State(state): State<AppState>,
     req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
+    prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
@@ -451,7 +477,10 @@ pub async fn handle_describe_capability(
             .into_response();
     }
 
-    let catalog_ver = state.catalog_version.read().await.clone();
+    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
+    let base_ver = state.catalog_version.read().await.clone();
+    let catalog_ver =
+        crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
 
     if check_if_none_match(&headers, &catalog_ver) {
         return (
@@ -472,7 +501,7 @@ pub async fn handle_describe_capability(
             input_schema,
             tags: _,
             examples,
-        }) => (
+        }) if prof_ctx.is_server_allowed(server) => (
             StatusCode::OK,
             make_etag_header(&catalog_ver),
             Json(json!({
@@ -489,7 +518,7 @@ pub async fn handle_describe_capability(
             })),
         )
             .into_response(),
-        None => (
+        _ => (
             StatusCode::NOT_FOUND,
             make_etag_header(&catalog_ver),
             Json(error_envelope(
@@ -510,6 +539,7 @@ pub async fn handle_describe_capability(
 pub async fn handle_list_resources(
     State(state): State<AppState>,
     req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
+    prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let base_pol = state.policy.read().await;
@@ -519,7 +549,10 @@ pub async fn handle_list_resources(
         .map(|ctx| &ctx.effective_policy)
         .unwrap_or(&base_pol);
 
-    let catalog_ver = state.catalog_version.read().await.clone();
+    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
+    let base_ver = state.catalog_version.read().await.clone();
+    let catalog_ver =
+        crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
 
     if check_if_none_match(&headers, &catalog_ver) {
         return (
@@ -533,7 +566,7 @@ pub async fn handle_list_resources(
     let res_guard = state.resources.read().await;
     let mut resources = res_guard
         .iter()
-        .filter(|(id, _)| pol.allows(id))
+        .filter(|(id, meta)| pol.allows(id) && prof_ctx.is_server_allowed(&meta.server))
         .map(|(id, meta)| {
             json!({
                 "id": id,
@@ -571,6 +604,7 @@ pub async fn handle_list_resources(
 pub async fn handle_list_prompts(
     State(state): State<AppState>,
     req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
+    prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     let base_pol = state.policy.read().await;
@@ -580,7 +614,10 @@ pub async fn handle_list_prompts(
         .map(|ctx| &ctx.effective_policy)
         .unwrap_or(&base_pol);
 
-    let catalog_ver = state.catalog_version.read().await.clone();
+    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
+    let base_ver = state.catalog_version.read().await.clone();
+    let catalog_ver =
+        crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
 
     if check_if_none_match(&headers, &catalog_ver) {
         return (
@@ -594,7 +631,7 @@ pub async fn handle_list_prompts(
     let prompts_guard = state.prompts.read().await;
     let mut prompts = prompts_guard
         .iter()
-        .filter(|(id, _)| pol.allows(id))
+        .filter(|(id, meta)| pol.allows(id) && prof_ctx.is_server_allowed(&meta.server))
         .map(|(id, meta)| {
             json!({
                 "id": id,
@@ -631,9 +668,11 @@ pub async fn handle_list_prompts(
 /// Handles HTTP POST `/v1/resources/read` reading an MCP resource content.
 pub async fn handle_read_resource(
     State(state): State<AppState>,
+    prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
     headers: HeaderMap,
     Json(payload): Json<ReadResourceRequest>,
 ) -> impl IntoResponse {
+    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
     let trace_id = next_trace_id();
     let request_id =
         crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
@@ -677,6 +716,27 @@ pub async fn handle_read_resource(
             )
                 .into_response();
         };
+
+        if !prof_ctx.is_server_allowed(&meta.server) {
+            state.operation_registry.unregister(&request_id).await;
+            return (
+                StatusCode::NOT_FOUND,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    crate::idempotency::RetryMetadata::safe("not_started"),
+                    "RESOURCE_NOT_FOUND",
+                    format!(
+                        "Resource '{}' not available in active profile",
+                        payload.resource_id
+                    ),
+                    false,
+                )),
+            )
+                .into_response();
+        }
+
         (meta.server.clone(), meta.uri.clone())
     };
 
@@ -832,9 +892,11 @@ pub async fn handle_read_resource(
 /// Handles HTTP POST `/v1/prompts/get` fetching rendered prompt template.
 pub async fn handle_get_prompt(
     State(state): State<AppState>,
+    prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
     headers: HeaderMap,
     Json(payload): Json<GetPromptRequest>,
 ) -> impl IntoResponse {
+    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
     let trace_id = next_trace_id();
     let request_id =
         crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
@@ -881,6 +943,27 @@ pub async fn handle_get_prompt(
             )
                 .into_response();
         };
+
+        if !prof_ctx.is_server_allowed(&meta.server) {
+            state.operation_registry.unregister(&request_id).await;
+            return (
+                StatusCode::NOT_FOUND,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    crate::idempotency::RetryMetadata::safe("not_started"),
+                    "PROMPT_NOT_FOUND",
+                    format!(
+                        "Prompt '{}' not available in active profile",
+                        payload.prompt_id
+                    ),
+                    false,
+                )),
+            )
+                .into_response();
+        }
+
         (meta.server.clone(), meta.name.clone())
     };
 

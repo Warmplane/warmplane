@@ -39,6 +39,9 @@ pub enum Commands {
     McpServer {
         #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
         config: String,
+        /// Optional named server constellation (profile) to restrict exposed capabilities
+        #[arg(long)]
+        profile: Option<String>,
     },
     /// Manage upstream MCP servers (add, remove, list, get, test)
     Server {
@@ -63,6 +66,9 @@ pub enum Commands {
         port: Option<u16>,
         #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
         config: String,
+        /// Optional named server constellation (profile)
+        #[arg(long)]
+        profile: Option<String>,
     },
     /// Search capabilities using hybrid lexical and semantic search
     SearchCapabilities {
@@ -77,6 +83,9 @@ pub enum Commands {
         server: Vec<String>,
         #[arg(short, long)]
         tag: Vec<String>,
+        /// Optional named server constellation (profile)
+        #[arg(long)]
+        profile: Option<String>,
     },
     /// Describe one capability with full on-demand schema from the v1 facade API
     DescribeCapability {
@@ -85,6 +94,9 @@ pub enum Commands {
         #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
         config: String,
         id: String,
+        /// Optional named server constellation (profile)
+        #[arg(long)]
+        profile: Option<String>,
     },
     /// Call one capability through the v1 facade API
     CallCapability {
@@ -107,6 +119,9 @@ pub enum Commands {
         grant_id: Option<String>,
         #[arg(long)]
         idempotency_key: Option<String>,
+        /// Optional named server constellation (profile)
+        #[arg(long)]
+        profile: Option<String>,
         /// Filter result payload with JSONPath expression (e.g. "$.items[*].name")
         #[arg(long)]
         jsonpath: Option<String>,
@@ -129,6 +144,9 @@ pub enum Commands {
         /// Path to JSON file containing steps array
         #[arg(short = 'f', long)]
         file: Option<String>,
+        /// Optional named server constellation (profile)
+        #[arg(long)]
+        profile: Option<String>,
     },
     /// List compact resources from the v1 facade API
     ListResources {
@@ -136,6 +154,9 @@ pub enum Commands {
         port: Option<u16>,
         #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
         config: String,
+        /// Optional named server constellation (profile)
+        #[arg(long)]
+        profile: Option<String>,
     },
     /// Read one resource through the v1 facade API
     ReadResource {
@@ -154,6 +175,9 @@ pub enum Commands {
         actor_id: Option<String>,
         #[arg(long)]
         grant_id: Option<String>,
+        /// Optional named server constellation (profile)
+        #[arg(long)]
+        profile: Option<String>,
     },
     /// List compact prompts from the v1 facade API
     ListPrompts {
@@ -161,6 +185,9 @@ pub enum Commands {
         port: Option<u16>,
         #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
         config: String,
+        /// Optional named server constellation (profile)
+        #[arg(long)]
+        profile: Option<String>,
     },
     /// Get one prompt through the v1 facade API
     GetPrompt {
@@ -181,6 +208,9 @@ pub enum Commands {
         actor_id: Option<String>,
         #[arg(long)]
         grant_id: Option<String>,
+        /// Optional named server constellation (profile)
+        #[arg(long)]
+        profile: Option<String>,
     },
     /// List catalog events from the v1 change feed API
     ListCatalogEvents {

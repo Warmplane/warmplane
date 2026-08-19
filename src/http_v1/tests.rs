@@ -13,15 +13,16 @@ use crate::{
             handle_search_capabilities,
         },
         config_api::{
-            handle_get_config, handle_get_ecosystem_sources, handle_reload_config,
-            handle_upsert_server,
+            handle_delete_profile, handle_get_config, handle_get_ecosystem_sources,
+            handle_reload_config, handle_upsert_profile, handle_upsert_server,
         },
         execute::handle_call_capability,
         helpers::redact_value,
         types::{
             ApproveTicketRequest, CallCapabilityRequest, CatalogEventsQuery, CompletionRequest,
             GetPromptRequest, ReadResourceRequest, RejectTicketRequest, RespondSamplingRequest,
-            SamplingListQuery, SamplingRequest, SearchCapabilitiesRequest, UpsertServerRequest,
+            SamplingListQuery, SamplingRequest, SearchCapabilitiesRequest, UpsertProfileRequest,
+            UpsertServerRequest,
         },
         ui::handle_ui_dashboard,
     },
@@ -263,6 +264,7 @@ async fn list_resources_returns_sorted_ids() {
     let response = handle_list_resources(
         State(state),
         axum::extract::Extension(None),
+        None,
         HeaderMap::new(),
     )
     .await
@@ -287,6 +289,7 @@ async fn read_resource_returns_not_found_code() {
 
     let response = handle_read_resource(
         State(state),
+        None,
         HeaderMap::new(),
         Json(ReadResourceRequest {
             resource_id: "missing.resource".to_string(),
@@ -306,6 +309,35 @@ async fn read_resource_returns_not_found_code() {
         .expect("response body");
     let payload: Value = serde_json::from_slice(&bytes).expect("valid json");
     assert_eq!(payload["error"]["code"], "RESOURCE_NOT_FOUND");
+}
+
+#[tokio::test]
+async fn get_prompt_returns_not_found_code() {
+    let state = AppState::builder().catalog_version("sha256:test").build();
+
+    let response = handle_get_prompt(
+        State(state),
+        None,
+        HeaderMap::new(),
+        Json(GetPromptRequest {
+            prompt_id: "missing.prompt".to_string(),
+            arguments: None,
+            request_id: None,
+            context: None,
+            idempotency_key: None,
+            input_responses: None,
+            request_state: None,
+        }),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let payload: Value = serde_json::from_slice(&bytes).expect("valid json");
+    assert_eq!(payload["error"]["code"], "PROMPT_NOT_FOUND");
 }
 
 #[tokio::test]
@@ -342,6 +374,7 @@ async fn list_prompts_returns_sorted_ids() {
     let response = handle_list_prompts(
         State(state),
         axum::extract::Extension(None),
+        None,
         HeaderMap::new(),
     )
     .await
@@ -358,34 +391,6 @@ async fn list_prompts_returns_sorted_ids() {
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0]["id"], "alpha.prompt");
     assert_eq!(entries[1]["id"], "zeta.prompt");
-}
-
-#[tokio::test]
-async fn get_prompt_returns_not_found_code() {
-    let state = AppState::builder().catalog_version("sha256:test").build();
-
-    let response = handle_get_prompt(
-        State(state),
-        HeaderMap::new(),
-        Json(GetPromptRequest {
-            prompt_id: "missing.prompt".to_string(),
-            arguments: None,
-            request_id: None,
-            context: None,
-            idempotency_key: None,
-            input_responses: None,
-            request_state: None,
-        }),
-    )
-    .await
-    .into_response();
-
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    let bytes = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("response body");
-    let payload: Value = serde_json::from_slice(&bytes).expect("valid json");
-    assert_eq!(payload["error"]["code"], "PROMPT_NOT_FOUND");
 }
 
 #[tokio::test]
@@ -415,6 +420,7 @@ async fn get_prompt_rejects_non_object_arguments() {
 
     let response = handle_get_prompt(
         State(state),
+        None,
         HeaderMap::new(),
         Json(GetPromptRequest {
             prompt_id: "alpha.prompt".to_string(),
@@ -461,6 +467,7 @@ async fn handle_search_capabilities_returns_matched_results() {
     let response = handle_search_capabilities(
         State(state),
         axum::extract::Extension(None),
+        None,
         Json(SearchCapabilitiesRequest {
             query: Some("issues".to_string()),
             limit: 5,
@@ -497,9 +504,10 @@ async fn if_none_match_returns_304_not_modified() {
         HeaderValue::from_static("\"sha256:abc1234\""),
     );
 
-    let response = handle_list_capabilities(State(state), axum::extract::Extension(None), headers)
-        .await
-        .into_response();
+    let response =
+        handle_list_capabilities(State(state), axum::extract::Extension(None), None, headers)
+            .await
+            .into_response();
     assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
     assert_eq!(
         response
@@ -550,6 +558,7 @@ async fn test_request_context_and_header_fallback_in_envelope() {
 
     let response = handle_read_resource(
         State(state),
+        None,
         headers,
         Json(ReadResourceRequest {
             resource_id: "missing.res".to_string(),
@@ -643,6 +652,7 @@ async fn test_mrtr_call_capability_round_trip() {
     let response = handle_call_capability(
         State(state),
         axum::extract::Extension(None),
+        None,
         HeaderMap::new(),
         Json(req),
     )
@@ -716,7 +726,7 @@ async fn test_mrtr_read_resource_round_trip() {
     let req: ReadResourceRequest =
         serde_json::from_value(request_json).expect("valid ReadResourceRequest JSON");
 
-    let response = handle_read_resource(State(state), HeaderMap::new(), Json(req))
+    let response = handle_read_resource(State(state), None, HeaderMap::new(), Json(req))
         .await
         .into_response();
 
@@ -924,6 +934,7 @@ async fn test_hitl_approval_flow_and_endpoints() {
     let async_res = handle_call_capability(
         State(state.clone()),
         axum::extract::Extension(None),
+        None,
         headers,
         Json(req),
     )
@@ -1010,6 +1021,7 @@ async fn test_hitl_approval_flow_and_endpoints() {
     let sync_res = handle_call_capability(
         State(state.clone()),
         axum::extract::Extension(None),
+        None,
         HeaderMap::new(),
         Json(sync_req),
     )
@@ -1088,6 +1100,7 @@ async fn test_hitl_rejection_returns_structured_envelope() {
     let res = handle_call_capability(
         State(state),
         axum::extract::Extension(None),
+        None,
         HeaderMap::new(),
         Json(req),
     )
@@ -1152,6 +1165,7 @@ async fn test_tool_call_emits_audit_events_and_hash_chain() {
     let res = handle_call_capability(
         State(state.clone()),
         axum::extract::Extension(None),
+        None,
         HeaderMap::new(),
         Json(req),
     )
@@ -1368,6 +1382,7 @@ async fn test_circuit_breaker_fast_fail_and_recovery() {
     let res1 = handle_call_capability(
         State(state.clone()),
         axum::extract::Extension(None),
+        None,
         headers.clone(),
         Json(CallCapabilityRequest {
             capability_id: "flaky.error".to_string(),
@@ -1383,6 +1398,7 @@ async fn test_circuit_breaker_fast_fail_and_recovery() {
     let res2 = handle_call_capability(
         State(state.clone()),
         axum::extract::Extension(None),
+        None,
         headers.clone(),
         Json(CallCapabilityRequest {
             capability_id: "flaky.error".to_string(),
@@ -1398,6 +1414,7 @@ async fn test_circuit_breaker_fast_fail_and_recovery() {
     let res3 = handle_call_capability(
         State(state.clone()),
         axum::extract::Extension(None),
+        None,
         headers.clone(),
         Json(CallCapabilityRequest {
             capability_id: "flaky.error".to_string(),
@@ -1413,4 +1430,87 @@ async fn test_circuit_breaker_fast_fail_and_recovery() {
     assert_eq!(payload["ok"], false);
     assert_eq!(payload["error"]["code"], "CIRCUIT_OPEN");
     assert_eq!(payload["retry"]["upstream_execution_state"], "not_started");
+}
+
+#[tokio::test]
+async fn test_ui_config_profiles_crud() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let config_path = tmp.path().to_str().unwrap().to_string();
+
+    let mut mcp_servers = HashMap::new();
+    mcp_servers.insert(
+        "s1".to_string(),
+        crate::config::ServerConfig {
+            command: Some("echo".to_string()),
+            args: vec![],
+            env: HashMap::new(),
+            url: None,
+            protocol_version: None,
+            allow_stateless: None,
+            headers: HashMap::new(),
+            auth: None,
+            resilience: None,
+        },
+    );
+
+    let initial_cfg = crate::config::McpConfig {
+        mcp_servers,
+        ..Default::default()
+    };
+    crate::config::save_config(&config_path, &initial_cfg).unwrap();
+
+    let profiles = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+    let state = AppState::builder()
+        .config_path(config_path.clone())
+        .profiles_arc(profiles.clone())
+        .build();
+
+    // 1. Create profile "dev"
+    let create_res = handle_upsert_profile(
+        State(state.clone()),
+        Json(UpsertProfileRequest {
+            name: "dev".to_string(),
+            servers: vec!["s1".to_string()],
+            description: Some("Developer tools".to_string()),
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(create_res.status(), StatusCode::OK);
+
+    // Verify in-memory state and disk
+    {
+        let prof_guard = profiles.read().await;
+        assert!(prof_guard.contains_key("dev"));
+        assert_eq!(prof_guard["dev"].servers, vec!["s1".to_string()]);
+    }
+    let loaded = crate::config::load_or_default_config(&config_path).unwrap();
+    assert!(loaded.profiles.contains_key("dev"));
+
+    // 2. Reject unknown server
+    let reject_res = handle_upsert_profile(
+        State(state.clone()),
+        Json(UpsertProfileRequest {
+            name: "invalid".to_string(),
+            servers: vec!["nonexistent_srv".to_string()],
+            description: None,
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(reject_res.status(), StatusCode::BAD_REQUEST);
+
+    // 3. Delete profile "dev"
+    let del_res =
+        handle_delete_profile(State(state.clone()), axum::extract::Path("dev".to_string()))
+            .await
+            .into_response();
+    assert_eq!(del_res.status(), StatusCode::OK);
+
+    {
+        let prof_guard = profiles.read().await;
+        assert!(!prof_guard.contains_key("dev"));
+    }
+    let loaded_after = crate::config::load_or_default_config(&config_path).unwrap();
+    assert!(!loaded_after.profiles.contains_key("dev"));
 }

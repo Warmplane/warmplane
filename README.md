@@ -52,6 +52,12 @@ Or manually create `mcp_servers.json`:
     "deny":  ["fs.secret"],
     "redactKeys": ["token", "api_key", "password"]
   },
+  "profiles": {
+    "coding": {
+      "servers": ["filesystem", "sqlite"],
+      "description": "Local coding and data inspection tools"
+    }
+  },
   "mcpServers": {
     "sqlite":     { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-sqlite", "./test.db"] },
     "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"] }
@@ -140,18 +146,19 @@ warmplane config import
 warmplane config alias set tool git-commit github.create_commit
 warmplane config policy allow "github.*" "fetch.*"
 
-# Capability and Execution CLI
-warmplane list-capabilities
-warmplane search-capabilities "triage logs" --limit 5
-warmplane describe-capability db.query
+# Capability and Execution CLI (supports --profile <name>)
+warmplane list-capabilities --profile coding
+warmplane search-capabilities "triage logs" --limit 5 --profile coding
+warmplane describe-capability db.query --profile coding
 
 warmplane call-capability db.query \
   --params '{"query":"SELECT 1"}' \
   --request-id req-101 --actor-id user-7 \
-  --idempotency-key op-20-run-1
+  --idempotency-key op-20-run-1 \
+  --profile coding
 
-warmplane read-resource fs.readme
-warmplane get-prompt prompt.code-review --arguments '{"code":"fn main() {}"}'
+warmplane read-resource fs.readme --profile coding
+warmplane get-prompt prompt.code-review --arguments '{"code":"fn main() {}"}' --profile coding
 
 warmplane list-catalog-events --after evt_3
 warmplane cancel-operation req-101
@@ -177,6 +184,7 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 
 | Feature | Since | Summary |
 |---------|-------|---------|
+| **Named Server Constellations (Profiles)** | v0.20.0 | Task-relevant server constellation slicing (`profiles`), dynamic per-request selection (`X-Warmplane-Profile` / `?profile=`), profile-partitioned ETag caching (`-p:<profile_id>`), and stdio MCP proxy filtering (`--profile`) |
 | **Multi-Tenant RBAC & Catalog Partitioning** | v0.20.0 | Tenant-scoped authorization (`TenantContext`), static token & HMAC-SHA256 JWT auth, per-role policy overrides, dynamic catalog/search pruning, and WORM audit identity binding |
 | **Client-Delegated MCP Sampling** | v0.19.0 | Reverse RPC sampling delegation (`sampling/createMessage`), synchronous long-polling or async ticket lifecycle, persistent `sampling.json` storage, and self-healing HTTP/SSE supervisor |
 | **Persistent State & Graceful Teardown** | v0.18.0 | Restart-resilient atomic storage (`approvals`, `idempotency`, `oauth`, `catalog_events`), SIGINT/SIGTERM handling, audit batch drain, Bun CI UI gate & E2E suite |

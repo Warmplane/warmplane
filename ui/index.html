@@ -189,6 +189,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>
       Alias Studio
     </div>
+    <div class="nav-item" data-tab="profiles" onclick="window.app.switchTab('profiles')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+      Profiles Studio
+    </div>
 
     <div style="margin-top: auto; padding: 10px; background: var(--surface-card); border-radius: var(--radius-sm); border: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 11px;">
       <span style="display: flex; align-items: center; gap: 6px;">
@@ -202,7 +206,15 @@
   <!-- MAIN AREA -->
   <main class="main-wrapper">
     <header class="top-bar">
-      <div style="font-size: 16px; font-weight: 700; color: var(--text-main);" id="top-title">Overview Cockpit</div>
+      <div style="display: flex; align-items: center; gap: 14px;">
+        <div style="font-size: 16px; font-weight: 700; color: var(--text-main);" id="top-title">Overview Cockpit</div>
+        <div style="display: flex; align-items: center; gap: 6px; background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 2px 8px;">
+          <span style="font-size: 11px; color: var(--text-dim); font-weight: 600;">PROFILE:</span>
+          <select id="top-profile-selector" class="form-input" style="height: 24px; padding: 0 6px; font-size: 11.5px; border: none; background: transparent; color: var(--amber-400); font-weight: 600; cursor: pointer;" onchange="window.app.setActiveProfile(this.value || null)">
+            <option value="">All Servers (Unrestricted)</option>
+          </select>
+        </div>
+      </div>
       <div style="display: flex; gap: 8px;">
         <button class="btn btn-ghost" onclick="window.app.openImportModal()">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
@@ -367,6 +379,35 @@
       <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px;">
         <button class="btn btn-ghost" onclick="window.app.openTemplateCatalog()">← Back to Catalog</button>
         <button class="btn btn-primary" onclick="window.app.submitTemplateServer()">Save &amp; Connect Server</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: ADD / EDIT PROFILE -->
+  <div class="modal-backdrop" id="modal-add-profile" onclick="if(event.target === this) window.app.closeModals()">
+    <div class="modal-box" style="width: 520px;">
+      <div class="modal-header">
+        <div class="modal-title" id="modal-prof-title">Create Server Constellation Profile</div>
+        <button class="btn btn-ghost" onclick="window.app.closeModals()" style="padding: 2px 6px;">✕</button>
+      </div>
+      <input type="hidden" id="modal-prof-mode" value="create">
+      <div class="form-group">
+        <label class="form-label">Profile Identifier (e.g. coding, support, data)</label>
+        <input type="text" class="form-input" id="modal-prof-name" placeholder="e.g. coding">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Description (Optional)</label>
+        <input type="text" class="form-input" id="modal-prof-desc" placeholder="e.g. Software engineering and database inspection tools">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Included MCP Upstream Servers</label>
+        <div id="modal-prof-servers-list" style="max-height: 180px; overflow-y: auto; background: var(--surface-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; display: flex; flex-direction: column; gap: 4px;">
+          <!-- Rendered dynamically -->
+        </div>
+      </div>
+      <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px;">
+        <button class="btn btn-ghost" onclick="window.app.closeModals()">Cancel</button>
+        <button class="btn btn-primary" onclick="window.app.saveProfile()">Save Profile</button>
       </div>
     </div>
   </div>
