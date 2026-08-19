@@ -136,7 +136,7 @@ Warmplane consists of five major components:
 
 3. **Policy, Governance, and Envelope Layer**
    - Enforces allow/deny patterns across capability types.
-   - Evaluates Human-in-the-Loop (HITL) approval rules (`requireApproval`) and manages suspension states.
+   - Evaluates Human-in-the-Loop (HITL) approval rules (`requireApproval`) and manages suspension states with crash-safe atomic disk persistence (`AtomicFile`), auto-expiring timeouts across daemon restarts.
    - Applies payload redaction keys in logs and trace spans.
    - Standardizes response envelopes with **Request Context** (`operation_id`, `actor_id`, `grant_id`, `work_item_id`) and **Retry Governance** (`safe|unsafe|idempotent` classification).
    - In-flight **Context Distillation & Truncation** (`_jsonpath`, `_limit_lines`, `_truncate_bytes`) reducing agent context token consumption.
@@ -144,7 +144,7 @@ Warmplane consists of five major components:
    - Supports **Multi Round-Trip Requests (MRTR)** with `input_responses` and `request_state` propagation for interactive approvals and missing input elicitation.
 
 4. **Idempotency and Operations Manager**
-   - Deduplicates concurrent or replayed invocations via `Idempotency-Key`.
+   - Deduplicates concurrent or replayed invocations via `Idempotency-Key` backed by atomic on-disk persistence and in-memory TTL caching.
    - Manages active task handle lifetimes and provides in-flight operation cancellation (`POST /v1/operations/:id/cancel`).
 
 5. **WORM Audit & SIEM Subsystem**
@@ -180,7 +180,7 @@ For HTTP/SSE upstreams, Warmplane supports:
 Warmplane introduces an integrated HITL suspension engine:
 
 1. **Interception**: Capabilities matching `policy.requireApproval` patterns are intercepted before upstream dispatch.
-2. **Ticket Creation**: An in-memory approval ticket is created with a unique ID (e.g. `appr-1723668200-1`), capturing sanitized parameters and caller context.
+2. **Ticket Creation**: An approval ticket is created with a unique ID (e.g. `appr-1723668200-1`), capturing sanitized parameters and caller context, atomically persisted to disk.
 3. **Webhook Notification**: Outbound HMAC-SHA256 signed webhook alerts (`X-Warmplane-Signature-256`) are dispatched to operator dashboards or chat bots.
 4. **Resolution**: Operators approve (optionally modifying JSON arguments) or reject the ticket via the Control Deck Web UI, HTTP API, or CLI (`warmplane approvals approve`).
 5. **Execution or Abortion**: Approved executions resume immediately with operator-supplied arguments; rejected or expired tickets return clean `APPROVAL_REJECTED` or `APPROVAL_TIMEOUT` error codes.

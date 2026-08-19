@@ -255,6 +255,7 @@ The `policy` block enforces global security boundaries, human approval gates, an
 
 - **Deny Precedence**: Rules in `deny` take absolute precedence over `allow` and `requireApproval` rules. Matching a `deny` pattern blocks execution immediately.
 - **Human-in-the-Loop Interception**: Capabilities matching `requireApproval` suspend execution and return a pending ticket until approved or rejected.
+- **Crash-Safe Persistence**: Pending approval tickets and decisions are atomically stored to disk (`AtomicFile`), ensuring unexpired tickets and timeout schedules survive daemon restarts.
 - **Default Permissiveness**: If `allow` is empty or omitted, all non-denied items are permitted.
 - **Data Redaction**: Fields matching keys in `redactKeys` are masked in logs, trace spans, and webhook payloads.
 - **Webhook HMAC Signing**: Outbound webhook requests are signed with HMAC-SHA256 in the `X-Warmplane-Signature-256` header using `secret` or `secretEnv`.
@@ -642,9 +643,10 @@ curl -X POST http://127.0.0.1:9090/v1/tools/call \
 
 #### Behavior Semantics
 
-1. **First Request**: Executes the operation and stores the response in the deduplication cache.
+1. **First Request**: Executes the operation and stores the response in the deduplication cache, atomically persisted to disk.
 2. **In-Flight Duplicate**: Subscribes to the active execution and waits for completion.
 3. **Completed Duplicate**: Immediately returns the cached response payload without re-executing upstream.
+4. **Daemon Crash/Restart Recovery**: Persisted idempotency records and active TTLs survive daemon restarts.
 
 ---
 
