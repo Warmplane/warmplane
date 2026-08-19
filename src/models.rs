@@ -43,6 +43,20 @@ pub enum Commands {
         #[arg(long)]
         profile: Option<String>,
     },
+    /// Run as a Streamable HTTP/SSE MCP server exposing the lightweight facade
+    McpHttpServer {
+        /// TCP port override (overrides config file and default of 9191)
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+        /// Optional named server constellation (profile) to restrict exposed capabilities
+        #[arg(long)]
+        profile: Option<String>,
+        /// Bind address override (default: 127.0.0.1; use 0.0.0.0 for network access)
+        #[arg(long)]
+        bind: Option<String>,
+    },
     /// Manage upstream MCP servers (add, remove, list, get, test)
     Server {
         #[command(subcommand)]

@@ -1,10 +1,15 @@
-// Rust guideline compliant 2026-08-17
+// Rust guideline compliant 2026-08-19
 
-//! MCP stdio server facade interface exposing compact tools/resources/prompts endpoints.
+//! MCP server facade interface exposing compact tools/resources/prompts endpoints.
+//!
+//! Provides two server transports:
+//! - **stdio** via [`run_mcp_server`]: for local process-to-process MCP sessions.
+//! - **Streamable HTTP/SSE** via [`run_mcp_http_server`]: for remote network MCP clients.
 
 use std::{
     sync::atomic::{AtomicU64, Ordering},
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::Result;
@@ -15,14 +20,19 @@ use rmcp::{
         ListToolsResult, Prompt, ReadResourceRequestParams, ReadResourceResponse,
         ReadResourceResult, Resource, ServerCapabilities, ServerInfo, Tool,
     },
-    transport::stdio,
+    transport::{
+        stdio,
+        streamable_http_server::{
+            session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
+        },
+    },
     ErrorData as McpError, ServerHandler, ServiceExt,
 };
 use serde_json::{json, Map, Value};
-use tokio::sync::oneshot;
+use tokio::{net::TcpListener, sync::oneshot};
 
 use crate::{
-    config::McpConfig,
+    config::{McpConfig, DEFAULT_MCP_HTTP_PORT},
     daemon::{initialize_state, AppState, ServerMsg, UpstreamCallError},
 };
 
@@ -41,9 +51,16 @@ const TOOL_SUBSCRIPTIONS_LISTEN: &str = "subscriptions_listen";
 static TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
-struct FacadeMcpServer {
+pub(crate) struct FacadeMcpServer {
     state: AppState,
     profile: Option<String>,
+}
+
+impl FacadeMcpServer {
+    /// Creates a new `FacadeMcpServer` bound to the given state and optional profile.
+    pub(crate) fn new(state: AppState, profile: Option<String>) -> Self {
+        Self { state, profile }
+    }
 }
 
 impl ServerHandler for FacadeMcpServer {
@@ -1334,6 +1351,127 @@ pub async fn run_mcp_server(
         _ = crate::daemon::shutdown_signal(shutdown_token) => {
             tracing::info!("shutdown signal received; closing MCP facade stdio server");
         }
+    }
+
+    state_for_shutdown.shutdown().await;
+    Ok(())
+}
+
+/// Runs the Warmplane facade as a Streamable HTTP/SSE MCP server.
+///
+/// Binds a dedicated TCP port and serves the same facade surface as the stdio variant,
+/// but over the MCP Streamable HTTP transport. One [`FacadeMcpServer`] is created per
+/// incoming client session, sharing the underlying [`AppState`].
+///
+/// # Arguments
+/// * `config` - Loaded `McpConfig` instance.
+/// * `config_path` - Path to the configuration file (used by hot-reload).
+/// * `port_override` - Optional port from CLI `--port`; overrides config and default.
+/// * `bind_override` - Optional bind address from CLI `--bind`; overrides config and default.
+/// * `profile_override` - Optional profile from CLI `--profile`; overrides config block value.
+///
+/// # Errors
+/// Returns an error if state initialization, TCP binding, or transport negotiation fails.
+pub async fn run_mcp_http_server(
+    config: McpConfig,
+    config_path: impl Into<String>,
+    port_override: Option<u16>,
+    bind_override: Option<String>,
+    profile_override: Option<String>,
+) -> Result<()> {
+    // Resolve effective profile: CLI flag > mcpHttpServer.profile > None
+    let effective_profile = profile_override.or_else(|| {
+        config
+            .mcp_http_server
+            .as_ref()
+            .and_then(|c| c.profile.clone())
+    });
+
+    if let Some(ref prof_id) = effective_profile {
+        if !config.profiles.contains_key(prof_id) {
+            anyhow::bail!("Profile '{}' is not defined in configuration", prof_id);
+        }
+    }
+
+    // Resolve bind/port: CLI overrides > mcpHttpServer config > defaults
+    let http_cfg = config.mcp_http_server.as_ref();
+    let bind_addr = bind_override
+        .or_else(|| http_cfg.map(|c| c.bind.clone()))
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    let port = port_override
+        .or_else(|| http_cfg.map(|c| c.port))
+        .unwrap_or(DEFAULT_MCP_HTTP_PORT);
+    let sse_keep_alive = http_cfg
+        .and_then(|c| c.sse_keep_alive_ms)
+        .map(Duration::from_millis);
+    let json_response = http_cfg.map(|c| c.json_response).unwrap_or(true);
+    let mut allowed_hosts: Vec<String> = http_cfg
+        .map(|c| c.allowed_hosts.clone())
+        .unwrap_or_default();
+    let allowed_origins: Vec<String> = http_cfg
+        .map(|c| c.allowed_origins.clone())
+        .unwrap_or_default();
+
+    // Always allow loopback; add the bind address if it is not already covered
+    for loopback in &["127.0.0.1", "::1", "localhost"] {
+        if !allowed_hosts.iter().any(|h| h == loopback) {
+            allowed_hosts.push((*loopback).to_string());
+        }
+    }
+    if !matches!(
+        bind_addr.as_str(),
+        "127.0.0.1" | "::1" | "localhost" | "0.0.0.0" | "::"
+    ) {
+        allowed_hosts.push(bind_addr.clone());
+    }
+
+    let state = initialize_state(config, config_path).await?;
+    let shutdown_token = state.shutdown_token.clone();
+    let state_for_shutdown = state.clone();
+
+    // Build rmcp StreamableHttpServerConfig
+    let mut mcp_server_cfg = StreamableHttpServerConfig::default();
+    mcp_server_cfg.sse_keep_alive = sse_keep_alive;
+    mcp_server_cfg.json_response = json_response;
+    mcp_server_cfg.cancellation_token = shutdown_token.clone();
+    mcp_server_cfg.allowed_hosts = allowed_hosts;
+    mcp_server_cfg.allowed_origins = allowed_origins;
+
+    // Build the Tower service factory — one FacadeMcpServer clone per session
+    let state_for_factory = state.clone();
+    let profile_for_factory = effective_profile.clone();
+    let mcp_service = StreamableHttpService::new(
+        move || {
+            let s = state_for_factory.clone();
+            let p = profile_for_factory.clone();
+            Ok(FacadeMcpServer {
+                state: s,
+                profile: p,
+            })
+        },
+        Arc::new(LocalSessionManager::default()),
+        mcp_server_cfg,
+    );
+
+    // Mount on a dedicated Axum router so we can re-use Axum's serve infrastructure
+    let router = axum::Router::new()
+        .route_service("/mcp", mcp_service.clone())
+        // Also accept root path for clients that omit the /mcp suffix
+        .route_service("/", mcp_service);
+
+    let listen_addr = format!("{}:{}", bind_addr, port);
+    let listener = TcpListener::bind(&listen_addr).await?;
+    tracing::info!(
+        bind = %listen_addr,
+        profile = ?effective_profile,
+        "Warmplane MCP HTTP/SSE facade listening"
+    );
+
+    let server_fut = axum::serve(listener, router)
+        .with_graceful_shutdown(crate::daemon::shutdown_signal(shutdown_token));
+
+    if let Err(err) = server_fut.await {
+        tracing::error!(error = %err, "MCP HTTP server error");
     }
 
     state_for_shutdown.shutdown().await;

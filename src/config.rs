@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-18
+// Rust guideline compliant 2026-08-19
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -6,6 +6,8 @@ use std::{collections::HashMap, fs, io::ErrorKind, path::PathBuf};
 
 /// Default TCP listening port for Warmplane daemon HTTP API.
 pub const DEFAULT_PORT: u16 = 9090;
+/// Default TCP listening port for the Warmplane HTTP/SSE MCP server facade.
+pub const DEFAULT_MCP_HTTP_PORT: u16 = 9191;
 /// Default configuration file path.
 pub const DEFAULT_CONFIG_PATH: &str = "mcp_servers.json";
 /// Default timeout in milliseconds for tool call execution.
@@ -74,6 +76,84 @@ pub struct McpConfig {
     /// Upstream MCP server definitions keyed by server identifier.
     #[serde(rename = "mcpServers", default)]
     pub mcp_servers: HashMap<String, ServerConfig>,
+    /// Optional HTTP/SSE MCP server facade exposure configuration.
+    #[serde(
+        default,
+        rename = "mcpHttpServer",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub mcp_http_server: Option<McpHttpServerConfig>,
+}
+
+/// Configuration for exposing warmplane itself as a Streamable HTTP/SSE MCP server.
+///
+/// When present, `warmplane mcp-http-server` (or the daemon with this config block) binds a
+/// Streamable-HTTP MCP endpoint that remote MCP clients can connect to directly.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub struct McpHttpServerConfig {
+    /// TCP port to listen on (default: 9191).
+    #[serde(default = "default_mcp_http_port")]
+    pub port: u16,
+    /// Bind address (default: `"127.0.0.1"`). Set to `"0.0.0.0"` for network access;
+    /// requires `authToken` or `rbac` to be configured.
+    #[serde(default = "default_mcp_http_bind")]
+    pub bind: String,
+    /// SSE keep-alive ping interval in milliseconds (default: 15 000).
+    /// `None` disables keep-alive pings.
+    #[serde(
+        default = "default_sse_keep_alive_ms",
+        rename = "sseKeepAliveMs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sse_keep_alive_ms: Option<u64>,
+    /// Prefer `application/json` responses for simple request/response exchanges (default: true).
+    /// Falls back to SSE automatically when streaming is required.
+    #[serde(default = "default_true", rename = "jsonResponse")]
+    pub json_response: bool,
+    /// Optional profile name restricting the exposed capability surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// Additional hostnames (or `host:port` pairs) accepted in the `Host` header.
+    /// Loopback addresses are always accepted; add your public hostname here for network deployments.
+    #[serde(
+        default,
+        rename = "allowedHosts",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub allowed_hosts: Vec<String>,
+    /// Browser origins allowed via the `Origin` header (CORS). Empty list disables origin checking.
+    #[serde(
+        default,
+        rename = "allowedOrigins",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub allowed_origins: Vec<String>,
+}
+
+fn default_mcp_http_port() -> u16 {
+    crate::config::DEFAULT_MCP_HTTP_PORT
+}
+
+fn default_mcp_http_bind() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_sse_keep_alive_ms() -> Option<u64> {
+    Some(15_000)
+}
+
+impl Default for McpHttpServerConfig {
+    fn default() -> Self {
+        Self {
+            port: DEFAULT_MCP_HTTP_PORT,
+            bind: "127.0.0.1".to_string(),
+            sse_keep_alive_ms: Some(15_000),
+            json_response: true,
+            profile: None,
+            allowed_hosts: Vec::new(),
+            allowed_origins: Vec::new(),
+        }
+    }
 }
 
 /// Profile configuration defining a named constellation of upstream MCP servers.
@@ -767,6 +847,38 @@ fn validate_config(config: &McpConfig) -> Result<()> {
                     "Profile '{}' references unknown server '{}' (not defined in 'mcpServers')",
                     profile_name,
                     server_id
+                );
+            }
+        }
+    }
+
+    // Validate mcpHttpServer block if present
+    if let Some(ref http_srv) = config.mcp_http_server {
+        // Non-loopback bind requires at least one auth mechanism to prevent open network exposure
+        let is_loopback = matches!(http_srv.bind.as_str(), "127.0.0.1" | "::1" | "localhost");
+        if !is_loopback {
+            let has_auth = config
+                .auth_token
+                .as_ref()
+                .map(|t| !t.trim().is_empty())
+                .unwrap_or(false);
+            let has_rbac = config.rbac.as_ref().map(|r| r.enabled).unwrap_or(false);
+            if !has_auth && !has_rbac {
+                anyhow::bail!(
+                    "'mcpHttpServer.bind' is set to '{}' (non-loopback) but no 'authToken' or \
+                     'rbac' authentication is configured. This would expose the MCP server to \
+                     the network without any authentication.",
+                    http_srv.bind
+                );
+            }
+        }
+
+        // Validate profile reference if specified
+        if let Some(ref prof_id) = http_srv.profile {
+            if !config.profiles.contains_key(prof_id) {
+                anyhow::bail!(
+                    "'mcpHttpServer.profile' references unknown profile '{}' (not defined in 'profiles')",
+                    prof_id
                 );
             }
         }

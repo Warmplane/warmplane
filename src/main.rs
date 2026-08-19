@@ -58,6 +58,15 @@ async fn main() -> Result<()> {
             let config_data = load_config(&config)?;
             mcp_server::run_mcp_server(config_data, config, profile).await?;
         }
+        Commands::McpHttpServer {
+            port,
+            config,
+            profile,
+            bind,
+        } => {
+            let config_data = load_config(&config)?;
+            mcp_server::run_mcp_http_server(config_data, config, port, bind, profile).await?;
+        }
         Commands::ListCapabilities {
             port,
             config,

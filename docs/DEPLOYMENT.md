@@ -74,12 +74,16 @@ ENTRYPOINT ["warmplane"]
 Run:
 
 ```bash
-docker run --rm -p 9090:9090 \
+docker run --rm \
+  -p 9090:9090 \
+  -p 9191:9191 \
   -e RUST_LOG=info \
   -e WARMPLANE_OTEL_ENABLED=true \
   -e OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
   -v $(pwd)/mcp_servers.json:/app/mcp_servers.json:ro \
   warmplane:latest daemon --config /app/mcp_servers.json
+# Port 9090 = REST control-plane API
+# Port 9191 = Streamable HTTP/SSE MCP facade (when mcpHttpServer block is configured)
 ```
 
 ## 4) Kubernetes Pattern
@@ -130,10 +134,11 @@ Ticket-level alerts:
 Before production rollout:
 
 1. Validate config in CI: `warmplane validate-config --config mcp_servers.json`
-2. Smoke test MCP server mode: `./scripts/smoke_mcp_server.sh`
-3. Verify OTEL export path in staging
-4. Confirm redaction list covers secrets
-5. Load test representative tool/resource/prompt mixes
+2. Smoke test MCP stdio server mode: `./scripts/smoke_mcp_server.sh`
+3. If using MCP HTTP/SSE facade: verify `warmplane mcp-http-server --config mcp_servers.json --port 9191` starts and responds on `http://127.0.0.1:9191/mcp`
+4. Verify OTEL export path in staging
+5. Confirm redaction list covers secrets
+6. Load test representative tool/resource/prompt mixes
 
 ## 8) Incident Triage Flow
 
