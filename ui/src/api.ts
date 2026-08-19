@@ -221,12 +221,37 @@ export interface CircuitBreakerSnapshot {
   open_until_epoch_ms?: number;
 }
 
+export interface RolePolicyConfig {
+  description?: string;
+  allow?: string[];
+  deny?: string[];
+  requireApproval?: string[];
+  require_approval?: string[];
+  redactKeys?: string[];
+  redact_keys?: string[];
+}
+
+export interface TokenAssignment {
+  role: string;
+  tenantId?: string;
+  actorId?: string;
+  description?: string;
+}
+
+export interface RbacConfig {
+  enabled: boolean;
+  defaultRole?: string;
+  tokens?: Record<string, TokenAssignment>;
+  roles?: Record<string, RolePolicyConfig>;
+}
+
 export interface McpConfig {
   mcpServers?: Record<string, McpServerConfig>;
   capabilityAliases?: Record<string, string>;
   resourceAliases?: Record<string, string>;
   promptAliases?: Record<string, string>;
   policy?: PolicyConfig;
+  rbac?: RbacConfig;
   resilience?: ResilienceConfig;
   audit?: Record<string, any>;
   toolTimeoutMs?: number;
