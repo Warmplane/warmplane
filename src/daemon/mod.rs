@@ -14,7 +14,7 @@ mod tests;
 
 // Re-export all core types, policies, state, and server runners for backward compatibility
 pub use policy::{wildcard_match, Policy};
-pub use server::{initialize_state, run_daemon};
+pub use server::{initialize_state, run_daemon, shutdown_signal};
 pub use state::{compute_catalog_version, AppState, AppStateBuilder};
 pub use transport::{build_http_headers, resolve_secret, DEFAULT_MCP_PROTOCOL_VERSION};
 pub use types::{

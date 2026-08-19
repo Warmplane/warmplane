@@ -876,7 +876,10 @@ async fn oauth_proxy_security_middleware(
 }
 
 // Spawns the central background proxy / callback server on an ephemeral port.
-pub async fn start_oauth_proxy_server(registry: OAuthRegistry) -> Result<u16> {
+pub async fn start_oauth_proxy_server(
+    registry: OAuthRegistry,
+    shutdown_token: tokio_util::sync::CancellationToken,
+) -> Result<u16> {
     let app = Router::new()
         .route("/callback", get(handle_callback))
         .route("/client-metadata/:server_id", get(handle_client_metadata))
@@ -893,8 +896,16 @@ pub async fn start_oauth_proxy_server(registry: OAuthRegistry) -> Result<u16> {
         .store(port, std::sync::atomic::Ordering::SeqCst);
 
     tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, app).await {
-            error!(error = %e, "OAuth proxy server failed");
+        let server = axum::serve(listener, app);
+        tokio::select! {
+            res = server => {
+                if let Err(e) = res {
+                    error!(error = %e, "OAuth proxy server failed");
+                }
+            }
+            _ = shutdown_token.cancelled() => {
+                info!("OAuth proxy server received shutdown signal; stopping");
+            }
         }
     });
 

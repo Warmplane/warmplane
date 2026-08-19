@@ -70,6 +70,9 @@ pub async fn initialize_state(
             )
         };
 
+    // Create shutdown token early for subsystems
+    let shutdown_token = tokio_util::sync::CancellationToken::new();
+
     // Initialize central OAuth registry and proxy server if any server uses OAuth2
     let mut oauth_proxy_port = None;
 
@@ -79,7 +82,9 @@ pub async fn initialize_state(
         .any(|s| matches!(s.auth, Some(AuthConfig::Oauth2 { .. })));
 
     if has_oauth2 {
-        let port = crate::oauth2::start_oauth_proxy_server(oauth_registry.clone()).await?;
+        let port =
+            crate::oauth2::start_oauth_proxy_server(oauth_registry.clone(), shutdown_token.clone())
+                .await?;
         oauth_proxy_port = Some(port);
     }
 
@@ -167,7 +172,8 @@ pub async fn initialize_state(
         .audit_store(audit_store)
         .audit_handle(audit_handle)
         .rbac_engine(rbac_engine)
-        .profiles(config.profiles.clone());
+        .profiles(config.profiles.clone())
+        .shutdown_token(shutdown_token);
 
     if let Some(token) = auth_token {
         state_builder = state_builder.auth_token(token);
@@ -470,7 +476,7 @@ pub async fn security_guard_middleware(
 }
 
 /// Awaits process termination signals (`SIGINT` or `SIGTERM`) for graceful server shutdown.
-pub async fn shutdown_signal() {
+pub async fn shutdown_signal(shutdown_token: tokio_util::sync::CancellationToken) {
     let ctrl_c = async {
         if let Err(err) = tokio::signal::ctrl_c().await {
             error!(error = %err, "failed to install Ctrl+C signal handler");
@@ -500,6 +506,9 @@ pub async fn shutdown_signal() {
             info!("received SIGTERM; initiating graceful shutdown");
         },
     }
+
+    // Immediately trigger cancellation of all background workers, SSE streams, and supervisors
+    shutdown_token.cancel();
 }
 
 /// Runs the Warmplane MCP aggregation daemon.
@@ -521,12 +530,17 @@ pub async fn run_daemon(
 
     info!(port, "all upstream servers connected; daemon listening");
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    let shutdown_token = app_state.shutdown_token.clone();
+
+    let server_fut =
+        axum::serve(listener, app).with_graceful_shutdown(shutdown_signal(shutdown_token));
+    if let Err(err) = server_fut.await {
+        error!(error = %err, "HTTP server error during execution or shutdown");
+    }
 
     info!("HTTP server drained and stopped; shutting down daemon subsystems");
-    app_state.shutdown().await;
+    let drain_timeout = std::time::Duration::from_secs(3);
+    let _ = tokio::time::timeout(drain_timeout, app_state.shutdown()).await;
 
     Ok(())
 }

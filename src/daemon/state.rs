@@ -4,6 +4,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     config::{ServerConfig, DEFAULT_TOOL_TIMEOUT_MS},
@@ -78,6 +79,8 @@ pub struct AppState {
     pub rbac_engine: crate::rbac::RbacEngine,
     /// Active named server constellations (profiles).
     pub profiles: crate::daemon::types::SharedProfiles,
+    /// Cancellation token triggered when the daemon or state is shutting down.
+    pub shutdown_token: CancellationToken,
 }
 
 impl AppState {
@@ -115,6 +118,7 @@ pub struct AppStateBuilder {
     auth_token: Option<String>,
     rbac_engine: Option<crate::rbac::RbacEngine>,
     profiles: Option<crate::daemon::types::SharedProfiles>,
+    shutdown_token: Option<CancellationToken>,
 }
 
 #[allow(dead_code)]
@@ -315,6 +319,12 @@ impl AppStateBuilder {
         self
     }
 
+    /// Sets shutdown cancellation token.
+    pub fn shutdown_token(mut self, token: CancellationToken) -> Self {
+        self.shutdown_token = Some(token);
+        self
+    }
+
     /// Sets profiles map from raw HashMap.
     pub fn profiles(mut self, profiles: HashMap<String, crate::config::ProfileConfig>) -> Self {
         self.profiles = Some(Arc::new(RwLock::new(profiles)));
@@ -382,6 +392,7 @@ impl AppStateBuilder {
                 .rbac_engine
                 .unwrap_or_else(|| crate::rbac::RbacEngine::new(None)),
             profiles: self.profiles.unwrap_or_default(),
+            shutdown_token: self.shutdown_token.unwrap_or_default(),
         }
     }
 }

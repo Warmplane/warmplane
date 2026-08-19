@@ -496,9 +496,12 @@ async fn test_e2e_oauth2_mock_provider_flow_and_refresh() {
     }
 
     // Start OAuth proxy server
-    let proxy_port = warmplane::oauth2::start_oauth_proxy_server(registry.clone())
-        .await
-        .expect("OAuth proxy server must start");
+    let proxy_port = warmplane::oauth2::start_oauth_proxy_server(
+        registry.clone(),
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .expect("OAuth proxy server must start");
 
     // 3. Send request through the Warmplane OAuth proxy
     let proxy_url = format!(
