@@ -165,23 +165,25 @@ pub async fn handle_resource_updates(
 ) -> Sse<impl Stream<Item = std::result::Result<Event, std::convert::Infallible>>> {
     let rx = state.resource_update_tx.subscribe();
 
-    let stream = futures::stream::unfold(
-        rx,
-        |mut receiver: tokio::sync::broadcast::Receiver<crate::catalog::ResourceUpdateEvent>| async move {
+    let shutdown_token = state.shutdown_token.clone();
+    let stream =
+        futures::stream::unfold((rx, shutdown_token), |(mut receiver, token)| async move {
             loop {
-                match receiver.recv().await {
-                    Ok(evt) => {
-                        if let Ok(data) = serde_json::to_string(&evt) {
-                            let event = Event::default().event("resource_updated").data(data);
-                            return Some((Ok(event), receiver));
+                tokio::select! {
+                    _ = token.cancelled() => return None,
+                    msg = receiver.recv() => match msg {
+                        Ok(evt) => {
+                            if let Ok(data) = serde_json::to_string(&evt) {
+                                let event = Event::default().event("resource_updated").data(data);
+                                return Some((Ok(event), (receiver, token)));
+                            }
                         }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
                 }
             }
-        },
-    );
+        });
 
     Sse::new(stream).keep_alive(KeepAlive::default())
 }

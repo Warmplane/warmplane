@@ -409,6 +409,7 @@ pub async fn spawn_supervised_stdio_server(
     let mut cmd = Command::new(command);
     cmd.args(&srv_cfg.args);
     cmd.envs(&srv_cfg.env);
+    cmd.kill_on_drop(true);
 
     let transport = TokioChildProcess::new(cmd);
 
@@ -463,6 +464,7 @@ pub async fn spawn_supervised_stdio_server(
     let prompt_aliases_owned = prompt_aliases.clone();
     let tool_timeout = Duration::from_millis(state.tool_timeout_ms);
     let state_clone = state.clone();
+    let shutdown_token = state.shutdown_token.clone();
 
     tokio::spawn(async move {
         let mut client_opt = initial_client_opt;
@@ -470,7 +472,21 @@ pub async fn spawn_supervised_stdio_server(
         let mut last_restart_time: Option<Instant> = None;
         const STABLE_UPTIME_WINDOW: Duration = Duration::from_secs(60);
 
-        while let Some(msg) = rx.recv().await {
+        loop {
+            let msg = tokio::select! {
+                _ = shutdown_token.cancelled() => {
+                    info!(
+                        server_id = %server_id_owned,
+                        "shutdown token cancelled; terminating stdio supervisor loop"
+                    );
+                    break;
+                }
+                opt = rx.recv() => match opt {
+                    Some(m) => m,
+                    None => break,
+                }
+            };
+
             let mut is_alive = false;
 
             if let Some(client) = &client_opt {
@@ -502,8 +518,12 @@ pub async fn spawn_supervised_stdio_server(
                 }
             }
 
-            // Attempt reconnection if process died
-            if !is_alive && client_opt.is_none() && resilience_cfg.auto_restart {
+            // Attempt reconnection if process died and shutdown is not in progress
+            if !is_alive
+                && client_opt.is_none()
+                && resilience_cfg.auto_restart
+                && !shutdown_token.is_cancelled()
+            {
                 let now = Instant::now();
                 if let Some(last_time) = last_restart_time {
                     if now.duration_since(last_time) >= STABLE_UPTIME_WINDOW {
@@ -522,11 +542,21 @@ pub async fn spawn_supervised_stdio_server(
                         "stdio child process exited; supervisor scheduling restart"
                     );
 
-                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                    tokio::select! {
+                        _ = shutdown_token.cancelled() => {
+                            info!(
+                                server_id = %server_id_owned,
+                                "shutdown requested during restart backoff; cancelling supervisor"
+                            );
+                            break;
+                        }
+                        _ = tokio::time::sleep(Duration::from_millis(backoff_ms)) => {}
+                    }
 
                     let mut cmd = Command::new(&command_owned);
                     cmd.args(&args_owned);
                     cmd.envs(&env_owned);
+                    cmd.kill_on_drop(true);
 
                     if let Ok(transport) = TokioChildProcess::new(cmd) {
                         if let Ok(new_client) = ().serve(transport).await {
@@ -663,6 +693,7 @@ pub async fn spawn_supervised_http_server(
     let prompt_aliases_owned = prompt_aliases.clone();
     let tool_timeout = Duration::from_millis(state.tool_timeout_ms);
     let state_clone = state.clone();
+    let shutdown_token = state.shutdown_token.clone();
 
     tokio::spawn(async move {
         let mut client_opt = initial_client_opt;
@@ -670,7 +701,21 @@ pub async fn spawn_supervised_http_server(
         let mut last_restart_time: Option<Instant> = None;
         const STABLE_UPTIME_WINDOW: Duration = Duration::from_secs(60);
 
-        while let Some(msg) = rx.recv().await {
+        loop {
+            let msg = tokio::select! {
+                _ = shutdown_token.cancelled() => {
+                    info!(
+                        server_id = %server_id_owned,
+                        "shutdown token cancelled; terminating HTTP supervisor loop"
+                    );
+                    break;
+                }
+                opt = rx.recv() => match opt {
+                    Some(m) => m,
+                    None => break,
+                }
+            };
+
             let mut is_alive = false;
 
             if let Some(client) = &client_opt {
@@ -701,7 +746,11 @@ pub async fn spawn_supervised_http_server(
             }
 
             // Attempt reconnection if client dropped or initial connection was deferred
-            if !is_alive && client_opt.is_none() && resilience_cfg.auto_restart {
+            if !is_alive
+                && client_opt.is_none()
+                && resilience_cfg.auto_restart
+                && !shutdown_token.is_cancelled()
+            {
                 let now = Instant::now();
                 if let Some(last_time) = last_restart_time {
                     if now.duration_since(last_time) >= STABLE_UPTIME_WINDOW {
@@ -720,7 +769,16 @@ pub async fn spawn_supervised_http_server(
                         "Remote HTTP server disconnected; supervisor scheduling reconnect"
                     );
 
-                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                    tokio::select! {
+                        _ = shutdown_token.cancelled() => {
+                            info!(
+                                server_id = %server_id_owned,
+                                "shutdown requested during reconnect backoff; cancelling supervisor"
+                            );
+                            break;
+                        }
+                        _ = tokio::time::sleep(Duration::from_millis(backoff_ms)) => {}
+                    }
 
                     let reconnect_attempt = timeout(
                         handshake_timeout,

@@ -1322,9 +1322,21 @@ pub async fn run_mcp_server(
         }
     }
     let state = initialize_state(config, config_path).await?;
+    let state_for_shutdown = state.clone();
+    let shutdown_token = state.shutdown_token.clone();
     let server = FacadeMcpServer { state, profile };
     let running = server.serve(stdio()).await?;
-    let _ = running.waiting().await?;
+
+    tokio::select! {
+        res = running.waiting() => {
+            let _ = res?;
+        }
+        _ = crate::daemon::shutdown_signal(shutdown_token) => {
+            tracing::info!("shutdown signal received; closing MCP facade stdio server");
+        }
+    }
+
+    state_for_shutdown.shutdown().await;
     Ok(())
 }
 

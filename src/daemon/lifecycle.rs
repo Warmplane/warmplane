@@ -240,6 +240,9 @@ impl AppState {
     pub async fn shutdown(&self) {
         info!("initiating graceful shutdown of Warmplane daemon subsystems");
 
+        // 0. Notify all supervisor tasks and workers to stop
+        self.shutdown_token.cancel();
+
         // 1. Collect all active upstream servers and unmount them
         let server_ids: Vec<String> = {
             let guard = self.servers.read().await;
