@@ -186,7 +186,7 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 | Feature | Since | Summary |
 |---------|-------|---------|
 | **Signal Handling & Graceful Teardown** | v0.21.0 | Immediate signal cancellation (`CancellationToken`), instant SSE stream termination, clean stdio child orphan protection (`kill_on_drop`), and bounded drain safety timeouts |
-| **Named Server Constellations (Profiles)** | v0.20.0 | Task-relevant server constellation slicing (`profiles`), dynamic per-request selection (`X-Warmplane-Profile` / `?profile=`), profile-partitioned ETag caching (`-p:<profile_id>`), and stdio MCP proxy filtering (`--profile`) |
+| **Named Server Constellations (Profiles)** | v0.21.0 | Task-relevant server constellation slicing (`profiles`), dynamic per-request selection (`X-Warmplane-Profile` / `?profile=`), profile-partitioned ETag caching (`-p:<profile_id>`), and stdio MCP proxy filtering (`--profile`) |
 | **Multi-Tenant RBAC & Catalog Partitioning** | v0.20.0 | Tenant-scoped authorization (`TenantContext`), static token & HMAC-SHA256 JWT auth, per-role policy overrides, dynamic catalog/search pruning, and WORM audit identity binding |
 | **Client-Delegated MCP Sampling** | v0.19.0 | Reverse RPC sampling delegation (`sampling/createMessage`), synchronous long-polling or async ticket lifecycle, persistent `sampling.json` storage, and self-healing HTTP/SSE supervisor |
 | **Persistent State & Graceful Teardown** | v0.18.0 | Restart-resilient atomic storage (`approvals`, `idempotency`, `oauth`, `catalog_events`), SIGINT/SIGTERM handling, audit batch drain, Bun CI UI gate & E2E suite |
@@ -219,12 +219,13 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 
 ## Changelog
 
-### v0.21.0 — Signal Lifecycle & Graceful Process Termination Hardening
-- **Immediate Signal Cancellation Propagation:** Integrated unified `tokio_util::sync::CancellationToken` triggered synchronously upon interception of `SIGINT` (Ctrl-C) or `SIGTERM`, instantly notifying all background supervisor loops, HTTP listeners, and worker tasks to shut down.
-- **Unblocking SSE & Stream Draining:** Updated Server-Sent Events (SSE) notification streams (`/v1/resources/updates`) and long-polling endpoints to monitor the cancellation token and terminate immediately, resolving connection drain deadlocks during Axum graceful shutdown.
-- **Child Process Orphan Prevention:** Configured `cmd.kill_on_drop(true)` across stdio child process supervisor commands, ensuring background MCP servers terminate cleanly upon parent exit and preventing supervisor auto-restart loops during system shutdown.
-- **OAuth Proxy Lifecycle Synchronization:** Wired cancellation token directly into the ephemeral OAuth proxy server listener to prevent dangling background proxy processes.
-- **Bounded Teardown Safety Timeout:** Added a 3-second bounded safety timeout on daemon subsystem teardown (`app_state.shutdown()`) to guarantee prompt process exit.
+### v0.21.0 — Named Server Constellations (Profiles), Signal Lifecycle & Integrator Ecosystem
+- **Named Server Constellations (Profiles):** Added first-class profile support (`ProfileConfig`) allowing task-relevant subsets of upstream MCP servers to be grouped into named constellations (e.g. `coding`, `research`, `data_science`).
+- **Dynamic Profile Selection & Scoped ETag Partitioning:** Supported per-request profile scoping via `X-Warmplane-Profile` headers and `?profile=` query parameters. Catalog endpoints (`/v1/capabilities`, `/v1/resources`, `/v1/prompts`) and search (`/v1/capabilities/search`) dynamically prune items outside the active profile and maintain deterministic profile-partitioned ETags (`sha256:...-p:<profile_id>`).
+- **MCP Facade Stdio Profile Filtering:** Added `--profile <name>` CLI option to `warmplane mcp-server` and `warmplane list-capabilities`, providing agent hosts with a strictly scoped MCP tool and resource surface.
+- **Web Control Deck Profile Hub:** Added interactive visual profile manager in the Web UI dashboard with 1-click active constellation switching, server toggles, and live catalog filtering.
+- **Signal Handling & Process Teardown Hardening:** Integrated immediate `tokio_util::sync::CancellationToken` dispatch on `SIGINT` (Ctrl-C) / `SIGTERM`, unblocked SSE stream draining, added child process orphan prevention via `kill_on_drop(true)`, and enforced a 3-second bounded safety shutdown timeout.
+- **Developer & Integrator Ecosystem Guides:** Published official [Rust Integrators Guide](docs/RUST_INTEGRATORS_GUIDE.md), [TypeScript Integrators Guide](docs/TYPESCRIPT_INTEGRATORS_GUIDE.md), and [Idempotency Architecture Editorial](docs/EDITORIAL.md).
 
 ### v0.20.0 — Multi-Tenant RBAC & Deterministic Catalog Partitioning
 - **Multi-Tenant RBAC Engine (`src/rbac`):** Built role-based access control engine with support for static API tokens, token-to-role mappings in configuration (`rbac.tokens`), and cryptographic HMAC-SHA256 symmetric JWT signature verification with configurable secret key (`rbac.jwt_secret`).
