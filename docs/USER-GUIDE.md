@@ -18,13 +18,15 @@ Warmplane optimizes AI agent tool execution across three core technical dimensio
 
 ### Client Interfaces
 
-Warmplane exposes five client interfaces backed by shared daemon state:
+Warmplane exposes six client interfaces backed by shared core engine state:
 
-1. **Control Deck Web UI (`/ui` and `/`)**: Embedded zero-dependency web management interface for runtime telemetry, upstream server lifecycle, interactive tool execution playground, and security policy rules.
-2. **HTTP REST API (`/v1/...`)**: Low-overhead HTTP JSON API for web applications, microservices, and orchestration gateways.
-3. **MCP Stdio Server Mode (`mcp-server`)**: Standard MCP stdio interface for direct integration with MCP-native AI clients (Claude Desktop, Cursor, Zed).
-4. **MCP HTTP/SSE Server Mode (`mcp-http-server`)**: Streamable HTTP/SSE MCP server for remote MCP clients connecting over a network socket (CI pipelines, multi-host agent clusters, remote desktop clients).
-5. **CLI Facade (`warmplane <command>`)**: Command-line interface for administrative scripting, server hot-reloading (`warmplane reload`), health checks, and manual debugging.
+1. **Embedded Rust Engine (`EmbeddedWarmplane`)**: Direct in-process Rust library entry point for embedding Warmplane into agents without HTTP overhead, daemon child processes, or JSON-RPC serialization.
+2. **Control Deck Web UI (`/ui` and `/`)**: Embedded zero-dependency web management interface for runtime telemetry, upstream server lifecycle, interactive tool execution playground, and security policy rules.
+3. **HTTP REST API (`/v1/...`)**: Low-overhead HTTP JSON API for web applications, microservices, and orchestration gateways.
+4. **MCP Stdio Server Mode (`mcp-server`)**: Standard MCP stdio interface for direct integration with MCP-native AI clients (Claude Desktop, Cursor, Zed).
+5. **MCP HTTP/SSE Server Mode (`mcp-http-server`)**: Streamable HTTP/SSE MCP server for remote MCP clients connecting over a network socket (CI pipelines, multi-host agent clusters, remote desktop clients).
+6. **CLI Facade (`warmplane <command>`)**: Command-line interface for administrative scripting, server hot-reloading (`warmplane reload`), health checks, and manual debugging.
+
 
 ---
 
@@ -578,7 +580,57 @@ Two deployment topologies are supported:
 
 ---
 
-### 5.4 CLI Management and Operations
+### 5.4 Embedded Rust Library Mode
+
+In addition to running as a standalone daemon or MCP server process, Warmplane can be embedded directly into any Rust application or agent architecture as an in-process library via `EmbeddedWarmplane` and `ControlPlaneHandle`.
+
+#### Cargo Dependency
+
+```toml
+[dependencies]
+warmplane = "0.23.0"
+tokio = { version = "1", features = ["full"] }
+serde_json = "1.0"
+```
+
+#### Example: In-Process Control Plane
+
+```rust
+use warmplane::{config::McpConfig, EmbeddedWarmplane, engine::ExecutionOptions};
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // 1. Boot embedded engine on caller's Tokio runtime
+    let (cp, _shutdown) = EmbeddedWarmplane::start_from_path("mcp_servers.json").await?;
+
+    // 2. Discover capabilities
+    let caps = cp.list_capabilities(None).await?;
+    println!("Discovered {} capabilities", caps.capabilities.len());
+
+    // 3. Execute capability tool directly without HTTP serialization overhead
+    let env = cp.call_capability(
+        "filesystem.read_file",
+        json!({ "path": "/tmp/readme.txt" }),
+        ExecutionOptions::default().with_request_id("agent-req-01"),
+    ).await;
+
+    if env.ok {
+        println!("Execution result: {:?}", env.data);
+    } else {
+        eprintln!("Execution failed: {:?}", env.error);
+    }
+
+    // 4. Gracefully terminate supervisors and worker actors
+    cp.shutdown().await;
+    Ok(())
+}
+```
+
+---
+
+### 5.5 CLI Management and Operations
+
 
 Run single-shot CLI commands for administration, configuration management, approvals, debugging, and automation scripts.
 

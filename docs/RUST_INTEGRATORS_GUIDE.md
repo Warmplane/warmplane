@@ -1,33 +1,72 @@
 # Rust Integrators Guide
 
-This guide explains how to drive a running Warmplane daemon from Rust code over its HTTP REST API. It includes a minimal `WarmplaneClient` you can drop into your project and build on.
+This guide explains two approaches to integrating Warmplane in Rust:
+1. **Embedded Rust Engine (Direct in-process)**: Directly spawn `EmbeddedWarmplane` on your own `tokio` runtime without HTTP overhead or daemon management.
+2. **HTTP REST Client (`WarmplaneClient`)**: Drive a running Warmplane daemon over its HTTP REST API.
+
 
 ---
 
-## Prerequisites
+## 1. In-Process Integration (`EmbeddedWarmplane`)
 
-- A running Warmplane daemon with at least one upstream MCP server configured.
-- Rust toolchain (1.80+).
-- The following crates in your `Cargo.toml`:
+For lowest latency, zero network hops, and single-binary deployment, import `warmplane` directly as a library crate.
+
+### Cargo Dependency
 
 ```toml
 [dependencies]
-reqwest = { version = "0.13", features = ["json", "rustls"] }
+warmplane = "0.23.0"
 tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-anyhow = "1"
+serde_json = "1.0"
 ```
 
-Start the daemon in a separate terminal:
+### In-Process Quickstart
 
-```bash
-warmplane daemon --config mcp_servers.json
+```rust
+use warmplane::{
+    config::load_config,
+    engine::{ExecutionOptions, ReadResourceOptions, GetPromptOptions},
+    EmbeddedWarmplane,
+};
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // 1. Boot embedded engine from config file on caller's runtime
+    let (cp, shutdown_token) = EmbeddedWarmplane::start_from_path("mcp_servers.json").await?;
+
+    // 2. Discover capabilities
+    let list = cp.list_capabilities(None).await?;
+    for cap in &list.capabilities {
+        println!("Capability: {} (Server: {})", cap.id, cap.server);
+    }
+
+    // 3. Execute tool directly with full typed Envelope<Value> return
+    let env = cp.call_capability(
+        "filesystem.read_file",
+        json!({ "path": "/tmp/test.txt" }),
+        ExecutionOptions::default().with_request_id("req-101"),
+    ).await;
+
+    if env.ok {
+        println!("Result: {:?}", env.data);
+    } else {
+        eprintln!("Error: {:?}", env.error);
+    }
+
+    // 4. Clean graceful shutdown
+    cp.shutdown().await;
+    assert!(shutdown_token.is_cancelled());
+    Ok(())
+}
 ```
 
 ---
 
-## WarmplaneClient
+## 2. HTTP REST Client Integration (`WarmplaneClient`)
+
+If you run Warmplane as a standalone daemon process, use this thin typed wrapper over `reqwest`.
+
 
 A thin typed wrapper over `reqwest`. No framework, no macros — just enough structure to avoid repeating URL construction and envelope parsing.
 
