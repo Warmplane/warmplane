@@ -326,4 +326,3 @@ pub struct GetPromptOptions {
     /// Named server profile restricting visibility.
     pub profile: Option<String>,
 }
-

@@ -250,7 +250,9 @@ impl ControlPlaneHandle {
         args: Value,
         options: ExecutionOptions,
     ) -> Envelope<Value> {
-        let prof_ctx = self.resolve_profile_context(options.profile.as_deref()).await;
+        let prof_ctx = self
+            .resolve_profile_context(options.profile.as_deref())
+            .await;
         let start_time = std::time::Instant::now();
         self.state.total_tool_calls.fetch_add(1, Ordering::Relaxed);
         let trace_id = next_trace_id();
@@ -620,7 +622,9 @@ impl ControlPlaneHandle {
         resource_id: &str,
         options: ReadResourceOptions,
     ) -> Envelope<Value> {
-        let prof_ctx = self.resolve_profile_context(options.profile.as_deref()).await;
+        let prof_ctx = self
+            .resolve_profile_context(options.profile.as_deref())
+            .await;
         let trace_id = next_trace_id();
         let req_id = options.request_id.unwrap_or_else(|| trace_id.clone());
         let req_ctx = options.context.unwrap_or_default();
@@ -757,12 +761,10 @@ impl ControlPlaneHandle {
     }
 
     /// Renders a registered prompt template.
-    pub async fn get_prompt(
-        &self,
-        prompt_id: &str,
-        options: GetPromptOptions,
-    ) -> Envelope<Value> {
-        let prof_ctx = self.resolve_profile_context(options.profile.as_deref()).await;
+    pub async fn get_prompt(&self, prompt_id: &str, options: GetPromptOptions) -> Envelope<Value> {
+        let prof_ctx = self
+            .resolve_profile_context(options.profile.as_deref())
+            .await;
         let trace_id = next_trace_id();
         let req_id = options.request_id.unwrap_or_else(|| trace_id.clone());
         let req_ctx = options.context.unwrap_or_default();
@@ -909,4 +911,3 @@ impl ControlPlaneHandle {
         self.state.shutdown().await;
     }
 }
-

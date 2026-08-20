@@ -687,8 +687,6 @@ impl FacadeMcpServer {
         let env = handle.get_prompt(&prompt_id, opts).await;
         serde_json::to_value(env).map_err(|e| e.to_string())
     }
-
-
 }
 
 fn invalid_args(message: impl Into<String>) -> Value {
