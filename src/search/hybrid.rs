@@ -8,7 +8,7 @@ use super::vector::VectorSearchIndex;
 use crate::daemon::{CapabilityMeta, Policy};
 
 /// Ranked result item returned by hybrid capability search.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CapabilitySearchResult {
     /// Unique identifier of matched capability.
     pub id: String,

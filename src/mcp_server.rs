@@ -513,32 +513,12 @@ impl FacadeMcpServer {
     }
 
     async fn list_capabilities_value(&self) -> std::result::Result<Value, String> {
-        let prof_ctx = self.profile_context().await;
-        let caps_guard = self.state.capabilities.read().await;
-        let mut capabilities = caps_guard
-            .iter()
-            .filter(|(_, meta)| prof_ctx.is_server_allowed(&meta.server))
-            .map(|(id, meta)| {
-                json!({
-                    "id": id,
-                    "summary": meta.summary,
-                    "server": meta.server,
-                    "tool": meta.tool,
-                    "tags": meta.tags,
-                })
-            })
-            .collect::<Vec<_>>();
-
-        capabilities.sort_by(|a, b| {
-            a.get("id")
-                .and_then(|v| v.as_str())
-                .cmp(&b.get("id").and_then(|v| v.as_str()))
-        });
-
-        Ok(json!({
-            "version": "v1",
-            "capabilities": capabilities,
-        }))
+        let handle = crate::engine::ControlPlaneHandle::new(self.state.clone());
+        let res = handle
+            .list_capabilities(self.profile.as_deref())
+            .await
+            .map_err(|e| e.to_string())?;
+        serde_json::to_value(res).map_err(|e| e.to_string())
     }
 
     async fn search_capabilities_value(
@@ -549,77 +529,34 @@ impl FacadeMcpServer {
         modes: Option<Vec<String>>,
         limit: Option<usize>,
     ) -> std::result::Result<Value, String> {
-        let prof_ctx = self.profile_context().await;
-        let mut filter_builder = crate::search::SearchFilter::builder();
-        let effective_servers = match &prof_ctx.allowed_servers {
-            Some(allowed) => match server_ids {
-                Some(servers) => servers
-                    .into_iter()
-                    .filter(|s| allowed.contains(s))
-                    .collect(),
-                None => allowed.iter().cloned().collect(),
-            },
-            None => server_ids.unwrap_or_default(),
-        };
-
-        if !effective_servers.is_empty() {
-            filter_builder = filter_builder.server_ids(effective_servers);
-        }
-        if let Some(t) = tags {
-            filter_builder = filter_builder.tags(t);
-        }
-        if let Some(m) = modes {
-            filter_builder = filter_builder.modes(m);
-        }
-        let filter = filter_builder.build();
-
-        let caps = self.state.capabilities.read().await;
-        let pol = self.state.policy.read().await;
-        let base_ver = self.state.catalog_version.read().await.clone();
-        let catalog_ver =
-            crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
-        let query_str = query.as_deref().unwrap_or("");
-        let limit = limit.unwrap_or(8);
-
-        let results = self
-            .state
-            .search_engine
-            .search(query_str, limit, &filter, &caps, &pol);
-
-        Ok(json!({
-            "version": "v1",
-            "catalog_version": catalog_ver,
-            "query": query_str,
-            "total": results.len(),
-            "capabilities": results,
-        }))
+        let handle = crate::engine::ControlPlaneHandle::new(self.state.clone());
+        let res = handle
+            .search_capabilities(
+                query.as_deref(),
+                server_ids,
+                tags,
+                modes,
+                limit,
+                self.profile.as_deref(),
+            )
+            .await;
+        serde_json::to_value(res).map_err(|e| e.to_string())
     }
 
     async fn describe_capability_value(&self, id: String) -> std::result::Result<Value, String> {
-        let prof_ctx = self.profile_context().await;
-        let caps_guard = self.state.capabilities.read().await;
-        match caps_guard.get(&id) {
-            Some(meta) if prof_ctx.is_server_allowed(&meta.server) => Ok(json!({
-                "version": "v1",
-                "capability": {
-                    "id": id,
-                    "server": meta.server,
-                    "tool": meta.tool,
-                    "description": meta.description,
-                    "input_schema": meta.input_schema,
-                    "examples": meta.examples,
-                }
-            })),
-            _ => Ok(error_envelope(
-                next_trace_id(),
-                None,
-                None,
-                crate::idempotency::RetryMetadata::safe("not_started"),
-                "TOOL_NOT_FOUND",
-                format!("Capability '{}' not found", id),
-                false,
-            )),
+        let handle = crate::engine::ControlPlaneHandle::new(self.state.clone());
+        let env = handle
+            .describe_capability(&id, self.profile.as_deref())
+            .await;
+        if env.ok {
+            if let Some(cap) = env.data {
+                return Ok(json!({
+                    "version": "v1",
+                    "capability": cap,
+                }));
+            }
         }
+        serde_json::to_value(env).map_err(|e| e.to_string())
     }
 
     async fn call_capability_value(
@@ -631,159 +568,18 @@ impl FacadeMcpServer {
         input_responses: Option<std::collections::BTreeMap<String, Value>>,
         request_state: Option<String>,
     ) -> std::result::Result<Value, String> {
-        let prof_ctx = self.profile_context().await;
-        let trace_id = next_trace_id();
-        let ctx = context.unwrap_or_default();
-        if !self.state.policy.read().await.allows(&capability_id) {
-            return Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::unsafe_op("not_started"),
-                "INVALID_ARGS",
-                format!("Capability '{}' blocked by policy", capability_id),
-                false,
-            ));
-        }
-
-        let (server, tool) = {
-            let caps_guard = self.state.capabilities.read().await;
-            let Some(meta) = caps_guard.get(&capability_id) else {
-                return Ok(error_envelope(
-                    trace_id,
-                    request_id,
-                    Some(ctx),
-                    crate::idempotency::RetryMetadata::unsafe_op("not_started"),
-                    "TOOL_NOT_FOUND",
-                    format!("Capability '{}' not found", capability_id),
-                    false,
-                ));
-            };
-
-            if !prof_ctx.is_server_allowed(&meta.server) {
-                return Ok(error_envelope(
-                    trace_id,
-                    request_id,
-                    Some(ctx),
-                    crate::idempotency::RetryMetadata::unsafe_op("not_started"),
-                    "TOOL_NOT_IN_PROFILE",
-                    format!(
-                        "Capability '{}' belongs to server '{}' which is not in active profile",
-                        capability_id, meta.server
-                    ),
-                    false,
-                ));
-            }
-
-            (meta.server.clone(), meta.tool.clone())
+        let handle = crate::engine::ControlPlaneHandle::new(self.state.clone());
+        let opts = crate::engine::ExecutionOptions {
+            request_id,
+            context,
+            idempotency_key: None,
+            input_responses,
+            request_state,
+            profile: self.profile.clone(),
         };
 
-        let tx = {
-            let servers_guard = self.state.servers.read().await;
-            let Some(tx) = servers_guard.get(&server).cloned() else {
-                return Ok(error_envelope(
-                    trace_id,
-                    request_id,
-                    Some(ctx),
-                    crate::idempotency::RetryMetadata::unsafe_op("not_started"),
-                    "SERVER_UNREACHABLE",
-                    format!("Server '{}' is unreachable", server),
-                    true,
-                ));
-            };
-            tx
-        };
-
-        // Circuit Breaker Check
-        if let Err(cb_err) = self.state.circuit_breakers.check_permission(&server).await {
-            return Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::safe("not_started"),
-                "CIRCUIT_OPEN",
-                cb_err.to_string(),
-                false,
-            ));
-        }
-
-        let distill_opts = crate::context_filter::DistillationOptions::from_args(Some(&args));
-
-        let (reply_tx, reply_rx) = oneshot::channel();
-        if tx
-            .send(ServerMsg::CallTool {
-                name: tool,
-                params: args,
-                input_responses,
-                request_state,
-                reply: reply_tx,
-            })
-            .await
-            .is_err()
-        {
-            self.state.circuit_breakers.record_failure(&server).await;
-            return Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::unsafe_op("not_started"),
-                "SERVER_UNREACHABLE",
-                format!("Server '{}' mailbox is closed", server),
-                true,
-            ));
-        }
-
-        match reply_rx.await {
-            Ok(Ok(data)) => {
-                self.state.circuit_breakers.record_success(&server).await;
-                let distilled_data = crate::context_filter::distill_value(data, &distill_opts);
-                Ok(json!({
-                    "ok": true,
-                    "request_id": request_id,
-                    "context": ctx,
-                    "trace_id": trace_id,
-                    "data": distilled_data,
-                    "error": null,
-                    "retry": crate::idempotency::RetryMetadata::unsafe_op("completed"),
-                }))
-            }
-            Ok(Err(UpstreamCallError::Timeout)) => {
-                self.state.circuit_breakers.record_failure(&server).await;
-                Ok(error_envelope(
-                    trace_id,
-                    request_id,
-                    Some(ctx),
-                    crate::idempotency::RetryMetadata::unsafe_op("unknown"),
-                    "UPSTREAM_TIMEOUT",
-                    format!("Tool call timed out after {}ms", self.state.tool_timeout_ms),
-                    true,
-                ))
-            }
-            Ok(Err(UpstreamCallError::Upstream(err))) => {
-                self.state.circuit_breakers.record_failure(&server).await;
-                Ok(error_envelope(
-                    trace_id,
-                    request_id,
-                    Some(ctx),
-                    crate::idempotency::RetryMetadata::unsafe_op("unknown"),
-                    "UPSTREAM_ERROR",
-                    err,
-                    false,
-                ))
-            }
-            Err(_) => {
-                self.state.circuit_breakers.record_failure(&server).await;
-                Ok(error_envelope(
-                    trace_id,
-                    request_id,
-                    Some(ctx),
-                    crate::idempotency::RetryMetadata::unsafe_op("unknown"),
-                    "SERVER_UNREACHABLE",
-                    format!("Server '{}' dropped reply channel", server),
-                    true,
-                ))
-            }
-        }
+        let env = handle.call_capability(&capability_id, args, opts).await;
+        serde_json::to_value(env).map_err(|e| e.to_string())
     }
 
     async fn list_resources_value(&self) -> std::result::Result<Value, String> {
@@ -825,129 +621,17 @@ impl FacadeMcpServer {
         input_responses: Option<std::collections::BTreeMap<String, Value>>,
         request_state: Option<String>,
     ) -> std::result::Result<Value, String> {
-        let prof_ctx = self.profile_context().await;
-        let trace_id = next_trace_id();
-        let ctx = context.unwrap_or_default();
-        if !self.state.policy.read().await.allows(&resource_id) {
-            return Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::safe("not_started"),
-                "INVALID_ARGS",
-                format!("Resource '{}' blocked by policy", resource_id),
-                false,
-            ));
-        }
-
-        let (server, uri) = {
-            let res_guard = self.state.resources.read().await;
-            let Some(meta) = res_guard.get(&resource_id) else {
-                return Ok(error_envelope(
-                    trace_id,
-                    request_id,
-                    Some(ctx),
-                    crate::idempotency::RetryMetadata::safe("not_started"),
-                    "RESOURCE_NOT_FOUND",
-                    format!("Resource '{}' not found", resource_id),
-                    false,
-                ));
-            };
-
-            if !prof_ctx.is_server_allowed(&meta.server) {
-                return Ok(error_envelope(
-                    trace_id,
-                    request_id,
-                    Some(ctx),
-                    crate::idempotency::RetryMetadata::safe("not_started"),
-                    "RESOURCE_NOT_FOUND",
-                    format!("Resource '{}' not available in active profile", resource_id),
-                    false,
-                ));
-            }
-
-            (meta.server.clone(), meta.uri.clone())
+        let handle = crate::engine::ControlPlaneHandle::new(self.state.clone());
+        let opts = crate::engine::ReadResourceOptions {
+            request_id,
+            context,
+            input_responses,
+            request_state,
+            profile: self.profile.clone(),
         };
 
-        let tx = {
-            let servers_guard = self.state.servers.read().await;
-            let Some(tx) = servers_guard.get(&server).cloned() else {
-                return Ok(error_envelope(
-                    trace_id,
-                    request_id,
-                    Some(ctx),
-                    crate::idempotency::RetryMetadata::safe("not_started"),
-                    "SERVER_UNREACHABLE",
-                    format!("Server '{}' is unreachable", server),
-                    true,
-                ));
-            };
-            tx
-        };
-
-        let (reply_tx, reply_rx) = oneshot::channel();
-        if tx
-            .send(ServerMsg::ReadResource {
-                uri,
-                input_responses,
-                request_state,
-                reply: reply_tx,
-            })
-            .await
-            .is_err()
-        {
-            return Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::safe("not_started"),
-                "SERVER_UNREACHABLE",
-                format!("Server '{}' mailbox is closed", server),
-                true,
-            ));
-        }
-
-        match reply_rx.await {
-            Ok(Ok(data)) => Ok(json!({
-                "ok": true,
-                "request_id": request_id,
-                "context": ctx,
-                "trace_id": trace_id,
-                "data": data,
-                "error": null,
-                "retry": crate::idempotency::RetryMetadata::safe("completed"),
-            })),
-            Ok(Err(UpstreamCallError::Timeout)) => Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::safe("unknown"),
-                "UPSTREAM_TIMEOUT",
-                format!(
-                    "Resource read timed out after {}ms",
-                    self.state.tool_timeout_ms
-                ),
-                true,
-            )),
-            Ok(Err(UpstreamCallError::Upstream(err))) => Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::safe("unknown"),
-                "UPSTREAM_ERROR",
-                err,
-                false,
-            )),
-            Err(_) => Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::safe("unknown"),
-                "INTERNAL_ERROR",
-                "Daemon actor task died",
-                true,
-            )),
-        }
+        let env = handle.read_resource(&resource_id, opts).await;
+        serde_json::to_value(env).map_err(|e| e.to_string())
     }
 
     async fn list_prompts_value(&self) -> std::result::Result<Value, String> {
@@ -990,146 +674,18 @@ impl FacadeMcpServer {
         input_responses: Option<std::collections::BTreeMap<String, Value>>,
         request_state: Option<String>,
     ) -> std::result::Result<Value, String> {
-        let prof_ctx = self.profile_context().await;
-        let trace_id = next_trace_id();
-        let ctx = context.unwrap_or_default();
-        if !self.state.policy.read().await.allows(&prompt_id) {
-            return Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::safe("not_started"),
-                "INVALID_ARGS",
-                format!("Prompt '{}' blocked by policy", prompt_id),
-                false,
-            ));
-        }
-
-        let (server, name) = {
-            let prompts_guard = self.state.prompts.read().await;
-            let Some(meta) = prompts_guard.get(&prompt_id) else {
-                return Ok(error_envelope(
-                    trace_id,
-                    request_id,
-                    Some(ctx),
-                    crate::idempotency::RetryMetadata::safe("not_started"),
-                    "PROMPT_NOT_FOUND",
-                    format!("Prompt '{}' not found", prompt_id),
-                    false,
-                ));
-            };
-
-            if !prof_ctx.is_server_allowed(&meta.server) {
-                return Ok(error_envelope(
-                    trace_id,
-                    request_id,
-                    Some(ctx),
-                    crate::idempotency::RetryMetadata::safe("not_started"),
-                    "PROMPT_NOT_FOUND",
-                    format!("Prompt '{}' not available in active profile", prompt_id),
-                    false,
-                ));
-            }
-
-            (meta.server.clone(), meta.name.clone())
+        let handle = crate::engine::ControlPlaneHandle::new(self.state.clone());
+        let opts = crate::engine::GetPromptOptions {
+            request_id,
+            context,
+            arguments,
+            input_responses,
+            request_state,
+            profile: self.profile.clone(),
         };
 
-        let arguments = match arguments {
-            Some(Value::Object(map)) => Some(map),
-            Some(_) => {
-                return Ok(error_envelope(
-                    trace_id,
-                    request_id,
-                    Some(ctx),
-                    crate::idempotency::RetryMetadata::safe("not_started"),
-                    "INVALID_ARGS",
-                    "'arguments' must be a JSON object when provided",
-                    false,
-                ));
-            }
-            None => None,
-        };
-
-        let tx = {
-            let servers_guard = self.state.servers.read().await;
-            let Some(tx) = servers_guard.get(&server).cloned() else {
-                return Ok(error_envelope(
-                    trace_id,
-                    request_id,
-                    Some(ctx),
-                    crate::idempotency::RetryMetadata::safe("not_started"),
-                    "SERVER_UNREACHABLE",
-                    format!("Server '{}' is unreachable", server),
-                    true,
-                ));
-            };
-            tx
-        };
-
-        let (reply_tx, reply_rx) = oneshot::channel();
-        if tx
-            .send(ServerMsg::GetPrompt {
-                name,
-                arguments,
-                input_responses,
-                request_state,
-                reply: reply_tx,
-            })
-            .await
-            .is_err()
-        {
-            return Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::safe("not_started"),
-                "SERVER_UNREACHABLE",
-                format!("Server '{}' mailbox is closed", server),
-                true,
-            ));
-        }
-
-        match reply_rx.await {
-            Ok(Ok(data)) => Ok(json!({
-                "ok": true,
-                "request_id": request_id,
-                "context": ctx,
-                "trace_id": trace_id,
-                "data": data,
-                "error": null,
-                "retry": crate::idempotency::RetryMetadata::safe("completed"),
-            })),
-            Ok(Err(UpstreamCallError::Timeout)) => Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::safe("unknown"),
-                "UPSTREAM_TIMEOUT",
-                format!(
-                    "Prompt get timed out after {}ms",
-                    self.state.tool_timeout_ms
-                ),
-                true,
-            )),
-            Ok(Err(UpstreamCallError::Upstream(err))) => Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::safe("unknown"),
-                "UPSTREAM_ERROR",
-                err,
-                false,
-            )),
-            Err(_) => Ok(error_envelope(
-                trace_id,
-                request_id,
-                Some(ctx),
-                crate::idempotency::RetryMetadata::safe("unknown"),
-                "INTERNAL_ERROR",
-                "Daemon actor task died",
-                true,
-            )),
-        }
+        let env = handle.get_prompt(&prompt_id, opts).await;
+        serde_json::to_value(env).map_err(|e| e.to_string())
     }
 }
 
