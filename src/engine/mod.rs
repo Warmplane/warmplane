@@ -1,0 +1,912 @@
+// Rust guideline compliant 2026-08-20
+
+//! Embedded Warmplane engine interface and ControlPlaneHandle implementation (`M-CANONICAL-DOCS`).
+//!
+//! Provides direct Rust callable APIs without HTTP or transport serialization overhead:
+//! - [`EmbeddedWarmplane`]: In-process entry point to boot and supervise upstream MCP sessions.
+//! - [`ControlPlaneHandle`]: Cloneable, `Send + Sync` handle to query catalogs, invoke capabilities, and run batches.
+
+pub mod types;
+
+use anyhow::Result;
+use serde_json::Value;
+use std::sync::atomic::Ordering;
+use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
+
+use crate::{
+    batch_executor::{execute_batch, BatchCallResponse, BatchStep},
+    config::McpConfig,
+    context::{ProfileContext, RequestContext},
+    context_filter::{distill_value, DistillationOptions},
+    daemon::{
+        initialize_state,
+        state::AppState,
+        types::{ServerMsg, UpstreamCallError},
+    },
+    idempotency::RetryMetadata,
+};
+
+pub use types::*;
+
+/// Generates a trace ID for request correlation.
+#[inline]
+pub fn next_trace_id() -> String {
+    use std::sync::atomic::AtomicU64;
+    static TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
+    format!(
+        "trc-{}-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        TRACE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// In-process entry point for booting and managing Warmplane MCP sessions.
+pub struct EmbeddedWarmplane;
+
+impl EmbeddedWarmplane {
+    /// Spawns upstream MCP supervisors and background workers on the current Tokio runtime.
+    ///
+    /// # Arguments
+    /// * `config` - Typed `McpConfig` specifying servers, policy, resilience, and state settings.
+    ///
+    /// # Returns
+    /// A tuple containing `(ControlPlaneHandle, CancellationToken)`.
+    ///
+    /// # Errors
+    /// Returns an error if initial state configuration fails.
+    pub async fn start(config: McpConfig) -> Result<(ControlPlaneHandle, CancellationToken)> {
+        let app_state = initialize_state(config, "embedded").await?;
+        let shutdown_token = app_state.shutdown_token.clone();
+        let handle = ControlPlaneHandle::new(app_state);
+        Ok((handle, shutdown_token))
+    }
+
+    /// Helper to load a config from a JSON file and boot the embedded engine.
+    pub async fn start_from_path(
+        config_path: impl AsRef<str>,
+    ) -> Result<(ControlPlaneHandle, CancellationToken)> {
+        let cfg = crate::config::load_config(config_path.as_ref())?;
+        Self::start(cfg).await
+    }
+}
+
+/// Cloneable handle to invoke capabilities, query resources/prompts, and inspect engine state directly.
+#[derive(Clone)]
+pub struct ControlPlaneHandle {
+    state: AppState,
+}
+
+impl ControlPlaneHandle {
+    /// Creates a new `ControlPlaneHandle` wrapping an active `AppState`.
+    pub fn new(state: AppState) -> Self {
+        Self { state }
+    }
+
+    /// Returns a reference to the underlying daemon `AppState`.
+    pub fn state(&self) -> &AppState {
+        &self.state
+    }
+
+    /// Resolves profile context for server scoping.
+    pub async fn resolve_profile_context(&self, profile: Option<&str>) -> ProfileContext {
+        if let Some(prof_id) = profile {
+            let profiles_guard = self.state.profiles.read().await;
+            if let Some(prof_cfg) = profiles_guard.get(prof_id) {
+                return ProfileContext::scoped(prof_id.to_string(), prof_cfg.servers.clone());
+            }
+        }
+        ProfileContext::unrestricted()
+    }
+
+    /// Returns current health and diagnostic status of all upstream servers and circuit breakers.
+    pub async fn health_status(&self) -> EngineHealthStatus {
+        let catalog_version = self.state.catalog_version.read().await.clone();
+        let server_statuses = self.state.server_statuses.read().await.clone();
+        let mut circuit_breakers = std::collections::HashMap::new();
+
+        for snapshot in self.state.circuit_breakers.all_statuses().await {
+            circuit_breakers.insert(snapshot.server_id, snapshot.state);
+        }
+
+        EngineHealthStatus {
+            catalog_version,
+            server_statuses,
+            circuit_breakers,
+            total_tool_calls: self.state.total_tool_calls.load(Ordering::Relaxed),
+            total_tool_duration_us: self.state.total_tool_duration_us.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Lists registered capabilities, optionally filtered by a named profile constellation.
+    pub async fn list_capabilities(
+        &self,
+        profile: Option<&str>,
+    ) -> Result<CapabilitiesListResponse> {
+        let prof_ctx = self.resolve_profile_context(profile).await;
+        let caps_guard = self.state.capabilities.read().await;
+        let mut capabilities = caps_guard
+            .iter()
+            .filter(|(_, meta)| prof_ctx.is_server_allowed(&meta.server))
+            .map(|(id, meta)| CapabilitySummary {
+                id: id.clone(),
+                summary: meta.summary.clone(),
+                server: meta.server.clone(),
+                tool: meta.tool.clone(),
+                tags: meta.tags.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        capabilities.sort_by(|a, b| a.id.cmp(&b.id));
+
+        Ok(CapabilitiesListResponse {
+            version: "v1".to_string(),
+            capabilities,
+        })
+    }
+
+    /// Describes a single capability schema and examples.
+    pub async fn describe_capability(
+        &self,
+        id: &str,
+        profile: Option<&str>,
+    ) -> Envelope<CapabilityDetail> {
+        let trace_id = next_trace_id();
+        let prof_ctx = self.resolve_profile_context(profile).await;
+        let caps_guard = self.state.capabilities.read().await;
+
+        match caps_guard.get(id) {
+            Some(meta) if prof_ctx.is_server_allowed(&meta.server) => Envelope::success(
+                trace_id,
+                None,
+                None,
+                CapabilityDetail {
+                    id: id.to_string(),
+                    server: meta.server.clone(),
+                    tool: meta.tool.clone(),
+                    description: meta.description.clone(),
+                    input_schema: meta.input_schema.clone(),
+                    examples: meta.examples.clone(),
+                },
+                RetryMetadata::safe("completed"),
+            ),
+            _ => Envelope::failure(
+                trace_id,
+                None,
+                None,
+                WarmplaneError::new(
+                    "TOOL_NOT_FOUND",
+                    format!("Capability '{}' not found", id),
+                    false,
+                ),
+                RetryMetadata::safe("not_started"),
+            ),
+        }
+    }
+
+    /// Performs hybrid lexical and semantic search over registered capabilities.
+    pub async fn search_capabilities(
+        &self,
+        query: Option<&str>,
+        server_ids: Option<Vec<String>>,
+        tags: Option<Vec<String>>,
+        modes: Option<Vec<String>>,
+        limit: Option<usize>,
+        profile: Option<&str>,
+    ) -> CapabilitySearchResponse {
+        let prof_ctx = self.resolve_profile_context(profile).await;
+        let mut filter_builder = crate::search::SearchFilter::builder();
+        let effective_servers = match &prof_ctx.allowed_servers {
+            Some(allowed) => match server_ids {
+                Some(servers) => servers
+                    .into_iter()
+                    .filter(|s| allowed.contains(s))
+                    .collect(),
+                None => allowed.iter().cloned().collect(),
+            },
+            None => server_ids.unwrap_or_default(),
+        };
+
+        if !effective_servers.is_empty() {
+            filter_builder = filter_builder.server_ids(effective_servers);
+        }
+        if let Some(t) = tags {
+            filter_builder = filter_builder.tags(t);
+        }
+        if let Some(m) = modes {
+            filter_builder = filter_builder.modes(m);
+        }
+        let filter = filter_builder.build();
+
+        let caps = self.state.capabilities.read().await;
+        let pol = self.state.policy.read().await;
+        let base_ver = self.state.catalog_version.read().await.clone();
+        let catalog_ver =
+            crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
+        let query_str = query.unwrap_or("");
+        let limit_val = limit.unwrap_or(8);
+
+        let results = self
+            .state
+            .search_engine
+            .search(query_str, limit_val, &filter, &caps, &pol);
+
+        CapabilitySearchResponse {
+            version: "v1".to_string(),
+            catalog_version: catalog_ver,
+            query: query_str.to_string(),
+            total: results.len(),
+            capabilities: results,
+        }
+    }
+
+    /// Invokes a capability tool with policy enforcement, circuit breaker checks, HITL approvals, and idempotency deduplication.
+    pub async fn call_capability(
+        &self,
+        capability_id: &str,
+        args: Value,
+        options: ExecutionOptions,
+    ) -> Envelope<Value> {
+        let prof_ctx = self.resolve_profile_context(options.profile.as_deref()).await;
+        let start_time = std::time::Instant::now();
+        self.state.total_tool_calls.fetch_add(1, Ordering::Relaxed);
+        let trace_id = next_trace_id();
+        let req_id = options.request_id.unwrap_or_else(|| trace_id.clone());
+        let req_ctx = options.context.unwrap_or_default();
+
+        let retry_base = if options.idempotency_key.is_some() {
+            RetryMetadata::idempotent
+        } else {
+            RetryMetadata::unsafe_op
+        };
+
+        // Check Idempotency Store
+        if let Some(ref key) = options.idempotency_key {
+            match self.state.idempotency_store.check_or_start(key).await {
+                crate::idempotency::DeduplicateResult::Completed(cached) => {
+                    if let Ok(env) = serde_json::from_value::<Envelope<Value>>(cached.clone()) {
+                        return env;
+                    }
+                    return Envelope::success(
+                        trace_id,
+                        Some(req_id),
+                        Some(req_ctx),
+                        cached,
+                        retry_base("completed"),
+                    );
+                }
+                crate::idempotency::DeduplicateResult::InProgress(mut rx) => {
+                    if let Ok(cached) = rx.recv().await {
+                        if let Ok(env) = serde_json::from_value::<Envelope<Value>>(cached.clone()) {
+                            return env;
+                        }
+                        return Envelope::success(
+                            trace_id,
+                            Some(req_id),
+                            Some(req_ctx),
+                            cached,
+                            retry_base("completed"),
+                        );
+                    }
+                }
+                crate::idempotency::DeduplicateResult::New => {}
+            }
+        }
+
+        if !args.is_object() {
+            if let Some(ref key) = options.idempotency_key {
+                self.state.idempotency_store.remove(key).await;
+            }
+            return Envelope::failure(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                WarmplaneError::new("INVALID_ARGS", "'args' must be a JSON object", false),
+                retry_base("not_started"),
+            );
+        }
+
+        let (requires_approval, approval_timeout_secs, webhook_cfg, redact_keys) = {
+            let pol = self.state.policy.read().await;
+            if !pol.allows(capability_id) {
+                if let Some(ref key) = options.idempotency_key {
+                    self.state.idempotency_store.remove(key).await;
+                }
+                return Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "POLICY_DENIED",
+                        format!("Capability '{}' blocked by policy", capability_id),
+                        false,
+                    ),
+                    retry_base("not_started"),
+                );
+            }
+            (
+                pol.requires_approval(capability_id),
+                pol.approval_timeout_secs,
+                pol.webhook.clone(),
+                pol.redact_keys.clone(),
+            )
+        };
+
+        let (server_id, tool_name) = {
+            let caps_guard = self.state.capabilities.read().await;
+            let Some(meta) = caps_guard.get(capability_id) else {
+                if let Some(ref key) = options.idempotency_key {
+                    self.state.idempotency_store.remove(key).await;
+                }
+                return Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "TOOL_NOT_FOUND",
+                        format!("Capability '{}' not found", capability_id),
+                        false,
+                    ),
+                    retry_base("not_started"),
+                );
+            };
+
+            if !prof_ctx.is_server_allowed(&meta.server) {
+                if let Some(ref key) = options.idempotency_key {
+                    self.state.idempotency_store.remove(key).await;
+                }
+                return Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "TOOL_NOT_IN_PROFILE",
+                        format!(
+                            "Capability '{}' belongs to server '{}' which is not in active profile",
+                            capability_id, meta.server
+                        ),
+                        false,
+                    ),
+                    retry_base("not_started"),
+                );
+            }
+
+            (meta.server.clone(), meta.tool.clone())
+        };
+
+        let mut effective_args = args.clone();
+
+        // Human-in-the-Loop (HITL) Handling
+        if requires_approval {
+            let sanitized = crate::http_v1::helpers::redact_value(args.clone(), &redact_keys);
+            let (_approval_id, rx) = self
+                .state
+                .approval_registry
+                .create_approval(crate::approvals::CreateApprovalRequest {
+                    capability_id: capability_id.to_string(),
+                    server_id: server_id.clone(),
+                    args: args.clone(),
+                    sanitized_args: sanitized,
+                    request_id: Some(req_id.clone()),
+                    context: Some(req_ctx.clone()),
+                    timeout_secs: approval_timeout_secs,
+                    webhook: webhook_cfg.as_ref(),
+                })
+                .await;
+
+            let resolution = match rx.await {
+                Ok(r) => r,
+                Err(_) => crate::approvals::ApprovalResolution::Expired,
+            };
+
+            match resolution {
+                crate::approvals::ApprovalResolution::Approved { modified_args, .. } => {
+                    if let Some(mod_args) = modified_args {
+                        effective_args = mod_args;
+                    }
+                }
+                crate::approvals::ApprovalResolution::Rejected { operator, reason } => {
+                    if let Some(ref key) = options.idempotency_key {
+                        self.state.idempotency_store.remove(key).await;
+                    }
+                    return Envelope::failure(
+                        trace_id,
+                        Some(req_id),
+                        Some(req_ctx),
+                        WarmplaneError::operator_rejected(operator, reason),
+                        retry_base("not_started"),
+                    );
+                }
+                crate::approvals::ApprovalResolution::Expired => {
+                    if let Some(ref key) = options.idempotency_key {
+                        self.state.idempotency_store.remove(key).await;
+                    }
+                    return Envelope::failure(
+                        trace_id,
+                        Some(req_id),
+                        Some(req_ctx),
+                        WarmplaneError::new(
+                            "APPROVAL_TIMEOUT",
+                            format!(
+                                "Approval request timed out after {}s",
+                                approval_timeout_secs
+                            ),
+                            true,
+                        ),
+                        retry_base("not_started"),
+                    );
+                }
+            }
+        }
+
+        let tx = {
+            let servers_guard = self.state.servers.read().await;
+            let Some(tx) = servers_guard.get(&server_id).cloned() else {
+                if let Some(ref key) = options.idempotency_key {
+                    self.state.idempotency_store.remove(key).await;
+                }
+                return Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "SERVER_UNREACHABLE",
+                        format!("Server '{}' is unreachable", server_id),
+                        true,
+                    ),
+                    retry_base("not_started"),
+                );
+            };
+            tx
+        };
+
+        // Circuit Breaker Permission Check
+        if let Err(cb_err) = self
+            .state
+            .circuit_breakers
+            .check_permission(&server_id)
+            .await
+        {
+            if let Some(ref key) = options.idempotency_key {
+                self.state.idempotency_store.remove(key).await;
+            }
+            return Envelope::failure(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                WarmplaneError::new("CIRCUIT_OPEN", cb_err.to_string(), false),
+                retry_base("not_started"),
+            );
+        }
+
+        let distill_opts = DistillationOptions::from_args(Some(&args));
+        let (reply_tx, reply_rx) = oneshot::channel();
+
+        if tx
+            .send(ServerMsg::CallTool {
+                name: tool_name,
+                params: effective_args,
+                input_responses: options.input_responses,
+                request_state: options.request_state,
+                reply: reply_tx,
+            })
+            .await
+            .is_err()
+        {
+            self.state.circuit_breakers.record_failure(&server_id).await;
+            if let Some(ref key) = options.idempotency_key {
+                self.state.idempotency_store.remove(key).await;
+            }
+            return Envelope::failure(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                WarmplaneError::new(
+                    "SERVER_UNREACHABLE",
+                    format!("Server '{}' mailbox is closed", server_id),
+                    true,
+                ),
+                retry_base("not_started"),
+            );
+        }
+
+        let result = reply_rx.await;
+
+        match result {
+            Ok(Ok(data)) => {
+                self.state.circuit_breakers.record_success(&server_id).await;
+                let elapsed_us = start_time.elapsed().as_micros() as u64;
+                self.state
+                    .total_tool_duration_us
+                    .fetch_add(elapsed_us, Ordering::Relaxed);
+
+                let distilled_data = distill_value(data, &distill_opts);
+                let env = Envelope::success(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    distilled_data,
+                    retry_base("completed"),
+                );
+
+                if let Some(ref key) = options.idempotency_key {
+                    if let Ok(val) = serde_json::to_value(&env) {
+                        self.state.idempotency_store.complete(key, val).await;
+                    }
+                }
+
+                env
+            }
+            Ok(Err(UpstreamCallError::Timeout)) => {
+                self.state.circuit_breakers.record_failure(&server_id).await;
+                if let Some(ref key) = options.idempotency_key {
+                    self.state.idempotency_store.remove(key).await;
+                }
+                Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "UPSTREAM_TIMEOUT",
+                        format!("Tool call timed out after {}ms", self.state.tool_timeout_ms),
+                        true,
+                    ),
+                    retry_base("unknown"),
+                )
+            }
+            Ok(Err(UpstreamCallError::Upstream(err))) => {
+                self.state.circuit_breakers.record_failure(&server_id).await;
+                if let Some(ref key) = options.idempotency_key {
+                    self.state.idempotency_store.remove(key).await;
+                }
+                Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new("UPSTREAM_ERROR", err, false),
+                    retry_base("unknown"),
+                )
+            }
+            Err(_) => {
+                self.state.circuit_breakers.record_failure(&server_id).await;
+                if let Some(ref key) = options.idempotency_key {
+                    self.state.idempotency_store.remove(key).await;
+                }
+                Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "INTERNAL_ERROR",
+                        "Server actor task dropped reply channel",
+                        true,
+                    ),
+                    retry_base("unknown"),
+                )
+            }
+        }
+    }
+
+    /// Executes an ordered sequence of tool execution steps, interpolating prior step outputs.
+    pub async fn batch_call(
+        &self,
+        steps: Vec<BatchStep>,
+        request_id: Option<String>,
+        context: Option<RequestContext>,
+        profile: Option<&str>,
+    ) -> BatchCallResponse {
+        let trace_id = next_trace_id();
+        let prof_ctx = self.resolve_profile_context(profile).await;
+        let policy = self.state.policy.read().await.clone();
+
+        execute_batch(
+            &self.state,
+            steps,
+            trace_id,
+            request_id,
+            context,
+            &policy,
+            &prof_ctx,
+        )
+        .await
+    }
+
+    /// Reads a registered resource URI.
+    pub async fn read_resource(
+        &self,
+        resource_id: &str,
+        options: ReadResourceOptions,
+    ) -> Envelope<Value> {
+        let prof_ctx = self.resolve_profile_context(options.profile.as_deref()).await;
+        let trace_id = next_trace_id();
+        let req_id = options.request_id.unwrap_or_else(|| trace_id.clone());
+        let req_ctx = options.context.unwrap_or_default();
+
+        if !self.state.policy.read().await.allows(resource_id) {
+            return Envelope::failure(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                WarmplaneError::new(
+                    "INVALID_ARGS",
+                    format!("Resource '{}' blocked by policy", resource_id),
+                    false,
+                ),
+                RetryMetadata::safe("not_started"),
+            );
+        }
+
+        let (server, uri) = {
+            let res_guard = self.state.resources.read().await;
+            let Some(meta) = res_guard.get(resource_id) else {
+                return Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "RESOURCE_NOT_FOUND",
+                        format!("Resource '{}' not found", resource_id),
+                        false,
+                    ),
+                    RetryMetadata::safe("not_started"),
+                );
+            };
+
+            if !prof_ctx.is_server_allowed(&meta.server) {
+                return Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "RESOURCE_NOT_IN_PROFILE",
+                        format!(
+                            "Resource '{}' belongs to server '{}' which is not in active profile",
+                            resource_id, meta.server
+                        ),
+                        false,
+                    ),
+                    RetryMetadata::safe("not_started"),
+                );
+            }
+
+            (meta.server.clone(), meta.uri.clone())
+        };
+
+        let tx = {
+            let servers_guard = self.state.servers.read().await;
+            let Some(tx) = servers_guard.get(&server).cloned() else {
+                return Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "SERVER_UNREACHABLE",
+                        format!("Server '{}' is unreachable", server),
+                        true,
+                    ),
+                    RetryMetadata::safe("not_started"),
+                );
+            };
+            tx
+        };
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if tx
+            .send(ServerMsg::ReadResource {
+                uri,
+                input_responses: options.input_responses,
+                request_state: options.request_state,
+                reply: reply_tx,
+            })
+            .await
+            .is_err()
+        {
+            return Envelope::failure(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                WarmplaneError::new(
+                    "SERVER_UNREACHABLE",
+                    format!("Server '{}' mailbox is closed", server),
+                    true,
+                ),
+                RetryMetadata::safe("not_started"),
+            );
+        }
+
+        match reply_rx.await {
+            Ok(Ok(data)) => Envelope::success(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                data,
+                RetryMetadata::safe("completed"),
+            ),
+            Ok(Err(UpstreamCallError::Timeout)) => Envelope::failure(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                WarmplaneError::new(
+                    "UPSTREAM_TIMEOUT",
+                    format!(
+                        "Resource read timed out after {}ms",
+                        self.state.tool_timeout_ms
+                    ),
+                    true,
+                ),
+                RetryMetadata::safe("unknown"),
+            ),
+            Ok(Err(UpstreamCallError::Upstream(err))) => Envelope::failure(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                WarmplaneError::new("UPSTREAM_ERROR", err, false),
+                RetryMetadata::safe("unknown"),
+            ),
+            Err(_) => Envelope::failure(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                WarmplaneError::new("INTERNAL_ERROR", "Server actor task died", true),
+                RetryMetadata::safe("unknown"),
+            ),
+        }
+    }
+
+    /// Renders a registered prompt template.
+    pub async fn get_prompt(
+        &self,
+        prompt_id: &str,
+        options: GetPromptOptions,
+    ) -> Envelope<Value> {
+        let prof_ctx = self.resolve_profile_context(options.profile.as_deref()).await;
+        let trace_id = next_trace_id();
+        let req_id = options.request_id.unwrap_or_else(|| trace_id.clone());
+        let req_ctx = options.context.unwrap_or_default();
+
+        if !self.state.policy.read().await.allows(prompt_id) {
+            return Envelope::failure(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                WarmplaneError::new(
+                    "INVALID_ARGS",
+                    format!("Prompt '{}' blocked by policy", prompt_id),
+                    false,
+                ),
+                RetryMetadata::safe("not_started"),
+            );
+        }
+
+        let (server, name) = {
+            let prompts_guard = self.state.prompts.read().await;
+            let Some(meta) = prompts_guard.get(prompt_id) else {
+                return Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "PROMPT_NOT_FOUND",
+                        format!("Prompt '{}' not found", prompt_id),
+                        false,
+                    ),
+                    RetryMetadata::safe("not_started"),
+                );
+            };
+
+            if !prof_ctx.is_server_allowed(&meta.server) {
+                return Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "PROMPT_NOT_IN_PROFILE",
+                        format!(
+                            "Prompt '{}' belongs to server '{}' which is not in active profile",
+                            prompt_id, meta.server
+                        ),
+                        false,
+                    ),
+                    RetryMetadata::safe("not_started"),
+                );
+            }
+
+            (meta.server.clone(), meta.name.clone())
+        };
+
+        let tx = {
+            let servers_guard = self.state.servers.read().await;
+            let Some(tx) = servers_guard.get(&server).cloned() else {
+                return Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "SERVER_UNREACHABLE",
+                        format!("Server '{}' is unreachable", server),
+                        true,
+                    ),
+                    RetryMetadata::safe("not_started"),
+                );
+            };
+            tx
+        };
+
+        let args_map = options.arguments.and_then(|v| match v {
+            Value::Object(m) => Some(m),
+            _ => None,
+        });
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if tx
+            .send(ServerMsg::GetPrompt {
+                name,
+                arguments: args_map,
+                input_responses: options.input_responses,
+                request_state: options.request_state,
+                reply: reply_tx,
+            })
+            .await
+            .is_err()
+        {
+            return Envelope::failure(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                WarmplaneError::new(
+                    "SERVER_UNREACHABLE",
+                    format!("Server '{}' mailbox is closed", server),
+                    true,
+                ),
+                RetryMetadata::safe("not_started"),
+            );
+        }
+
+        match reply_rx.await {
+            Ok(Ok(data)) => Envelope::success(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                data,
+                RetryMetadata::safe("completed"),
+            ),
+            Ok(Err(UpstreamCallError::Timeout)) => Envelope::failure(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                WarmplaneError::new(
+                    "UPSTREAM_TIMEOUT",
+                    format!(
+                        "Prompt get timed out after {}ms",
+                        self.state.tool_timeout_ms
+                    ),
+                    true,
+                ),
+                RetryMetadata::safe("unknown"),
+            ),
+            Ok(Err(UpstreamCallError::Upstream(err))) => Envelope::failure(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                WarmplaneError::new("UPSTREAM_ERROR", err, false),
+                RetryMetadata::safe("unknown"),
+            ),
+            Err(_) => Envelope::failure(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                WarmplaneError::new("INTERNAL_ERROR", "Server actor task died", true),
+                RetryMetadata::safe("unknown"),
+            ),
+        }
+    }
+
+    /// Gracefully initiates shutdown of all background supervisors and actor channels.
+    pub async fn shutdown(&self) {
+        self.state.shutdown().await;
+    }
+}
+

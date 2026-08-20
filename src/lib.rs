@@ -13,6 +13,7 @@ pub mod config_import;
 pub mod context;
 pub mod context_filter;
 pub mod daemon;
+pub mod engine;
 pub mod http_v1;
 pub mod idempotency;
 pub mod interactive;
@@ -26,3 +27,5 @@ pub mod search;
 pub mod storage;
 pub mod supervisor;
 pub mod telemetry;
+
+pub use engine::{ControlPlaneHandle, EmbeddedWarmplane, Envelope, WarmplaneError};
