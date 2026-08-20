@@ -6,7 +6,8 @@
 
 > **The Local control plane that keeps MCP sessions warm with compact capability/resource/prompt facades.**
 > 
-> v0.22.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.23.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
 
@@ -223,6 +224,7 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 
 | Feature | Since | Summary |
 |---------|-------|---------|
+| **Embedded Rust Library Engine** | v0.23.0 | Direct in-process library interface (`EmbeddedWarmplane`, `ControlPlaneHandle`) with strongly typed response envelopes (`Envelope<T>`), direct tool/resource/prompt execution, and graceful cancellation on caller's Tokio runtime |
 | **MCP HTTP/SSE Server Mode** | v0.22.0 | Streamable HTTP/SSE MCP server (`mcp-http-server`) for remote network clients; daemon co-hosting via `mcpHttpServer` config block; profile restriction, auth enforcement on non-loopback bind, graceful shared-state shutdown |
 | **Signal Handling & Graceful Teardown** | v0.21.0 | Immediate signal cancellation (`CancellationToken`), instant SSE stream termination, clean stdio child orphan protection (`kill_on_drop`), and bounded drain safety timeouts |
 | **Named Server Constellations (Profiles)** | v0.21.0 | Task-relevant server constellation slicing (`profiles`), dynamic per-request selection (`X-Warmplane-Profile` / `?profile=`), profile-partitioned ETag caching (`-p:<profile_id>`), and stdio MCP proxy filtering (`--profile`) |
@@ -257,6 +259,13 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 ---
 
 ## Changelog
+
+### v0.23.0 — Embedded Rust Engine, In-Process Control Plane & Facade Adapter Refactoring
+- **In-Process Embedded Rust Library Engine (`EmbeddedWarmplane`, `ControlPlaneHandle`):** Exposed Warmplane as a pure in-process library without HTTP, daemon child process, or JSON-RPC serialization overhead. Callers spawn the engine directly on their own Tokio runtime via `EmbeddedWarmplane::start(config)` or `EmbeddedWarmplane::start_from_path(path)` and interact via typed `ControlPlaneHandle` methods (`list_capabilities`, `describe_capability`, `search_capabilities`, `call_capability`, `batch_call`, `read_resource`, `get_prompt`, `health_status`).
+- **Strongly Typed Generic Envelopes & Error Models:** Added `Envelope<T>`, `WarmplaneError`, `CapabilitySummary`, `CapabilityDetail`, `ExecutionOptions`, `ReadResourceOptions`, `GetPromptOptions`, and `EngineHealthStatus` in `warmplane::engine::types`, preserving structured diagnostics (`request_id`, `trace_id`, `retry`, `operator`) for programmatic orchestration.
+- **MCP Stdio Server Facade Adapter Refactoring:** Refactored `mcp_server.rs` to delegate all tool call execution, search, descriptions, batch execution, and resource/prompt dispatch directly to `ControlPlaneHandle`, eliminating duplicated logic and unifying execution pipelines.
+- **Embedded Engine Integration Test Suite:** Added dedicated integration tests in `tests/embedded_tests.rs` covering embedded lifecycle startup, degraded server handling, health status inspection, and graceful cancellation.
+
 
 ### v0.22.0 — Streamable HTTP/SSE MCP Transport, Interactive Playground & UI Polish
 - **Streamable HTTP/SSE MCP Server Transport (`mcp-http-server`):** Built standalone and daemon-co-hosted HTTP/SSE MCP server endpoints (`/mcp/sse`, `/mcp/messages`), allowing remote AI agents and IDEs (Cursor, Windsurf, Claude Desktop) to connect over standard HTTP/SSE networks with automatic keep-alives and zero client drift.
