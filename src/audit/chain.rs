@@ -116,6 +116,17 @@ pub fn compute_event_hash_with_key(
     payload.extend_from_slice(event.operator_id.as_deref().unwrap_or("").as_bytes());
     payload.push(b'|');
     payload.extend_from_slice(event.approval_ticket_id.as_deref().unwrap_or("").as_bytes());
+    payload.push(b'|');
+    payload.extend_from_slice(event.idempotency_key.as_deref().unwrap_or("").as_bytes());
+    payload.push(b'|');
+    payload.extend_from_slice(
+        event
+            .is_replay
+            .map(|r| r.to_string())
+            .as_deref()
+            .unwrap_or("")
+            .as_bytes(),
+    );
 
     if let Some(key) = hmac_key {
         if !key.is_empty() {
@@ -169,6 +180,8 @@ pub fn verify_record_hash_with_key(record: &AuditEvent, hmac_key: Option<&[u8]>)
         error_message: record.error_message.clone(),
         operator_id: record.operator_id.clone(),
         approval_ticket_id: record.approval_ticket_id.clone(),
+        idempotency_key: record.idempotency_key.clone(),
+        is_replay: record.is_replay,
     };
 
     let expected = compute_event_hash_with_key(
@@ -206,6 +219,8 @@ mod tests {
             error_message: None,
             operator_id: None,
             approval_ticket_id: None,
+            idempotency_key: Some("idk-12345".to_string()),
+            is_replay: Some(false),
         };
 
         let id = "aud_01".to_string();
@@ -233,6 +248,8 @@ mod tests {
             error_message: raw.error_message.clone(),
             operator_id: raw.operator_id.clone(),
             approval_ticket_id: raw.approval_ticket_id.clone(),
+            idempotency_key: raw.idempotency_key.clone(),
+            is_replay: raw.is_replay,
             prev_hash: GENESIS_HASH.to_string(),
             hash: hash1.clone(),
         };

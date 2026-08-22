@@ -201,6 +201,8 @@ async fn test_app_state_graceful_shutdown() {
         error_message: None,
         operator_id: None,
         approval_ticket_id: None,
+        idempotency_key: None,
+        is_replay: None,
     });
 
     // Execute graceful shutdown

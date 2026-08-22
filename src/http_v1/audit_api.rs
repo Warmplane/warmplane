@@ -65,6 +65,10 @@ pub struct AuditEventsQuery {
     pub trace_id: Option<String>,
     /// Filter by request ID.
     pub request_id: Option<String>,
+    /// Filter by idempotency key.
+    pub idempotency_key: Option<String>,
+    /// Filter by whether the event was a deduplicated replay.
+    pub is_replay: Option<bool>,
     /// General search term or keyword query across multiple fields.
     pub search: Option<String>,
     /// Shorthand alias for `search`.
@@ -98,6 +102,10 @@ pub struct AuditExportQuery {
     pub trace_id: Option<String>,
     /// Filter by request ID.
     pub request_id: Option<String>,
+    /// Filter by idempotency key.
+    pub idempotency_key: Option<String>,
+    /// Filter by whether the event was a deduplicated replay.
+    pub is_replay: Option<bool>,
     /// General search term or keyword query across multiple fields.
     pub search: Option<String>,
     /// Shorthand alias for `search`.
@@ -123,6 +131,8 @@ pub async fn handle_list_audit_events(
         status: parsed_status,
         trace_id: query.trace_id,
         request_id: query.request_id,
+        idempotency_key: query.idempotency_key,
+        is_replay: query.is_replay,
         search: search_query,
         limit: query.limit.unwrap_or(50),
         offset: query.offset.unwrap_or(0),
@@ -141,6 +151,60 @@ pub async fn handle_list_audit_events(
         })),
     )
         .into_response()
+}
+
+/// Query parameters for GET `/v1/idempotency/records`.
+#[derive(Debug, Deserialize, Default)]
+pub struct IdempotencyListQuery {
+    /// Page size (default 50).
+    pub limit: Option<usize>,
+    /// Page offset (default 0).
+    pub offset: Option<usize>,
+}
+
+/// Handles GET `/v1/idempotency/records` listing cached idempotency records.
+pub async fn handle_list_idempotency_records(
+    State(state): State<AppState>,
+    Query(query): Query<IdempotencyListQuery>,
+) -> impl IntoResponse {
+    let limit = query.limit.unwrap_or(50);
+    let offset = query.offset.unwrap_or(0);
+    let records = state.idempotency_store.list_records(limit, offset).await;
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "records": records,
+            "limit": limit,
+            "offset": offset,
+        })),
+    )
+        .into_response()
+}
+
+/// Handles GET `/v1/idempotency/records/:key` fetching a single cached idempotency record.
+pub async fn handle_get_idempotency_record(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+) -> impl IntoResponse {
+    match state.idempotency_store.get_record(&key).await {
+        Some(record) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "record": record,
+            })),
+        )
+            .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "ok": false,
+                "error": format!("Idempotency record '{}' not found or expired", key),
+            })),
+        )
+            .into_response(),
+    }
 }
 
 /// Handles GET `/v1/audit/events/:id` returning a single audit event record.
@@ -241,6 +305,8 @@ pub async fn handle_export_audit(
         status: parsed_status,
         trace_id: query.trace_id,
         request_id: query.request_id,
+        idempotency_key: query.idempotency_key,
+        is_replay: query.is_replay,
         search: search_query,
         limit: crate::audit::MAX_IN_MEMORY_AUDIT_EVENTS,
         offset: 0,

@@ -210,6 +210,18 @@ To satisfy enterprise compliance mandates (SOC2 Type II, ISO 27001, HIPAA), Warm
    - **Splunk HEC**: Formatted directly to Splunk HTTP Event Collector JSON payloads with event timestamps and index routing.
    - **HTTP Webhooks / Datadog**: Dispatched over HTTPS with configurable authorization headers and custom metadata tags.
 
+### 3.5 Exactly-Once Idempotency & Side-Effect Replay Ledger
+
+To eliminate duplicate side-effect execution caused by agent retry loops, transient network faults, or upstream crashes, Warmplane enforces exactly-once semantics across tool capabilities:
+
+1. **Deterministic Canonical Key Derivation**: When clients omit an explicit `Idempotency-Key`, Warmplane derives a deterministic SHA-256 key from a canonical representation of the invocation:
+   $$\text{Key} = \text{SHA256}(\text{capability\_id} \mathbin{\Vert} \text{canonical\_json}(\text{args}) \mathbin{\Vert} \text{actor\_id} \mathbin{\Vert} \text{request\_id})$$
+   Dictionary keys are sorted recursively, guaranteeing that semantically identical JSON objects with differing whitespace or key ordering produce identical idempotency digests.
+2. **In-Flight Single-Flight Execution**: Concurrent identical requests subscribe to the active in-flight worker channel rather than issuing duplicate calls upstream.
+3. **Cached Replay & Header Signalling**: Completed executions are persisted with TTL metadata. Subsequent requests matching the key immediately return the cached payload accompanied by the `X-Warmplane-Deduplicated: true` header.
+4. **WORM Audit Trail Linkage**: Deduplicated replays are recorded in the append-only cryptographic audit chain with `is_replay: true` and the associated `idempotency_key`, maintaining a complete audit ledger linking initial attempts, timeouts, and replays.
+5. **Effect History Inspection (`/v1/idempotency/records`)**: Exposes queryable inspection endpoints and CLI tooling (`warmplane idempotency list/get`) to inspect replay counts and active deduplication records.
+
 ---
 
 ## 4. Performance Profile and Micro-Benchmarks
