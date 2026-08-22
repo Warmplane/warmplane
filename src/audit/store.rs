@@ -39,6 +39,10 @@ pub struct AuditQueryFilter {
     pub trace_id: Option<String>,
     /// Filter by request ID.
     pub request_id: Option<String>,
+    /// Filter by idempotency key.
+    pub idempotency_key: Option<String>,
+    /// Filter by whether the event was a deduplicated replay.
+    pub is_replay: Option<bool>,
     /// Case-insensitive multi-field search substring query.
     pub search: Option<String>,
     /// Maximum number of records to return.
@@ -188,6 +192,8 @@ impl AuditStore {
             error_message: raw.error_message,
             operator_id: raw.operator_id,
             approval_ticket_id: raw.approval_ticket_id,
+            idempotency_key: raw.idempotency_key,
+            is_replay: raw.is_replay,
             prev_hash,
             hash: hash.clone(),
         };
@@ -264,6 +270,8 @@ impl AuditStore {
                 error_message: raw.error_message,
                 operator_id: raw.operator_id,
                 approval_ticket_id: raw.approval_ticket_id,
+                idempotency_key: raw.idempotency_key,
+                is_replay: raw.is_replay,
                 prev_hash,
                 hash: hash.clone(),
             };
@@ -414,10 +422,23 @@ impl AuditStore {
                         return false;
                     }
                 }
+                if let Some(ref idk) = filter.idempotency_key {
+                    if e.idempotency_key.as_deref() != Some(idk.as_str()) {
+                        return false;
+                    }
+                }
+                if let Some(replay) = filter.is_replay {
+                    if e.is_replay != Some(replay) {
+                        return false;
+                    }
+                }
                 if let Some(ref needle) = search_pattern {
                     let matches = e.id.to_lowercase().contains(needle)
                         || e.trace_id.to_lowercase().contains(needle)
                         || e.request_id
+                            .as_deref()
+                            .is_some_and(|v| v.to_lowercase().contains(needle))
+                        || e.idempotency_key
                             .as_deref()
                             .is_some_and(|v| v.to_lowercase().contains(needle))
                         || e.actor_id
@@ -505,6 +526,8 @@ mod tests {
             error_message: None,
             operator_id: None,
             approval_ticket_id: None,
+            idempotency_key: None,
+            is_replay: None,
         };
 
         let raw2 = RawAuditEvent {
@@ -525,6 +548,8 @@ mod tests {
             error_message: None,
             operator_id: Some("operator-alice".to_string()),
             approval_ticket_id: Some("appr-123".to_string()),
+            idempotency_key: None,
+            is_replay: None,
         };
 
         let ev1 = store.append(raw1).await.unwrap();
@@ -569,6 +594,8 @@ mod tests {
             error_message: None,
             operator_id: None,
             approval_ticket_id: None,
+            idempotency_key: None,
+            is_replay: None,
         };
 
         let raw2 = RawAuditEvent {
@@ -589,6 +616,8 @@ mod tests {
             error_message: Some("Dangerous operation forbidden by security policy".to_string()),
             operator_id: None,
             approval_ticket_id: None,
+            idempotency_key: None,
+            is_replay: None,
         };
 
         let raw3 = RawAuditEvent {
@@ -609,6 +638,8 @@ mod tests {
             error_message: None,
             operator_id: Some("admin-bob".to_string()),
             approval_ticket_id: Some("ticket-999".to_string()),
+            idempotency_key: None,
+            is_replay: None,
         };
 
         let ev1 = store.append(raw1).await.unwrap();

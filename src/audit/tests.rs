@@ -30,6 +30,8 @@ async fn test_audit_worker_batching_and_chain() {
                 error_message: None,
                 operator_id: None,
                 approval_ticket_id: None,
+                idempotency_key: None,
+                is_replay: None,
             })
             .await;
     }
@@ -71,6 +73,8 @@ async fn test_audit_tampering_detection() {
                 error_message: None,
                 operator_id: None,
                 approval_ticket_id: None,
+                idempotency_key: None,
+                is_replay: None,
             })
             .await
             .unwrap();
@@ -94,6 +98,8 @@ async fn test_audit_tampering_detection() {
                 error_message: None,
                 operator_id: None,
                 approval_ticket_id: None,
+                idempotency_key: None,
+                is_replay: None,
             })
             .await
             .unwrap();
@@ -148,6 +154,8 @@ async fn test_audit_handle_shutdown_drains_all_records() {
             error_message: None,
             operator_id: None,
             approval_ticket_id: None,
+            idempotency_key: None,
+            is_replay: None,
         });
     }
 

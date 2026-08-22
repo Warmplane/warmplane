@@ -248,6 +248,38 @@ pub enum Commands {
         #[command(subcommand)]
         command: ApprovalCommands,
     },
+    /// Inspect and manage cached idempotency records
+    Idempotency {
+        #[command(subcommand)]
+        command: IdempotencyCommands,
+    },
+}
+
+/// Idempotency inspection subcommands.
+#[derive(Subcommand, Debug, Clone)]
+pub enum IdempotencyCommands {
+    /// List cached idempotency records
+    List {
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+        /// Maximum number of records to show (default 50)
+        #[arg(long, default_value = "50")]
+        limit: usize,
+        /// Record offset
+        #[arg(long, default_value = "0")]
+        offset: usize,
+    },
+    /// Get details of a specific cached idempotency record
+    Get {
+        /// Idempotency key
+        key: String,
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
 }
 
 /// Upstream server management subcommands.

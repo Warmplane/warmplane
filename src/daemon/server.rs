@@ -316,6 +316,15 @@ pub fn build_router(app_state: AppState) -> Router {
         .route("/v1/audit/verify", get(http_v1::handle_verify_audit_chain))
         .route("/v1/audit/stats", get(http_v1::handle_get_audit_stats))
         .route("/v1/audit/export", get(http_v1::handle_export_audit))
+        // Idempotency & Effect History Endpoints
+        .route(
+            "/v1/idempotency/records",
+            get(http_v1::handle_list_idempotency_records),
+        )
+        .route(
+            "/v1/idempotency/records/:key",
+            get(http_v1::handle_get_idempotency_record),
+        )
         // Web UI Control Deck
         .route("/ui", get(http_v1::handle_ui_dashboard))
         .route("/", get(http_v1::handle_ui_dashboard))

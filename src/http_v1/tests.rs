@@ -1221,6 +1221,8 @@ async fn test_audit_api_endpoints_and_export() {
             error_message: None,
             operator_id: None,
             approval_ticket_id: None,
+            idempotency_key: None,
+            is_replay: None,
         })
         .await;
 

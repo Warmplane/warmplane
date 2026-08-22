@@ -251,6 +251,8 @@ pub async fn execute_batch(
                 error_message: None,
                 operator_id: None,
                 approval_ticket_id: Some(approval_id),
+                idempotency_key: None,
+                is_replay: None,
             });
 
             let resolution = match rx.await {
@@ -393,6 +395,8 @@ pub async fn execute_batch(
                     error_message: None,
                     operator_id: None,
                     approval_ticket_id: None,
+                    idempotency_key: None,
+                    is_replay: Some(false),
                 });
 
                 step_outputs.insert(step.id.clone(), val.clone());

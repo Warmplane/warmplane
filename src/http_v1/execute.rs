@@ -48,7 +48,19 @@ pub async fn handle_call_capability(
         }
     }
 
-    let idempotency_key = resolve_idempotency_key(payload.idempotency_key.clone(), &headers);
+    let explicit_key = resolve_idempotency_key(payload.idempotency_key.clone(), &headers);
+    let idempotency_key = explicit_key.or_else(|| {
+        if payload.args.is_object() {
+            Some(crate::idempotency::derive_idempotency_key(
+                &payload.capability_id,
+                &payload.args,
+                req_context.actor_id.as_deref(),
+                payload.request_id.as_deref(),
+            ))
+        } else {
+            None
+        }
+    });
 
     let retry_base = if idempotency_key.is_some() {
         crate::idempotency::RetryMetadata::idempotent
@@ -57,13 +69,50 @@ pub async fn handle_call_capability(
     };
 
     if let Some(ref key) = idempotency_key {
-        match state.idempotency_store.check_or_start(key).await {
+        match state
+            .idempotency_store
+            .check_or_start_with_meta(
+                key,
+                Some(payload.capability_id.clone()),
+                Some(trace_id.clone()),
+            )
+            .await
+        {
             crate::idempotency::DeduplicateResult::Completed(cached) => {
-                return (StatusCode::OK, Json(cached)).into_response();
+                state.audit_handle.send(crate::audit::RawAuditEvent {
+                    event_type: crate::audit::AuditEventType::ToolExecution,
+                    trace_id: trace_id.clone(),
+                    request_id: Some(request_id.clone()),
+                    actor_id: req_context.actor_id.clone(),
+                    work_item_id: req_context.work_item_id.clone(),
+                    client_ip: headers
+                        .get("x-forwarded-for")
+                        .and_then(|h| h.to_str().ok())
+                        .map(|s| s.to_string()),
+                    server_id: None,
+                    capability_id: Some(payload.capability_id.clone()),
+                    resource_uri: None,
+                    sanitized_args: Some(payload.args.clone()),
+                    sanitized_response: Some(cached.clone()),
+                    execution_latency_us: Some(start_time.elapsed().as_micros() as u64),
+                    status: crate::audit::AuditEventStatus::Success,
+                    error_code: None,
+                    error_message: None,
+                    operator_id: None,
+                    approval_ticket_id: None,
+                    idempotency_key: Some(key.clone()),
+                    is_replay: Some(true),
+                });
+
+                let mut resp_headers = HeaderMap::new();
+                resp_headers.insert("x-warmplane-deduplicated", "true".parse().unwrap());
+                return (StatusCode::OK, resp_headers, Json(cached)).into_response();
             }
             crate::idempotency::DeduplicateResult::InProgress(mut rx) => {
                 if let Ok(cached) = rx.recv().await {
-                    return (StatusCode::OK, Json(cached)).into_response();
+                    let mut resp_headers = HeaderMap::new();
+                    resp_headers.insert("x-warmplane-deduplicated", "true".parse().unwrap());
+                    return (StatusCode::OK, resp_headers, Json(cached)).into_response();
                 }
             }
             crate::idempotency::DeduplicateResult::New => {}
@@ -130,6 +179,8 @@ pub async fn handle_call_capability(
                 )),
                 operator_id: None,
                 approval_ticket_id: None,
+                idempotency_key: idempotency_key.clone(),
+                is_replay: Some(false),
             });
             return (
                 StatusCode::FORBIDDEN,
@@ -241,6 +292,8 @@ pub async fn handle_call_capability(
             error_message: None,
             operator_id: None,
             approval_ticket_id: Some(approval_id.clone()),
+            idempotency_key: idempotency_key.clone(),
+            is_replay: Some(false),
         });
 
         let prefer_async = headers
@@ -328,6 +381,8 @@ pub async fn handle_call_capability(
                     error_message: reason.clone(),
                     operator_id: Some(operator.clone()),
                     approval_ticket_id: Some(approval_id),
+                    idempotency_key: idempotency_key.clone(),
+                    is_replay: Some(false),
                 });
                 let reason_str = reason.map(|r| format!(": {}", r)).unwrap_or_default();
                 return (
@@ -378,6 +433,8 @@ pub async fn handle_call_capability(
                     )),
                     operator_id: None,
                     approval_ticket_id: Some(approval_id),
+                    idempotency_key: idempotency_key.clone(),
+                    is_replay: Some(false),
                 });
                 return (
                     StatusCode::GATEWAY_TIMEOUT,
@@ -463,6 +520,8 @@ pub async fn handle_call_capability(
             error_message: Some(cb_err.to_string()),
             operator_id: None,
             approval_ticket_id: None,
+            idempotency_key: idempotency_key.clone(),
+            is_replay: Some(false),
         });
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -572,6 +631,8 @@ pub async fn handle_call_capability(
                 error_message: None,
                 operator_id: None,
                 approval_ticket_id: None,
+                idempotency_key: idempotency_key.clone(),
+                is_replay: Some(false),
             });
 
             let distill_opts =
@@ -627,6 +688,8 @@ pub async fn handle_call_capability(
                 )),
                 operator_id: None,
                 approval_ticket_id: None,
+                idempotency_key: idempotency_key.clone(),
+                is_replay: Some(false),
             });
             (
                 StatusCode::GATEWAY_TIMEOUT,
@@ -669,6 +732,8 @@ pub async fn handle_call_capability(
                 error_message: Some(err.clone()),
                 operator_id: None,
                 approval_ticket_id: None,
+                idempotency_key: idempotency_key.clone(),
+                is_replay: Some(false),
             });
             (
                 StatusCode::BAD_GATEWAY,

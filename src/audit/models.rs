@@ -101,6 +101,12 @@ pub struct AuditEvent {
     /// Linked approval ticket ID if applicable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_ticket_id: Option<String>,
+    /// Unique idempotency key if operation was executed under idempotency deduplication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    /// Whether this event reflects a deduplicated replay from stored cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_replay: Option<bool>,
     /// Cryptographic SHA-256 hash of the preceding audit record in the sequence.
     pub prev_hash: String,
     /// Cryptographic SHA-256 hash of this audit record.
@@ -144,6 +150,10 @@ pub struct RawAuditEvent {
     pub operator_id: Option<String>,
     /// Linked approval ticket ID if applicable.
     pub approval_ticket_id: Option<String>,
+    /// Idempotency key if applicable.
+    pub idempotency_key: Option<String>,
+    /// Whether event is a cache deduplication replay.
+    pub is_replay: Option<bool>,
 }
 
 /// Verification result report for cryptographic audit hash chain checks.

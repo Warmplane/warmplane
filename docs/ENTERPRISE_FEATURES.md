@@ -83,6 +83,16 @@ As enterprises deploy autonomous agents in production environments, unmanaged MC
 
 ---
 
+### 2.6 Exactly-Once Idempotency & Side-Effect Replay Ledger
+* **Problem:** Agent retry loops, network timeouts, and partial crashes trigger duplicate side-effect mutations (e.g. duplicate payments, double ticket creations, repeated commits) when upstream tools lack native idempotency.
+* **Solution:**
+  * **Deterministic Key Derivation:** SHA-256 canonical hashing across capability identifier, arguments, tenant/actor identity, and request/turn metadata.
+  * **Stateful Response Caching:** TTL-bounded persisted cache returning cached outputs immediately with `X-Warmplane-Deduplicated: true` on replays.
+  * **Cryptographic WORM Audit Linking:** Links the initial attempt, intermediate timeouts, and deduplicated replay events via `idempotency_key` and `is_replay` flags.
+  * **Effect History API:** Read and query endpoints (`/v1/idempotency/records`, `warmplane idempotency list`) for enterprise auditability and compliance verification.
+
+---
+
 ## 3. Prioritized Implementation Roadmap
 
 | Milestone | Feature Pillar | Status | Impact | Complexity | Target Audience |
@@ -91,5 +101,6 @@ As enterprises deploy autonomous agents in production environments, unmanaged MC
 | **Phase 2** | **WORM Audit Trail & HMAC Integrity** | ✅ Released (v0.16.0) | 🟢 High | Low-Medium | SecOps / Enterprise Auditors |
 | **Phase 3** | **Circuit Breaking & Supervision** | ✅ Released (v0.15.0) | 🟡 High | Medium | AI Platform Teams |
 | **Phase 4** | **API Token Auth & Proxy Guarding** | ✅ Released (v0.16.0) | 🟢 Critical | Low-Medium | SecOps & Platform Engineers |
-| **Phase 5** | **Multi-Tenant RBAC & OIDC Auth** | 🔄 Planned | 🟡 High | Medium | Platform Engineers & SREs |
-| **Phase 6** | **FinOps Budgeting & Quota Caps** | 🔄 Planned | 🔵 Medium | Low | FinOps & Engineering Leads |
+| **Phase 5** | **Multi-Tenant RBAC & Partitioning** | ✅ Released (v0.20.0) | 🟡 High | Medium | Platform Engineers & SREs |
+| **Phase 6** | **Exactly-Once Idempotency Ledger** | ✅ Released (v0.23.0) | 🟢 Critical | Medium | FinOps & Enterprise Architects |
+| **Phase 7** | **FinOps Token Budgeting & Caps** | 🔄 Planned | 🔵 Medium | Low | FinOps & Engineering Leads |

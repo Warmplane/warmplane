@@ -92,6 +92,8 @@ pub async fn handle_approve_ticket(
                     error_message: None,
                     operator_id: Some(payload.operator),
                     approval_ticket_id: Some(id.clone()),
+                    idempotency_key: None,
+                    is_replay: None,
                 });
             }
             (
