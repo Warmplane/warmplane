@@ -425,7 +425,7 @@ impl IdempotencyStore {
             .collect();
 
         // Sort reverse chronological by created timestamp
-        records.sort_by(|a, b| b.created_at_epoch_secs.cmp(&a.created_at_epoch_secs));
+        records.sort_by_key(|a| std::cmp::Reverse(a.created_at_epoch_secs));
         records.into_iter().skip(offset).take(limit).collect()
     }
 
