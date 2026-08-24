@@ -1380,8 +1380,11 @@
 Warmplane manages the lifecycle of upstream MCP servers.
 - Maintains warm sub-process stdio & HTTP/SSE sessions
 - Eliminates startup penalties on tool invocations
-- Enforces fine-grained allow/deny rules & key redaction
-- Exposes BM25 + ONNX vector embedding search
+- SEP-2663 Tasks Extension (`io.modelcontextprotocol/tasks`)
+- Unified Human-in-the-Loop (HITL) approval state machine
+- Enforces fine-grained RBAC allow/deny rules & key redaction
+- Exposes BM25 + ONNX vector embedding hybrid search
+- Embedded Rust engine (`EmbeddedWarmplane`, `ControlPlaneHandle`)
 - Provides standardized execution envelopes & OTLP tracing
           </div>
 
@@ -1621,11 +1624,11 @@ Discovery       <span style="color:#e6b85c">2,552</span> -&gt; <span style="colo
         </div>
 
         <div class="bento-cell">
-          <span class="bento-tag">v0.12.0 Spec Parity</span>
+          <span class="bento-tag">v0.24.0 Spec Extension</span>
           <div class="bento-icon">⚡</div>
-          <div class="bento-title">MCP 2026-07-28, MRTR &amp; Subscriptions</div>
+          <div class="bento-title">SEP-2663 Tasks &amp; Unified HITL</div>
           <div class="bento-body">
-            Full compliance with MCP 2026-07-28 spec: Multi Round-Trip Requests (MRTR) with <code>input_responses</code> propagation, <code>subscriptions_listen</code> change feed, real-time <code>GET /v1/resources/updates</code> SSE streams, and LLM delegation sampling.
+            Official <code>io.modelcontextprotocol/tasks</code> capability: asynchronous long-running tool execution (<code>202 Accepted</code> + <code>resultType: "task"</code>), MRTR <code>inputRequests</code> delegation, cooperative cancellation, and persistent atomic task registry.
           </div>
         </div>
 
@@ -1639,38 +1642,38 @@ Discovery       <span style="color:#e6b85c">2,552</span> -&gt; <span style="colo
         </div>
 
         <div class="bento-cell">
-          <span class="bento-tag">v0.6.0 Resiliency</span>
+          <span class="bento-tag">v0.23.0 Resiliency</span>
           <div class="bento-icon">⇌</div>
-          <div class="bento-title">Idempotency &amp; Operation Cancel</div>
+          <div class="bento-title">Exactly-Once Idempotency &amp; Replay Ledger</div>
           <div class="bento-body">
-            Pass <code>Idempotency-Key</code> to share in-flight calls and avoid duplicate side-effects. Abort stuck calls instantly via <code>POST /v1/operations/cancel</code>.
+            Deterministic auto-key derivation (<code>idk_&lt;sha256&gt;</code>), <code>X-Warmplane-Deduplicated</code> caching, replay count tracking, WORM audit trail linking, and in-flight cancellation.
           </div>
         </div>
 
         <div class="bento-cell">
-          <span class="bento-tag">Governance</span>
+          <span class="bento-tag">Multi-Tenant Governance</span>
           <div class="bento-icon">⊘</div>
-          <div class="bento-title">Fine-Grained RBAC &amp; Policy Profiles</div>
+          <div class="bento-title">Fine-Grained RBAC &amp; Policy Constellations</div>
           <div class="bento-body">
-            Centralized policy rules for read-only, constrained write, and privileged paths with automated argument key redaction.
+            Named server constellations (<code>profiles</code>), static/JWT token auth, per-role policy overrides, dynamic catalog/search pruning, and automated secret redaction.
           </div>
         </div>
 
         <div class="bento-cell">
-          <span class="bento-tag">Observability</span>
+          <span class="bento-tag">Observability &amp; WORM</span>
           <div class="bento-icon">⊙</div>
-          <div class="bento-title">OTLP Traces &amp; Request Context</div>
+          <div class="bento-title">OTLP Traces, SIEM &amp; Cryptographic Audit</div>
           <div class="bento-body">
-            Propagate <code>operation_id</code>, <code>actor_id</code>, and <code>grant_id</code> across execution envelopes, structured JSON logs, and OpenTelemetry spans.
+            Append-only SHA-256 hash-chained audit logging, Splunk/Webhook SIEM export, and end-to-end OpenTelemetry trace propagation across execution envelopes.
           </div>
         </div>
 
         <div class="bento-cell">
-          <span class="bento-tag">v0.12.0 Benchmarks</span>
+          <span class="bento-tag">In-Process Rust Engine</span>
           <div class="bento-icon">🦀</div>
-          <div class="bento-title">Criterion Micro-Benchmarks &amp; Hot-Path Optimization</div>
+          <div class="bento-title">Embedded Rust Control Plane</div>
           <div class="bento-body">
-            56% faster tag search, 83% faster idempotency under concurrency, and 66% faster zero-copy ETag validation — all verified with a full Criterion benchmark suite.
+            Embed Warmplane directly into Rust applications via <code>EmbeddedWarmplane</code> and <code>ControlPlaneHandle</code> — zero HTTP/IPC serialization overhead on your Tokio runtime.
           </div>
         </div>
 
@@ -1688,7 +1691,7 @@ Discovery       <span style="color:#e6b85c">2,552</span> -&gt; <span style="colo
           <div class="bento-icon">⌗</div>
           <div class="bento-title">Catalog Versioning &amp; ETag Validation</div>
           <div class="bento-body">
-            SHA-256 state hashing with conditional 304 Not Modified responses and cursor-based event feeds for zero-token client revalidation.
+            SHA-256 state hashing with conditional 304 Not Modified responses, profile-scoped ETag partitioning, and cursor-based SSE event feeds for zero-token client revalidation.
           </div>
         </div>
       </div>
@@ -1711,6 +1714,10 @@ Discovery       <span style="color:#e6b85c">2,552</span> -&gt; <span style="colo
           <div class="pg-item active" onclick="switchPg('caps', this)">
             <span>GET /v1/capabilities</span>
             <span class="pg-tag">INDEX</span>
+          </div>
+          <div class="pg-item" onclick="switchPg('tasks', this)">
+            <span>GET /v1/tasks/:id</span>
+            <span class="pg-tag">TASK</span>
           </div>
           <div class="pg-item" onclick="switchPg('search', this)">
             <span>POST /v1/capabilities/search</span>
@@ -1736,7 +1743,7 @@ Discovery       <span style="color:#e6b85c">2,552</span> -&gt; <span style="colo
 <span class="code-comment">// ETag header matching yields HTTP 304 Not Modified (0 tokens)</span>
 
 {
-  <span class="code-key">"etag"</span>: <span class="code-str">"\"3a8f9c1b-cl100k\""</span>,
+  <span class="code-key">"etag"</span>: <span class="code-str">"\"3a8f9c1b-p:default\""</span>,
   <span class="code-key">"capabilities"</span>: [
     {
       <span class="code-key">"alias"</span>: <span class="code-str">"db.query"</span>,
@@ -1751,6 +1758,25 @@ Discovery       <span style="color:#e6b85c">2,552</span> -&gt; <span style="colo
       <span class="code-key">"policy_group"</span>: <span class="code-str">"read_only"</span>
     }
   ]
+}
+          </div>
+
+          <div id="pg-tasks" class="code-output" style="display:none;">
+<span class="code-comment">// HTTP GET /v1/tasks/task_1771891200_a81f</span>
+<span class="code-comment">// SEP-2663 Tasks Extension (io.modelcontextprotocol/tasks)</span>
+
+{
+  <span class="code-key">"taskId"</span>: <span class="code-str">"task_1771891200_a81f"</span>,
+  <span class="code-key">"status"</span>: <span class="code-str">"input_required"</span>,
+  <span class="code-key">"progress"</span>: <span class="code-num">0.5</span>,
+  <span class="code-key">"ttlSeconds"</span>: <span class="code-num">300</span>,
+  <span class="code-key">"inputRequests"</span>: {
+    <span class="code-key">"operator_approval"</span>: {
+      <span class="code-key">"type"</span>: <span class="code-str">"confirmation"</span>,
+      <span class="code-key">"prompt"</span>: <span class="code-str">"Approve write mutation to production SQLite database?"</span>,
+      <span class="code-key">"tool"</span>: <span class="code-str">"db.exec"</span>
+    }
+  }
 }
           </div>
 
@@ -1822,37 +1848,46 @@ data: {"uri": "file:///workspace/logs/app.log", "timestamp": 1770982800}
   <section class="section" id="modes">
     <div class="section-inner">
       <div class="section-label reveal">05 — Access Modes</div>
-      <h2 class="section-heading reveal">Three Client Modes, One Engine</h2>
+      <h2 class="section-heading reveal">Four Client Modes, One Engine</h2>
       <p class="section-desc reveal">
         All interfaces share identical policy rules, session warmers, idempotency layers, and execution envelopes.
       </p>
 
-      <div class="modes-grid reveal">
+      <div class="modes-grid reveal" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));">
         <div class="mode-card">
           <div class="mode-card-icon">⌁</div>
           <div class="mode-card-title">HTTP Daemon</div>
           <div class="mode-card-body">
-            RESTful <code>/v1/</code> API exposing capability indices, hybrid search, resource updates via SSE streams, and operation cancellation.
+            RESTful <code>/v1/</code> API exposing capability indices, SEP-2663 tasks, hybrid search, SSE streams, and operation cancellation.
           </div>
           <div class="mode-card-code">warmplane daemon --config mcp_servers.json</div>
         </div>
 
         <div class="mode-card">
           <div class="mode-card-icon">⊞</div>
-          <div class="mode-card-title">MCP Server</div>
+          <div class="mode-card-title">MCP Server (Stdio / SSE)</div>
           <div class="mode-card-body">
-            Standard stdio MCP interface. Point Claude Desktop, Cursor, or any agent framework directly at Warmplane as a unified MCP server.
+            Standard MCP facade. Point Claude Desktop, Cursor, or remote agents at Warmplane via stdio or streamable HTTP/SSE.
           </div>
           <div class="mode-card-code">warmplane mcp-server --config mcp_servers.json</div>
+        </div>
+
+        <div class="mode-card">
+          <div class="mode-card-icon">🦀</div>
+          <div class="mode-card-title">Embedded Rust Engine</div>
+          <div class="mode-card-body">
+            Direct in-process library interface (<code>EmbeddedWarmplane</code>, <code>ControlPlaneHandle</code>) with zero HTTP/IPC overhead.
+          </div>
+          <div class="mode-card-code">EmbeddedWarmplane::start(config).await</div>
         </div>
 
         <div class="mode-card">
           <div class="mode-card-icon">⊳</div>
           <div class="mode-card-title">CLI Interface</div>
           <div class="mode-card-body">
-            Direct terminal commands for scripting, manual tool execution, catalog inspection, and config validation.
+            Direct terminal commands for scripting, manual tool execution, SEP-2663 task control, and catalog inspection.
           </div>
-          <div class="mode-card-code">warmplane search-capabilities "query db"</div>
+          <div class="mode-card-code">warmplane tasks list</div>
         </div>
       </div>
     </div>
@@ -2006,7 +2041,7 @@ data: {"uri": "file:///workspace/logs/app.log", "timestamp": 1770982800}
     function switchPg(pgId, btn) {
       document.querySelectorAll('.pg-item').forEach(item => item.classList.remove('active'));
       btn.classList.add('active');
-      ['caps', 'search', 'call', 'sse', 'complete'].forEach(id => {
+      ['caps', 'tasks', 'search', 'call', 'sse', 'complete'].forEach(id => {
         const el = document.getElementById('pg-' + id);
         if (el) el.style.display = (id === pgId) ? 'block' : 'none';
       });
