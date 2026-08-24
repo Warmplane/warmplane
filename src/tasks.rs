@@ -305,7 +305,7 @@ impl TaskRegistry {
     pub async fn list_tasks(&self) -> Vec<TaskRecord> {
         let guard = self.tasks.read().await;
         let mut list: Vec<TaskRecord> = guard.values().cloned().collect();
-        list.sort_by(|a, b| b.created_at_epoch_secs.cmp(&a.created_at_epoch_secs));
+        list.sort_by_key(|t| std::cmp::Reverse(t.created_at_epoch_secs));
         list
     }
 
