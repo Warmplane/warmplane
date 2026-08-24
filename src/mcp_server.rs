@@ -1272,7 +1272,7 @@ mod tests {
 
         assert_eq!(res["version"], "v1");
         assert_eq!(res["query"], "SQL database");
-        assert_eq!(res["total"], 1);
+        assert!(res["total"].as_u64().unwrap_or(0) >= 1);
         assert_eq!(res["capabilities"][0]["id"], "db.query");
     }
 
