@@ -263,6 +263,21 @@ function renderToolsPlayground(state: any): string {
               </div>
             </div>
 
+            <div style="margin-top: 10px; display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: rgba(0,0,0,0.25); border-radius: var(--radius-sm); border: 1px solid var(--border);">
+              <div>
+                <div style="font-size: 11.5px; font-weight: 600; color: var(--amber-300); display: flex; align-items: center; gap: 6px;">
+                  <span>⚡ Async Task Mode (SEP-2663)</span>
+                </div>
+                <div style="font-size: 10.5px; color: var(--text-dim);">Execute tool asynchronously returning HTTP 202 Accepted Task</div>
+              </div>
+              <label style="position: relative; display: inline-block; width: 36px; height: 20px; margin: 0; cursor: pointer;">
+                <input type="checkbox" id="pg-async-task-toggle" ${state.playgroundAsyncTask ? 'checked' : ''} onchange="window.app.togglePlaygroundAsyncTask(this.checked)" style="opacity: 0; width: 0; height: 0;">
+                <span style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: ${state.playgroundAsyncTask ? 'var(--amber-400)' : 'var(--border)'}; transition: .3s; border-radius: 20px;">
+                  <span style="position: absolute; content: ''; height: 14px; width: 14px; left: ${state.playgroundAsyncTask ? '19px' : '3px'}; bottom: 3px; background-color: white; transition: .3s; border-radius: 50%;"></span>
+                </span>
+              </label>
+            </div>
+
             <div class="form-group" style="margin-top: 10px;">
               <label class="form-label">Request Context / Operation ID (Optional)</label>
               <input type="text" class="form-input" id="pg-context-input" placeholder="e.g. op-dev-test-1">
@@ -281,11 +296,33 @@ function renderToolsPlayground(state: any): string {
           <!-- Response Inspector -->
           <div style="padding: 16px; background: var(--bg-app); display: flex; flex-direction: column; overflow: hidden;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-              <span style="font-size: 11px; font-weight: 600; color: var(--text-dim);">NORMALIZED EXECUTION ENVELOPE</span>
-              <span id="pg-status-badge" style="font-size: 11px; font-weight: 600; color: ${state.executionResult ? (state.executionResult.status === 200 ? 'var(--green-400)' : 'var(--red-400)') : 'var(--text-dim)'}; font-family: var(--ff-mono);">
+              <span style="font-size: 11px; font-weight: 600; color: var(--text-dim);">
+                ${state.executionResult && (state.executionResult.status === 202 || state.executionResult.data?.resultType === 'task') ? 'SEP-2663 TASK RESPONSE' : 'NORMALIZED EXECUTION ENVELOPE'}
+              </span>
+              <span id="pg-status-badge" style="font-size: 11px; font-weight: 600; color: ${state.executionResult ? (state.executionResult.status === 200 ? 'var(--green-400)' : state.executionResult.status === 202 ? 'var(--amber-300)' : 'var(--red-400)') : 'var(--text-dim)'}; font-family: var(--ff-mono);">
                 ${state.executionResult ? `HTTP ${state.executionResult.status} · ${state.executionResult.durationMs.toFixed(1)}ms` : 'READY'}
               </span>
             </div>
+
+            ${state.executionResult && (state.executionResult.status === 202 || state.executionResult.data?.resultType === 'task') ? `
+              <div style="margin-bottom: 12px; padding: 12px 14px; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: var(--radius-sm); display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <span class="brand-badge" style="background: rgba(245, 158, 11, 0.2); color: var(--amber-300); border-color: rgba(245, 158, 11, 0.5);">
+                      ${escapeHtml(state.executionResult.data?.task?.status || state.executionResult.data?.status || 'TASK_CREATED').toUpperCase()}
+                    </span>
+                    <span style="font-family: var(--ff-mono); font-size: 12px; font-weight: 700; color: var(--text-main);">${escapeHtml(state.executionResult.data?.task?.taskId || state.executionResult.data?.taskId || '')}</span>
+                  </div>
+                  <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">
+                    Execution suspended for Human-in-the-Loop approval or async resolution.
+                  </div>
+                </div>
+                <button class="btn btn-primary" style="padding: 4px 10px; font-size: 11px;" onclick="window.app.switchTab('tasks')">
+                  Go to Tasks &amp; Approvals →
+                </button>
+              </div>
+            ` : ''}
+
             <pre id="pg-response-json" style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: var(--amber-300); font-size: 11.5px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-word;">${state.executionResult ? escapeHtml(JSON.stringify(state.executionResult.data, null, 2)) : '// Response envelope output will be formatted here'}</pre>
           </div>
         </div>

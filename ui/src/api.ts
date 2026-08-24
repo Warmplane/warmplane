@@ -116,6 +116,40 @@ export interface PolicyConfig {
   webhook?: string;
 }
 
+export interface TaskItem {
+  taskId: string;
+  status: 'working' | 'input_required' | 'completed' | 'cancelled' | 'failed' | string;
+  progress?: number;
+  total?: number;
+  result?: any;
+  error?: any;
+  ttlSeconds?: number;
+  createdAtEpochSecs?: number;
+  expiresAtEpochSecs?: number;
+  inputRequests?: Record<string, any>;
+  capabilityId?: string;
+  serverId?: string;
+  context?: {
+    operation_id?: string;
+    actor_id?: string;
+    grant_id?: string;
+  };
+}
+
+export interface ListTasksResponse {
+  ok: boolean;
+  total: number;
+  tasks: TaskItem[];
+}
+
+export interface UpdateTaskRequest {
+  inputResponses: Record<string, any>;
+}
+
+export interface CancelTaskRequest {
+  reason?: string;
+}
+
 export interface PendingApproval {
   id: string;
   capability_id: string;
@@ -299,6 +333,7 @@ export interface CallCapabilityRequest {
   capability_id: string;
   args: Record<string, any>;
   request_id?: string;
+  async_task?: boolean;
   context?: {
     operation_id?: string;
     actor_id?: string;
@@ -485,6 +520,34 @@ export class WarmplaneClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
+    });
+    return res.json();
+  }
+
+  async listTasks(): Promise<ListTasksResponse> {
+    const res = await fetch(`${this.baseUrl}/v1/tasks`);
+    return res.json();
+  }
+
+  async getTask(id: string): Promise<{ ok: boolean; resultType?: string; task?: TaskItem; error?: any }> {
+    const res = await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(id)}`);
+    return res.json();
+  }
+
+  async updateTask(id: string, inputResponses: Record<string, any>): Promise<{ ok: boolean; resultType?: string; message?: string; error?: any }> {
+    const res = await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(id)}/update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inputResponses })
+    });
+    return res.json();
+  }
+
+  async cancelTask(id: string, reason?: string): Promise<{ ok: boolean; resultType?: string; cancelled?: boolean; message?: string; error?: any }> {
+    const res = await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason })
     });
     return res.json();
   }
