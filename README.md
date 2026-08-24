@@ -6,7 +6,7 @@
 
 > **The Local control plane that keeps MCP sessions warm with compact capability/resource/prompt facades.**
 > 
-> v0.25.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.25.1 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
@@ -268,6 +268,10 @@ warmplane mcp-server
 ---
 
 ## Changelog
+
+### v0.25.1 — Asynchronous Task Completion State Machine Fix
+- **Asynchronous Task Finalization (`src/engine/mod.rs`, `src/http_v1/execute.rs`):** Resolved regression where asynchronous capability executions (`async_task: true` or `Prefer: respond-async`) and tasks resumed after Human-in-the-Loop (HITL) input responses remained indefinitely in `TaskStatus::Working`. Background workers now reliably record terminal state (`TaskStatus::Completed` with `result`, or `TaskStatus::Failed` with structured error) directly into `TaskRegistry`.
+- **Embedded Task Lifecycle Tests (`tests/embedded_tests.rs`, `tests/tasks_tests.rs`):** Added comprehensive automated integration tests verifying that `get_task` and `list_tasks` observe terminal `completed` status with upstream payload following approval submissions and direct asynchronous calls.
 
 ### v0.25.0 — Control Deck Tasks & HITL UI, In-Process Embedded Task API
 - **Control Deck Tasks & Approvals Hub (`ui/src/components/tasks.ts`):** Upgraded the review queue into a unified Tasks & Approvals dashboard (`data-tab="tasks"`) with live status KPIs (`input_required`, `working`, `completed`, `cancelled/failed`), interactive action cards with inlined MRTR input resolution forms (booleans, JSON editors, text fields), TTL countdown timers, and cooperative cancellation controls.
