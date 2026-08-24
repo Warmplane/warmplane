@@ -34,7 +34,7 @@ impl VectorSearchIndex {
                 Err(err) => {
                     attempts += 1;
                     if attempts >= 5 {
-                        return Err(err.into());
+                        return Err(err);
                     }
                     std::thread::sleep(std::time::Duration::from_millis(300));
                 }
