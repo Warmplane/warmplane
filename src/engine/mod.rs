@@ -1011,6 +1011,132 @@ impl ControlPlaneHandle {
         }
     }
 
+    /// Lists all active and historical tasks in the task registry.
+    ///
+    /// # Returns
+    /// A vector of [`TaskResponse`] wire representations sorted from newest to oldest.
+    pub async fn list_tasks(&self) -> Vec<TaskResponse> {
+        let tasks = self.state.task_registry.list_tasks().await;
+        tasks.iter().map(TaskResponse::from).collect()
+    }
+
+    /// Retrieves a task by its task ID, performing TTL checks.
+    ///
+    /// # Arguments
+    /// * `task_id` - Unique task identifier.
+    ///
+    /// # Returns
+    /// An [`Envelope`] containing the [`TaskResponse`] if found, or an error envelope if not found.
+    pub async fn get_task(&self, task_id: &str) -> Envelope<TaskResponse> {
+        let trace_id = next_trace_id();
+        if let Some(record) = self.state.task_registry.get_task(task_id).await {
+            Envelope::success(
+                trace_id,
+                record.request_id.clone(),
+                record.context.clone(),
+                TaskResponse::from(&record),
+                RetryMetadata::safe("completed"),
+            )
+        } else {
+            Envelope::failure(
+                trace_id,
+                None,
+                None,
+                WarmplaneError::new(
+                    "TASK_NOT_FOUND",
+                    format!("Task '{}' not found", task_id),
+                    false,
+                ),
+                RetryMetadata::safe("not_started"),
+            )
+        }
+    }
+
+    /// Resolves an `InputRequired` task by submitting client input responses.
+    ///
+    /// # Arguments
+    /// * `task_id` - Target task identifier.
+    /// * `input_responses` - Map of input keys to response values (e.g. `{"hitl_approval": {"approved": true}}`).
+    ///
+    /// # Returns
+    /// An [`Envelope`] indicating whether the update succeeded.
+    pub async fn update_task(
+        &self,
+        task_id: &str,
+        input_responses: std::collections::BTreeMap<String, Value>,
+    ) -> Envelope<bool> {
+        let trace_id = next_trace_id();
+        match self
+            .state
+            .task_registry
+            .update_task(task_id, input_responses)
+            .await
+        {
+            Ok(true) => {
+                Envelope::success(trace_id, None, None, true, RetryMetadata::safe("completed"))
+            }
+            Ok(false) => Envelope::failure(
+                trace_id,
+                None,
+                None,
+                WarmplaneError::new(
+                    "TASK_UPDATE_REJECTED",
+                    format!(
+                        "Task '{}' is not in 'input_required' status or does not exist",
+                        task_id
+                    ),
+                    false,
+                ),
+                RetryMetadata::safe("not_started"),
+            ),
+            Err(e) => Envelope::failure(
+                trace_id,
+                None,
+                None,
+                WarmplaneError::new("INTERNAL_ERROR", e.to_string(), false),
+                RetryMetadata::safe("unknown"),
+            ),
+        }
+    }
+
+    /// Cooperatively cancels an in-progress or suspended task.
+    ///
+    /// # Arguments
+    /// * `task_id` - Target task identifier.
+    /// * `reason` - Optional reason for cancellation.
+    ///
+    /// # Returns
+    /// An [`Envelope`] indicating whether the task was cancelled.
+    pub async fn cancel_task(&self, task_id: &str, reason: Option<String>) -> Envelope<bool> {
+        let trace_id = next_trace_id();
+        match self.state.task_registry.cancel_task(task_id, reason).await {
+            Ok(true) => {
+                Envelope::success(trace_id, None, None, true, RetryMetadata::safe("completed"))
+            }
+            Ok(false) => Envelope::failure(
+                trace_id,
+                None,
+                None,
+                WarmplaneError::new(
+                    "TASK_CANCEL_REJECTED",
+                    format!(
+                        "Task '{}' is already completed, failed, cancelled, or not found",
+                        task_id
+                    ),
+                    false,
+                ),
+                RetryMetadata::safe("not_started"),
+            ),
+            Err(e) => Envelope::failure(
+                trace_id,
+                None,
+                None,
+                WarmplaneError::new("INTERNAL_ERROR", e.to_string(), false),
+                RetryMetadata::safe("unknown"),
+            ),
+        }
+    }
+
     /// Gracefully initiates shutdown of all background supervisors and actor channels.
     pub async fn shutdown(&self) {
         self.state.shutdown().await;

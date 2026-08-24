@@ -253,6 +253,8 @@ pub struct EngineHealthStatus {
     pub total_tool_duration_us: u64,
 }
 
+pub use crate::tasks::{TaskRecord, TaskResponse, TaskStatus};
+
 /// Optional invocation settings for calling a capability tool.
 #[derive(Debug, Clone, Default)]
 pub struct ExecutionOptions {
@@ -293,6 +295,12 @@ impl ExecutionOptions {
     /// Sets idempotency key.
     pub fn with_idempotency_key(mut self, key: impl Into<String>) -> Self {
         self.idempotency_key = Some(key.into());
+        self
+    }
+
+    /// Sets async_task execution mode.
+    pub fn with_async_task(mut self, async_task: bool) -> Self {
+        self.async_task = async_task;
         self
     }
 }
