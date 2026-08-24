@@ -6,7 +6,7 @@
 
 > **The Local control plane that keeps MCP sessions warm with compact capability/resource/prompt facades.**
 > 
-> v0.23.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.25.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
@@ -225,6 +225,7 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 
 | Feature | Since | Summary |
 |---------|-------|---------|
+| **SEP-2663 Tasks Extension & Unified HITL** | v0.25.0 | Official `io.modelcontextprotocol/tasks` support with atomic state machine, asynchronous long-running tool execution (`202 Accepted` + `resultType: "task"`), cooperative cancellation (`POST /v1/tasks/:id/cancel`), TTL expiry management, and unified Human-in-the-Loop (HITL) suspension & argument resolution |
 | **Exactly-Once Idempotency & Replay Ledger** | v0.23.0 | Deterministic auto-key derivation (`idk_<sha256>`), `X-Warmplane-Deduplicated: true` header caching, replay count tracking, WORM audit trail linking (`idempotency_key`, `is_replay`), and `/v1/idempotency/records` inspection APIs |
 | **Embedded Rust Library Engine** | v0.23.0 | Direct in-process library interface (`EmbeddedWarmplane`, `ControlPlaneHandle`) with strongly typed response envelopes (`Envelope<T>`), direct tool/resource/prompt execution, and graceful cancellation on caller's Tokio runtime |
 | **MCP HTTP/SSE Server Mode** | v0.22.0 | Streamable HTTP/SSE MCP server (`mcp-http-server`) for remote network clients; daemon co-hosting via `mcpHttpServer` config block; profile restriction, auth enforcement on non-loopback bind, graceful shared-state shutdown |
@@ -261,6 +262,14 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 ---
 
 ## Changelog
+
+### v0.25.0 — SEP-2663 Tasks Extension, Unified HITL Execution & MCP Roadmap Alignment
+- **SEP-2663 Tasks Extension Implementation (`src/tasks.rs`):** Implemented the official `io.modelcontextprotocol/tasks` capability with atomic persistent storage (`tasks.json`), safe TTL expiration detection, and oneshot input response channels (`TaskWaitSender` / `TaskWaitReceiver`).
+- **Unified HITL Approval & Asynchronous Task State Machine:** Unified Human-in-the-Loop approval workflows and asynchronous tool executions directly onto the SEP-2663 lifecycle. Tool executions requiring operator gate approval or requested with `async_task: true` / `Prefer: respond-async` return `202 Accepted` with `resultType: "task"` and `status: "input_required"`, inlining MRTR `inputRequests`.
+- **HTTP REST Task API (`/v1/tasks/*`):** Added comprehensive REST endpoints for task inspection and control: `GET /v1/tasks` (list), `GET /v1/tasks/:id` (poll status/result), `POST /v1/tasks/:id/update` (submit `inputResponses` to wake up worker), and `POST /v1/tasks/:id/cancel` (cooperative cancellation).
+- **MCP Facade Server Integration:** Exposed `task_get`, `task_update`, and `task_cancel` tools on the MCP facade server for direct agent orchestration.
+- **CLI Tasks Subcommands & Async Execution Flag:** Added `warmplane tasks list`, `warmplane tasks get <id>`, `warmplane tasks update <id> -r '<json>'`, `warmplane tasks cancel <id>`, and the `--async-task` flag to `warmplane call-capability`.
+- **MCP Protocol Roadmap Strategic Analysis:** Published `docs/MCP_ROADMAP_REPORT.md` analyzing the official MCP roadmap and Warmplane's architectural alignment across stateless transports, sessionless routing, and progressive capability discovery.
 
 ### v0.23.0 — Embedded Rust Engine, In-Process Control Plane & Facade Adapter Refactoring
 - **In-Process Embedded Rust Library Engine (`EmbeddedWarmplane`, `ControlPlaneHandle`):** Exposed Warmplane as a pure in-process library without HTTP, daemon child process, or JSON-RPC serialization overhead. Callers spawn the engine directly on their own Tokio runtime via `EmbeddedWarmplane::start(config)` or `EmbeddedWarmplane::start_from_path(path)` and interact via typed `ControlPlaneHandle` methods (`list_capabilities`, `describe_capability`, `search_capabilities`, `call_capability`, `batch_call`, `read_resource`, `get_prompt`, `health_status`).
