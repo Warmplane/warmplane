@@ -406,11 +406,272 @@ impl ControlPlaneHandle {
 
         let mut effective_args = args.clone();
 
-        // Human-in-the-Loop (HITL) Handling & SEP-2663 Tasks Integration
-        if requires_approval {
+        // If caller requested async task handle, create task and spawn background worker
+        if options.async_task {
+            let initial_status = if requires_approval {
+                crate::tasks::TaskStatus::InputRequired
+            } else {
+                crate::tasks::TaskStatus::Working
+            };
+
+            let status_msg = if requires_approval {
+                Some(format!(
+                    "Execution suspended awaiting operator approval for capability '{}'",
+                    capability_id
+                ))
+            } else {
+                Some("Task accepted and running".to_string())
+            };
+
+            let input_requests = if requires_approval {
+                let sanitized = crate::http_v1::helpers::redact_value(args.clone(), &redact_keys);
+                let mut map = std::collections::BTreeMap::new();
+                map.insert(
+                    "hitl_approval".to_string(),
+                    serde_json::json!({
+                        "type": "approval_review",
+                        "capability_id": capability_id,
+                        "server_id": server_id,
+                        "sanitized_args": sanitized,
+                        "timeout_secs": approval_timeout_secs,
+                    }),
+                );
+                Some(map)
+            } else {
+                None
+            };
+
+            let (task_record, task_rx) = self
+                .state
+                .task_registry
+                .create_task(crate::tasks::CreateTaskParams {
+                    capability_id: capability_id.to_string(),
+                    server_id: server_id.clone(),
+                    args: args.clone(),
+                    request_id: Some(req_id.clone()),
+                    context: Some(req_ctx.clone()),
+                    idempotency_key: idempotency_key.clone(),
+                    initial_status,
+                    status_message: status_msg,
+                    input_requests,
+                    ttl_ms: Some(approval_timeout_secs * 1000),
+                    poll_interval_ms: Some(1000),
+                })
+                .await;
+
+            let handle = self.clone();
+            let task_id_clone = task_record.task_id.clone();
+            let server_id_clone = server_id.clone();
+            let tool_name_clone = tool_name.clone();
+            let args_clone = args.clone();
+            let idempotency_key_clone = idempotency_key.clone();
+            let trace_id_clone = trace_id.clone();
+            let req_id_clone = req_id.clone();
+            let req_ctx_clone = req_ctx.clone();
+
+            tokio::spawn(async move {
+                let mut worker_args = args_clone.clone();
+                if requires_approval {
+                    if let Some(trx) = task_rx {
+                        match trx.await {
+                            Ok(responses) => {
+                                if let Some(appr) = responses.get("hitl_approval") {
+                                    if appr.get("approved").and_then(Value::as_bool) == Some(true) {
+                                        if let Some(mod_args) = appr.get("modified_args").cloned() {
+                                            worker_args = mod_args;
+                                        }
+                                    } else {
+                                        let reason = appr
+                                            .get("reason")
+                                            .and_then(Value::as_str)
+                                            .map(ToString::to_string);
+                                        let _ = handle
+                                            .state
+                                            .task_registry
+                                            .cancel_task(&task_id_clone, reason)
+                                            .await;
+                                        if let Some(ref key) = idempotency_key_clone {
+                                            handle.state.idempotency_store.remove(key).await;
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                let _ = handle
+                                    .state
+                                    .task_registry
+                                    .fail_task(
+                                        &task_id_clone,
+                                        serde_json::json!({"code": "APPROVAL_TIMEOUT"}),
+                                        Some("Approval request timed out or cancelled".to_string()),
+                                    )
+                                    .await;
+                                if let Some(ref key) = idempotency_key_clone {
+                                    handle.state.idempotency_store.remove(key).await;
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                let tx = {
+                    let servers_guard = handle.state.servers.read().await;
+                    match servers_guard.get(&server_id_clone).cloned() {
+                        Some(tx) => tx,
+                        None => {
+                            let _ = handle
+                                .state
+                                .task_registry
+                                .fail_task(
+                                    &task_id_clone,
+                                    serde_json::json!({"code": "SERVER_UNREACHABLE"}),
+                                    Some(format!("Server '{}' is unreachable", server_id_clone)),
+                                )
+                                .await;
+                            if let Some(ref key) = idempotency_key_clone {
+                                handle.state.idempotency_store.remove(key).await;
+                            }
+                            return;
+                        }
+                    }
+                };
+
+                let (reply_tx, reply_rx) = oneshot::channel();
+                if tx
+                    .send(ServerMsg::CallTool {
+                        name: tool_name_clone,
+                        params: worker_args.clone(),
+                        input_responses: options.input_responses.clone(),
+                        request_state: options.request_state.clone(),
+                        reply: reply_tx,
+                    })
+                    .await
+                    .is_err()
+                {
+                    handle
+                        .state
+                        .circuit_breakers
+                        .record_failure(&server_id_clone)
+                        .await;
+                    let _ = handle
+                        .state
+                        .task_registry
+                        .fail_task(
+                            &task_id_clone,
+                            serde_json::json!({"code": "SERVER_UNREACHABLE"}),
+                            Some(format!("Server '{}' mailbox is closed", server_id_clone)),
+                        )
+                        .await;
+                    if let Some(ref key) = idempotency_key_clone {
+                        handle.state.idempotency_store.remove(key).await;
+                    }
+                    return;
+                }
+
+                let distill_opts = DistillationOptions::from_args(Some(&args_clone));
+                match reply_rx.await {
+                    Ok(Ok(data)) => {
+                        handle
+                            .state
+                            .circuit_breakers
+                            .record_success(&server_id_clone)
+                            .await;
+                        let distilled_data = distill_value(data, &distill_opts);
+                        let _ = handle
+                            .state
+                            .task_registry
+                            .complete_task(&task_id_clone, distilled_data.clone())
+                            .await;
+
+                        let env = Envelope::success(
+                            trace_id_clone,
+                            Some(req_id_clone),
+                            Some(req_ctx_clone),
+                            distilled_data,
+                            retry_base("completed"),
+                        );
+                        if let Some(ref key) = idempotency_key_clone {
+                            if let Ok(val) = serde_json::to_value(&env) {
+                                handle.state.idempotency_store.complete(key, val).await;
+                            }
+                        }
+                    }
+                    Ok(Err(UpstreamCallError::Timeout)) => {
+                        handle
+                            .state
+                            .circuit_breakers
+                            .record_failure(&server_id_clone)
+                            .await;
+                        let _ = handle
+                            .state
+                            .task_registry
+                            .fail_task(
+                                &task_id_clone,
+                                serde_json::json!({"code": "UPSTREAM_TIMEOUT"}),
+                                Some("Tool call timed out".to_string()),
+                            )
+                            .await;
+                        if let Some(ref key) = idempotency_key_clone {
+                            handle.state.idempotency_store.remove(key).await;
+                        }
+                    }
+                    Ok(Err(UpstreamCallError::Upstream(err))) => {
+                        handle
+                            .state
+                            .circuit_breakers
+                            .record_failure(&server_id_clone)
+                            .await;
+                        let _ = handle
+                            .state
+                            .task_registry
+                            .fail_task(
+                                &task_id_clone,
+                                serde_json::json!({"code": "UPSTREAM_ERROR", "message": &err}),
+                                Some(err),
+                            )
+                            .await;
+                        if let Some(ref key) = idempotency_key_clone {
+                            handle.state.idempotency_store.remove(key).await;
+                        }
+                    }
+                    Err(_) => {
+                        handle
+                            .state
+                            .circuit_breakers
+                            .record_failure(&server_id_clone)
+                            .await;
+                        let _ = handle
+                            .state
+                            .task_registry
+                            .fail_task(
+                                &task_id_clone,
+                                serde_json::json!({"code": "INTERNAL_ERROR"}),
+                                Some("Server actor task dropped reply channel".to_string()),
+                            )
+                            .await;
+                        if let Some(ref key) = idempotency_key_clone {
+                            handle.state.idempotency_store.remove(key).await;
+                        }
+                    }
+                }
+            });
+
+            let task_resp = crate::tasks::TaskResponse::from(&task_record);
+            return Envelope::success(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                serde_json::to_value(task_resp).unwrap_or_default(),
+                retry_base("in_progress"),
+            );
+        }
+
+        // Synchronous Human-in-the-Loop (HITL) Interception Flow
+        let task_record = if requires_approval {
             let sanitized = crate::http_v1::helpers::redact_value(args.clone(), &redact_keys);
 
-            // Also create a registered SEP-2663 task for this approval wait
             let mut input_requests = std::collections::BTreeMap::new();
             input_requests.insert(
                 "hitl_approval".to_string(),
@@ -423,7 +684,7 @@ impl ControlPlaneHandle {
                 }),
             );
 
-            let (task_record, task_rx) = self
+            let (rec, trx) = self
                 .state
                 .task_registry
                 .create_task(crate::tasks::CreateTaskParams {
@@ -443,18 +704,6 @@ impl ControlPlaneHandle {
                     poll_interval_ms: Some(1000),
                 })
                 .await;
-
-            // If caller requested async task handle, return CreateTaskResult immediately
-            if options.async_task {
-                let task_resp = crate::tasks::TaskResponse::from(&task_record);
-                return Envelope::success(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    serde_json::to_value(task_resp).unwrap_or_default(),
-                    retry_base("in_progress"),
-                );
-            }
 
             let (_approval_id, rx) = self
                 .state
@@ -485,7 +734,7 @@ impl ControlPlaneHandle {
                             }
                         }
                         crate::approvals::ApprovalResolution::Rejected { operator, reason } => {
-                            let _ = self.state.task_registry.cancel_task(&task_record.task_id, reason.clone()).await;
+                            let _ = self.state.task_registry.cancel_task(&rec.task_id, reason.clone()).await;
                             if let Some(ref key) = idempotency_key {
                                 self.state.idempotency_store.remove(key).await;
                             }
@@ -498,7 +747,7 @@ impl ControlPlaneHandle {
                             );
                         }
                         crate::approvals::ApprovalResolution::Expired => {
-                            let _ = self.state.task_registry.fail_task(&task_record.task_id, serde_json::json!({"code": "APPROVAL_TIMEOUT"}), Some("Approval request timed out".to_string())).await;
+                            let _ = self.state.task_registry.fail_task(&rec.task_id, serde_json::json!({"code": "APPROVAL_TIMEOUT"}), Some("Approval request timed out".to_string())).await;
                             if let Some(ref key) = idempotency_key {
                                 self.state.idempotency_store.remove(key).await;
                             }
@@ -517,7 +766,7 @@ impl ControlPlaneHandle {
                     }
                 }
                 task_res = async {
-                    if let Some(trx) = task_rx {
+                    if let Some(trx) = trx {
                         trx.await.ok()
                     } else {
                         None
@@ -531,7 +780,7 @@ impl ControlPlaneHandle {
                                 }
                             } else {
                                 let reason = appr.get("reason").and_then(Value::as_str).map(ToString::to_string);
-                                let _ = self.state.task_registry.cancel_task(&task_record.task_id, reason.clone()).await;
+                                let _ = self.state.task_registry.cancel_task(&rec.task_id, reason.clone()).await;
                                 if let Some(ref key) = idempotency_key {
                                     self.state.idempotency_store.remove(key).await;
                                 }
@@ -547,11 +796,25 @@ impl ControlPlaneHandle {
                     }
                 }
             }
-        }
+            Some(rec)
+        } else {
+            None
+        };
 
         let tx = {
             let servers_guard = self.state.servers.read().await;
             let Some(tx) = servers_guard.get(&server_id).cloned() else {
+                if let Some(ref rec) = task_record {
+                    let _ = self
+                        .state
+                        .task_registry
+                        .fail_task(
+                            &rec.task_id,
+                            serde_json::json!({"code": "SERVER_UNREACHABLE"}),
+                            Some(format!("Server '{}' is unreachable", server_id)),
+                        )
+                        .await;
+                }
                 if let Some(ref key) = idempotency_key {
                     self.state.idempotency_store.remove(key).await;
                 }
@@ -577,6 +840,17 @@ impl ControlPlaneHandle {
             .check_permission(&server_id)
             .await
         {
+            if let Some(ref rec) = task_record {
+                let _ = self
+                    .state
+                    .task_registry
+                    .fail_task(
+                        &rec.task_id,
+                        serde_json::json!({"code": "CIRCUIT_OPEN"}),
+                        Some(cb_err.to_string()),
+                    )
+                    .await;
+            }
             if let Some(ref key) = idempotency_key {
                 self.state.idempotency_store.remove(key).await;
             }
@@ -604,6 +878,17 @@ impl ControlPlaneHandle {
             .is_err()
         {
             self.state.circuit_breakers.record_failure(&server_id).await;
+            if let Some(ref rec) = task_record {
+                let _ = self
+                    .state
+                    .task_registry
+                    .fail_task(
+                        &rec.task_id,
+                        serde_json::json!({"code": "SERVER_UNREACHABLE"}),
+                        Some(format!("Server '{}' mailbox is closed", server_id)),
+                    )
+                    .await;
+            }
             if let Some(ref key) = idempotency_key {
                 self.state.idempotency_store.remove(key).await;
             }
@@ -631,6 +916,14 @@ impl ControlPlaneHandle {
                     .fetch_add(elapsed_us, Ordering::Relaxed);
 
                 let distilled_data = distill_value(data, &distill_opts);
+                if let Some(ref rec) = task_record {
+                    let _ = self
+                        .state
+                        .task_registry
+                        .complete_task(&rec.task_id, distilled_data.clone())
+                        .await;
+                }
+
                 let env = Envelope::success(
                     trace_id,
                     Some(req_id),
@@ -649,6 +942,20 @@ impl ControlPlaneHandle {
             }
             Ok(Err(UpstreamCallError::Timeout)) => {
                 self.state.circuit_breakers.record_failure(&server_id).await;
+                if let Some(ref rec) = task_record {
+                    let _ = self
+                        .state
+                        .task_registry
+                        .fail_task(
+                            &rec.task_id,
+                            serde_json::json!({"code": "UPSTREAM_TIMEOUT"}),
+                            Some(format!(
+                                "Tool call timed out after {}ms",
+                                self.state.tool_timeout_ms
+                            )),
+                        )
+                        .await;
+                }
                 if let Some(ref key) = idempotency_key {
                     self.state.idempotency_store.remove(key).await;
                 }
@@ -666,6 +973,17 @@ impl ControlPlaneHandle {
             }
             Ok(Err(UpstreamCallError::Upstream(err))) => {
                 self.state.circuit_breakers.record_failure(&server_id).await;
+                if let Some(ref rec) = task_record {
+                    let _ = self
+                        .state
+                        .task_registry
+                        .fail_task(
+                            &rec.task_id,
+                            serde_json::json!({"code": "UPSTREAM_ERROR", "message": &err}),
+                            Some(err.clone()),
+                        )
+                        .await;
+                }
                 if let Some(ref key) = idempotency_key {
                     self.state.idempotency_store.remove(key).await;
                 }
@@ -679,6 +997,17 @@ impl ControlPlaneHandle {
             }
             Err(_) => {
                 self.state.circuit_breakers.record_failure(&server_id).await;
+                if let Some(ref rec) = task_record {
+                    let _ = self
+                        .state
+                        .task_registry
+                        .fail_task(
+                            &rec.task_id,
+                            serde_json::json!({"code": "INTERNAL_ERROR"}),
+                            Some("Server actor task dropped reply channel".to_string()),
+                        )
+                        .await;
+                }
                 if let Some(ref key) = idempotency_key {
                     self.state.idempotency_store.remove(key).await;
                 }

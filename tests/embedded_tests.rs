@@ -261,3 +261,187 @@ async fn test_embedded_task_management_lifecycle() {
 
     cp.shutdown().await;
 }
+
+#[tokio::test]
+async fn test_embedded_async_task_hitl_and_completion_lifecycle() {
+    use std::collections::BTreeMap;
+    use tokio::sync::mpsc;
+    use warmplane::config::{PolicyConfig, ServerConfig};
+    use warmplane::daemon::{CapabilityMeta, ServerMsg};
+    use warmplane::engine::{ExecutionOptions, TaskStatus};
+
+    let mut mcp_servers = HashMap::new();
+    mcp_servers.insert(
+        "mock_srv".to_string(),
+        ServerConfig {
+            command: None,
+            args: vec![],
+            env: HashMap::new(),
+            url: Some("http://127.0.0.1:59996/mcp".to_string()),
+            auth: None,
+            protocol_version: None,
+            allow_stateless: Some(true),
+            headers: HashMap::new(),
+            resilience: None,
+        },
+    );
+
+    let policy = PolicyConfig {
+        require_approval: vec!["mock_srv/sensitive_action".to_string()],
+        approval_timeout_secs: Some(30),
+        ..Default::default()
+    };
+
+    let config = McpConfig {
+        mcp_servers,
+        policy: Some(policy),
+        state: Some(warmplane::config::StateConfig {
+            enabled: false,
+            dir: None,
+        }),
+        ..Default::default()
+    };
+
+    let (cp, _shutdown) = EmbeddedWarmplane::start(config)
+        .await
+        .expect("EmbeddedWarmplane must boot cleanly");
+
+    // Install mock server mailbox
+    let (tx, mut rx) = mpsc::channel(4);
+    {
+        let mut servers = cp.state().servers.write().await;
+        servers.insert("mock_srv".to_string(), tx);
+
+        let mut caps = cp.state().capabilities.write().await;
+        caps.insert(
+            "mock_srv/sensitive_action".to_string(),
+            CapabilityMeta {
+                server: "mock_srv".to_string(),
+                tool: "sensitive_action".to_string(),
+                summary: "Sensitive Action".to_string(),
+                description: "Requires approval".to_string(),
+                input_schema: json!({"type": "object"}),
+                tags: vec![],
+                examples: vec![],
+            },
+        );
+        caps.insert(
+            "mock_srv/fast_action".to_string(),
+            CapabilityMeta {
+                server: "mock_srv".to_string(),
+                tool: "fast_action".to_string(),
+                summary: "Fast Action".to_string(),
+                description: "Direct async execution".to_string(),
+                input_schema: json!({"type": "object"}),
+                tags: vec![],
+                examples: vec![],
+            },
+        );
+    }
+
+    // 1. Call sensitive capability with async_task: true -> should be InputRequired
+    let async_res = cp
+        .call_capability(
+            "mock_srv/sensitive_action",
+            json!({"param": "val"}),
+            ExecutionOptions::default().with_async_task(true),
+        )
+        .await;
+
+    assert!(async_res.ok);
+    let task_payload = async_res.data.expect("task payload");
+    let task_id = task_payload["taskId"].as_str().unwrap().to_string();
+    assert_eq!(task_payload["status"], "input_required");
+
+    // 2. Submit HITL approval via embedded update_task
+    let mut responses = BTreeMap::new();
+    responses.insert(
+        "hitl_approval".to_string(),
+        json!({"approved": true, "modified_args": {"param": "val_approved"}}),
+    );
+    let update_env = cp.update_task(&task_id, responses).await;
+    assert!(update_env.ok);
+    assert!(update_env.data.unwrap_or(false));
+
+    // 3. Upstream mock actor receives call and responds
+    let msg = rx.recv().await.expect("worker must send CallTool");
+    match msg {
+        ServerMsg::CallTool {
+            name,
+            params,
+            reply,
+            ..
+        } => {
+            assert_eq!(name, "sensitive_action");
+            assert_eq!(params["param"], "val_approved");
+            let _ = reply.send(Ok(json!({"action_result": "success_123"})));
+        }
+        _ => panic!("Expected CallTool message"),
+    }
+
+    // 4. Poll get_task until completed
+    let mut completed = false;
+    for _ in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let get_env = cp.get_task(&task_id).await;
+        if let Some(task) = get_env.data {
+            if task.status == TaskStatus::Completed {
+                assert_eq!(task.result.expect("result")["action_result"], "success_123");
+                completed = true;
+                break;
+            }
+        }
+    }
+    assert!(completed, "Task should reach Completed status with result");
+
+    // 5. Test direct async task (no HITL approval)
+    let fast_res = cp
+        .call_capability(
+            "mock_srv/fast_action",
+            json!({"count": 42}),
+            ExecutionOptions::default().with_async_task(true),
+        )
+        .await;
+
+    assert!(fast_res.ok);
+    let fast_payload = fast_res.data.expect("fast task payload");
+    let fast_task_id = fast_payload["taskId"].as_str().unwrap().to_string();
+    assert_eq!(fast_payload["status"], "working");
+
+    let fast_msg = rx
+        .recv()
+        .await
+        .expect("worker must send CallTool for fast action");
+    match fast_msg {
+        ServerMsg::CallTool {
+            name,
+            params,
+            reply,
+            ..
+        } => {
+            assert_eq!(name, "fast_action");
+            assert_eq!(params["count"], 42);
+            let _ = reply.send(Ok(json!({"count_doubled": 84})));
+        }
+        _ => panic!("Expected CallTool message"),
+    }
+
+    let mut fast_completed = false;
+    for _ in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let get_env = cp.get_task(&fast_task_id).await;
+        if let Some(task) = get_env.data {
+            if task.status == TaskStatus::Completed {
+                assert_eq!(task.result.expect("result")["count_doubled"], 84);
+                fast_completed = true;
+                break;
+            }
+        }
+    }
+    assert!(
+        fast_completed,
+        "Fast async task should reach Completed status with result"
+    );
+
+    cp.shutdown().await;
+}
