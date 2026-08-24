@@ -93,6 +93,9 @@ export function renderOverview(): string {
 
   const savingsStr = totalAliases > 0 ? `${totalAliases * 18}B / call` : '0B';
   const savingsSubStr = totalAliases > 0 ? `${totalAliases} active facade aliases pruning prompt size` : 'Configure aliases in Studio to reduce prompt size';
+  const tasks = state.tasks || [];
+  const inputReqTasks = tasks.filter(t => t.status === 'input_required').length;
+  const activeTasks = tasks.filter(t => t.status === 'working' || t.status === 'input_required').length;
 
   return `
     <div class="bento-grid">
@@ -107,14 +110,14 @@ export function renderOverview(): string {
         <div class="stat-sub">${etagSubStr}</div>
       </div>
       <div class="bento-card col-3">
+        <div class="stat-label">Tasks &amp; HITL State</div>
+        <div class="stat-value" style="color: ${inputReqTasks > 0 ? 'var(--amber-400)' : 'var(--green-400)'};">${inputReqTasks > 0 ? `${inputReqTasks} Action Req` : `${activeTasks} Active`}</div>
+        <div class="stat-sub">${inputReqTasks > 0 ? 'Awaiting Human-in-the-Loop decision' : `${tasks.length} total registered tasks`}</div>
+      </div>
+      <div class="bento-card col-3">
         <div class="stat-label">Connected Upstreams</div>
         <div class="stat-value" style="color: var(--green-400);">${warmCount} Active</div>
         <div class="stat-sub">${warmCount > 0 ? 'Persistent worker task channels' : 'No active upstream servers'}</div>
-      </div>
-      <div class="bento-card col-3">
-        <div class="stat-label">Avg Execution Latency</div>
-        <div class="stat-value">${avgLatencyStr}</div>
-        <div class="stat-sub">${latencySubStr}</div>
       </div>
     </div>
 

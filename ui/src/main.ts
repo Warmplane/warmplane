@@ -3,6 +3,7 @@ import { api } from './api';
 import { renderOverview } from './components/overview';
 import { renderServers } from './components/servers';
 import { renderPlayground, generateSampleArgsFromSchema } from './components/playground';
+import { renderTasks } from './components/tasks';
 import { renderApprovals } from './components/approvals';
 import { renderAudit } from './components/audit';
 import { renderPolicy } from './components/policy';
@@ -36,13 +37,14 @@ class WarmplaneApp {
       const state = store.getState();
       const filters = state.auditFilters;
       const prof = state.activeProfile || undefined;
-      const [configRes, capsRes, resRes, promptsRes, eventsRes, apprRes, auditEventsRes, auditStatsRes] = await Promise.all([
+      const [configRes, capsRes, resRes, promptsRes, eventsRes, apprRes, tasksRes, auditEventsRes, auditStatsRes] = await Promise.all([
         api.getConfig(),
         api.listCapabilities(prof),
         api.listResources(prof),
         api.listPrompts(prof),
         api.getCatalogEvents(),
         api.listApprovals(),
+        api.listTasks(),
         api.listAuditEvents({
           server_id: filters.serverId !== 'all' ? filters.serverId : undefined,
           event_type: filters.eventType !== 'all' ? filters.eventType : undefined,
@@ -96,6 +98,12 @@ class WarmplaneApp {
       if (apprRes && Array.isArray(apprRes.approvals)) {
         store.setState({
           approvals: apprRes.approvals
+        });
+      }
+
+      if (tasksRes && Array.isArray(tasksRes.tasks)) {
+        store.setState({
+          tasks: tasksRes.tasks
         });
       }
 
@@ -267,7 +275,7 @@ class WarmplaneApp {
     }
   }
 
-  switchTab(tab: 'overview' | 'servers' | 'playground' | 'approvals' | 'audit' | 'policy' | 'aliases' | 'profiles') {
+  switchTab(tab: 'overview' | 'servers' | 'playground' | 'tasks' | 'approvals' | 'audit' | 'policy' | 'aliases' | 'profiles') {
     store.setState({ activeTab: tab });
     this.refreshData();
   }
@@ -278,16 +286,19 @@ class WarmplaneApp {
     if (!mainEl) return;
 
     // Update nav item active states and badges
-    const pendingCount = state.approvals.filter(a => a.status === 'pending').length;
+    const inputReqTasks = (state.tasks || []).filter(t => t.status === 'input_required').length;
+    const legacyPendingApprs = (state.approvals || []).filter(a => a.status === 'pending').length;
+    const totalActionNeeded = Math.max(inputReqTasks, legacyPendingApprs);
+
     const badgeEl = document.getElementById('nav-approvals-badge');
     if (badgeEl) {
-      badgeEl.textContent = pendingCount > 0 ? `${pendingCount}` : '';
-      (badgeEl as HTMLElement).style.display = pendingCount > 0 ? 'inline-block' : 'none';
+      badgeEl.textContent = totalActionNeeded > 0 ? `${totalActionNeeded}` : '';
+      (badgeEl as HTMLElement).style.display = totalActionNeeded > 0 ? 'inline-block' : 'none';
     }
 
     document.querySelectorAll('.nav-item').forEach(el => {
       const tabAttr = el.getAttribute('data-tab');
-      if (tabAttr === state.activeTab) {
+      if (tabAttr === state.activeTab || (state.activeTab === 'tasks' && tabAttr === 'approvals') || (state.activeTab === 'approvals' && tabAttr === 'tasks')) {
         el.classList.add('active');
       } else {
         el.classList.remove('active');
@@ -296,17 +307,18 @@ class WarmplaneApp {
 
     // Update top title
     const titleEl = document.getElementById('top-title');
-    const titles = {
+    const titles: Record<string, string> = {
       overview: 'Overview Cockpit',
       servers: 'Server Hub & Connections',
       playground: 'MCP Capability Playground',
-      approvals: 'Human-in-the-Loop Review Queue',
+      tasks: 'SEP-2663 Tasks & HITL Review',
+      approvals: 'SEP-2663 Tasks & HITL Review',
       audit: 'WORM Audit & Compliance Ledger',
       policy: 'Security Governance & Redaction',
       aliases: 'Facade & Alias Studio',
       profiles: 'Server Constellation Profiles'
     };
-    if (titleEl) titleEl.textContent = titles[state.activeTab];
+    if (titleEl) titleEl.textContent = titles[state.activeTab] || 'Control Deck';
 
     // Update top bar profile selector
     this.renderTopProfileSelector();
@@ -321,8 +333,9 @@ class WarmplaneApp {
       case 'playground':
         mainEl.innerHTML = renderPlayground();
         break;
+      case 'tasks':
       case 'approvals':
-        mainEl.innerHTML = renderApprovals(state);
+        mainEl.innerHTML = renderTasks(state);
         break;
       case 'audit':
         mainEl.innerHTML = renderAudit();
@@ -339,7 +352,96 @@ class WarmplaneApp {
     }
   }
 
-  // HITL Approval Actions
+  // SEP-2663 Tasks & HITL Actions
+  async refreshTasks() {
+    try {
+      const tasksRes = await api.listTasks();
+      if (tasksRes && Array.isArray(tasksRes.tasks)) {
+        store.setState({ tasks: tasksRes.tasks });
+      }
+    } catch (e) {
+      console.error('Failed to refresh tasks:', e);
+    }
+  }
+
+  filterTasksByStatus(status: string) {
+    store.setState({ taskFilterStatus: status });
+  }
+
+  togglePlaygroundAsyncTask(enabled: boolean) {
+    store.setState({ playgroundAsyncTask: enabled });
+  }
+
+  async submitTaskInputResponses(taskId: string) {
+    const task = store.getState().tasks.find(t => t.taskId === taskId);
+    const inputReqs = task?.inputRequests || {};
+    const inputKeys = Object.keys(inputReqs);
+    const responses: Record<string, any> = {};
+
+    if (inputKeys.length > 0) {
+      for (const k of inputKeys) {
+        const el = document.getElementById(`task-input-${taskId}-${k}`) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null;
+        if (el) {
+          const val = el.value.trim();
+          try {
+            responses[k] = JSON.parse(val);
+          } catch {
+            responses[k] = val;
+          }
+        }
+      }
+    } else {
+      const rawEl = document.getElementById(`task-raw-input-${taskId}`) as HTMLTextAreaElement | null;
+      if (rawEl && rawEl.value.trim()) {
+        try {
+          Object.assign(responses, JSON.parse(rawEl.value.trim()));
+        } catch {
+          alert('Invalid JSON in raw input responses');
+          return;
+        }
+      }
+    }
+
+    try {
+      const res = await api.updateTask(taskId, responses);
+      if (res.ok) {
+        await this.refreshTasks();
+      } else {
+        alert(`Task update failed: ${res.error?.message || res.error || 'Unknown error'}`);
+      }
+    } catch (e: any) {
+      alert(`Error updating task: ${e.message}`);
+    }
+  }
+
+  async promptCancelTask(taskId: string) {
+    const reason = prompt('Reason for cancelling task:');
+    if (reason === null) return;
+
+    try {
+      const res = await api.cancelTask(taskId, reason || undefined);
+      if (res.ok) {
+        await this.refreshTasks();
+      } else {
+        alert(`Task cancellation failed: ${res.error?.message || res.error || 'Unknown error'}`);
+      }
+    } catch (e: any) {
+      alert(`Error cancelling task: ${e.message}`);
+    }
+  }
+
+  async inspectTaskDetails(taskId: string) {
+    try {
+      const res = await api.getTask(taskId);
+      if (res.ok && res.task) {
+        alert(`Task [${res.task.taskId}]\nStatus: ${res.task.status}\nProgress: ${Math.round((res.task.progress || 0) * 100)}%\nPayload: ${JSON.stringify(res.task.result || res.task.error || res.task.inputRequests || {}, null, 2)}`);
+      }
+    } catch (e: any) {
+      alert(`Failed to fetch task: ${e.message}`);
+    }
+  }
+
+  // HITL Approval Actions (Legacy compatibility)
   async submitApproval(id: string) {
     const operatorInput = document.getElementById(`appr-operator-${id}`) as HTMLInputElement | null;
     const argsInput = document.getElementById(`appr-args-${id}`) as HTMLTextAreaElement | null;
@@ -358,6 +460,7 @@ class WarmplaneApp {
     const res = await api.approveTicket(id, operator, modifiedArgs);
     if (res.ok) {
       await this.refreshApprovals();
+      await this.refreshTasks();
     } else {
       alert(`Approval failed: ${res.error || 'Unknown error'}`);
     }
@@ -372,6 +475,7 @@ class WarmplaneApp {
     const res = await api.rejectTicket(id, operator, reason);
     if (res.ok) {
       await this.refreshApprovals();
+      await this.refreshTasks();
     } else {
       alert(`Rejection failed: ${res.error || 'Unknown error'}`);
     }
@@ -691,11 +795,14 @@ class WarmplaneApp {
     store.setState({ isExecuting: true, activeRequestId: opReqId });
 
     const prof = state.activeProfile || undefined;
+    const isAsync = state.playgroundAsyncTask || false;
+
     try {
       const res = await api.callCapability({
         capability_id: capId,
         args: parsedArgs,
         request_id: opReqId,
+        async_task: isAsync ? true : undefined,
         context: {
           operation_id: contextVal || opReqId,
         },
@@ -710,6 +817,10 @@ class WarmplaneApp {
           data: res.data
         }
       });
+
+      if (res.status === 202 || res.data?.resultType === 'task') {
+        this.refreshTasks();
+      }
 
       store.addEventLog('POST', `/v1/tools/call → ${capId}`, res.status === 200 ? '200 OK' : `HTTP ${res.status}`, `${res.durationMs.toFixed(1)}ms`);
 

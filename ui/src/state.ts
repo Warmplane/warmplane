@@ -4,6 +4,7 @@ import {
   ResourceItem,
   PromptItem,
   CatalogEventItem,
+  TaskItem,
   PendingApproval,
   AuditEventItem,
   VerificationReport,
@@ -36,6 +37,9 @@ export interface AppState {
   resources: ResourceItem[];
   prompts: PromptItem[];
   catalogEvents: CatalogEventItem[];
+  tasks: TaskItem[];
+  selectedTaskId: string | null;
+  taskFilterStatus: string;
   approvals: PendingApproval[];
   auditEvents: AuditEventItem[];
   auditTotal: number;
@@ -49,10 +53,11 @@ export interface AppState {
   playgroundMode: 'tools' | 'resources' | 'prompts';
   playgroundArgs: Record<string, string>;
   isExecuting: boolean;
+  playgroundAsyncTask: boolean;
   activeRequestId: string | null;
   isBatchModalOpen: boolean;
   batchSteps: BatchStepState[];
-  activeTab: 'overview' | 'servers' | 'playground' | 'approvals' | 'audit' | 'policy' | 'aliases' | 'profiles';
+  activeTab: 'overview' | 'servers' | 'playground' | 'tasks' | 'approvals' | 'audit' | 'policy' | 'aliases' | 'profiles';
   activeProfile: string | null;
   eventLogs: Array<{ time: string; method: string; target: string; status: string; latency: string }>;
   executionResult: { status: number; durationMs: number; data: any } | null;
@@ -78,6 +83,9 @@ class Store {
     resources: [],
     prompts: [],
     catalogEvents: [],
+    tasks: [],
+    selectedTaskId: null,
+    taskFilterStatus: 'all',
     approvals: [],
     auditEvents: [],
     auditTotal: 0,
@@ -98,6 +106,7 @@ class Store {
     playgroundMode: 'tools',
     playgroundArgs: {},
     isExecuting: false,
+    playgroundAsyncTask: false,
     activeRequestId: null,
     isBatchModalOpen: false,
     batchSteps: [
