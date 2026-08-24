@@ -731,6 +731,8 @@ All HTTP API endpoints return standard JSON response envelopes.
 | `GET` | `/v1/audit/verify` | Verify cryptographic SHA-256 hash chain integrity. | No |
 | `GET` | `/v1/audit/stats` | Get aggregate audit statistics and event disposition breakdowns. | No |
 | `GET` | `/v1/audit/export` | Stream or download audit logs in `jsonl` or `csv` format. | No |
+| `GET` | `/v1/idempotency/records` | List cached idempotency records and execution metadata. | No |
+| `GET` | `/v1/idempotency/records/:key` | Get details and cached payload for an idempotency key. | No |
 | `GET` | `/ui`, `/` | Embedded Control Deck Web UI dashboard. | No |
 
 ---
@@ -838,11 +840,16 @@ curl -X POST http://127.0.0.1:9090/v1/tools/batch_call \
 
 ---
 
-### 6.5 Idempotency and Deduplication
-
-To prevent duplicate execution during network retries or concurrent agent calls, pass an `Idempotency-Key` header or `idempotency_key` field in the payload envelope.
-
+### 6.5 Exactly-Once Idempotency & Replay Ledger
+ 
+To prevent duplicate side effects during network retries or concurrent agent loops, Warmplane implements exactly-once execution semantics with persistent deduplication caching and WORM audit linkage.
+ 
+#### Supplying and Deriving Keys
+- **Explicit Key**: Pass an `Idempotency-Key` HTTP header or `"idempotency_key"` field in the payload envelope.
+- **Deterministic Auto-Derivation**: If omitted on mutating tool invocations, Warmplane automatically derives a canonical SHA-256 key (`idk_<64-hex>`) by sorting dictionary keys across the capability ID, payload arguments, actor ID, and request ID.
+ 
 ```bash
+# Explicit Key
 curl -X POST http://127.0.0.1:9090/v1/tools/call \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: exec-tx-994812" \
@@ -851,13 +858,28 @@ curl -X POST http://127.0.0.1:9090/v1/tools/call \
     "args": {"amount": 100, "currency": "USD"}
   }'
 ```
-
+ 
 #### Behavior Semantics
-
-1. **First Request**: Executes the operation and stores the response in the deduplication cache, atomically persisted to disk.
+ 
+1. **First Request**: Executes the operation upstream and stores the response in the deduplication cache, atomically persisted to disk.
 2. **In-Flight Duplicate**: Subscribes to the active execution and waits for completion.
-3. **Completed Duplicate**: Immediately returns the cached response payload without re-executing upstream.
-4. **Daemon Crash/Restart Recovery**: Persisted idempotency records and active TTLs survive daemon restarts.
+3. **Completed Duplicate (Replay)**: Returns the cached response payload immediately with the `X-Warmplane-Deduplicated: true` HTTP response header without re-invoking the upstream server. Increments `replay_count`.
+4. **WORM Audit Trail Linkage**: Replays emit an audit event linked to the original `idempotency_key` with `is_replay: true`, providing a verifiable ledger connecting initial execution, timeouts, and replays.
+5. **Daemon Crash/Restart Recovery**: Persisted idempotency records and active TTLs survive daemon restarts in `idempotency.json`.
+ 
+#### Querying Idempotency Records
+ 
+Inspect effect history and cached responses via REST or CLI:
+ 
+```bash
+# List all active idempotency records
+warmplane idempotency list --limit 20
+curl http://127.0.0.1:9090/v1/idempotency/records?limit=20
+ 
+# Get details for a specific key
+warmplane idempotency get exec-tx-994812
+curl http://127.0.0.1:9090/v1/idempotency/records/exec-tx-994812
+```
 
 ---
 

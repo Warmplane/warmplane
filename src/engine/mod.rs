@@ -256,18 +256,43 @@ impl ControlPlaneHandle {
         let start_time = std::time::Instant::now();
         self.state.total_tool_calls.fetch_add(1, Ordering::Relaxed);
         let trace_id = next_trace_id();
-        let req_id = options.request_id.unwrap_or_else(|| trace_id.clone());
-        let req_ctx = options.context.unwrap_or_default();
+        let req_id = options
+            .request_id
+            .clone()
+            .unwrap_or_else(|| trace_id.clone());
+        let req_ctx = options.context.clone().unwrap_or_default();
+        let explicit_key = options.idempotency_key.clone();
+        let idempotency_key = explicit_key.or_else(|| {
+            if args.is_object() {
+                Some(crate::idempotency::derive_idempotency_key(
+                    capability_id,
+                    &args,
+                    req_ctx.actor_id.as_deref(),
+                    options.request_id.as_deref(),
+                ))
+            } else {
+                None
+            }
+        });
 
-        let retry_base = if options.idempotency_key.is_some() {
+        let retry_base = if idempotency_key.is_some() {
             RetryMetadata::idempotent
         } else {
             RetryMetadata::unsafe_op
         };
 
         // Check Idempotency Store
-        if let Some(ref key) = options.idempotency_key {
-            match self.state.idempotency_store.check_or_start(key).await {
+        if let Some(ref key) = idempotency_key {
+            match self
+                .state
+                .idempotency_store
+                .check_or_start_with_meta(
+                    key,
+                    Some(capability_id.to_string()),
+                    Some(trace_id.clone()),
+                )
+                .await
+            {
                 crate::idempotency::DeduplicateResult::Completed(cached) => {
                     if let Ok(env) = serde_json::from_value::<Envelope<Value>>(cached.clone()) {
                         return env;
@@ -299,7 +324,7 @@ impl ControlPlaneHandle {
         }
 
         if !args.is_object() {
-            if let Some(ref key) = options.idempotency_key {
+            if let Some(ref key) = idempotency_key {
                 self.state.idempotency_store.remove(key).await;
             }
             return Envelope::failure(
@@ -314,7 +339,7 @@ impl ControlPlaneHandle {
         let (requires_approval, approval_timeout_secs, webhook_cfg, redact_keys) = {
             let pol = self.state.policy.read().await;
             if !pol.allows(capability_id) {
-                if let Some(ref key) = options.idempotency_key {
+                if let Some(ref key) = idempotency_key {
                     self.state.idempotency_store.remove(key).await;
                 }
                 return Envelope::failure(
@@ -340,7 +365,7 @@ impl ControlPlaneHandle {
         let (server_id, tool_name) = {
             let caps_guard = self.state.capabilities.read().await;
             let Some(meta) = caps_guard.get(capability_id) else {
-                if let Some(ref key) = options.idempotency_key {
+                if let Some(ref key) = idempotency_key {
                     self.state.idempotency_store.remove(key).await;
                 }
                 return Envelope::failure(
@@ -357,7 +382,7 @@ impl ControlPlaneHandle {
             };
 
             if !prof_ctx.is_server_allowed(&meta.server) {
-                if let Some(ref key) = options.idempotency_key {
+                if let Some(ref key) = idempotency_key {
                     self.state.idempotency_store.remove(key).await;
                 }
                 return Envelope::failure(
@@ -411,7 +436,7 @@ impl ControlPlaneHandle {
                     }
                 }
                 crate::approvals::ApprovalResolution::Rejected { operator, reason } => {
-                    if let Some(ref key) = options.idempotency_key {
+                    if let Some(ref key) = idempotency_key {
                         self.state.idempotency_store.remove(key).await;
                     }
                     return Envelope::failure(
@@ -423,7 +448,7 @@ impl ControlPlaneHandle {
                     );
                 }
                 crate::approvals::ApprovalResolution::Expired => {
-                    if let Some(ref key) = options.idempotency_key {
+                    if let Some(ref key) = idempotency_key {
                         self.state.idempotency_store.remove(key).await;
                     }
                     return Envelope::failure(
@@ -447,7 +472,7 @@ impl ControlPlaneHandle {
         let tx = {
             let servers_guard = self.state.servers.read().await;
             let Some(tx) = servers_guard.get(&server_id).cloned() else {
-                if let Some(ref key) = options.idempotency_key {
+                if let Some(ref key) = idempotency_key {
                     self.state.idempotency_store.remove(key).await;
                 }
                 return Envelope::failure(
@@ -472,7 +497,7 @@ impl ControlPlaneHandle {
             .check_permission(&server_id)
             .await
         {
-            if let Some(ref key) = options.idempotency_key {
+            if let Some(ref key) = idempotency_key {
                 self.state.idempotency_store.remove(key).await;
             }
             return Envelope::failure(
@@ -499,7 +524,7 @@ impl ControlPlaneHandle {
             .is_err()
         {
             self.state.circuit_breakers.record_failure(&server_id).await;
-            if let Some(ref key) = options.idempotency_key {
+            if let Some(ref key) = idempotency_key {
                 self.state.idempotency_store.remove(key).await;
             }
             return Envelope::failure(
@@ -534,7 +559,7 @@ impl ControlPlaneHandle {
                     retry_base("completed"),
                 );
 
-                if let Some(ref key) = options.idempotency_key {
+                if let Some(ref key) = idempotency_key {
                     if let Ok(val) = serde_json::to_value(&env) {
                         self.state.idempotency_store.complete(key, val).await;
                     }
@@ -544,7 +569,7 @@ impl ControlPlaneHandle {
             }
             Ok(Err(UpstreamCallError::Timeout)) => {
                 self.state.circuit_breakers.record_failure(&server_id).await;
-                if let Some(ref key) = options.idempotency_key {
+                if let Some(ref key) = idempotency_key {
                     self.state.idempotency_store.remove(key).await;
                 }
                 Envelope::failure(
@@ -561,7 +586,7 @@ impl ControlPlaneHandle {
             }
             Ok(Err(UpstreamCallError::Upstream(err))) => {
                 self.state.circuit_breakers.record_failure(&server_id).await;
-                if let Some(ref key) = options.idempotency_key {
+                if let Some(ref key) = idempotency_key {
                     self.state.idempotency_store.remove(key).await;
                 }
                 Envelope::failure(
@@ -574,7 +599,7 @@ impl ControlPlaneHandle {
             }
             Err(_) => {
                 self.state.circuit_breakers.record_failure(&server_id).await;
-                if let Some(ref key) = options.idempotency_key {
+                if let Some(ref key) = idempotency_key {
                     self.state.idempotency_store.remove(key).await;
                 }
                 Envelope::failure(

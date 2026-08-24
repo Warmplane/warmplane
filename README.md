@@ -94,9 +94,10 @@ Key endpoints:
 |--------|------|-------------|
 | `GET` | `/v1/capabilities` | Compact capability index |
 | `POST` | `/v1/capabilities/search` | Hybrid lexical + semantic search |
-| `GET` | `/v1/capabilities/:id` | On-demand capability detail |
-| `POST` | `/v1/tools/call` | Normalized execution envelope (supports `_jsonpath`, `_limit_lines`, `_truncate_bytes`) |
+| `POST` | `/v1/tools/call` | Normalized execution envelope (supports idempotency keys, `_jsonpath`, `_limit_lines`, `_truncate_bytes`) |
 | `POST` | `/v1/tools/batch_call` | Chained multi-step execution with `$step.field` reference interpolation |
+| `GET` | `/v1/idempotency/records` | List cached idempotency execution records and replay counts |
+| `GET` | `/v1/idempotency/records/:key` | Inspect single cached idempotency record |
 | `GET` | `/v1/resources` | Resource index |
 | `POST` | `/v1/resources/read` | Read resource |
 | `GET` | `/v1/prompts` | Prompt index |
@@ -224,6 +225,7 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 
 | Feature | Since | Summary |
 |---------|-------|---------|
+| **Exactly-Once Idempotency & Replay Ledger** | v0.23.0 | Deterministic auto-key derivation (`idk_<sha256>`), `X-Warmplane-Deduplicated: true` header caching, replay count tracking, WORM audit trail linking (`idempotency_key`, `is_replay`), and `/v1/idempotency/records` inspection APIs |
 | **Embedded Rust Library Engine** | v0.23.0 | Direct in-process library interface (`EmbeddedWarmplane`, `ControlPlaneHandle`) with strongly typed response envelopes (`Envelope<T>`), direct tool/resource/prompt execution, and graceful cancellation on caller's Tokio runtime |
 | **MCP HTTP/SSE Server Mode** | v0.22.0 | Streamable HTTP/SSE MCP server (`mcp-http-server`) for remote network clients; daemon co-hosting via `mcpHttpServer` config block; profile restriction, auth enforcement on non-loopback bind, graceful shared-state shutdown |
 | **Signal Handling & Graceful Teardown** | v0.21.0 | Immediate signal cancellation (`CancellationToken`), instant SSE stream termination, clean stdio child orphan protection (`kill_on_drop`), and bounded drain safety timeouts |

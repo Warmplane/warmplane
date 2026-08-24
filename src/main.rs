@@ -360,6 +360,9 @@ async fn main() -> Result<()> {
         Commands::Approvals { command } => {
             cli_config::handle_approvals_command(command).await?;
         }
+        Commands::Idempotency { command } => {
+            cli_config::handle_idempotency_command(command).await?;
+        }
     }
     Ok(())
 }

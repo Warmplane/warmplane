@@ -19,7 +19,8 @@ pub use approvals_api::{
     handle_approve_ticket, handle_get_approval, handle_list_approvals, handle_reject_ticket,
 };
 pub use audit_api::{
-    handle_export_audit, handle_get_audit_event, handle_get_audit_stats, handle_list_audit_events,
+    handle_export_audit, handle_get_audit_event, handle_get_audit_stats,
+    handle_get_idempotency_record, handle_list_audit_events, handle_list_idempotency_records,
     handle_verify_audit_chain,
 };
 pub use catalog::{

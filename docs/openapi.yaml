@@ -151,6 +151,68 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BatchCallResponse"
+  /v1/idempotency/records:
+    get:
+      summary: List cached idempotency records
+      operationId: listIdempotencyRecords
+      parameters:
+        - name: limit
+          in: query
+          description: Max records to return (default 50)
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          description: Record offset (default 0)
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of cached idempotency records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  records:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/IdempotencyRecord"
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+  /v1/idempotency/records/{key}:
+    get:
+      summary: Get details for a specific idempotency record
+      operationId: getIdempotencyRecord
+      parameters:
+        - name: key
+          in: path
+          required: true
+          description: Idempotency key
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Single cached idempotency record
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  record:
+                    $ref: "#/components/schemas/IdempotencyRecord"
+        "404":
+          description: Record not found or expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
   /v1/resources:
     get:
       summary: List resources
@@ -1251,3 +1313,29 @@ components:
             $ref: "#/components/schemas/BatchStepResult"
         total_duration_us:
           type: integer
+    IdempotencyRecord:
+      type: object
+      required: [key, response, created_at_epoch_secs, replay_count]
+      properties:
+        key:
+          type: string
+          description: Idempotency key
+        capability_id:
+          type: [string, "null"]
+          description: Target capability ID
+        response:
+          type: object
+          description: Cached execution response payload
+        created_at_epoch_secs:
+          type: integer
+          description: Unix timestamp when key was initialized
+        completed_at_epoch_secs:
+          type: [integer, "null"]
+          description: Unix timestamp when execution completed
+        replay_count:
+          type: integer
+          description: Number of times this cached response was replayed
+        first_trace_id:
+          type: [string, "null"]
+          description: Trace ID of the initial execution attempt
+

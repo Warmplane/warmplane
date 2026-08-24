@@ -9,7 +9,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::config::{
-    load_config, load_or_default_config, save_config, AuthConfig, McpConfig, ServerConfig,
+    load_config, load_or_default_config, resolve_client_port, save_config, AuthConfig, McpConfig,
+    ServerConfig,
 };
 use crate::config_import::{
     discover_sources, import_servers_into_config, parse_standard_mcp_source,
@@ -1105,6 +1106,40 @@ pub async fn handle_approvals_command(cmd: crate::models::ApprovalCommands) -> R
                     .unwrap_or("Failed to reject ticket");
                 println!("{} {}", "✖".red().bold(), err);
             }
+        }
+    }
+    Ok(())
+}
+
+/// Dispatches `warmplane idempotency` subcommands.
+pub async fn handle_idempotency_command(cmd: crate::models::IdempotencyCommands) -> Result<()> {
+    match cmd {
+        crate::models::IdempotencyCommands::List {
+            port,
+            config,
+            limit,
+            offset,
+        } => {
+            let resolved_port = resolve_client_port(port, &config)?;
+            let url = format!(
+                "http://127.0.0.1:{}/v1/idempotency/records?limit={}&offset={}",
+                resolved_port, limit, offset
+            );
+            let client = reqwest::Client::new();
+            let res = client.get(&url).send().await?;
+            let body: serde_json::Value = res.json().await?;
+            println!("{}", serde_json::to_string_pretty(&body)?);
+        }
+        crate::models::IdempotencyCommands::Get { key, port, config } => {
+            let resolved_port = resolve_client_port(port, &config)?;
+            let url = format!(
+                "http://127.0.0.1:{}/v1/idempotency/records/{}",
+                resolved_port, key
+            );
+            let client = reqwest::Client::new();
+            let res = client.get(&url).send().await?;
+            let body: serde_json::Value = res.json().await?;
+            println!("{}", serde_json::to_string_pretty(&body)?);
         }
     }
     Ok(())
