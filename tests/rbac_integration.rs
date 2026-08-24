@@ -315,6 +315,7 @@ async fn test_rbac_execution_boundary_enforcement() {
         idempotency_key: None,
         input_responses: None,
         request_state: None,
+        async_task: false,
     };
 
     let res = handle_call_capability(

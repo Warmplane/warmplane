@@ -98,6 +98,7 @@ async fn test_hitl_end_to_end_wildcard_matching_and_approval() {
         idempotency_key: None,
         input_responses: None,
         request_state: None,
+        async_task: false,
     };
 
     let res = handle_call_capability(

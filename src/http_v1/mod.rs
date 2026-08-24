@@ -8,6 +8,7 @@ pub mod catalog;
 pub mod config_api;
 pub mod execute;
 pub mod helpers;
+pub mod tasks_api;
 pub mod types;
 pub mod ui;
 
@@ -42,6 +43,7 @@ pub use helpers::{
     check_if_none_match, get_profile_scoped_catalog_version, make_etag_header, next_trace_id,
     redact_value, resolve_idempotency_key, resolve_profile_context, ProfileQuery,
 };
+pub use tasks_api::{handle_cancel_task, handle_get_task, handle_list_tasks, handle_update_task};
 pub use types::{
     error_envelope, ApproveTicketRequest, CallCapabilityRequest, CatalogEventsQuery,
     CatalogEventsResponse, CompletionRequest, GetPromptRequest, ImportConfigRequest,

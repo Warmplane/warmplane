@@ -47,6 +47,9 @@ const TOOL_PROMPTS_LIST: &str = "prompts_list";
 const TOOL_PROMPT_GET: &str = "prompt_get";
 const TOOL_COMPLETION_COMPLETE: &str = "completion_complete";
 const TOOL_SUBSCRIPTIONS_LISTEN: &str = "subscriptions_listen";
+const TOOL_TASK_GET: &str = "task_get";
+const TOOL_TASK_UPDATE: &str = "task_update";
+const TOOL_TASK_CANCEL: &str = "task_cancel";
 
 static TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -337,6 +340,118 @@ impl ServerHandler for FacadeMcpServer {
                     "events": events,
                 }))
             }
+            TOOL_TASK_GET => {
+                let Some(task_id) = args
+                    .get("taskId")
+                    .or_else(|| args.get("task_id"))
+                    .and_then(Value::as_str)
+                else {
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "Missing required field 'taskId'",
+                        )),
+                    ));
+                };
+                if let Some(record) = self.state.task_registry.get_task(task_id).await {
+                    let resp = crate::tasks::TaskResponse::from(&record);
+                    Ok(json!({
+                        "ok": true,
+                        "resultType": "complete",
+                        "task": resp,
+                    }))
+                } else {
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(format!(
+                            "Task '{}' not found",
+                            task_id
+                        ))),
+                    ));
+                }
+            }
+            TOOL_TASK_UPDATE => {
+                let Some(task_id) = args
+                    .get("taskId")
+                    .or_else(|| args.get("task_id"))
+                    .and_then(Value::as_str)
+                else {
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "Missing required field 'taskId'",
+                        )),
+                    ));
+                };
+                let input_responses: std::collections::BTreeMap<String, Value> = args
+                    .get("inputResponses")
+                    .or_else(|| args.get("input_responses"))
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default();
+
+                match self
+                    .state
+                    .task_registry
+                    .update_task(task_id, input_responses)
+                    .await
+                {
+                    Ok(true) => Ok(json!({
+                        "ok": true,
+                        "resultType": "complete",
+                        "message": format!("Task '{}' updated with input responses", task_id),
+                    })),
+                    Ok(false) => Ok(json!({
+                        "ok": false,
+                        "error": {
+                            "code": "INVALID_TASK_STATE",
+                            "message": format!("Task '{}' is not in 'input_required' state or not found", task_id),
+                        }
+                    })),
+                    Err(e) => Ok(json!({
+                        "ok": false,
+                        "error": {
+                            "code": "TASK_UPDATE_FAILED",
+                            "message": e.to_string(),
+                        }
+                    })),
+                }
+            }
+            TOOL_TASK_CANCEL => {
+                let Some(task_id) = args
+                    .get("taskId")
+                    .or_else(|| args.get("task_id"))
+                    .and_then(Value::as_str)
+                else {
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "Missing required field 'taskId'",
+                        )),
+                    ));
+                };
+                let reason = args
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string);
+
+                match self.state.task_registry.cancel_task(task_id, reason).await {
+                    Ok(true) => Ok(json!({
+                        "ok": true,
+                        "resultType": "complete",
+                        "message": format!("Task '{}' cancelled", task_id),
+                    })),
+                    Ok(false) => Ok(json!({
+                        "ok": false,
+                        "error": {
+                            "code": "TASK_NOT_CANCELLABLE",
+                            "message": format!("Task '{}' is already completed, cancelled, or not found", task_id),
+                        }
+                    })),
+                    Err(e) => Ok(json!({
+                        "ok": false,
+                        "error": {
+                            "code": "TASK_CANCEL_FAILED",
+                            "message": e.to_string(),
+                        }
+                    })),
+                }
+            }
             _ => {
                 return Err(McpError::invalid_params(
                     format!("Unknown tool '{}'.", request.name),
@@ -576,6 +691,7 @@ impl FacadeMcpServer {
             input_responses,
             request_state,
             profile: self.profile.clone(),
+            async_task: false,
         };
 
         let env = handle.call_capability(&capability_id, args, opts).await;
@@ -839,6 +955,44 @@ fn facade_tools() -> Vec<Tool> {
                 "additionalProperties":false
             })),
         ),
+        Tool::new(
+            TOOL_TASK_GET,
+            "Query a SEP-2663 task handle for status, progress, input requests, or results",
+            schema_object(json!({
+                "type":"object",
+                "properties":{
+                    "taskId":{"type":"string","description":"Unique identifier of the task"}
+                },
+                "required":["taskId"],
+                "additionalProperties":true
+            })),
+        ),
+        Tool::new(
+            TOOL_TASK_UPDATE,
+            "Submit client input responses to a SEP-2663 task in 'input_required' state",
+            schema_object(json!({
+                "type":"object",
+                "properties":{
+                    "taskId":{"type":"string","description":"Unique identifier of the task"},
+                    "inputResponses":{"type":"object","description":"Input response key-value map"}
+                },
+                "required":["taskId","inputResponses"],
+                "additionalProperties":true
+            })),
+        ),
+        Tool::new(
+            TOOL_TASK_CANCEL,
+            "Cancel a SEP-2663 task in progress or awaiting input",
+            schema_object(json!({
+                "type":"object",
+                "properties":{
+                    "taskId":{"type":"string","description":"Unique identifier of the task"},
+                    "reason":{"type":"string","description":"Optional cancellation reason"}
+                },
+                "required":["taskId"],
+                "additionalProperties":true
+            })),
+        ),
     ]
 }
 
@@ -1044,7 +1198,7 @@ mod tests {
             .into_iter()
             .map(|t| t.name.to_string())
             .collect::<Vec<_>>();
-        assert_eq!(names.len(), 11);
+        assert_eq!(names.len(), 14);
         assert!(names.contains(&"capabilities_list".to_string()));
         assert!(names.contains(&"capability_search".to_string()));
         assert!(names.contains(&"capability_describe".to_string()));
@@ -1056,6 +1210,9 @@ mod tests {
         assert!(names.contains(&"prompt_get".to_string()));
         assert!(names.contains(&"completion_complete".to_string()));
         assert!(names.contains(&"subscriptions_listen".to_string()));
+        assert!(names.contains(&"task_get".to_string()));
+        assert!(names.contains(&"task_update".to_string()));
+        assert!(names.contains(&"task_cancel".to_string()));
     }
 
     #[test]

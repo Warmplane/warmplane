@@ -65,6 +65,8 @@ pub struct AppState {
     pub oauth_registry: crate::oauth2::OAuthRegistry,
     /// Human-in-the-loop approval registry.
     pub approval_registry: crate::approvals::ApprovalRegistry,
+    /// SEP-2663 task management registry.
+    pub task_registry: crate::tasks::TaskRegistry,
     /// Append-only WORM audit store.
     pub audit_store: crate::audit::SharedAuditStore,
     /// Non-blocking async audit event dispatcher handle.
@@ -111,6 +113,7 @@ pub struct AppStateBuilder {
     oauth_proxy_port: Option<u16>,
     oauth_registry: Option<crate::oauth2::OAuthRegistry>,
     approval_registry: Option<crate::approvals::ApprovalRegistry>,
+    task_registry: Option<crate::tasks::TaskRegistry>,
     sampling_registry: Option<crate::sampling::SamplingRegistry>,
     audit_store: Option<crate::audit::SharedAuditStore>,
     audit_handle: Option<crate::audit::AuditHandle>,
@@ -292,6 +295,12 @@ impl AppStateBuilder {
         self
     }
 
+    /// Sets SEP-2663 task management registry.
+    pub fn task_registry(mut self, registry: crate::tasks::TaskRegistry) -> Self {
+        self.task_registry = Some(registry);
+        self
+    }
+
     /// Sets MCP sampling delegation registry.
     pub fn sampling_registry(mut self, registry: crate::sampling::SamplingRegistry) -> Self {
         self.sampling_registry = Some(registry);
@@ -383,6 +392,7 @@ impl AppStateBuilder {
             oauth_proxy_port: self.oauth_proxy_port,
             oauth_registry: self.oauth_registry.unwrap_or_default(),
             approval_registry: self.approval_registry.unwrap_or_default(),
+            task_registry: self.task_registry.unwrap_or_default(),
             sampling_registry: self.sampling_registry.unwrap_or_default(),
             audit_store,
             audit_handle,

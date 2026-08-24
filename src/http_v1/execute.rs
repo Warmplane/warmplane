@@ -257,6 +257,39 @@ pub async fn handle_call_capability(
     // Human-in-the-Loop (HITL) Interception Flow
     if requires_approval {
         let sanitized = redact_value(payload.args.clone(), &redact_keys);
+
+        let mut input_requests = std::collections::BTreeMap::new();
+        input_requests.insert(
+            "hitl_approval".to_string(),
+            serde_json::json!({
+                "type": "approval_review",
+                "capability_id": payload.capability_id,
+                "server_id": server_id,
+                "sanitized_args": sanitized,
+                "timeout_secs": approval_timeout_secs,
+            }),
+        );
+
+        let (task_record, _task_rx) = state
+            .task_registry
+            .create_task(crate::tasks::CreateTaskParams {
+                capability_id: payload.capability_id.clone(),
+                server_id: server_id.clone(),
+                args: payload.args.clone(),
+                request_id: Some(request_id.clone()),
+                context: Some(req_context.clone()),
+                idempotency_key: idempotency_key.clone(),
+                initial_status: crate::tasks::TaskStatus::InputRequired,
+                status_message: Some(format!(
+                    "Execution suspended awaiting operator approval for capability '{}'",
+                    payload.capability_id
+                )),
+                input_requests: Some(input_requests),
+                ttl_ms: Some(approval_timeout_secs * 1000),
+                poll_interval_ms: Some(1000),
+            })
+            .await;
+
         let (approval_id, rx) = state
             .approval_registry
             .create_approval(crate::approvals::CreateApprovalRequest {
@@ -296,21 +329,23 @@ pub async fn handle_call_capability(
             is_replay: Some(false),
         });
 
-        let prefer_async = headers
-            .get("prefer")
-            .and_then(|h| h.to_str().ok())
-            .map(|v| v.to_lowercase().contains("respond-async"))
-            .unwrap_or(false);
+        let prefer_async = payload.async_task
+            || headers
+                .get("prefer")
+                .and_then(|h| h.to_str().ok())
+                .map(|v| v.to_lowercase().contains("respond-async"))
+                .unwrap_or(false);
 
         if prefer_async {
+            let task_resp = crate::tasks::TaskResponse::from(&task_record);
             return (
                 StatusCode::ACCEPTED,
                 Json(json!({
                     "ok": true,
                     "status": "pending_approval",
                     "approval_id": approval_id,
-                    "capability_id": payload.capability_id,
-                    "message": "Execution suspended pending human operator approval",
+                    "resultType": "task",
+                    "task": task_resp,
                     "request_id": request_id,
                     "trace_id": trace_id,
                 })),

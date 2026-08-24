@@ -218,6 +218,11 @@ impl StateDirectory {
     pub fn sampling_file(&self) -> PathBuf {
         self.base_dir.join("sampling.json")
     }
+
+    /// Returns the file path for persistent SEP-2663 tasks.
+    pub fn tasks_file(&self) -> PathBuf {
+        self.base_dir.join("tasks.json")
+    }
 }
 
 #[cfg(test)]

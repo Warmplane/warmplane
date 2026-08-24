@@ -147,6 +147,7 @@ async fn main() -> Result<()> {
             jsonpath,
             limit_lines,
             truncate_bytes,
+            async_task,
         } => {
             let resolved_port = resolve_client_port(port, &config)?;
             let mut parsed_params: Value =
@@ -177,6 +178,7 @@ async fn main() -> Result<()> {
                 "request_id": request_id,
                 "context": context,
                 "idempotency_key": idempotency_key,
+                "async_task": async_task,
             });
 
             let client = reqwest::Client::new();
@@ -359,6 +361,9 @@ async fn main() -> Result<()> {
         }
         Commands::Approvals { command } => {
             cli_config::handle_approvals_command(command).await?;
+        }
+        Commands::Tasks { command } => {
+            cli_config::handle_task_command(command).await?;
         }
         Commands::Idempotency { command } => {
             cli_config::handle_idempotency_command(command).await?;

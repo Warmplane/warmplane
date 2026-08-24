@@ -1145,6 +1145,159 @@ pub async fn handle_idempotency_command(cmd: crate::models::IdempotencyCommands)
     Ok(())
 }
 
+/// Dispatches `warmplane tasks` subcommands.
+pub async fn handle_task_command(cmd: crate::models::TaskCommands) -> Result<()> {
+    match cmd {
+        crate::models::TaskCommands::List { port, config } => {
+            let resolved_port = resolve_client_port(port, &config)?;
+            let client = reqwest::Client::new();
+            let res = client
+                .get(format!("http://127.0.0.1:{}/v1/tasks", resolved_port))
+                .send()
+                .await
+                .with_context(|| {
+                    format!("Could not reach daemon at 127.0.0.1:{}", resolved_port)
+                })?;
+
+            let body: serde_json::Value = res.json().await?;
+            if let Some(tasks) = body.get("tasks").and_then(|t| t.as_array()) {
+                if tasks.is_empty() {
+                    println!("{}", "No active or recorded tasks.".dimmed());
+                    return Ok(());
+                }
+                println!(
+                    "{:<26} {:<16} {:<24} {:<8}",
+                    "TASK ID".bold(),
+                    "STATUS".bold(),
+                    "CREATED AT".bold(),
+                    "TTL (s)".bold()
+                );
+                println!("{}", "─".repeat(78).dimmed());
+                for task in tasks {
+                    let id = task.get("taskId").and_then(|v| v.as_str()).unwrap_or("-");
+                    let status = task.get("status").and_then(|v| v.as_str()).unwrap_or("-");
+                    let created = task
+                        .get("createdAt")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("-");
+                    let ttl_s = task
+                        .get("ttlMs")
+                        .and_then(|v| v.as_u64())
+                        .map(|ms| (ms / 1000).to_string())
+                        .unwrap_or_else(|| "∞".to_string());
+
+                    let status_styled = match status {
+                        "working" => status.yellow(),
+                        "input_required" => status.cyan().bold(),
+                        "completed" => status.green(),
+                        "failed" => status.red(),
+                        "cancelled" => status.dimmed(),
+                        _ => status.normal(),
+                    };
+
+                    println!(
+                        "{:<26} {:<16} {:<24} {:<8}",
+                        id, status_styled, created, ttl_s
+                    );
+                }
+            } else {
+                println!("{}", serde_json::to_string_pretty(&body)?);
+            }
+        }
+        crate::models::TaskCommands::Get { id, port, config } => {
+            let resolved_port = resolve_client_port(port, &config)?;
+            let client = reqwest::Client::new();
+            let res = client
+                .get(format!(
+                    "http://127.0.0.1:{}/v1/tasks/{}",
+                    resolved_port, id
+                ))
+                .send()
+                .await
+                .with_context(|| {
+                    format!("Could not reach daemon at 127.0.0.1:{}", resolved_port)
+                })?;
+
+            let body: serde_json::Value = res.json().await?;
+            println!("{}", serde_json::to_string_pretty(&body)?);
+        }
+        crate::models::TaskCommands::Update {
+            id,
+            responses,
+            port,
+            config,
+        } => {
+            let resolved_port = resolve_client_port(port, &config)?;
+            let parsed_responses: serde_json::Value = serde_json::from_str(&responses)
+                .context("Responses must be a valid JSON object")?;
+
+            let client = reqwest::Client::new();
+            let res = client
+                .post(format!(
+                    "http://127.0.0.1:{}/v1/tasks/{}/update",
+                    resolved_port, id
+                ))
+                .json(&serde_json::json!({ "inputResponses": parsed_responses }))
+                .send()
+                .await
+                .with_context(|| {
+                    format!("Could not reach daemon at 127.0.0.1:{}", resolved_port)
+                })?;
+
+            let status = res.status();
+            let body: serde_json::Value = res.json().await?;
+            if status.is_success() {
+                println!(
+                    "{} Task '{}' updated with input responses",
+                    "✔".green().bold(),
+                    id.bold()
+                );
+            } else {
+                let err = body
+                    .get("error")
+                    .and_then(|v| v.get("message"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Failed to update task");
+                println!("{} {}", "✖".red().bold(), err);
+            }
+        }
+        crate::models::TaskCommands::Cancel {
+            id,
+            reason,
+            port,
+            config,
+        } => {
+            let resolved_port = resolve_client_port(port, &config)?;
+            let client = reqwest::Client::new();
+            let res = client
+                .post(format!(
+                    "http://127.0.0.1:{}/v1/tasks/{}/cancel",
+                    resolved_port, id
+                ))
+                .json(&serde_json::json!({ "reason": reason }))
+                .send()
+                .await
+                .with_context(|| {
+                    format!("Could not reach daemon at 127.0.0.1:{}", resolved_port)
+                })?;
+
+            let status = res.status();
+            let body: serde_json::Value = res.json().await?;
+            if status.is_success() {
+                println!("{} Task '{}' cancelled", "✔".green().bold(), id.bold());
+            } else {
+                let err = body
+                    .get("error")
+                    .and_then(|v| v.get("message"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Failed to cancel task");
+                println!("{} {}", "✖".red().bold(), err);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

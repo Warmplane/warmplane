@@ -145,6 +145,9 @@ pub enum Commands {
         /// Truncate returned output byte size
         #[arg(long)]
         truncate_bytes: Option<usize>,
+        /// Request asynchronous execution as a SEP-2663 task handle
+        #[arg(long, rename_all = "kebab-case")]
+        async_task: bool,
     },
     /// Execute a chained batch of tool capabilities
     BatchCallCapabilities {
@@ -247,6 +250,11 @@ pub enum Commands {
     Approvals {
         #[command(subcommand)]
         command: ApprovalCommands,
+    },
+    /// Inspect and manage SEP-2663 tasks
+    Tasks {
+        #[command(subcommand)]
+        command: TaskCommands,
     },
     /// Inspect and manage cached idempotency records
     Idempotency {
@@ -610,6 +618,51 @@ pub enum ApprovalCommands {
         #[arg(short = 'o', long, default_value = "cli-operator")]
         operator: String,
         /// Reason explaining the rejection
+        #[arg(short = 'r', long)]
+        reason: Option<String>,
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+}
+
+/// SEP-2663 task inspection and management subcommands.
+#[derive(Subcommand, Debug, Clone)]
+pub enum TaskCommands {
+    /// List all active and recent tasks
+    List {
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Get details and status of a specific task
+    Get {
+        /// Task identifier (e.g. task-1723668200-1001)
+        id: String,
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Submit client input responses to an input_required task
+    Update {
+        /// Task identifier
+        id: String,
+        /// JSON object of input responses (e.g. '{"approval":{"approved":true}}')
+        #[arg(short, long)]
+        responses: String,
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Cancel an active task
+    Cancel {
+        /// Task identifier
+        id: String,
+        /// Optional cancellation reason
         #[arg(short = 'r', long)]
         reason: Option<String>,
         #[arg(short = 'p', long)]

@@ -268,6 +268,8 @@ pub struct ExecutionOptions {
     pub request_state: Option<String>,
     /// Named server profile restricting visibility.
     pub profile: Option<String>,
+    /// Request asynchronous execution as a SEP-2663 task handle.
+    pub async_task: bool,
 }
 
 impl ExecutionOptions {
