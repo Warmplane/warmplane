@@ -43,7 +43,7 @@ async fn test_tasks_lifecycle_and_hitl_integration() {
         },
     );
 
-    let (tx, _rx) = mpsc::channel(1);
+    let (tx, mut rx) = mpsc::channel(1);
     let mut servers = HashMap::new();
     servers.insert("stripe".to_string(), tx);
 
@@ -129,12 +129,26 @@ async fn test_tasks_lifecycle_and_hitl_integration() {
     .into_response();
     assert_eq!(update_resp.status(), StatusCode::OK);
 
-    // 5. Complete task
-    state
-        .task_registry
-        .complete_task(&task_id, json!({"charge_id": "ch_test_999"}))
-        .await
-        .unwrap();
+    // 5. Upstream server actor receives CallTool and replies
+    let msg = rx.recv().await.expect("worker must forward tool call");
+    match msg {
+        warmplane::daemon::ServerMsg::CallTool {
+            name,
+            params,
+            reply,
+            ..
+        } => {
+            assert_eq!(name, "charge");
+            assert_eq!(params["amount"], 120);
+            let _ = reply.send(Ok(
+                json!({"charge_id": "ch_test_999", "status": "succeeded"}),
+            ));
+        }
+        _ => panic!("Expected CallTool message"),
+    }
+
+    // 6. Give worker a moment to process reply and verify completed state
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let final_get = handle_get_task(State(state.clone()), axum::extract::Path(task_id.clone()))
         .await
