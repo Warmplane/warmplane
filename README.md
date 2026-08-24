@@ -6,7 +6,7 @@
 
 > **The Local control plane that keeps MCP sessions warm with compact capability/resource/prompt facades.**
 > 
-> v0.24.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.25.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
@@ -230,38 +230,50 @@ Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loo
 | **Embedded Rust Library Engine** | v0.23.0 | Direct in-process library interface (`EmbeddedWarmplane`, `ControlPlaneHandle`) with strongly typed response envelopes (`Envelope<T>`), direct tool/resource/prompt execution, and graceful cancellation on caller's Tokio runtime |
 | **MCP HTTP/SSE Server Mode** | v0.22.0 | Streamable HTTP/SSE MCP server (`mcp-http-server`) for remote network clients; daemon co-hosting via `mcpHttpServer` config block; profile restriction, auth enforcement on non-loopback bind, graceful shared-state shutdown |
 | **Signal Handling & Graceful Teardown** | v0.21.0 | Immediate signal cancellation (`CancellationToken`), instant SSE stream termination, clean stdio child orphan protection (`kill_on_drop`), and bounded drain safety timeouts |
-| **Named Server Constellations (Profiles)** | v0.21.0 | Task-relevant server constellation slicing (`profiles`), dynamic per-request selection (`X-Warmplane-Profile` / `?profile=`), profile-partitioned ETag caching (`-p:<profile_id>`), and stdio MCP proxy filtering (`--profile`) |
-| **Multi-Tenant RBAC & Catalog Partitioning** | v0.20.0 | Tenant-scoped authorization (`TenantContext`), static token & HMAC-SHA256 JWT auth, per-role policy overrides, dynamic catalog/search pruning, and WORM audit identity binding |
-| **Client-Delegated MCP Sampling** | v0.19.0 | Reverse RPC sampling delegation (`sampling/createMessage`), synchronous long-polling or async ticket lifecycle, persistent `sampling.json` storage, and self-healing HTTP/SSE supervisor |
-| **Persistent State & Graceful Teardown** | v0.18.0 | Restart-resilient atomic storage (`approvals`, `idempotency`, `oauth`, `catalog_events`), SIGINT/SIGTERM handling, audit batch drain, Bun CI UI gate & E2E suite |
-| **360° MCP Explorer & Execution Controls** | v0.17.0 | Resources explorer & live reader, prompt template studio, in-flight cancellation, visual batch pipeline builder, WORM multi-field search & pagination |
-| **Security Hardening & WORM Integrity** | v0.16.0 | API token gate, OAuth proxy guard, HMAC audit verification, sliding-window backoff, resource caps |
-| **Fault Tolerance & Supervision** | v0.15.0 | Supervisor restart loop, configurable circuit breakers, and degraded boot |
+**3. Run & Connect**
+
+```bash
+# Start HTTP daemon & Web Control Deck on http://127.0.0.1:9090
+warmplane daemon
+
+# Expose warmplane as a standard stdio MCP facade to Claude Desktop or Cursor
+warmplane mcp-server
+```
+
+---
+
+## Core Capabilities
+
+| Capability | Version | Description |
+|---|---|---|
+| **Control Deck Tasks & HITL UI** | v0.25.0 | Live Tasks & Approvals hub, MRTR input resolution forms, Playground async toggle, and embedded task API |
+| **SEP-2663 Tasks Extension** | v0.24.0 | Non-blocking `io.modelcontextprotocol/tasks` capability, unified HITL state machine, REST & CLI commands |
+| **In-Process Embedded Rust Engine** | v0.23.0 | `EmbeddedWarmplane` & `ControlPlaneHandle` for zero-overhead library integration |
+| **Streamable HTTP/SSE MCP Transport** | v0.22.0 | Co-hosted `/mcp/sse` MCP transport for remote agent connectivity |
+| **Named Server Constellations** | v0.21.0 | Profile grouping (`profiles`) with scoped ETag partitioning and stdio filtering |
+| **Multi-Tenant RBAC** | v0.20.0 | Role-based token access, deterministic catalog partitioning, tenant context propagation |
+| **Client-Delegated MCP Sampling** | v0.19.0 | Reverse RPC sampling (`sampling/createMessage`) with ticket tracking & long-polling |
+| **Persistent State Subsystem** | v0.18.0 | Atomic restart-resilient disk storage (`AtomicFile<T>`) for approvals, idempotency, and OAuth2 tokens |
+| **Graceful Shutdown & Signals** | v0.18.0 | Robust `SIGINT`/`SIGTERM` handling, async worker flushes, child process orphan prevention |
+| **MCP Resource & Prompt Studio** | v0.17.0 | 360° resource explorer, prompt template renderer with dynamic forms, and SSE syncing |
+| **Multi-Step Batch Pipelines** | v0.17.0 | Visual pipeline editor with reference parameter interpolation (`POST /v1/tools/batch_call`) |
+| **Enterprise Security & Auth** | v0.16.0 | Token-based middleware protection, WORM audit HMAC verification, and secret masking |
+| **Fault Tolerance & Supervision** | v0.15.0 | Degraded startup, per-server circuit breakers, exponential backoff restart supervision |
 | **Agent Enrichment Suite** | v0.14.0 | Facade search, context distillation (`_jsonpath`/`_limit_lines`), and multi-step batch execution |
 | **HITL Approval Engine** | v0.13.0 | Operator gate approval engine, suspension, argument editing, and HMAC webhook dispatch |
 | **WORM Audit & SIEM** | v0.12.0 | Append-only SHA-256 hash-chained audit logging, verification API, and Splunk/Webhook SIEM export |
 | **Control Deck Web UI** | v0.11.0 | Standalone embedded web dashboard for servers, testing playground, policy & telemetry |
 | **Dynamic Hot-Reloading** | v0.11.0 | Zero-downtime upstream mounting/unmounting, explicit `warmplane reload` & `/v1/config/reload` |
-| **CLI Config & Interactive Setup** | v0.10.0 | `warmplane server` & `warmplane config` wizards, atomic JSON writes |
-| **Ecosystem Import** | v0.10.0 | 1-click import from Claude Desktop, Cursor, and Zed settings |
-| **MCP 2026-07-28 & MRTR**| v0.9 | Full spec compliance, `rmcp 3.1.2`, cache hints, Multi Round-Trip Requests |
-| **Subscriptions Feed** | v0.9 | `subscriptions_listen` tool & `/v1/resources/updates` SSE feed |
-| **Semantic Vector Search**| v0.8.0 | FastEmbed ONNX embedding pipeline with cosine ranking |
-| **Pragmatic Rust Architecture** | v0.7.0 | Builder patterns (`M-INIT-BUILDER`), robust panic safety, structured logging |
-| **Idempotency & Retry** | v0.6.0 | `Idempotency-Key` deduplication and structured `"retry"` metadata envelopes |
-| **Cancellation** | v0.6.0 | `POST /v1/operations/:id/cancel` / `cancel-operation` CLI |
-| **Request context** | v0.5.0 | `operation_id`, `actor_id`, `grant_id` in envelopes + HTTP header fallback |
-| **Catalog versioning** | v0.4.0 | SHA-256 `ETag`, `If-None-Match` → `304`, change event feed |
-| **Hybrid search** | v0.3.0 | BM25 lexical + vector search with filters |
-| **Alias registry** | v0.1.0 | Short stable aliases over upstream capability IDs |
-| **Compact indexes** | v0.1.0 | Lazy, token-efficient catalog — detail only on demand |
-| **Policy profiles** | v0.1.0 | Allow/deny lists, redact keys, role-scoped exposure |
-| **Normalized envelopes** | v0.1.0 | Consistent result, timeout, and error format across all modes |
-| **OTLP traces** | v0.1.0 | OpenTelemetry export, `trace_id` reflected in envelopes |
 
 ---
 
 ## Changelog
+
+### v0.25.0 — Control Deck Tasks & HITL UI, In-Process Embedded Task API
+- **Control Deck Tasks & Approvals Hub (`ui/src/components/tasks.ts`):** Upgraded the review queue into a unified Tasks & Approvals dashboard (`data-tab="tasks"`) with live status KPIs (`input_required`, `working`, `completed`, `cancelled/failed`), interactive action cards with inlined MRTR input resolution forms (booleans, JSON editors, text fields), TTL countdown timers, and cooperative cancellation controls.
+- **MCP Playground Async Execution Mode:** Added **"⚡ Async Task Mode"** toggle in the tool testing playground and an interactive `202 Accepted` task card preview with 1-click navigation to the Tasks & Approvals review deck.
+- **Embedded Rust Task Management API (`ControlPlaneHandle`):** Exposed direct task management methods on the in-process `ControlPlaneHandle` (`list_tasks`, `get_task`, `update_task`, `cancel_task`), allowing embedding applications to manage asynchronous SEP-2663 tasks without HTTP or JSON-RPC serialization overhead.
+- **Overview Cockpit & Badge Integration:** Added **"Tasks & HITL State"** telemetry card in the Overview Cockpit and linked real-time sidebar badges to outstanding `input_required` tasks.
 
 ### v0.24.0 — SEP-2663 Tasks Extension, Unified HITL Execution & MCP Roadmap Alignment
 - **SEP-2663 Tasks Extension Implementation (`src/tasks.rs`):** Implemented the official `io.modelcontextprotocol/tasks` capability with atomic persistent storage (`tasks.json`), safe TTL expiration detection, and oneshot input response channels (`TaskWaitSender` / `TaskWaitReceiver`).
