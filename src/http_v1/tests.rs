@@ -929,6 +929,7 @@ async fn test_hitl_approval_flow_and_endpoints() {
         idempotency_key: None,
         input_responses: None,
         request_state: None,
+        async_task: false,
     };
 
     let async_res = handle_call_capability(
@@ -997,6 +998,7 @@ async fn test_hitl_approval_flow_and_endpoints() {
         idempotency_key: None,
         input_responses: None,
         request_state: None,
+        async_task: false,
     };
 
     // Note: this creates a second approval ticket since it's a new call
@@ -1095,6 +1097,7 @@ async fn test_hitl_rejection_returns_structured_envelope() {
         idempotency_key: None,
         input_responses: None,
         request_state: None,
+        async_task: false,
     };
 
     let res = handle_call_capability(
@@ -1160,6 +1163,7 @@ async fn test_tool_call_emits_audit_events_and_hash_chain() {
         idempotency_key: None,
         input_responses: None,
         request_state: None,
+        async_task: false,
     };
 
     let res = handle_call_capability(

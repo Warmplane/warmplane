@@ -26,6 +26,7 @@ pub mod sampling;
 pub mod search;
 pub mod storage;
 pub mod supervisor;
+pub mod tasks;
 pub mod telemetry;
 
 pub use engine::{ControlPlaneHandle, EmbeddedWarmplane, Envelope, WarmplaneError};

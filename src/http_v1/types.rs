@@ -45,6 +45,9 @@ pub struct CallCapabilityRequest {
     /// Optional MRTR opaque request state for multi-roundtrip retry.
     #[serde(default)]
     pub request_state: Option<String>,
+    /// Request asynchronous execution as a SEP-2663 task handle.
+    #[serde(default)]
+    pub async_task: bool,
 }
 
 /// Request body for reading a resource.

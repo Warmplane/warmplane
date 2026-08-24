@@ -43,32 +43,38 @@ pub async fn initialize_state(
         None => Some(".warmplane/state"),
     };
 
-    let (event_store, idempotency_store, oauth_registry, approval_registry, sampling_registry) =
-        if let Some(dir_str) = state_dir_opt {
-            let state_dir = crate::storage::StateDirectory::new(dir_str);
-            let _ = state_dir.ensure_exists();
-            let ev = Arc::new(crate::catalog::CatalogEventStore::open_or_create(
-                state_dir.catalog_events_file(),
-            )?);
-            let idm = Arc::new(crate::idempotency::IdempotencyStore::open_or_create(
-                state_dir.idempotency_file(),
-                std::time::Duration::from_secs(3600),
-            )?);
-            let oa = crate::oauth2::OAuthRegistry::open_or_create(state_dir.oauth_tokens_file());
-            let app =
-                crate::approvals::ApprovalRegistry::open_or_create(state_dir.approvals_file())?;
-            let samp =
-                crate::sampling::SamplingRegistry::open_or_create(state_dir.sampling_file())?;
-            (ev, idm, oa, app, samp)
-        } else {
-            (
-                Arc::new(crate::catalog::CatalogEventStore::new()),
-                Arc::new(crate::idempotency::IdempotencyStore::default()),
-                crate::oauth2::OAuthRegistry::default(),
-                crate::approvals::ApprovalRegistry::default(),
-                crate::sampling::SamplingRegistry::new(),
-            )
-        };
+    let (
+        event_store,
+        idempotency_store,
+        oauth_registry,
+        approval_registry,
+        task_registry,
+        sampling_registry,
+    ) = if let Some(dir_str) = state_dir_opt {
+        let state_dir = crate::storage::StateDirectory::new(dir_str);
+        let _ = state_dir.ensure_exists();
+        let ev = Arc::new(crate::catalog::CatalogEventStore::open_or_create(
+            state_dir.catalog_events_file(),
+        )?);
+        let idm = Arc::new(crate::idempotency::IdempotencyStore::open_or_create(
+            state_dir.idempotency_file(),
+            std::time::Duration::from_secs(3600),
+        )?);
+        let oa = crate::oauth2::OAuthRegistry::open_or_create(state_dir.oauth_tokens_file());
+        let app = crate::approvals::ApprovalRegistry::open_or_create(state_dir.approvals_file())?;
+        let tasks = crate::tasks::TaskRegistry::open_or_create(state_dir.tasks_file())?;
+        let samp = crate::sampling::SamplingRegistry::open_or_create(state_dir.sampling_file())?;
+        (ev, idm, oa, app, tasks, samp)
+    } else {
+        (
+            Arc::new(crate::catalog::CatalogEventStore::new()),
+            Arc::new(crate::idempotency::IdempotencyStore::default()),
+            crate::oauth2::OAuthRegistry::default(),
+            crate::approvals::ApprovalRegistry::default(),
+            crate::tasks::TaskRegistry::new(),
+            crate::sampling::SamplingRegistry::new(),
+        )
+    };
 
     // Create shutdown token early for subsystems
     let shutdown_token = tokio_util::sync::CancellationToken::new();
@@ -168,6 +174,7 @@ pub async fn initialize_state(
         .oauth_proxy_port(oauth_proxy_port)
         .oauth_registry(oauth_registry)
         .approval_registry(approval_registry)
+        .task_registry(task_registry)
         .sampling_registry(sampling_registry)
         .audit_store(audit_store)
         .audit_handle(audit_handle)
@@ -310,6 +317,11 @@ pub fn build_router(app_state: AppState) -> Router {
             "/v1/approvals/:id/reject",
             post(http_v1::handle_reject_ticket),
         )
+        // SEP-2663 Tasks Endpoints
+        .route("/v1/tasks", get(http_v1::handle_list_tasks))
+        .route("/v1/tasks/:id", get(http_v1::handle_get_task))
+        .route("/v1/tasks/:id/update", post(http_v1::handle_update_task))
+        .route("/v1/tasks/:id/cancel", post(http_v1::handle_cancel_task))
         // WORM Audit & Compliance Endpoints
         .route("/v1/audit/events", get(http_v1::handle_list_audit_events))
         .route("/v1/audit/events/:id", get(http_v1::handle_get_audit_event))

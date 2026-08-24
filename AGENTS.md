@@ -39,12 +39,14 @@ You are an expert Rust developer who strictly adheres to **Microsoft's Pragmatic
 
 ## 🛠️ Build & Test Commands
 
-Run these commands to verify your work.
+Run these commands to verify your work before pushing or creating a PR (matching CI exactly):
 
-* **Format:** `cargo fmt` (Strict enforcement).
-* **Lint:** `cargo clippy -- -D warnings` (Treat all warnings as errors).
-* **Test:** `cargo test` (Ensure all tests pass).
-* **Check:** `cargo check` (Fast syntax/type checking).
+* **Format:** `cargo fmt --check` (Strict enforcement).
+* **Lint:** `cargo clippy --all-targets --all-features -- -D warnings` (Treat all warnings as errors across all targets/tests/benchmarks).
+* **Test:** `cargo test --all-targets` (Ensure all integration and unit tests pass).
+* **Check:** `cargo check --all-targets` (Fast syntax/type checking).
+* **Web UI Bundle:** `cd ui && bun install --frozen-lockfile && bun run typecheck && bun run build && cd .. && git diff --exit-code ui/dist/index.html` (Ensure Web UI bundle is built and committed).
+* **Guideline Compliance:** Verify `// Rust guideline compliant YYYY-MM-DD` exists at the top of every `.rs` file in `src/`.
 
 ## 💻 Code Style Guidelines
 

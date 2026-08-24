@@ -406,9 +406,56 @@ impl ControlPlaneHandle {
 
         let mut effective_args = args.clone();
 
-        // Human-in-the-Loop (HITL) Handling
+        // Human-in-the-Loop (HITL) Handling & SEP-2663 Tasks Integration
         if requires_approval {
             let sanitized = crate::http_v1::helpers::redact_value(args.clone(), &redact_keys);
+
+            // Also create a registered SEP-2663 task for this approval wait
+            let mut input_requests = std::collections::BTreeMap::new();
+            input_requests.insert(
+                "hitl_approval".to_string(),
+                serde_json::json!({
+                    "type": "approval_review",
+                    "capability_id": capability_id,
+                    "server_id": server_id,
+                    "sanitized_args": sanitized,
+                    "timeout_secs": approval_timeout_secs,
+                }),
+            );
+
+            let (task_record, task_rx) = self
+                .state
+                .task_registry
+                .create_task(crate::tasks::CreateTaskParams {
+                    capability_id: capability_id.to_string(),
+                    server_id: server_id.clone(),
+                    args: args.clone(),
+                    request_id: Some(req_id.clone()),
+                    context: Some(req_ctx.clone()),
+                    idempotency_key: idempotency_key.clone(),
+                    initial_status: crate::tasks::TaskStatus::InputRequired,
+                    status_message: Some(format!(
+                        "Execution suspended awaiting operator approval for capability '{}'",
+                        capability_id
+                    )),
+                    input_requests: Some(input_requests),
+                    ttl_ms: Some(approval_timeout_secs * 1000),
+                    poll_interval_ms: Some(1000),
+                })
+                .await;
+
+            // If caller requested async task handle, return CreateTaskResult immediately
+            if options.async_task {
+                let task_resp = crate::tasks::TaskResponse::from(&task_record);
+                return Envelope::success(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    serde_json::to_value(task_resp).unwrap_or_default(),
+                    retry_base("in_progress"),
+                );
+            }
+
             let (_approval_id, rx) = self
                 .state
                 .approval_registry
@@ -424,47 +471,80 @@ impl ControlPlaneHandle {
                 })
                 .await;
 
-            let resolution = match rx.await {
-                Ok(r) => r,
-                Err(_) => crate::approvals::ApprovalResolution::Expired,
-            };
-
-            match resolution {
-                crate::approvals::ApprovalResolution::Approved { modified_args, .. } => {
-                    if let Some(mod_args) = modified_args {
-                        effective_args = mod_args;
+            // Wait for either the HITL approval channel or task input responses
+            tokio::select! {
+                resolution = rx => {
+                    let res = match resolution {
+                        Ok(r) => r,
+                        Err(_) => crate::approvals::ApprovalResolution::Expired,
+                    };
+                    match res {
+                        crate::approvals::ApprovalResolution::Approved { modified_args, .. } => {
+                            if let Some(mod_args) = modified_args {
+                                effective_args = mod_args;
+                            }
+                        }
+                        crate::approvals::ApprovalResolution::Rejected { operator, reason } => {
+                            let _ = self.state.task_registry.cancel_task(&task_record.task_id, reason.clone()).await;
+                            if let Some(ref key) = idempotency_key {
+                                self.state.idempotency_store.remove(key).await;
+                            }
+                            return Envelope::failure(
+                                trace_id,
+                                Some(req_id),
+                                Some(req_ctx),
+                                WarmplaneError::operator_rejected(operator, reason),
+                                retry_base("not_started"),
+                            );
+                        }
+                        crate::approvals::ApprovalResolution::Expired => {
+                            let _ = self.state.task_registry.fail_task(&task_record.task_id, serde_json::json!({"code": "APPROVAL_TIMEOUT"}), Some("Approval request timed out".to_string())).await;
+                            if let Some(ref key) = idempotency_key {
+                                self.state.idempotency_store.remove(key).await;
+                            }
+                            return Envelope::failure(
+                                trace_id,
+                                Some(req_id),
+                                Some(req_ctx),
+                                WarmplaneError::new(
+                                    "APPROVAL_TIMEOUT",
+                                    format!("Approval request timed out after {}s", approval_timeout_secs),
+                                    true,
+                                ),
+                                retry_base("not_started"),
+                            );
+                        }
                     }
                 }
-                crate::approvals::ApprovalResolution::Rejected { operator, reason } => {
-                    if let Some(ref key) = idempotency_key {
-                        self.state.idempotency_store.remove(key).await;
+                task_res = async {
+                    if let Some(trx) = task_rx {
+                        trx.await.ok()
+                    } else {
+                        None
                     }
-                    return Envelope::failure(
-                        trace_id,
-                        Some(req_id),
-                        Some(req_ctx),
-                        WarmplaneError::operator_rejected(operator, reason),
-                        retry_base("not_started"),
-                    );
-                }
-                crate::approvals::ApprovalResolution::Expired => {
-                    if let Some(ref key) = idempotency_key {
-                        self.state.idempotency_store.remove(key).await;
+                } => {
+                    if let Some(responses) = task_res {
+                        if let Some(appr) = responses.get("hitl_approval") {
+                            if appr.get("approved").and_then(Value::as_bool) == Some(true) {
+                                if let Some(mod_args) = appr.get("modified_args").cloned() {
+                                    effective_args = mod_args;
+                                }
+                            } else {
+                                let reason = appr.get("reason").and_then(Value::as_str).map(ToString::to_string);
+                                let _ = self.state.task_registry.cancel_task(&task_record.task_id, reason.clone()).await;
+                                if let Some(ref key) = idempotency_key {
+                                    self.state.idempotency_store.remove(key).await;
+                                }
+                                return Envelope::failure(
+                                    trace_id,
+                                    Some(req_id),
+                                    Some(req_ctx),
+                                    WarmplaneError::operator_rejected("client-agent", reason),
+                                    retry_base("not_started"),
+                                );
+                            }
+                        }
                     }
-                    return Envelope::failure(
-                        trace_id,
-                        Some(req_id),
-                        Some(req_ctx),
-                        WarmplaneError::new(
-                            "APPROVAL_TIMEOUT",
-                            format!(
-                                "Approval request timed out after {}s",
-                                approval_timeout_secs
-                            ),
-                            true,
-                        ),
-                        retry_base("not_started"),
-                    );
                 }
             }
         }
