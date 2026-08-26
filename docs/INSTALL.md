@@ -71,14 +71,14 @@ The bundled configuration has no upstream servers. Copy it to a writable locatio
 
 Recommended approach:
 
-- create tap repo: `mrorigo/homebrew-warmplane`
-- formula: `warmplane.rb`
+- create tap repo: `Warmplane/homebrew-tap`
+- formula: `Formula/warmplane.rb`
 - formula installs prebuilt binaries per platform
 
 User flow:
 
 ```bash
-brew tap mrorigo/warmplane
+brew tap warmplane/tap
 brew install warmplane
 ```
 
