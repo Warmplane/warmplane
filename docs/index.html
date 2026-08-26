@@ -1309,7 +1309,7 @@
 
       <div class="hero-cta">
         <button class="btn btn-code" onclick="copyInstall()">
-          <span>$ cargo install warmplane</span>
+          <span>$ brew install warmplane/tap/warmplane</span>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
         </button>
         <a href="https://github.com/Warmplane/warmplane" class="btn btn-primary" target="_blank" rel="noopener">View on GitHub</a>
@@ -2049,7 +2049,7 @@ data: {"uri": "file:///workspace/logs/app.log", "timestamp": 1770982800}
 
     // Copy Command to Clipboard Toast
     function copyInstall() {
-      navigator.clipboard.writeText('cargo install warmplane');
+      navigator.clipboard.writeText('brew install warmplane/tap/warmplane');
       const toast = document.getElementById('toast');
       toast.classList.add('show');
       setTimeout(() => toast.classList.remove('show'), 2600);

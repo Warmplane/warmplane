@@ -32,12 +32,34 @@ Warmplane exposes six client interfaces backed by shared core engine state:
 
 ## 2. Installation and Build
 
-### Prerequisites
+### Method A: Homebrew (macOS & Linux)
+
+The recommended package manager install method:
+
+```bash
+brew tap warmplane/tap
+brew install warmplane
+```
+
+### Method B: Crates.io
+
+Install pre-packaged crate via Cargo:
+
+```bash
+cargo install warmplane
+
+# Optional: with local ONNX vector search (FastEmbed)
+cargo install warmplane --features semantic-search
+```
+
+### Method C: Build from Source
+
+#### Prerequisites
 
 - Rust toolchain (version 1.80 or later)
 - Cargo package manager
 
-### Build and Install
+#### Build Steps
 
 1. Clone the repository:
 

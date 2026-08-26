@@ -15,12 +15,29 @@ Warmplane runs multiple upstream MCP servers behind one local process, keeps tho
 
 ## Quick Start
 
-**1. Build**
+**1. Install**
+
+Using Homebrew (macOS & Linux):
 
 ```bash
-cargo install --path .
+brew tap warmplane/tap
+brew install warmplane
+```
 
-# Optional: local ONNX vector embeddings (FastEmbed)
+Or via Cargo:
+
+```bash
+cargo install warmplane
+
+# Optional: with local ONNX vector embeddings (FastEmbed)
+cargo install warmplane --features semantic-search
+```
+
+Or from source:
+
+```bash
+git clone https://github.com/Warmplane/warmplane.git
+cd warmplane
 cargo install --path . --features semantic-search
 ```
 
