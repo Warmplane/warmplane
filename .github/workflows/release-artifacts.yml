@@ -109,11 +109,24 @@ jobs:
 
           tar -C dist -czf "dist/${name}.tar.gz" "$name"
 
+          mcpb_stage="dist/${name}.mcpb-stage"
+          mkdir -p "$mcpb_stage/server" "$mcpb_stage/config"
+          cp "target/${{ matrix.target }}/release/warmplane" "$mcpb_stage/server/warmplane"
+          cp packaging/mcpb/mcp_servers.json "$mcpb_stage/config/mcp_servers.json"
+          jq --arg version "${VERSION#v}" '.version = $version' packaging/mcpb/manifest.json > "$mcpb_stage/manifest.json"
+          cp README.md "$mcpb_stage/README.md"
+          cp docs/INSTALL.md "$mcpb_stage/INSTALL.md"
+          chmod +x "$mcpb_stage/server/warmplane"
+          (cd "$mcpb_stage" && zip -q -r "../${name}.mcpb" .)
+          unzip -t "dist/${name}.mcpb" >/dev/null
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: warmplane-${{ matrix.target }}
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.mcpb
           if-no-files-found: error
 
   release:
@@ -131,11 +144,52 @@ jobs:
 
       - name: Generate checksums
         working-directory: release-dist
-        run: sha256sum *.tar.gz > checksums.txt
+        run: sha256sum *.tar.gz *.mcpb > checksums.txt
+
+      - name: Generate MCP Registry metadata
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        working-directory: release-dist
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          tag = os.environ["RELEASE_TAG"]
+          version = tag.removeprefix("v")
+          packages = []
+          for artifact in sorted(Path(".").glob("*.mcpb")):
+              digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+              packages.append({
+                  "registryType": "mcpb",
+                  "identifier": f"https://github.com/Warmplane/warmplane/releases/download/{tag}/{artifact.name}",
+                  "version": version,
+                  "fileSha256": digest,
+                  "transport": {"type": "stdio"},
+              })
+
+          metadata = {
+              "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+              "name": "io.github.warmplane/warmplane",
+              "title": "Warmplane",
+              "description": "A local MCP control plane that keeps upstream sessions warm and exposes compact, policy-aware capability, resource, and prompt facades.",
+              "version": version,
+              "repository": {
+                  "url": "https://github.com/Warmplane/warmplane",
+                  "source": "github",
+              },
+              "packages": packages,
+          }
+          Path("server.json").write_text(json.dumps(metadata, indent=2) + "\n")
+          PY
 
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
             release-dist/*.tar.gz
+            release-dist/*.mcpb
             release-dist/checksums.txt
+            release-dist/server.json

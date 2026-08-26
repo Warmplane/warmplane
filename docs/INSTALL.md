@@ -46,22 +46,43 @@ Each archive should include:
 - `docs/config.schema.json`
 - `docs/openapi.yaml`
 
-## 4) Homebrew (Tap Strategy)
+## 4) MCPB Bundles
+
+Tagged releases also publish platform-specific `.mcpb` bundles for MCP clients that support the MCPB format. Each bundle contains the Warmplane binary, the MCPB manifest, documentation, and an empty `mcp_servers.json` configuration:
+
+```text
+warmplane-<version>-<target>.mcpb
+├── manifest.json
+├── server/warmplane
+├── config/mcp_servers.json
+├── README.md
+└── INSTALL.md
+```
+
+The manifest starts Warmplane with the bundled configuration:
+
+```text
+warmplane mcp-server --config <bundle>/config/mcp_servers.json
+```
+
+The bundled configuration has no upstream servers. Copy it to a writable location and add upstream MCP servers before using the bundle for real workloads. Never place credentials directly in the bundle. Release workflows also publish `server.json` with the GitHub Release URLs and SHA-256 hashes required by the Official MCP Registry.
+
+## 5) Homebrew (Tap Strategy)
 
 Recommended approach:
 
-- create tap repo: `mrorigo/homebrew-warmplane`
-- formula: `warmplane.rb`
+- create tap repo: `Warmplane/homebrew-tap`
+- formula: `Formula/warmplane.rb`
 - formula installs prebuilt binaries per platform
 
 User flow:
 
 ```bash
-brew tap mrorigo/warmplane
+brew tap warmplane/tap
 brew install warmplane
 ```
 
-## 5) Integrity and Provenance
+## 6) Integrity and Provenance
 
 For each release publish:
 
@@ -75,13 +96,13 @@ Example:
 shasum -a 256 warmplane-vX.Y.Z-*.tar.gz > checksums.txt
 ```
 
-## 6) Version Compatibility Policy
+## 7) Version Compatibility Policy
 
 - Keep `/v1` HTTP API stable within major version.
 - Treat alias contract changes as versioned API changes.
 - Document breaking changes in release notes.
 
-## 7) Post-Install Validation
+## 8) Post-Install Validation
 
 Validate binary and config quickly:
 

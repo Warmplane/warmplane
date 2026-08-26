@@ -6,7 +6,7 @@
 
 > **The Local control plane that keeps MCP sessions warm with compact capability/resource/prompt facades.**
 > 
-> v0.25.1 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.25.2 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
@@ -268,6 +268,11 @@ warmplane mcp-server
 ---
 
 ## Changelog
+
+### v0.25.2 — MCPB Bundle Packaging & Official MCP Registry Pipeline
+- **MCPB Distribution Format (`packaging/mcpb/`, `.github/workflows/release-artifacts.yml`):** Added automated build and packaging of platform-specific Model Context Protocol Bundles (`.mcpb`) containing standalone binaries, bootstrap configurations, and standardized manifests (`manifest_version: "0.3"`).
+- **Official MCP Registry Metadata (`server.json`):** Release workflows now automatically generate canonical registry metadata adhering to the official `server.schema.json` specification (`io.github.warmplane/warmplane`) with multi-arch SHA-256 package digests.
+- **Homebrew Tap (`Warmplane/homebrew-tap`):** Configured official tap distribution with prebuilt macOS and Linux formula (`brew tap warmplane/tap && brew install warmplane`).
 
 ### v0.25.1 — Asynchronous Task Completion State Machine Fix
 - **Asynchronous Task Finalization (`src/engine/mod.rs`, `src/http_v1/execute.rs`):** Resolved regression where asynchronous capability executions (`async_task: true` or `Prefer: respond-async`) and tasks resumed after Human-in-the-Loop (HITL) input responses remained indefinitely in `TaskStatus::Working`. Background workers now reliably record terminal state (`TaskStatus::Completed` with `result`, or `TaskStatus::Failed` with structured error) directly into `TaskRegistry`.
