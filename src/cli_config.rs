@@ -108,6 +108,58 @@ pub async fn handle_client_command(cmd: ClientCommands) -> Result<()> {
     Ok(())
 }
 
+/// Dispatches `warmplane secret` subcommands for OS Keychain management.
+pub async fn handle_secret_command(cmd: crate::models::SecretCommands) -> Result<()> {
+    match cmd {
+        crate::models::SecretCommands::Set {
+            key,
+            service,
+            value,
+        } => {
+            let secret_val = if let Some(v) = value {
+                v
+            } else {
+                inquire::Password::new(&format!("Enter secret for '{}' (will be masked):", key))
+                    .with_display_mode(inquire::PasswordDisplayMode::Masked)
+                    .without_confirmation()
+                    .prompt()?
+            };
+
+            crate::vault::set_os_keychain_secret(&service, &key, &secret_val)?;
+            println!(
+                "{}",
+                format!(
+                    "✔ Secret '{}' securely stored in OS Keychain (service: '{}')",
+                    key, service
+                )
+                .green()
+                .bold()
+            );
+            println!(
+                "  Use in config: {}",
+                format!("\"keychain://{}/{}\"", service, key).cyan()
+            );
+        }
+        crate::models::SecretCommands::Get { key, service } => {
+            let val = crate::vault::get_os_keychain_secret(&service, &key)?;
+            println!("{}", val);
+        }
+        crate::models::SecretCommands::Delete { key, service } => {
+            crate::vault::delete_os_keychain_secret(&service, &key)?;
+            println!(
+                "{}",
+                format!(
+                    "✔ Secret '{}' removed from OS Keychain (service: '{}')",
+                    key, service
+                )
+                .green()
+                .bold()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Dispatches `warmplane server` subcommands.
 pub async fn handle_server_command(cmd: ServerCommands) -> Result<()> {
     match cmd {

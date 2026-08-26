@@ -67,6 +67,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: ClientCommands,
     },
+    /// Manage secrets in native OS Keychain (macOS Keychain, Linux Secret Service, Windows Vault)
+    Secret {
+        #[command(subcommand)]
+        command: SecretCommands,
+    },
     /// Manage Warmplane configuration, aliases, policies, and imports
     Config {
         #[command(subcommand)]
@@ -766,4 +771,36 @@ pub struct ServerAddArgs {
     /// Path to Warmplane configuration file
     #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
     pub config: String,
+}
+
+/// Subcommands for `warmplane secret` managing native OS Keychain credentials.
+#[derive(Subcommand, Debug, Clone)]
+pub enum SecretCommands {
+    /// Store a secret in the native OS Keychain (prompts securely for value)
+    Set {
+        /// Secret key / account identifier (e.g. github_token, sentry_api_key)
+        key: String,
+        /// Optional service name (defaults to 'warmplane')
+        #[arg(short, long, default_value = "warmplane")]
+        service: String,
+        /// Explicit secret value (if omitted, prompts securely without terminal echo)
+        #[arg(short, long)]
+        value: Option<String>,
+    },
+    /// Retrieve a secret from the native OS Keychain
+    Get {
+        /// Secret key / account identifier
+        key: String,
+        /// Optional service name (defaults to 'warmplane')
+        #[arg(short, long, default_value = "warmplane")]
+        service: String,
+    },
+    /// Delete a secret from the native OS Keychain
+    Delete {
+        /// Secret key / account identifier
+        key: String,
+        /// Optional service name (defaults to 'warmplane')
+        #[arg(short, long, default_value = "warmplane")]
+        service: String,
+    },
 }

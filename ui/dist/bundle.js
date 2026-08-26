@@ -41,7 +41,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
       <span style="color: var(--green-400);">${z(x.status)}</span>
       <span style="color: var(--amber-300); text-align: right;">${z(x.latency)}</span>
     </div>
-  `).join(""),o=e.metrics,i=o.totalCatalogRequests,d=o.totalEtagHits,p=i>0?`${(d/i*100).toFixed(1)}%`:"0.0%",g=i>0?`${d} of ${i} requests served via HTTP 304`:"Waiting for client requests",u=o.totalToolCalls,m=u>0?`${(o.totalToolDurationUs/u/1000).toFixed(1)}ms`:"0.0ms",c=u>0?`${u} tool executions processed`:"Local worker task queues warm",h=Object.keys(e.config.capabilityAliases||{}).length+Object.keys(e.config.resourceAliases||{}).length+Object.keys(e.config.promptAliases||{}).length,k=h>0?`${h*18}B / call`:"0B",E=h>0?`${h} active facade aliases pruning prompt size`:"Configure aliases in Studio to reduce prompt size",T=e.tasks||[],I=T.filter((x)=>x.status==="input_required").length,A=T.filter((x)=>x.status==="working"||x.status==="input_required").length;return`
+  `).join(""),o=e.metrics,i=o.totalCatalogRequests,d=o.totalEtagHits,p=i>0?`${(d/i*100).toFixed(1)}%`:"0.0%",g=i>0?`${d} of ${i} requests served via HTTP 304`:"Waiting for client requests",u=o.totalToolCalls,m=u>0?`${(o.totalToolDurationUs/u/1000).toFixed(1)}ms`:"0.0ms",c=u>0?`${u} tool executions processed`:"Local worker task queues warm",h=Object.keys(e.config.capabilityAliases||{}).length+Object.keys(e.config.resourceAliases||{}).length+Object.keys(e.config.promptAliases||{}).length,k=h>0?`${h*18}B / call`:"0B",E=h>0?`${h} active facade aliases pruning prompt size`:"Configure aliases in Studio to reduce prompt size",T=e.tasks||[],A=T.filter((x)=>x.status==="input_required").length,I=T.filter((x)=>x.status==="working"||x.status==="input_required").length;return`
     <div class="bento-grid">
       <div class="bento-card col-3">
         <div class="stat-label">Token Savings Rate</div>
@@ -55,8 +55,8 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
       </div>
       <div class="bento-card col-3">
         <div class="stat-label">Tasks &amp; HITL State</div>
-        <div class="stat-value" style="color: ${I>0?"var(--amber-400)":"var(--green-400)"};">${I>0?`${I} Action Req`:`${A} Active`}</div>
-        <div class="stat-sub">${I>0?"Awaiting Human-in-the-Loop decision":`${T.length} total registered tasks`}</div>
+        <div class="stat-value" style="color: ${A>0?"var(--amber-400)":"var(--green-400)"};">${A>0?`${A} Action Req`:`${I} Active`}</div>
+        <div class="stat-sub">${A>0?"Awaiting Human-in-the-Loop decision":`${T.length} total registered tasks`}</div>
       </div>
       <div class="bento-card col-3">
         <div class="stat-label">Connected Upstreams</div>
@@ -101,7 +101,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
           <button class="btn btn-ghost" onclick="window.app.openImportModal()">Sync from IDEs</button>
         </div>
       </div>
-    `;else n=r.map((a)=>{let s=t[a],o=s.command?"stdio":"http / sse",i=s.command?`${s.command} ${(s.args||[]).join(" ")}`:s.url,d=e.serverStatuses[a]||{status:"connected",protocol_version:"2026-07-28"},p=s.env?Object.keys(s.env).map((T)=>`${T}=***`).join(", "):"None",g=(e.circuitBreakers||[]).find((T)=>T.server_id===a),u='<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.25);">Circuit: CLOSED</span>';if(g){if(g.state==="open")u=`<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);">Circuit: OPEN (${g.consecutive_failures} failures)</span>`;else if(g.state==="half_open")u=`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.1);">Circuit: HALF-OPEN (${g.consecutive_successes} probe)</span>`}let m=s.resilience||e.config.resilience,c=m?`FT: ${m.failureThreshold||3} · Cooldown: ${(m.cooldownMs||30000)/1000}s · AutoRestart: ${m.autoRestart!==!1?"ON":"OFF"}`:"Default Resilience",h=d.status==="degraded",k=d.status==="error"||d.status==="disconnected",E=h?"var(--amber-400)":k?"var(--red-400)":"var(--green-400)";return`
+    `;else n=r.map((a)=>{let s=t[a],o=s.command?"stdio":"http / sse",i=s.command?`${s.command} ${(s.args||[]).join(" ")}`:s.url,d=e.serverStatuses[a]||{status:"connected",protocol_version:"2026-07-28"},p=s.env?Object.entries(s.env).map(([T,A])=>{if(A.startsWith("keychain://"))return`<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">\uD83D\uDD12 ${_(T)} (Keychain)</span>`;if(A.startsWith("op://"))return`<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">\uD83D\uDD12 ${_(T)} (1Password)</span>`;if(A.startsWith("env://"))return`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3);">\uD83D\uDD12 ${_(T)} (Env)</span>`;return`<span style="color: var(--text-dim);">${_(T)}=***</span>`}).join(" "):"None",g=(e.circuitBreakers||[]).find((T)=>T.server_id===a),u='<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.25);">Circuit: CLOSED</span>';if(g){if(g.state==="open")u=`<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);">Circuit: OPEN (${g.consecutive_failures} failures)</span>`;else if(g.state==="half_open")u=`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.1);">Circuit: HALF-OPEN (${g.consecutive_successes} probe)</span>`}let m=s.resilience||e.config.resilience,c=m?`FT: ${m.failureThreshold||3} · Cooldown: ${(m.cooldownMs||30000)/1000}s · AutoRestart: ${m.autoRestart!==!1?"ON":"OFF"}`:"Default Resilience",h=d.status==="degraded",k=d.status==="error"||d.status==="disconnected",E=h?"var(--amber-400)":k?"var(--red-400)":"var(--green-400)";return`
         <div class="bento-card" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
           <div>
             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
@@ -115,9 +115,9 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
             <div style="font-family: var(--ff-mono); font-size: 12px; color: var(--text-muted); margin-top: 4px;">
               ${s.command?"Command: ":"URL: "}<code>${_(i||"")}</code>
             </div>
-            <div style="display: flex; gap: 14px; font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim); margin-top: 4px;">
+            <div style="display: flex; gap: 14px; font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim); margin-top: 4px; align-items: center; flex-wrap: wrap;">
               <span>\uD83D\uDEE1️ ${_(c)}</span>
-              ${s.env&&Object.keys(s.env).length>0?`<span>Env: ${_(p)}</span>`:""}
+              ${s.env&&Object.keys(s.env).length>0?`<span>Env: ${p}</span>`:""}
             </div>
           </div>
           <div style="display: flex; gap: 8px;">
@@ -241,12 +241,12 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
       `).join("");let o=n?.input_schema,i=o?.properties||{},d=Array.isArray(o?.required)?o.required:[],p=Object.entries(i),g="";if(p.length>0)g=`
       <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; align-items: center;">
         <span style="font-size: 10px; font-weight: 700; color: var(--text-dim); text-transform: uppercase;">Fields:</span>
-        ${p.map(([m,c])=>{let h=d.includes(m),k=c.type||(c.enum?"enum":"any"),E=h?"rgba(239, 68, 68, 0.15)":"rgba(148, 163, 184, 0.1)",T=h?"var(--red-400)":"var(--text-muted)",I=h?"rgba(239, 68, 68, 0.3)":"var(--border)",A=c.description?` - ${c.description}`:"";return`
+        ${p.map(([m,c])=>{let h=d.includes(m),k=c.type||(c.enum?"enum":"any"),E=h?"rgba(239, 68, 68, 0.15)":"rgba(148, 163, 184, 0.1)",T=h?"var(--red-400)":"var(--text-muted)",A=h?"rgba(239, 68, 68, 0.3)":"var(--border)",I=c.description?` - ${c.description}`:"";return`
             <button 
               type="button" 
               class="btn" 
-              style="padding: 2px 7px; font-size: 10.5px; font-family: var(--ff-mono); background: ${E}; color: ${T}; border: 1px solid ${I}; border-radius: var(--radius-sm);" 
-              title="Click to insert '${m}' (${k}${A})" 
+              style="padding: 2px 7px; font-size: 10.5px; font-family: var(--ff-mono); background: ${E}; color: ${T}; border: 1px solid ${A}; border-radius: var(--radius-sm);" 
+              title="Click to insert '${m}' (${k}${I})" 
               onclick="window.app.insertPlaygroundArgKey('${f(m)}', '${f(k)}', ${f(JSON.stringify(c.default??null))})"
             >
               + ${f(m)} <span style="font-size: 9px; opacity: 0.7;">(${k}${h?" *":""})</span>
@@ -691,7 +691,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         Tool calls requiring Human-in-the-Loop approval or returning asynchronous <code style="color: var(--amber-300); font-family: var(--ff-mono);">input_required</code> tasks will suspend here for operator inspection, parameter editing, and response submission.
       </div>
     </div>
-  `:n.map((c)=>{let h=c.inputRequests||{},k=Object.keys(h),E=k.length>0,T=Math.floor(Date.now()/1000),I=c.expiresAtEpochSecs?Math.max(0,c.expiresAtEpochSecs-T):c.ttlSeconds||300;return`
+  `:n.map((c)=>{let h=c.inputRequests||{},k=Object.keys(h),E=k.length>0,T=Math.floor(Date.now()/1000),A=c.expiresAtEpochSecs?Math.max(0,c.expiresAtEpochSecs-T):c.ttlSeconds||300;return`
       <div class="bento-card" style="border: 1px solid rgba(245, 158, 11, 0.35); background: var(--surface-card); margin-bottom: 14px; padding: 18px;">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
           <div>
@@ -711,7 +711,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
 
           <div style="text-align: right; font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim);">
             ${c.createdAtEpochSecs?`<div>Created: <span style="color: var(--text-muted);">${new Date(c.createdAtEpochSecs*1000).toLocaleTimeString()}</span></div>`:""}
-            <div style="color: var(--amber-400); margin-top: 2px;">TTL Remaining: ${I}s</div>
+            <div style="color: var(--amber-400); margin-top: 2px;">TTL Remaining: ${A}s</div>
           </div>
         </div>
 
@@ -732,22 +732,22 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
 
           ${E?`
             <div style="display: flex; flex-direction: column; gap: 10px;">
-              ${k.map((A)=>{let x=h[A]||{},P=typeof x==="string"?x:x.prompt||x.description||x.title||A,b=x.type||"text",L=x.default!==void 0?JSON.stringify(x.default):x.value!==void 0?JSON.stringify(x.value):x.sanitized_args?JSON.stringify(x.sanitized_args,null,2):"";return`
+              ${k.map((I)=>{let x=h[I]||{},P=typeof x==="string"?x:x.prompt||x.description||x.title||I,b=x.type||"text",L=x.default!==void 0?JSON.stringify(x.default):x.value!==void 0?JSON.stringify(x.value):x.sanitized_args?JSON.stringify(x.sanitized_args,null,2):"";return`
                   <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                      <label style="font-size: 11.5px; font-weight: 600; color: var(--amber-300); font-family: var(--ff-mono);">${S(A)}</label>
+                      <label style="font-size: 11.5px; font-weight: 600; color: var(--amber-300); font-family: var(--ff-mono);">${S(I)}</label>
                       <span class="brand-badge" style="font-size: 9.5px; padding: 1px 5px;">${S(b)}</span>
                     </div>
                     <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">${S(P)}</div>
                     ${b==="confirmation"||b==="boolean"?`
-                      <select id="task-input-${S(c.taskId)}-${S(A)}" class="form-input" style="font-size: 11.5px; font-family: var(--ff-mono); padding: 4px 8px;">
+                      <select id="task-input-${S(c.taskId)}-${S(I)}" class="form-input" style="font-size: 11.5px; font-family: var(--ff-mono); padding: 4px 8px;">
                         <option value="true" selected>true (Approve / Confirm)</option>
                         <option value="false">false (Reject / Deny)</option>
                       </select>
                     `:x.sanitized_args||b==="object"||b==="json"?`
-                      <textarea id="task-input-${S(c.taskId)}-${S(A)}" class="form-textarea" rows="3" style="color: var(--green-400); font-family: var(--ff-mono); font-size: 11.5px;">${S(L)}</textarea>
+                      <textarea id="task-input-${S(c.taskId)}-${S(I)}" class="form-textarea" rows="3" style="color: var(--green-400); font-family: var(--ff-mono); font-size: 11.5px;">${S(L)}</textarea>
                     `:`
-                      <input id="task-input-${S(c.taskId)}-${S(A)}" type="text" class="form-input" value="${S(L)}" placeholder="Enter ${S(A)} response..." style="font-size: 11.5px; font-family: var(--ff-mono);">
+                      <input id="task-input-${S(c.taskId)}-${S(I)}" type="text" class="form-input" value="${S(L)}" placeholder="Enter ${S(I)} response..." style="font-size: 11.5px; font-family: var(--ff-mono);">
                     `}
                   </div>
                 `}).join("")}
@@ -945,7 +945,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
     <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.verifyAuditChain()">
       \uD83D\uDEE1️ Verify Cryptographic Hash Chain
     </button>
-  `,T=i.map((b)=>`<option value="${w(b)}" ${a.serverId===b?"selected":""}>${w(b)}</option>`).join(""),I=`
+  `,T=i.map((b)=>`<option value="${w(b)}" ${a.serverId===b?"selected":""}>${w(b)}</option>`).join(""),A=`
     <div class="bento-card" style="padding: 14px 16px; margin-bottom: 16px; background: rgba(18, 24, 38, 0.7); border: 1px solid var(--border);">
       <div style="display: grid; grid-template-columns: 2fr 1fr 1.2fr 1.2fr auto auto; gap: 10px; align-items: center;">
         <!-- Full-text search input -->
@@ -1023,7 +1023,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         </div>
       </div>
     </div>
-  `,A=`
+  `,I=`
     <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: rgba(18, 24, 38, 0.5); border-radius: var(--radius-md); border: 1px solid var(--border); margin-top: 16px;">
       <div style="font-size: 12px; color: var(--text-dim); display: flex; align-items: center; gap: 8px;">
         <span>Showing <strong style="color: var(--text-main);">${m}–${c}</strong> of <strong style="color: var(--text-main);">${s}</strong> events</span>
@@ -1228,7 +1228,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
     </div>
 
     <!-- Search & Filter Toolbar -->
-    ${I}
+    ${A}
 
     <!-- Event Timeline List Header -->
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
@@ -1242,7 +1242,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
     </div>
 
     <!-- Pagination Footer -->
-    ${s>0?A:""}
+    ${s>0?I:""}
 
     <!-- Modal Popup for Event Inspection -->
     ${P}
@@ -1655,7 +1655,7 @@ Payload: ${JSON.stringify(t.task.result||t.task.error||t.task.inputRequests||{},
             </div>
           </div>
         </details>
-      `}}async submitTemplateServer(){if(!this.selectedTemplate)return;let e=this.selectedTemplate,t=document.getElementById("cfg-srv-id")?.value.trim(),r=document.getElementById("cfg-srv-args")?.value.trim();if(!t){alert("Server identifier is required");return}if((l.getState().config.mcpServers||{})[t]){if(!confirm(`Server '${t}' already exists. Do you want to overwrite its configuration?`))return}let s=r?r.split(/\s+/).filter(Boolean):[],o={},i=document.querySelectorAll(".tmpl-env-input");for(let h of Array.from(i)){let k=h.getAttribute("data-key"),E=h.value.trim(),T=e.envFields.find((I)=>I.key===k);if(T?.required&&!E){alert(`Required field '${T.label}' is missing.`);return}if(k&&E)o[k]=E}let d={command:e.command,args:s};if(Object.keys(o).length>0)d.env=o;let p=document.getElementById("cfg-srv-ft")?.value.trim(),g=document.getElementById("cfg-srv-cd")?.value.trim(),u=document.getElementById("cfg-srv-autorestart")?.value,m=document.getElementById("cfg-srv-maxrestarts")?.value.trim();if(p||g||u||m)d.resilience={failureThreshold:p?Number(p):3,cooldownMs:g?Number(g):30000,autoRestart:u!=="false",maxRestarts:m?Number(m):5};let c=await v.upsertServer(t,d);if(c.ok)this.closeModals(),await this.refreshData();else alert(`Failed to save server: ${c.error}`)}async openImportModal(){this.closeModals();let e=document.getElementById("modal-import");if(e)e.classList.add("active");let t=document.getElementById("modal-eco-list");if(!t)return;t.innerHTML='<div style="color: var(--text-dim); padding: 12px; text-align: center;">Scanning IDE configs...</div>';try{let r=await v.getEcosystemSources();if(r.sources&&r.sources.length>0)t.innerHTML=r.sources.map((n)=>`
+      `}}async submitTemplateServer(){if(!this.selectedTemplate)return;let e=this.selectedTemplate,t=document.getElementById("cfg-srv-id")?.value.trim(),r=document.getElementById("cfg-srv-args")?.value.trim();if(!t){alert("Server identifier is required");return}if((l.getState().config.mcpServers||{})[t]){if(!confirm(`Server '${t}' already exists. Do you want to overwrite its configuration?`))return}let s=r?r.split(/\s+/).filter(Boolean):[],o={},i=document.querySelectorAll(".tmpl-env-input");for(let h of Array.from(i)){let k=h.getAttribute("data-key"),E=h.value.trim(),T=e.envFields.find((A)=>A.key===k);if(T?.required&&!E){alert(`Required field '${T.label}' is missing.`);return}if(k&&E)o[k]=E}let d={command:e.command,args:s};if(Object.keys(o).length>0)d.env=o;let p=document.getElementById("cfg-srv-ft")?.value.trim(),g=document.getElementById("cfg-srv-cd")?.value.trim(),u=document.getElementById("cfg-srv-autorestart")?.value,m=document.getElementById("cfg-srv-maxrestarts")?.value.trim();if(p||g||u||m)d.resilience={failureThreshold:p?Number(p):3,cooldownMs:g?Number(g):30000,autoRestart:u!=="false",maxRestarts:m?Number(m):5};let c=await v.upsertServer(t,d);if(c.ok)this.closeModals(),await this.refreshData();else alert(`Failed to save server: ${c.error}`)}async openImportModal(){this.closeModals();let e=document.getElementById("modal-import");if(e)e.classList.add("active");let t=document.getElementById("modal-eco-list");if(!t)return;t.innerHTML='<div style="color: var(--text-dim); padding: 12px; text-align: center;">Scanning IDE configs...</div>';try{let r=await v.getEcosystemSources();if(r.sources&&r.sources.length>0)t.innerHTML=r.sources.map((n)=>`
           <label style="display: flex; align-items: center; gap: 10px; background: var(--surface); padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border); cursor: pointer;">
             <input type="checkbox" class="eco-checkbox" value="${n.path}" checked>
             <div>

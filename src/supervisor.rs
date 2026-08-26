@@ -406,9 +406,19 @@ pub async fn spawn_supervised_stdio_server(
         .as_ref()
         .context("Command required for stdio server")?;
 
+    let mut resolved_env = HashMap::new();
+    for (k, v) in &srv_cfg.env {
+        let resolved = crate::vault::resolve_secret_value(v)
+            .unwrap_or_else(|e| {
+                warn!(server_id = %server_id, key = %k, error = %e, "Failed to resolve secret from vault; using raw string");
+                v.clone()
+            });
+        resolved_env.insert(k.clone(), resolved);
+    }
+
     let mut cmd = Command::new(command);
     cmd.args(&srv_cfg.args);
-    cmd.envs(&srv_cfg.env);
+    cmd.envs(&resolved_env);
     cmd.kill_on_drop(true);
 
     let transport = TokioChildProcess::new(cmd);
@@ -553,9 +563,19 @@ pub async fn spawn_supervised_stdio_server(
                         _ = tokio::time::sleep(Duration::from_millis(backoff_ms)) => {}
                     }
 
+                    let mut resolved_restart_env = HashMap::new();
+                    for (k, v) in &env_owned {
+                        let resolved = crate::vault::resolve_secret_value(v)
+                            .unwrap_or_else(|e| {
+                                warn!(server_id = %server_id_owned, key = %k, error = %e, "Failed to resolve secret from vault on restart; using raw string");
+                                v.clone()
+                            });
+                        resolved_restart_env.insert(k.clone(), resolved);
+                    }
+
                     let mut cmd = Command::new(&command_owned);
                     cmd.args(&args_owned);
-                    cmd.envs(&env_owned);
+                    cmd.envs(&resolved_restart_env);
                     cmd.kill_on_drop(true);
 
                     if let Ok(transport) = TokioChildProcess::new(cmd) {
