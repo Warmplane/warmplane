@@ -172,9 +172,9 @@ jobs:
 
           metadata = {
               "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-              "name": "io.github.warmplane/warmplane",
+              "name": "io.github.Warmplane/warmplane",
               "title": "Warmplane",
-              "description": "A local MCP control plane that keeps upstream sessions warm and exposes compact, policy-aware capability, resource, and prompt facades.",
+              "description": "Local MCP control plane for persistent sessions and compact capability discovery.",
               "version": version,
               "repository": {
                   "url": "https://github.com/Warmplane/warmplane",
