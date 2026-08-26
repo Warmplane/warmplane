@@ -8,6 +8,7 @@ use inquire::{Confirm, Select};
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::client_sync::{attach_client, detach_client, detect_clients, AttachOptions};
 use crate::config::{
     load_config, load_or_default_config, resolve_client_port, save_config, AuthConfig, McpConfig,
     ServerConfig,
@@ -17,8 +18,95 @@ use crate::config_import::{
 };
 use crate::interactive::{interactive_add_server, parse_args_string};
 use crate::models::{
-    AliasCommands, ConfigCommands, PolicyCommands, ServerAddArgs, ServerCommands, StateCommands,
+    AliasCommands, ClientCommands, ConfigCommands, PolicyCommands, ServerAddArgs, ServerCommands,
+    StateCommands,
 };
+
+/// Dispatches `warmplane client` subcommands.
+pub async fn handle_client_command(cmd: ClientCommands) -> Result<()> {
+    match cmd {
+        ClientCommands::List { json } => {
+            let statuses = detect_clients();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&statuses)?);
+                return Ok(());
+            }
+
+            println!("{}", "\n🔌 Supported AI Client Integrations:".bold());
+            println!("{:-<76}", "");
+            for client in &statuses {
+                let status_badge = if client.is_attached {
+                    let prof = client
+                        .attached_profile
+                        .as_deref()
+                        .map(|p| format!(" (profile: {})", p))
+                        .unwrap_or_default();
+                    format!("{}{}", "⚡ ATTACHED".green().bold(), prof.dimmed())
+                } else if client.config_exists {
+                    "○ DETECTED (Ready to attach)".yellow().to_string()
+                } else if client.app_installed {
+                    "○ INSTALLED (Config not created yet)".cyan().to_string()
+                } else {
+                    "✕ NOT FOUND".dimmed().to_string()
+                };
+
+                println!(
+                    "  {} {} [{}]",
+                    "•".bold(),
+                    client.name.bold(),
+                    client.category.dimmed()
+                );
+                println!("    ID:     {}", client.id.cyan());
+                println!("    Status: {}", status_badge);
+                println!("    Config: {}", client.config_path.dimmed());
+                if client.other_servers_count > 0 {
+                    println!(
+                        "    Other servers: {}",
+                        client.other_servers_count.to_string().cyan()
+                    );
+                }
+                println!();
+            }
+            println!(
+                "Run `{}` to connect Warmplane to a client.",
+                "warmplane client attach <id>".bold()
+            );
+        }
+        ClientCommands::Attach {
+            client,
+            profile,
+            config,
+        } => {
+            let options = AttachOptions {
+                profile,
+                config_path: Some(config),
+                binary_path: None,
+            };
+            let res = attach_client(&client, &options)?;
+            if res.ok {
+                println!("{}", format!("✔ {}", res.message).green().bold());
+                if let Some(bak) = res.backup_path {
+                    println!("  Backup saved to: {}", bak.dimmed());
+                }
+            } else {
+                eprintln!("{}", format!("✖ {}", res.message).red().bold());
+            }
+        }
+        ClientCommands::Detach { client } => {
+            let res = detach_client(&client)?;
+            if res.ok {
+                if res.was_attached {
+                    println!("{}", format!("✔ {}", res.message).green().bold());
+                } else {
+                    println!("{}", format!("ℹ {}", res.message).yellow());
+                }
+            } else {
+                eprintln!("{}", format!("✖ {}", res.message).red().bold());
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Dispatches `warmplane server` subcommands.
 pub async fn handle_server_command(cmd: ServerCommands) -> Result<()> {

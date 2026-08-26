@@ -36,6 +36,9 @@ async fn main() -> Result<()> {
         Commands::Server { command } => {
             cli_config::handle_server_command(command).await?;
         }
+        Commands::Client { command } => {
+            cli_config::handle_client_command(command).await?;
+        }
         Commands::Config { command } => {
             cli_config::handle_config_command(command).await?;
         }

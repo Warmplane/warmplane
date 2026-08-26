@@ -62,6 +62,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: ServerCommands,
     },
+    /// Manage 1-click connections to external AI client applications (Claude, OpenCode, Cursor, Zed, Windsurf)
+    Client {
+        #[command(subcommand)]
+        command: ClientCommands,
+    },
     /// Manage Warmplane configuration, aliases, policies, and imports
     Config {
         #[command(subcommand)]
@@ -260,6 +265,33 @@ pub enum Commands {
     Idempotency {
         #[command(subcommand)]
         command: IdempotencyCommands,
+    },
+}
+
+/// External AI client integration subcommands.
+#[derive(Subcommand, Debug, Clone)]
+pub enum ClientCommands {
+    /// List supported AI clients and their local connection statuses
+    List {
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+    /// Attach Warmplane as an MCP proxy to a client configuration
+    Attach {
+        /// Target client ID (e.g. claude-desktop, opencode, cursor, zed, windsurf, claude-code, cline)
+        client: String,
+        /// Optional named server constellation profile
+        #[arg(long)]
+        profile: Option<String>,
+        /// Custom path to Warmplane configuration file
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Detach Warmplane from a client configuration
+    Detach {
+        /// Target client ID (e.g. claude-desktop, opencode, cursor, zed, windsurf, claude-code, cline)
+        client: String,
     },
 }
 

@@ -10,6 +10,7 @@ import {
   VerificationReport,
   AuditStats,
   CircuitBreakerSnapshot,
+  ClientAppStatus,
 } from './api';
 
 export interface AuditFiltersState {
@@ -33,6 +34,7 @@ export interface AppState {
   config: McpConfig;
   serverStatuses: Record<string, { transport: string; protocol_version: string; status: string }>;
   circuitBreakers: CircuitBreakerSnapshot[];
+  clients: ClientAppStatus[];
   capabilities: CapabilityItem[];
   resources: ResourceItem[];
   prompts: PromptItem[];
@@ -79,6 +81,7 @@ class Store {
     config: { mcpServers: {} },
     serverStatuses: {},
     circuitBreakers: [],
+    clients: [],
     capabilities: [],
     resources: [],
     prompts: [],

@@ -37,7 +37,7 @@ class WarmplaneApp {
       const state = store.getState();
       const filters = state.auditFilters;
       const prof = state.activeProfile || undefined;
-      const [configRes, capsRes, resRes, promptsRes, eventsRes, apprRes, tasksRes, auditEventsRes, auditStatsRes] = await Promise.all([
+      const [configRes, capsRes, resRes, promptsRes, eventsRes, apprRes, tasksRes, auditEventsRes, auditStatsRes, clientsRes] = await Promise.all([
         api.getConfig(),
         api.listCapabilities(prof),
         api.listResources(prof),
@@ -53,8 +53,13 @@ class WarmplaneApp {
           limit: filters.limit,
           offset: filters.offset,
         }),
-        api.getAuditStats()
+        api.getAuditStats(),
+        api.getClients().catch(() => ({ ok: false, clients: [] }))
       ]);
+
+      if (clientsRes && clientsRes.ok && Array.isArray(clientsRes.clients)) {
+        store.setState({ clients: clientsRes.clients });
+      }
 
       if (configRes.ok) {
         store.setState({
@@ -1620,6 +1625,39 @@ class WarmplaneApp {
 
     this.closeModals();
     await this.refreshData();
+  }
+
+  // Client Actions
+  async refreshClients() {
+    try {
+      const res = await api.getClients();
+      if (res.ok && Array.isArray(res.clients)) {
+        store.setState({ clients: res.clients });
+      }
+    } catch (e) {
+      console.error('Failed to scan clients:', e);
+    }
+  }
+
+  async attachClient(clientId: string) {
+    const profSelect = document.getElementById(`client-prof-${clientId}`) as HTMLSelectElement | null;
+    const profile = profSelect ? profSelect.value : undefined;
+    const res = await api.attachClient(clientId, profile);
+    if (!res.ok) {
+      alert(`Failed to attach client: ${res.error || res.message || 'Unknown error'}`);
+    } else {
+      await this.refreshData();
+    }
+  }
+
+  async detachClient(clientId: string) {
+    if (!confirm(`Disconnect Warmplane from this client?`)) return;
+    const res = await api.detachClient(clientId);
+    if (!res.ok) {
+      alert(`Failed to detach client: ${res.error || res.message || 'Unknown error'}`);
+    } else {
+      await this.refreshData();
+    }
   }
 
   // Alias Actions

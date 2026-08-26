@@ -8,6 +8,7 @@ pub mod batch_executor;
 pub mod catalog;
 pub mod circuit_breaker;
 pub mod cli_config;
+pub mod client_sync;
 pub mod config;
 pub mod config_import;
 pub mod context;
