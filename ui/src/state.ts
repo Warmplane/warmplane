@@ -11,6 +11,7 @@ import {
   AuditStats,
   CircuitBreakerSnapshot,
   ClientAppStatus,
+  SecretItem,
 } from './api';
 
 export interface AuditFiltersState {
@@ -35,6 +36,8 @@ export interface AppState {
   serverStatuses: Record<string, { transport: string; protocol_version: string; status: string }>;
   circuitBreakers: CircuitBreakerSnapshot[];
   clients: ClientAppStatus[];
+  secrets: SecretItem[];
+  clientsCollapsed: boolean;
   capabilities: CapabilityItem[];
   resources: ResourceItem[];
   prompts: PromptItem[];
@@ -59,7 +62,7 @@ export interface AppState {
   activeRequestId: string | null;
   isBatchModalOpen: boolean;
   batchSteps: BatchStepState[];
-  activeTab: 'overview' | 'servers' | 'playground' | 'tasks' | 'approvals' | 'audit' | 'policy' | 'aliases' | 'profiles';
+  activeTab: 'overview' | 'servers' | 'playground' | 'tasks' | 'approvals' | 'audit' | 'policy' | 'secrets' | 'aliases' | 'profiles';
   activeProfile: string | null;
   eventLogs: Array<{ time: string; method: string; target: string; status: string; latency: string }>;
   executionResult: { status: number; durationMs: number; data: any } | null;
@@ -82,6 +85,8 @@ class Store {
     serverStatuses: {},
     circuitBreakers: [],
     clients: [],
+    secrets: [],
+    clientsCollapsed: false,
     capabilities: [],
     resources: [],
     prompts: [],

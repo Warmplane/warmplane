@@ -540,3 +540,111 @@ pub async fn handle_delete_profile(
 
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
+
+/// Handles GET `/v1/secrets` returning detected secret references and vault status.
+pub async fn handle_list_secrets(State(state): State<AppState>) -> impl IntoResponse {
+    let config = match crate::config::load_or_default_config(&state.config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    let mut secrets = Vec::new();
+    for (srv_name, srv_cfg) in &config.mcp_servers {
+        for (k, v) in &srv_cfg.env {
+            let is_vault = v.starts_with("keychain://")
+                || v.starts_with("op://")
+                || v.starts_with("env://")
+                || v.starts_with("cmd://");
+
+            let backend = if v.starts_with("keychain://") {
+                "OS Keychain"
+            } else if v.starts_with("op://") {
+                "1Password"
+            } else if v.starts_with("env://") {
+                "Environment"
+            } else if v.starts_with("cmd://") {
+                "Command Subprocess"
+            } else {
+                "Plaintext (Unsecured)"
+            };
+
+            secrets.push(json!({
+                "server": srv_name,
+                "key": k,
+                "uri": v,
+                "is_vault": is_vault,
+                "backend": backend,
+                "display": crate::vault::redact_secret_for_display(v),
+            }));
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "secrets": secrets,
+            "keychain_service": crate::vault::DEFAULT_KEYCHAIN_SERVICE,
+        })),
+    )
+        .into_response()
+}
+
+/// Handles POST `/v1/secrets` storing a secret in OS Keychain.
+pub async fn handle_upsert_secret(
+    State(_state): State<AppState>,
+    Json(payload): Json<crate::http_v1::types::UpsertSecretRequest>,
+) -> impl IntoResponse {
+    let service = payload
+        .service
+        .unwrap_or_else(|| crate::vault::DEFAULT_KEYCHAIN_SERVICE.to_string());
+
+    match crate::vault::set_os_keychain_secret(&service, &payload.key, &payload.value) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": payload.key,
+                "service": service,
+                "uri": format!("keychain://{}/{}", service, payload.key),
+                "message": format!("Secret '{}' saved in OS Keychain", payload.key),
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Handles DELETE `/v1/secrets/:key` removing a secret from OS Keychain.
+pub async fn handle_delete_secret(
+    State(_state): State<AppState>,
+    Path(key): Path<String>,
+) -> impl IntoResponse {
+    let service = crate::vault::DEFAULT_KEYCHAIN_SERVICE;
+    match crate::vault::delete_os_keychain_secret(service, &key) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "key": key,
+                "message": format!("Secret '{}' removed from OS Keychain", key),
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}

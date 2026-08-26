@@ -253,6 +253,18 @@ pub struct AttachClientApiRequest {
     pub config_path: Option<String>,
 }
 
+/// Request body for storing a secret in OS Keychain.
+#[derive(Deserialize, Debug, Clone)]
+pub struct UpsertSecretRequest {
+    /// Secret key / account name
+    pub key: String,
+    /// Secret plaintext value
+    pub value: String,
+    /// Optional service name (defaults to 'warmplane')
+    #[serde(default)]
+    pub service: Option<String>,
+}
+
 /// Constructs a standardized error response envelope.
 ///
 /// # Arguments
