@@ -75,7 +75,9 @@ export function renderServers(): string {
   }
 
   return `
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px;">
+    ${renderClientIntegrations()}
+
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 24px; margin-bottom: 18px;">
       <div>
         <div style="font-size: 16px; font-weight: 700; color: var(--text-main);">Configured MCP Upstream Servers</div>
         <div style="font-size: 11px; color: var(--text-dim);">Active configuration file: <code>${escapeHtml(state.configPath)}</code></div>
@@ -86,6 +88,89 @@ export function renderServers(): string {
     </div>
 
     ${contentHtml}
+  `;
+}
+
+function renderClientIntegrations(): string {
+  const state = store.getState();
+  const clients = state.clients || [];
+  const profiles = Object.keys(state.config.profiles || {});
+
+  if (clients.length === 0) {
+    return '';
+  }
+
+  const clientCards = clients.map(c => {
+    const isAttached = c.is_attached;
+    const isDetected = c.config_exists;
+    const isInstalled = c.app_installed;
+
+    let badge = `<span class="brand-badge" style="color: var(--text-dim); border-color: rgba(255, 255, 255, 0.1);">Not Found</span>`;
+    if (isAttached) {
+      const profText = c.attached_profile ? ` · Profile: ${c.attached_profile}` : '';
+      badge = `<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ Connected${escapeHtml(profText)}</span>`;
+    } else if (isDetected) {
+      badge = `<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.08);">○ Ready to Connect</span>`;
+    } else if (isInstalled) {
+      badge = `<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">○ App Installed</span>`;
+    }
+
+    const profileOptions = profiles.map(p => `
+      <option value="${escapeHtml(p)}" ${c.attached_profile === p ? 'selected' : ''}>Profile: ${escapeHtml(p)}</option>
+    `).join('');
+
+    const actionBtn = isAttached
+      ? `<button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11px; color: var(--red-400); border-color: rgba(248, 113, 113, 0.3);" onclick="window.app.detachClient('${escapeHtml(c.id)}')">Disconnect</button>`
+      : `<button class="btn btn-primary" style="padding: 4px 10px; font-size: 11px;" onclick="window.app.attachClient('${escapeHtml(c.id)}')">⚡ Connect</button>`;
+
+    return `
+      <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; display: flex; flex-direction: column; justify-content: space-between; gap: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+          <div>
+            <div style="font-weight: 700; font-size: 13.5px; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
+              <span>${escapeHtml(c.name)}</span>
+            </div>
+            <div style="font-size: 10.5px; color: var(--text-dim); margin-top: 2px;">${escapeHtml(c.category)}</div>
+          </div>
+          ${badge}
+        </div>
+        
+        <div style="font-family: var(--ff-mono); font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(c.config_path)}">
+          ${escapeHtml(c.config_path)}
+        </div>
+
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--border-subtle);">
+          ${profiles.length > 0 && !isAttached ? `
+            <select id="client-prof-${escapeHtml(c.id)}" class="form-input" style="font-size: 10.5px; padding: 2px 6px; height: 26px; width: 130px;">
+              <option value="">All Tools (Default)</option>
+              ${profileOptions}
+            </select>
+          ` : `<div style="font-size: 10.5px; color: var(--text-dim);">${c.other_servers_count > 0 ? `${c.other_servers_count} other tools` : 'Single tool facade'}</div>`}
+          ${actionBtn}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="bento-card" style="margin-bottom: 20px; padding: 16px 18px; border-color: rgba(245, 158, 11, 0.2);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <div>
+          <div style="font-size: 14.5px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 8px;">
+            <span>⚡ 1-Click AI Client Integrations</span>
+            <span class="brand-badge" style="color: var(--amber-400); border-color: rgba(245, 158, 11, 0.3);">Auto-Sync</span>
+          </div>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
+            Automatically attach Warmplane's unified facade to your desktop IDEs and agents without editing JSON files.
+          </div>
+        </div>
+        <button class="btn btn-ghost" style="padding: 3px 8px; font-size: 11px;" onclick="window.app.refreshClients()">⟳ Scan IDEs</button>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px;">
+        ${clientCards}
+      </div>
+    </div>
   `;
 }
 

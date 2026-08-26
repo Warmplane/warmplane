@@ -19,7 +19,7 @@ When integrating 10+ Model Context Protocol (MCP) servers (databases, GitHub, Ku
 - Higher token costs per reasoning loop
 - Cold-start latency spikes as sub-processes spawn repeatedly
 
-We built Warmplane (written in pure Rust) as a local control plane to solve this cleanly.
+I built Warmplane (in pure Rust) as a local control plane to solve this cleanly.
 
 What it does under the hood:
 1. Keeps upstream MCP sessions warm and persistent (stdio and streamable HTTP/SSE).

@@ -116,6 +116,18 @@ export interface PolicyConfig {
   webhook?: string;
 }
 
+export interface ClientAppStatus {
+  id: string;
+  name: string;
+  category: string;
+  config_path: string;
+  config_exists: boolean;
+  app_installed: boolean;
+  is_attached: boolean;
+  attached_profile?: string | null;
+  other_servers_count: number;
+}
+
 export interface TaskItem {
   taskId: string;
   status: 'working' | 'input_required' | 'completed' | 'cancelled' | 'failed' | string;
@@ -629,6 +641,28 @@ export class WarmplaneClient {
 
   async getAuditStats(): Promise<{ ok: boolean; total_events: number; by_status: { success: number; failed: number; denied: number; intercepted: number } }> {
     const res = await fetch(`${this.baseUrl}/v1/audit/stats`);
+    return res.json();
+  }
+
+  async getClients(): Promise<{ ok: boolean; clients: ClientAppStatus[] }> {
+    const res = await fetch(`${this.baseUrl}/v1/clients`);
+    return res.json();
+  }
+
+  async attachClient(clientId: string, profile?: string): Promise<{ ok: boolean; message: string; backup_path?: string; error?: string }> {
+    const res = await fetch(`${this.baseUrl}/v1/clients/${encodeURIComponent(clientId)}/attach`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile: profile || undefined }),
+    });
+    return res.json();
+  }
+
+  async detachClient(clientId: string): Promise<{ ok: boolean; message: string; was_attached?: boolean; error?: string }> {
+    const res = await fetch(`${this.baseUrl}/v1/clients/${encodeURIComponent(clientId)}/detach`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
     return res.json();
   }
 }

@@ -242,6 +242,17 @@ pub struct RejectTicketRequest {
     pub reason: Option<String>,
 }
 
+/// Request body for attaching Warmplane to an external AI client.
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct AttachClientApiRequest {
+    /// Optional server constellation profile.
+    #[serde(default)]
+    pub profile: Option<String>,
+    /// Custom path to Warmplane configuration file.
+    #[serde(default)]
+    pub config_path: Option<String>,
+}
+
 /// Constructs a standardized error response envelope.
 ///
 /// # Arguments

@@ -266,6 +266,91 @@ pub async fn handle_import_config(
         .into_response()
 }
 
+/// Handles POST `/v1/config/reload` explicitly triggering a hot-reloading reconciliation from disk.
+pub async fn handle_reload_config(State(state): State<AppState>) -> impl IntoResponse {
+    match state.reload_from_disk().await {
+        Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Handles GET `/v1/clients` returning status of all supported external AI clients.
+pub async fn handle_list_clients() -> impl IntoResponse {
+    let statuses = crate::client_sync::detect_clients();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "clients": statuses,
+        })),
+    )
+        .into_response()
+}
+
+/// Handles POST `/v1/clients/:id/attach` attaching Warmplane to an external client.
+pub async fn handle_attach_client(
+    State(state): State<AppState>,
+    Path(client_id): Path<String>,
+    Json(payload): Json<crate::http_v1::types::AttachClientApiRequest>,
+) -> impl IntoResponse {
+    let options = crate::client_sync::AttachOptions {
+        profile: payload.profile,
+        config_path: Some(payload.config_path.unwrap_or(state.config_path.clone())),
+        binary_path: None,
+    };
+
+    match crate::client_sync::attach_client(&client_id, &options) {
+        Ok(res) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": res.ok,
+                "client_id": res.client_id,
+                "config_path": res.config_path,
+                "backup_path": res.backup_path,
+                "message": res.message,
+            })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "ok": false,
+                "error": err.to_string(),
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// Handles POST `/v1/clients/:id/detach` detaching Warmplane from an external client.
+pub async fn handle_detach_client(Path(client_id): Path<String>) -> impl IntoResponse {
+    match crate::client_sync::detach_client(&client_id) {
+        Ok(res) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": res.ok,
+                "client_id": res.client_id,
+                "config_path": res.config_path,
+                "was_attached": res.was_attached,
+                "message": res.message,
+            })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "ok": false,
+                "error": err.to_string(),
+            })),
+        )
+            .into_response(),
+    }
+}
+
 /// Handles POST `/v1/config/alias` adding or removing an alias.
 pub async fn handle_update_alias(
     State(state): State<AppState>,
@@ -454,16 +539,4 @@ pub async fn handle_delete_profile(
     }
 
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
-}
-
-/// Handles POST `/v1/config/reload` explicitly triggering a hot-reloading reconciliation from disk.
-pub async fn handle_reload_config(State(state): State<AppState>) -> impl IntoResponse {
-    match state.reload_from_disk().await {
-        Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "ok": false, "error": e.to_string() })),
-        )
-            .into_response(),
-    }
 }

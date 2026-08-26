@@ -306,6 +306,16 @@ pub fn build_router(app_state: AppState) -> Router {
             axum::routing::delete(http_v1::handle_delete_profile),
         )
         .route("/v1/config/reload", post(http_v1::handle_reload_config))
+        // Connected External AI Clients
+        .route("/v1/clients", get(http_v1::handle_list_clients))
+        .route(
+            "/v1/clients/:id/attach",
+            post(http_v1::handle_attach_client),
+        )
+        .route(
+            "/v1/clients/:id/detach",
+            post(http_v1::handle_detach_client),
+        )
         // Human-in-the-Loop (HITL) Approvals Endpoints
         .route("/v1/approvals", get(http_v1::handle_list_approvals))
         .route("/v1/approvals/:id", get(http_v1::handle_get_approval))
