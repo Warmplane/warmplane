@@ -110,6 +110,47 @@ export function renderPolicy(): string {
         </div>
       </div>
 
+      <!-- Webhooks & ChatOps Alerts -->
+      <div class="bento-card col-12" style="border-color: rgba(59, 130, 246, 0.3);">
+        <div class="stat-header" style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <span class="stat-label" style="color: var(--cyan-400);">⚡ ChatOps &amp; Outbound Webhooks</span>
+            <span style="font-size: 11px; color: var(--text-dim); margin-left: 8px;">Push actionable HITL approval cards and alerts directly to Slack, Discord, or Teams</span>
+          </div>
+          <span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">Bidirectional</span>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 14px;">
+          <div>
+            <label class="form-label" style="font-size: 11px;">Target Webhook URL</label>
+            <input type="text" class="form-input" id="policy-webhook-url" placeholder="https://hooks.slack.com/services/... or Discord webhook URL" value="${escapeHtml(typeof policy.webhook === 'object' && policy.webhook ? policy.webhook.url || '' : '')}">
+          </div>
+          <div>
+            <label class="form-label" style="font-size: 11px;">Payload Layout Format</label>
+            <select class="form-input" id="policy-webhook-format">
+              <option value="slack" ${(typeof policy.webhook === 'object' && policy.webhook?.format === 'slack') ? 'selected' : ''}>Slack Block Kit (Interactive)</option>
+              <option value="discord" ${(typeof policy.webhook === 'object' && policy.webhook?.format === 'discord') ? 'selected' : ''}>Discord Embed &amp; Actions</option>
+              <option value="teams" ${(typeof policy.webhook === 'object' && policy.webhook?.format === 'teams') ? 'selected' : ''}>Microsoft Teams Adaptive Cards</option>
+              <option value="generic" ${(typeof policy.webhook === 'object' && policy.webhook?.format === 'generic') || !policy.webhook ? 'selected' : ''}>Generic JSON (Standard)</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label" style="font-size: 11px;">HMAC Secret (or Env Var)</label>
+            <input type="text" class="form-input" id="policy-webhook-secret" placeholder="e.g. WARMPLANE_WEBHOOK_SECRET" value="${escapeHtml(typeof policy.webhook === 'object' && policy.webhook ? policy.webhook.secret_env || policy.webhook.secretEnv || policy.webhook.secret || '' : '')}">
+          </div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-subtle);">
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button class="btn btn-primary" onclick="window.app.saveWebhookConfig()">Save Webhook Settings</button>
+            <button class="btn btn-ghost" onclick="window.app.testWebhook()">⚡ Send Test Event</button>
+          </div>
+          <div id="policy-webhook-status" style="font-size: 11px; font-family: var(--ff-mono); color: var(--text-dim);">
+            ${typeof policy.webhook === 'object' && policy.webhook?.url ? `Active Target: ${escapeHtml(policy.webhook.url)}` : 'No webhook configured'}
+          </div>
+        </div>
+      </div>
+
       <!-- Evaluation Sandbox Tester -->
       <div class="bento-card col-12">
         <div class="stat-header">

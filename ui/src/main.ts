@@ -1139,6 +1139,71 @@ class WarmplaneApp {
     await this.refreshData();
   }
 
+  async saveWebhookConfig() {
+    const urlEl = document.getElementById('policy-webhook-url') as HTMLInputElement | null;
+    const formatEl = document.getElementById('policy-webhook-format') as HTMLSelectElement | null;
+    const secretEl = document.getElementById('policy-webhook-secret') as HTMLInputElement | null;
+
+    const url = urlEl ? urlEl.value.trim() : '';
+    const format = formatEl ? (formatEl.value as any) : 'generic';
+    const secret = secretEl ? secretEl.value.trim() : '';
+
+    const state = store.getState();
+    const current = state.config.policy || {};
+
+    const webhook = url ? {
+      url,
+      format,
+      secret: secret && !secret.startsWith('WARMPLANE_') && !secret.includes('_') ? secret : undefined,
+      secret_env: secret && (secret.startsWith('WARMPLANE_') || secret.includes('_')) ? secret : undefined,
+      events: ['approval.requested', 'circuit_breaker.tripped', 'policy.violation'],
+    } : undefined;
+
+    const res = await api.savePolicy({
+      ...current,
+      webhook,
+    });
+
+    if (res.ok) {
+      alert('Webhook settings saved successfully');
+    } else {
+      alert(`Failed to save webhook settings: ${res.error || 'Unknown error'}`);
+    }
+    await this.refreshData();
+  }
+
+  async testWebhook() {
+    const urlEl = document.getElementById('policy-webhook-url') as HTMLInputElement | null;
+    const formatEl = document.getElementById('policy-webhook-format') as HTMLSelectElement | null;
+    const url = urlEl ? urlEl.value.trim() : undefined;
+    const format = formatEl ? formatEl.value : undefined;
+
+    const statusEl = document.getElementById('policy-webhook-status');
+    if (statusEl) {
+      statusEl.textContent = 'Sending test event...';
+      statusEl.style.color = 'var(--cyan-400)';
+    }
+
+    try {
+      const res = await api.testWebhook(url, format);
+      if (res.ok) {
+        alert(`Test webhook sent successfully! (${res.message})`);
+        if (statusEl) {
+          statusEl.textContent = `✔ Test sent (HTTP ${res.status_code || 200})`;
+          statusEl.style.color = 'var(--green-400)';
+        }
+      } else {
+        alert(`Test webhook failed: ${res.error || 'Unknown error'}`);
+        if (statusEl) {
+          statusEl.textContent = `✖ Failed: ${res.error}`;
+          statusEl.style.color = 'var(--red-400)';
+        }
+      }
+    } catch (e: any) {
+      alert(`Error sending test webhook: ${e.message}`);
+    }
+  }
+
   testPolicySandbox(id: string) {
     const verdictEl = document.getElementById('policy-test-verdict');
     if (!verdictEl) return;

@@ -104,6 +104,19 @@ export interface CatalogEventsResponse {
   events: CatalogEventItem[];
 }
 
+export interface WebhookConfig {
+  url: string;
+  format?: 'generic' | 'slack' | 'discord' | 'teams';
+  secret?: string;
+  secretEnv?: string;
+  secret_env?: string;
+  authHeader?: string;
+  auth_header?: string;
+  events?: string[];
+  callbackUrl?: string;
+  callback_url?: string;
+}
+
 export interface PolicyConfig {
   allow?: string[];
   deny?: string[];
@@ -113,7 +126,7 @@ export interface PolicyConfig {
   require_approval?: string[];
   approvalTimeoutSecs?: number;
   approval_timeout_secs?: number;
-  webhook?: string;
+  webhook?: WebhookConfig | string;
 }
 
 export interface ClientAppStatus {
@@ -662,6 +675,15 @@ export class WarmplaneClient {
     const res = await fetch(`${this.baseUrl}/v1/clients/${encodeURIComponent(clientId)}/detach`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+    });
+    return res.json();
+  }
+
+  async testWebhook(url?: string, format?: string): Promise<{ ok: boolean; message?: string; error?: string; status_code?: number }> {
+    const res = await fetch(`${this.baseUrl}/v1/webhooks/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url || undefined, format: format || undefined }),
     });
     return res.json();
   }

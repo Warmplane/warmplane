@@ -11,6 +11,7 @@ pub mod helpers;
 pub mod tasks_api;
 pub mod types;
 pub mod ui;
+pub mod webhooks_api;
 
 #[cfg(test)]
 mod tests;
@@ -53,3 +54,4 @@ pub use types::{
     UpsertServerRequest,
 };
 pub use ui::handle_ui_dashboard;
+pub use webhooks_api::{handle_test_webhook, handle_webhook_callback};

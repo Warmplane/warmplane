@@ -327,6 +327,12 @@ pub fn build_router(app_state: AppState) -> Router {
             "/v1/approvals/:id/reject",
             post(http_v1::handle_reject_ticket),
         )
+        // Webhooks & ChatOps Endpoints
+        .route(
+            "/v1/webhooks/callbacks",
+            post(http_v1::handle_webhook_callback),
+        )
+        .route("/v1/webhooks/test", post(http_v1::handle_test_webhook))
         // SEP-2663 Tasks Endpoints
         .route("/v1/tasks", get(http_v1::handle_list_tasks))
         .route("/v1/tasks/:id", get(http_v1::handle_get_task))

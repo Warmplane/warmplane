@@ -163,8 +163,8 @@ export const SERVER_TEMPLATES: ServerTemplate[] = [
     description: 'Local embedded SQLite query runner and schema inspector.',
     badge: 'Official / uvx',
     command: 'uvx',
-    defaultArgs: ['mcp-server-sqlite', '--db-path', './app.db'],
-    argsPlaceholder: 'mcp-server-sqlite --db-path /path/to/database.sqlite',
+    defaultArgs: ['--with', 'mcp<2', 'mcp-server-sqlite', '--db-path', './app.db'],
+    argsPlaceholder: '--with mcp<2 mcp-server-sqlite --db-path /path/to/database.sqlite',
     envFields: []
   },
   {
