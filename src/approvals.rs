@@ -408,6 +408,11 @@ impl ApprovalRegistry {
 
 /// Dispatches an outbound webhook event with HMAC-SHA256 signature and bearer headers.
 pub async fn dispatch_webhook(cfg: &WebhookConfig, event_type: &str, approval: &PendingApproval) {
+    // Check if event is subscribed to
+    if !cfg.events.is_empty() && !cfg.events.iter().any(|e| e == event_type) {
+        return;
+    }
+
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -425,11 +430,13 @@ pub async fn dispatch_webhook(cfg: &WebhookConfig, event_type: &str, approval: &
         "status": approval.status,
     });
 
-    let payload = serde_json::json!({
-        "event": event_type,
-        "timestamp": now,
-        "approval": sanitized_approval
-    });
+    let format = cfg.format.unwrap_or_default();
+    let payload = crate::chatops::format_webhook_payload(
+        format,
+        event_type,
+        &sanitized_approval,
+        cfg.callback_url.as_deref(),
+    );
 
     let payload_str = match serde_json::to_string(&payload) {
         Ok(s) => s,

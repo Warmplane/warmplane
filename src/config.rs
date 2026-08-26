@@ -294,6 +294,20 @@ pub struct WebhookConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub auth_header: Option<String>,
+    /// Optional payload format (generic, slack, discord, teams).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<crate::chatops::WebhookFormat>,
+    /// Subscribed event types (defaults to `["approval.requested"]`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<String>,
+    /// Public callback URL for interactive action buttons.
+    #[serde(
+        default,
+        rename = "callbackUrl",
+        alias = "callback_url",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub callback_url: Option<String>,
     /// Optional custom HTTP headers map.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headers: Option<HashMap<String, String>>,
