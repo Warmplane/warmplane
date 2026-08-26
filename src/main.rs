@@ -39,6 +39,9 @@ async fn main() -> Result<()> {
         Commands::Client { command } => {
             cli_config::handle_client_command(command).await?;
         }
+        Commands::Secret { command } => {
+            cli_config::handle_secret_command(command).await?;
+        }
         Commands::Config { command } => {
             cli_config::handle_config_command(command).await?;
         }

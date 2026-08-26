@@ -30,5 +30,6 @@ pub mod storage;
 pub mod supervisor;
 pub mod tasks;
 pub mod telemetry;
+pub mod vault;
 
 pub use engine::{ControlPlaneHandle, EmbeddedWarmplane, Envelope, WarmplaneError};
