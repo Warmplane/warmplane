@@ -1,0 +1,25 @@
+{
+  "manifest_version": "0.3",
+  "name": "io.github.warmplane/warmplane",
+  "version": "0.0.0",
+  "description": "A local MCP control plane that keeps upstream sessions warm and exposes compact, policy-aware facades.",
+  "author": {
+    "name": "Warmplane"
+  },
+  "server": {
+    "type": "binary",
+    "entry_point": "server/warmplane",
+    "mcp_config": {
+      "command": "${__dirname}/server/warmplane",
+      "args": [
+        "mcp-server",
+        "--config",
+        "${__dirname}/config/mcp_servers.json"
+      ],
+      "env": {}
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "linux"]
+  }
+}
