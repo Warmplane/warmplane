@@ -80,9 +80,7 @@ export function renderServers(): string {
   }
 
   return `
-    ${renderClientIntegrations()}
-
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 24px; margin-bottom: 18px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px;">
       <div>
         <div style="font-size: 16px; font-weight: 700; color: var(--text-main);">Configured MCP Upstream Servers</div>
         <div style="font-size: 11px; color: var(--text-dim);">Active configuration file: <code>${escapeHtml(state.configPath)}</code></div>
@@ -93,6 +91,8 @@ export function renderServers(): string {
     </div>
 
     ${contentHtml}
+
+    ${renderClientIntegrations()}
   `;
 }
 
@@ -100,10 +100,13 @@ function renderClientIntegrations(): string {
   const state = store.getState();
   const clients = state.clients || [];
   const profiles = Object.keys(state.config.profiles || {});
+  const isCollapsed = state.clientsCollapsed;
 
   if (clients.length === 0) {
     return '';
   }
+
+  const attachedCount = clients.filter(c => c.is_attached).length;
 
   const clientCards = clients.map(c => {
     const isAttached = c.is_attached;
@@ -159,23 +162,28 @@ function renderClientIntegrations(): string {
   }).join('');
 
   return `
-    <div class="bento-card" style="margin-bottom: 20px; padding: 16px 18px; border-color: rgba(245, 158, 11, 0.2);">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+    <div class="bento-card" style="margin-top: 28px; padding: 14px 18px; border-color: rgba(245, 158, 11, 0.2); background: rgba(18, 24, 38, 0.4);">
+      <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;" onclick="window.app.toggleClientsCollapse()">
         <div>
-          <div style="font-size: 14.5px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 8px;">
+          <div style="font-size: 14px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 8px;">
             <span>⚡ 1-Click AI Client Integrations</span>
-            <span class="brand-badge" style="color: var(--amber-400); border-color: rgba(245, 158, 11, 0.3);">Auto-Sync</span>
+            <span class="brand-badge" style="color: var(--amber-400); border-color: rgba(245, 158, 11, 0.3);">${attachedCount > 0 ? `${attachedCount} Connected` : 'Auto-Sync'}</span>
           </div>
           <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
-            Automatically attach Warmplane's unified facade to your desktop IDEs and agents without editing JSON files.
+            Attach Warmplane's unified facade to desktop IDEs and agents without editing JSON files.
           </div>
         </div>
-        <button class="btn btn-ghost" style="padding: 3px 8px; font-size: 11px;" onclick="window.app.refreshClients()">⟳ Scan IDEs</button>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <button class="btn btn-ghost" style="padding: 3px 8px; font-size: 11px;" onclick="event.stopPropagation(); window.app.refreshClients()">⟳ Scan IDEs</button>
+          <span style="font-size: 12px; color: var(--text-dim);">${isCollapsed ? '▼ Show' : '▲ Hide'}</span>
+        </div>
       </div>
 
-      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;">
-        ${clientCards}
-      </div>
+      ${!isCollapsed ? `
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-subtle);">
+          ${clientCards}
+        </div>
+      ` : ''}
     </div>
   `;
 }
