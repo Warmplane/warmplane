@@ -8,36 +8,61 @@ export function renderPlayground(): string {
   const caps = state.capabilities || [];
   const resources = state.resources || [];
   const prompts = state.prompts || [];
+  const capsHidden = state.capabilitiesHiddenByPolicy || 0;
+  const resHidden = state.resourcesHiddenByPolicy || 0;
+  const promptsHidden = state.promptsHiddenByPolicy || 0;
 
   // Top Mode Switcher Bar
   const modeSwitcherHtml = `
-    <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center; justify-content: space-between;">
-      <div style="display: inline-flex; padding: 3px; background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: var(--radius-sm);">
+    <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;">
+      <div style="display: inline-flex; padding: 3px; background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: var(--radius-sm); align-items: center;">
         <button 
           class="btn ${mode === 'tools' ? 'btn-primary' : 'btn-ghost'}" 
-          style="padding: 4px 12px; font-size: 11.5px; height: 28px;"
+          style="padding: 4px 12px; font-size: 11.5px; height: 28px; display: inline-flex; align-items: center; gap: 6px;"
           onclick="window.app.setPlaygroundMode('tools')"
         >
-          🛠️ Tools (${caps.length})
+          <span>🛠️ Tools (${caps.length})</span>
+          ${capsHidden > 0 ? `<span class="badge" style="background: rgba(245, 158, 11, 0.2); color: var(--amber-300); font-size: 9.5px; padding: 1px 5px;" title="${capsHidden} tools hidden by policy/profile">+${capsHidden} hidden</span>` : ''}
         </button>
         <button 
           class="btn ${mode === 'resources' ? 'btn-primary' : 'btn-ghost'}" 
-          style="padding: 4px 12px; font-size: 11.5px; height: 28px;"
+          style="padding: 4px 12px; font-size: 11.5px; height: 28px; display: inline-flex; align-items: center; gap: 6px;"
           onclick="window.app.setPlaygroundMode('resources')"
         >
-          📄 Resources (${resources.length})
+          <span>📄 Resources (${resources.length})</span>
+          ${resHidden > 0 ? `<span class="badge" style="background: rgba(245, 158, 11, 0.2); color: var(--amber-300); font-size: 9.5px; padding: 1px 5px;" title="${resHidden} resources hidden by policy/profile">+${resHidden} hidden</span>` : ''}
         </button>
         <button 
           class="btn ${mode === 'prompts' ? 'btn-primary' : 'btn-ghost'}" 
-          style="padding: 4px 12px; font-size: 11.5px; height: 28px;"
+          style="padding: 4px 12px; font-size: 11.5px; height: 28px; display: inline-flex; align-items: center; gap: 6px;"
           onclick="window.app.setPlaygroundMode('prompts')"
         >
-          💬 Prompts (${prompts.length})
+          <span>💬 Prompts (${prompts.length})</span>
+          ${promptsHidden > 0 ? `<span class="badge" style="background: rgba(245, 158, 11, 0.2); color: var(--amber-300); font-size: 9.5px; padding: 1px 5px;" title="${promptsHidden} prompts hidden by policy/profile">+${promptsHidden} hidden</span>` : ''}
         </button>
       </div>
 
-      <div style="font-size: 11.5px; color: var(--text-dim);">
-        ${mode === 'tools' ? 'Interactive Tool Caller & Context Distillation' : mode === 'resources' ? 'Live MCP Resource Inspector & Reader' : 'Prompt Template Studio & Variable Binder'}
+      <div style="display: flex; align-items: center; gap: 12px;">
+        ${(mode === 'tools' && capsHidden > 0) ? `
+          <div style="font-size: 11px; color: var(--amber-300); background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.25); padding: 3px 8px; border-radius: var(--radius-sm); display: flex; align-items: center; gap: 6px;">
+            <span>🛡️ ${capsHidden} tool${capsHidden > 1 ? 's' : ''} filtered by policy/profile</span>
+            <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600;">View Policy</a>
+          </div>
+        ` : (mode === 'resources' && resHidden > 0) ? `
+          <div style="font-size: 11px; color: var(--amber-300); background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.25); padding: 3px 8px; border-radius: var(--radius-sm); display: flex; align-items: center; gap: 6px;">
+            <span>🛡️ ${resHidden} resource${resHidden > 1 ? 's' : ''} filtered by policy/profile</span>
+            <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600;">View Policy</a>
+          </div>
+        ` : (mode === 'prompts' && promptsHidden > 0) ? `
+          <div style="font-size: 11px; color: var(--amber-300); background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.25); padding: 3px 8px; border-radius: var(--radius-sm); display: flex; align-items: center; gap: 6px;">
+            <span>🛡️ ${promptsHidden} prompt${promptsHidden > 1 ? 's' : ''} filtered by policy/profile</span>
+            <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600;">View Policy</a>
+          </div>
+        ` : `
+          <div style="font-size: 11.5px; color: var(--text-dim);">
+            ${mode === 'tools' ? 'Interactive Tool Caller & Context Distillation' : mode === 'resources' ? 'Live MCP Resource Inspector & Reader' : 'Prompt Template Studio & Variable Binder'}
+          </div>
+        `}
       </div>
     </div>
   `;
@@ -111,6 +136,7 @@ export function generateSampleArgsFromSchema(schema: any, onlyRequired: boolean 
 
 function renderToolsPlayground(state: any): string {
   const caps = state.capabilities || [];
+  const capsHidden = state.capabilitiesHiddenByPolicy || 0;
   const selectedId = state.selectedCapabilityId || (caps.length > 0 ? caps[0].id : null);
   const selectedCap = caps.find((c: any) => c.id === selectedId);
   const isExecuting = !!state.isExecuting;
@@ -189,6 +215,12 @@ function renderToolsPlayground(state: any): string {
         <div style="flex: 1; overflow-y: auto; padding: 8px;" id="pg-cap-list">
           ${capListHtml}
         </div>
+        ${capsHidden > 0 ? `
+          <div style="padding: 8px 12px; background: rgba(245, 158, 11, 0.08); border-top: 1px solid rgba(245, 158, 11, 0.2); font-size: 11px; color: var(--amber-300); display: flex; justify-content: space-between; align-items: center;">
+            <span>🛡️ ${capsHidden} tool${capsHidden > 1 ? 's' : ''} hidden by policy</span>
+            <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600; font-size: 10.5px;">Edit Policy</a>
+          </div>
+        ` : ''}
       </div>
 
       <!-- Right Panel: Capability Execution & Envelope Visualizer -->
@@ -333,6 +365,7 @@ function renderToolsPlayground(state: any): string {
 
 function renderResourcesPlayground(state: any): string {
   const resources = state.resources || [];
+  const resHidden = state.resourcesHiddenByPolicy || 0;
   const selectedId = state.selectedResourceId || (resources.length > 0 ? resources[0].id : null);
   const selectedRes = resources.find((r: any) => r.id === selectedId);
   const result = state.resourceReadResult;
@@ -374,6 +407,12 @@ function renderResourcesPlayground(state: any): string {
         <div style="flex: 1; overflow-y: auto; padding: 8px;" id="pg-res-list">
           ${resListHtml}
         </div>
+        ${resHidden > 0 ? `
+          <div style="padding: 8px 12px; background: rgba(245, 158, 11, 0.08); border-top: 1px solid rgba(245, 158, 11, 0.2); font-size: 11px; color: var(--amber-300); display: flex; justify-content: space-between; align-items: center;">
+            <span>🛡️ ${resHidden} resource${resHidden > 1 ? 's' : ''} hidden by policy</span>
+            <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600; font-size: 10.5px;">Edit Policy</a>
+          </div>
+        ` : ''}
       </div>
 
       <!-- Right Panel: Resource Content Reader & Metadata Inspector -->
@@ -450,6 +489,7 @@ function renderResourcesPlayground(state: any): string {
 
 function renderPromptsPlayground(state: any): string {
   const prompts = state.prompts || [];
+  const promptsHidden = state.promptsHiddenByPolicy || 0;
   const selectedId = state.selectedPromptId || (prompts.length > 0 ? prompts[0].id : null);
   const selectedPrompt = prompts.find((p: any) => p.id === selectedId);
   const result = state.promptGetResult;
@@ -509,6 +549,12 @@ function renderPromptsPlayground(state: any): string {
         <div style="flex: 1; overflow-y: auto; padding: 8px;" id="pg-prompt-list">
           ${promptListHtml}
         </div>
+        ${promptsHidden > 0 ? `
+          <div style="padding: 8px 12px; background: rgba(245, 158, 11, 0.08); border-top: 1px solid rgba(245, 158, 11, 0.2); font-size: 11px; color: var(--amber-300); display: flex; justify-content: space-between; align-items: center;">
+            <span>🛡️ ${promptsHidden} prompt${promptsHidden > 1 ? 's' : ''} hidden by policy</span>
+            <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600; font-size: 10.5px;">Edit Policy</a>
+          </div>
+        ` : ''}
       </div>
 
       <!-- Right Panel: Prompt Parameter Binder & Message Envelope Preview -->

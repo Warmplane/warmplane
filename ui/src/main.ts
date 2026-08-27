@@ -84,19 +84,22 @@ class WarmplaneApp {
 
       if (capsRes && Array.isArray(capsRes.capabilities)) {
         store.setState({
-          capabilities: capsRes.capabilities
+          capabilities: capsRes.capabilities,
+          capabilitiesHiddenByPolicy: capsRes.hidden_by_policy || 0,
         });
       }
 
       if (resRes && Array.isArray(resRes.resources)) {
         store.setState({
-          resources: resRes.resources
+          resources: resRes.resources,
+          resourcesHiddenByPolicy: resRes.hidden_by_policy || 0,
         });
       }
 
       if (promptsRes && Array.isArray(promptsRes.prompts)) {
         store.setState({
-          prompts: promptsRes.prompts
+          prompts: promptsRes.prompts,
+          promptsHiddenByPolicy: promptsRes.hidden_by_policy || 0,
         });
       }
 
