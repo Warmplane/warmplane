@@ -266,6 +266,65 @@ pub async fn handle_import_config(
         .into_response()
 }
 
+/// Handles POST `/v1/config/servers/:id/restart` dynamically unmounting and remounting a server.
+pub async fn handle_restart_server(
+    State(state): State<AppState>,
+    Path(server_id): Path<String>,
+) -> impl IntoResponse {
+    let config = match crate::config::load_or_default_config(&state.config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    };
+
+    let srv_cfg =
+        match config.mcp_servers.get(&server_id) {
+            Some(s) => s.clone(),
+            None => return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "ok": false, "error": format!("Server '{}' not found", server_id) })),
+            )
+                .into_response(),
+        };
+
+    state.unmount_upstream_server(&server_id).await;
+    match state
+        .mount_upstream_server(
+            &server_id,
+            &srv_cfg,
+            &config.capability_aliases,
+            &config.resource_aliases,
+            &config.prompt_aliases,
+        )
+        .await
+    {
+        Ok(()) => {
+            let statuses_guard = state.server_statuses.read().await;
+            let status = statuses_guard.get(&server_id).cloned();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "server_id": server_id,
+                    "status": status,
+                    "message": format!("Server '{}' restarted successfully", server_id),
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 /// Handles POST `/v1/config/reload` explicitly triggering a hot-reloading reconciliation from disk.
 pub async fn handle_reload_config(State(state): State<AppState>) -> impl IntoResponse {
     match state.reload_from_disk().await {

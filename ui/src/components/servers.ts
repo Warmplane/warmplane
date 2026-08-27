@@ -51,29 +51,43 @@ export function renderServers(): string {
       const isError = statusInfo.status === 'error' || statusInfo.status === 'disconnected';
       const statusColor = isDegraded ? 'var(--amber-400)' : isError ? 'var(--red-400)' : 'var(--green-400)';
 
+      const errorBannerHtml = (isDegraded || isError) && statusInfo.error ? `
+        <div style="background: rgba(239, 68, 68, 0.08); border-left: 3px solid var(--amber-400); border-radius: var(--radius-xs); padding: 8px 12px; margin-top: 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+          <div style="font-size: 11px; color: var(--amber-300); font-family: var(--ff-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+            <span style="font-weight: 700; color: var(--amber-400);">⚠️ Diagnostics:</span> ${escapeHtml(statusInfo.error)}
+          </div>
+          <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10.5px; color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3);" onclick="window.app.openServerDiagnosticsModal('${escapeHtml(k)}')">Details</button>
+        </div>
+      ` : '';
+
       return `
-        <div class="bento-card" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-          <div>
-            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
-              <span style="width: 8px; height: 8px; border-radius: 50%; background: ${statusColor}; display: inline-block;"></span>
-              <span style="font-size: 15px; font-weight: 700; color: var(--text-main);">${escapeHtml(k)}</span>
-              <span class="brand-badge">${transport}</span>
-              <span class="brand-badge" style="color: ${statusColor}; border-color: rgba(245, 158, 11, 0.3);">Status: ${escapeHtml(statusInfo.status)}</span>
-              <span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">Protocol: ${statusInfo.protocol_version}</span>
-              ${cbBadge}
+        <div class="bento-card" style="margin-bottom: 12px; border-color: ${isDegraded ? 'rgba(251, 191, 36, 0.3)' : isError ? 'rgba(248, 113, 113, 0.3)' : 'var(--border)'};">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                <span style="width: 8px; height: 8px; border-radius: 50%; background: ${statusColor}; display: inline-block;"></span>
+                <span style="font-size: 15px; font-weight: 700; color: var(--text-main);">${escapeHtml(k)}</span>
+                <span class="brand-badge">${transport}</span>
+                <span class="brand-badge" style="color: ${statusColor}; border-color: rgba(245, 158, 11, 0.3);">Status: ${escapeHtml(statusInfo.status)}</span>
+                <span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">Protocol: ${statusInfo.protocol_version}</span>
+                ${cbBadge}
+              </div>
+              <div style="font-family: var(--ff-mono); font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+                ${s.command ? 'Command: ' : 'URL: '}<code>${escapeHtml(cmd || '')}</code>
+              </div>
+              <div style="display: flex; gap: 14px; font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim); margin-top: 4px; align-items: center; flex-wrap: wrap;">
+                <span>🛡️ ${escapeHtml(resDetails)}</span>
+                ${s.env && Object.keys(s.env).length > 0 ? `<span>Env: ${envBadges}</span>` : ''}
+              </div>
             </div>
-            <div style="font-family: var(--ff-mono); font-size: 12px; color: var(--text-muted); margin-top: 4px;">
-              ${s.command ? 'Command: ' : 'URL: '}<code>${escapeHtml(cmd || '')}</code>
-            </div>
-            <div style="display: flex; gap: 14px; font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim); margin-top: 4px; align-items: center; flex-wrap: wrap;">
-              <span>🛡️ ${escapeHtml(resDetails)}</span>
-              ${s.env && Object.keys(s.env).length > 0 ? `<span>Env: ${envBadges}</span>` : ''}
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px; color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);" onclick="window.app.restartServer('${escapeHtml(k)}')">⚡ Restart</button>
+              <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openServerDiagnosticsModal('${escapeHtml(k)}')">🔍 Diagnostics</button>
+              <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openEditServerModal('${escapeHtml(k)}')">✏️ Edit</button>
+              <button class="btn btn-danger" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.deleteServer('${escapeHtml(k)}')">Remove</button>
             </div>
           </div>
-          <div style="display: flex; gap: 8px;">
-            <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openEditServerModal('${escapeHtml(k)}')">✏️ Edit</button>
-            <button class="btn btn-danger" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.deleteServer('${escapeHtml(k)}')">Remove</button>
-          </div>
+          ${errorBannerHtml}
         </div>
       `;
     }).join('');

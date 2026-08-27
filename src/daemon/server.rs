@@ -294,6 +294,10 @@ pub fn build_router(app_state: AppState) -> Router {
             axum::routing::delete(http_v1::handle_delete_server),
         )
         .route(
+            "/v1/config/servers/:id/restart",
+            post(http_v1::handle_restart_server),
+        )
+        .route(
             "/v1/config/ecosystem",
             get(http_v1::handle_get_ecosystem_sources),
         )
