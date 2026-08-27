@@ -40,8 +40,8 @@ export const SERVER_TEMPLATES: ServerTemplate[] = [
     description: 'Read local Git repository status, diffs, log histories, and commit changes.',
     badge: 'Official / uvx',
     command: 'uvx',
-    defaultArgs: ['mcp-server-git', '--repository', '.'],
-    argsPlaceholder: 'mcp-server-git --repository /path/to/repo',
+    defaultArgs: ['--with', 'mcp<2', 'mcp-server-git', '--repository', '.'],
+    argsPlaceholder: '--with mcp<2 mcp-server-git --repository /path/to/repo',
     envFields: []
   },
   {
@@ -82,7 +82,8 @@ export const SERVER_TEMPLATES: ServerTemplate[] = [
     description: 'Query production error events, stack traces, and issue frequencies directly from Sentry.',
     badge: 'uvx / Telemetry',
     command: 'uvx',
-    defaultArgs: ['mcp-server-sentry'],
+    defaultArgs: ['--with', 'mcp<2', '--with', 'httpx', 'mcp-server-sentry', '--auth-token', 'sntrys_token'],
+    argsPlaceholder: '--with mcp<2 --with httpx mcp-server-sentry --auth-token YOUR_SENTRY_TOKEN',
     envFields: [
       { key: 'SENTRY_AUTH_TOKEN', label: 'Sentry Auth Token', placeholder: 'sntrys_...', required: true }
     ]
@@ -128,7 +129,7 @@ export const SERVER_TEMPLATES: ServerTemplate[] = [
     description: 'AI-optimized web search engine structured specifically for LLM context injection.',
     badge: 'Community / Stdio',
     command: 'npx',
-    defaultArgs: ['-y', '@tavily/mcp-server'],
+    defaultArgs: ['-y', 'tavily-mcp'],
     envFields: [
       { key: 'TAVILY_API_KEY', label: 'Tavily API Key', placeholder: 'tvly-...', required: true }
     ]
@@ -174,7 +175,7 @@ export const SERVER_TEMPLATES: ServerTemplate[] = [
     description: 'Query database tables, manage auth policies, and inspect storage in Supabase.',
     badge: 'Official / Stdio',
     command: 'npx',
-    defaultArgs: ['-y', '@supabase/mcp-server'],
+    defaultArgs: ['-y', '@supabase/mcp-server-supabase@latest'],
     envFields: [
       { key: 'SUPABASE_ACCESS_TOKEN', label: 'Supabase Personal Access Token', placeholder: 'sbp_...', required: true },
       { key: 'SUPABASE_PROJECT_REF', label: 'Supabase Project Reference ID', placeholder: 'abcdefghijklmnop', required: false }
@@ -185,10 +186,10 @@ export const SERVER_TEMPLATES: ServerTemplate[] = [
     name: 'Redis',
     category: 'database',
     description: 'Inspect cached keys, hash sets, lists, TTLs, and pub/sub channels in Redis.',
-    badge: 'uvx / Key-Value',
-    command: 'uvx',
-    defaultArgs: ['mcp-server-redis', '--url', 'redis://localhost:6379'],
-    argsPlaceholder: 'mcp-server-redis --url redis://localhost:6379',
+    badge: 'Official / Key-Value',
+    command: 'npx',
+    defaultArgs: ['-y', '@modelcontextprotocol/server-redis', 'redis://localhost:6379'],
+    argsPlaceholder: '-y @modelcontextprotocol/server-redis redis://localhost:6379',
     envFields: []
   },
   {
@@ -196,10 +197,10 @@ export const SERVER_TEMPLATES: ServerTemplate[] = [
     name: 'AWS S3 / Cloud Storage',
     category: 'database',
     description: 'Browse S3 buckets, fetch object metadata, and download files from cloud storage.',
-    badge: 'uvx / Cloud Storage',
-    command: 'uvx',
-    defaultArgs: ['mcp-server-s3', '--bucket', 'my-bucket-name'],
-    argsPlaceholder: 'mcp-server-s3 --bucket bucket-name --region us-east-1',
+    badge: 'Community / Stdio',
+    command: 'npx',
+    defaultArgs: ['-y', '@geunoh/s3-mcp-server'],
+    argsPlaceholder: '-y @geunoh/s3-mcp-server',
     envFields: [
       { key: 'AWS_ACCESS_KEY_ID', label: 'AWS Access Key ID', placeholder: 'AKIA...', required: true },
       { key: 'AWS_SECRET_ACCESS_KEY', label: 'AWS Secret Access Key', placeholder: '...', required: true },
@@ -240,9 +241,9 @@ export const SERVER_TEMPLATES: ServerTemplate[] = [
     description: 'Search Notion workspace pages, read nested blocks, and query database entries.',
     badge: 'Official / Stdio',
     command: 'npx',
-    defaultArgs: ['-y', '@modelcontextprotocol/server-notion'],
+    defaultArgs: ['-y', '@notionhq/notion-mcp-server'],
     envFields: [
-      { key: 'NOTION_API_KEY', label: 'Notion Internal Integration Token', placeholder: 'secret_...', required: true }
+      { key: 'NOTION_TOKEN', label: 'Notion Internal Integration Token', placeholder: 'secret_...', required: true }
     ]
   },
   {
@@ -252,10 +253,10 @@ export const SERVER_TEMPLATES: ServerTemplate[] = [
     description: 'Manage Jira issues, search JQL, read sprint statuses, and inspect boards.',
     badge: 'uvx / Atlassian',
     command: 'uvx',
-    defaultArgs: ['mcp-server-jira', '--url', 'https://your-domain.atlassian.net', '--email', 'user@example.com'],
-    argsPlaceholder: 'mcp-server-jira --url https://org.atlassian.net --email me@org.com',
+    defaultArgs: ['--with', 'mcp<2', 'mcp-server-jira', '--jira-base-url', 'https://your-domain.atlassian.net'],
+    argsPlaceholder: '--with mcp<2 mcp-server-jira --jira-base-url https://org.atlassian.net',
     envFields: [
-      { key: 'JIRA_API_TOKEN', label: 'Atlassian API Token', placeholder: 'ATATT3...', required: true }
+      { key: 'JIRA_TOKEN', label: 'Atlassian API Token', placeholder: 'ATATT3...', required: true }
     ]
   },
   {
@@ -263,9 +264,9 @@ export const SERVER_TEMPLATES: ServerTemplate[] = [
     name: 'Google Drive',
     category: 'productivity',
     description: 'Search, list, and read documents, spreadsheets, and drive files.',
-    badge: 'Official / Stdio',
+    badge: 'Community / Stdio',
     command: 'npx',
-    defaultArgs: ['-y', '@modelcontextprotocol/server-gdrive'],
+    defaultArgs: ['-y', '@piotr-agier/google-drive-mcp'],
     envFields: [
       { key: 'GOOGLE_APPLICATION_CREDENTIALS', label: 'Google Credentials JSON Path', placeholder: '/path/to/credentials.json', required: true }
     ]
@@ -287,9 +288,9 @@ export const SERVER_TEMPLATES: ServerTemplate[] = [
     name: 'Kubernetes (K8s)',
     category: 'cloud',
     description: 'Query cluster pods, services, deployment status, and inspect Kubernetes logs.',
-    badge: 'Official / Stdio',
+    badge: 'Popular / Stdio',
     command: 'npx',
-    defaultArgs: ['-y', '@modelcontextprotocol/server-kubernetes'],
+    defaultArgs: ['-y', '@strowk/mcp-k8s'],
     envFields: [
       { key: 'KUBECONFIG', label: 'Kubeconfig File Path (Optional)', placeholder: '~/.kube/config', required: false }
     ]
@@ -301,7 +302,8 @@ export const SERVER_TEMPLATES: ServerTemplate[] = [
     description: 'Manage Cloudflare Workers, KV namespaces, D1 databases, Vectorize indexes, and DNS.',
     badge: 'Official / Cloudflare',
     command: 'npx',
-    defaultArgs: ['-y', '@cloudflare/mcp-server-cloudflare'],
+    defaultArgs: ['-y', '@cloudflare/mcp-server-cloudflare', 'run', 'dummy_account_id'],
+    argsPlaceholder: '-y @cloudflare/mcp-server-cloudflare run YOUR_ACCOUNT_ID',
     envFields: [
       { key: 'CLOUDFLARE_API_TOKEN', label: 'Cloudflare API Token', placeholder: '...', required: true },
       { key: 'CLOUDFLARE_ACCOUNT_ID', label: 'Cloudflare Account ID', placeholder: '...', required: true }
@@ -312,9 +314,9 @@ export const SERVER_TEMPLATES: ServerTemplate[] = [
     name: 'Terraform',
     category: 'cloud',
     description: 'Inspect Terraform state files, resource dependency graphs, and plan previews.',
-    badge: 'uvx / IaC',
-    command: 'uvx',
-    defaultArgs: ['mcp-server-terraform'],
+    badge: 'Community / IaC',
+    command: 'npx',
+    defaultArgs: ['-y', '@mseep/terraform-mcp-server'],
     envFields: []
   }
 ];
