@@ -421,14 +421,67 @@ The `profiles` block defines named server constellations. Profiles allow a singl
 #### Key Characteristics
 - **Dynamic Slicing**: Omitting a profile presents the full unrestricted catalog. Specifying a profile restricts `/v1/capabilities`, `/v1/resources`, `/v1/prompts`, search queries, and tool execution strictly to servers in the constellation whitelist.
 - **Per-Request Selection**: HTTP clients select profiles dynamically via the `X-Warmplane-Profile: <name>` request header or the `?profile=<name>` query parameter.
-- **Partitioned ETag Caching**: Catalog ETags are automatically partitioned (`<sha256>-p:<profile_id>`), allowing conditional `If-None-Match` $\rightarrow$ `304 Not Modified` checks to function independently per profile.
+- **Partitioned ETag Caching**: Catalog ETags are automatically partitioned (`<sha256>-p:<profile_id>:<hash>`), allowing conditional `If-None-Match` $\rightarrow$ `304 Not Modified` checks to function independently per profile.
+- **Per-Profile Governance Policy**: Profiles support an optional nested `policy` block (`allow`, `deny`, `requireApproval`, `redactKeys`). These rules scope or override global policies when the profile is active:
+  ```json
+  "profiles": {
+    "readonly_sandbox": {
+      "servers": ["github", "sqlite"],
+      "policy": {
+        "deny": ["*.write*", "*.create*", "*.delete*"],
+        "requireApproval": ["sqlite.query"]
+      }
+    }
+  }
+  ```
+- **Constellation Boundary Enforcement**: Servers omitted from the profile constellation are marked as excluded (`🚫 EXCLUDED FROM PROFILE`). Warmplane automatically derives implicit `<server>.*` deny rules for unincluded servers.
 - **Composition with RBAC & Policy**: Profiles intersect cleanly with RBAC roles and policies:
   $$\text{Visible Surface} = \text{Full Catalog} \cap \text{Profile Servers} \cap \text{RBAC Role Scopes} \cap \text{Policy}$$
 - **Execution Gating**: Tool invocations or chained batch steps targeting servers outside the active profile return `403 TOOL_NOT_IN_PROFILE` without forwarding requests upstream.
 
 ---
 
-### 4.7 MCP HTTP/SSE Server Configuration (`mcpHttpServer`)
+### 4.7 Native OS Keychain Vault and Dynamic Secrets
+
+Warmplane provides secure credential storage and dynamic environment variable expansion through OS keychain integration (`keychain://`), 1Password CLI (`op://`), and process environment fallbacks (`env://`).
+
+#### Supported URI Schemes
+
+- `keychain://<service>/<key>`: Resolves secret value from macOS Keychain, Linux SecretService, or Windows Credential Manager.
+- `op://<vault>/<item>/<field>`: Resolves secret value using the local 1Password CLI.
+- `env://<VAR_NAME>`: Resolves secret from the daemon process environment.
+
+#### Configuration Example
+
+```json
+"github": {
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-github"],
+  "env": {
+    "GITHUB_PERSONAL_ACCESS_TOKEN": "keychain://warmplane/github_pat"
+  }
+}
+```
+
+---
+
+### 4.8 Actionable ChatOps and Webhook Integrations
+
+Warmplane integrates with enterprise chat platforms for interactive Human-in-the-Loop approval workflows.
+
+#### Supported Platforms
+
+- **Slack**: Interactive Block Kit cards with approve and reject action buttons.
+- **Discord**: Embed messages with contextual metadata and disposition status.
+- **Microsoft Teams**: Adaptive Cards supporting operator decisions directly within team channels.
+
+#### Verification and Security
+
+Every outgoing webhook includes an HMAC-SHA256 signature in the `X-Signature-SHA256` header. The receiver verifies payloads using the shared secret configured in `policy.webhook.secret` or `policy.webhook.secretEnv`.
+
+---
+
+### 4.9 MCP HTTP/SSE Server Configuration (`mcpHttpServer`)
 
 The optional `mcpHttpServer` block exposes the Warmplane facade as a **Streamable HTTP/SSE MCP server** that remote MCP clients (Claude Desktop via network, Cursor, CI pipelines) can connect to over TCP.
 
@@ -665,6 +718,24 @@ Run single-shot CLI commands for administration, configuration management, appro
 | `server list` | Displays a table or JSON (`--json`) list of configured servers. | `warmplane server list` |
 | `server get` | Inspects a single server definition in detail. | `warmplane server get github` |
 | `server test` | Tests upstream reachability, binary path resolution, or HTTP connectivity. | `warmplane server test github` |
+| `server restart` | Restarts an active upstream MCP server process. | `warmplane server restart github` |
+
+#### 1-Click AI Client Integrations (`warmplane client`)
+
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `client list` | Lists all detected AI clients and their integration statuses. | `warmplane client list` |
+| `client attach` | Injects Warmplane MCP proxy into the target client configuration. | `warmplane client attach claude-desktop --profile coding` |
+| `client detach` | Removes Warmplane MCP proxy configuration from the target client. | `warmplane client detach claude-desktop` |
+
+#### Native Secret Vault (`warmplane secret`)
+
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `secret set` | Stores a secret in the native OS keychain. | `warmplane secret set github_pat --value "ghp_12345"` |
+| `secret get` | Reads a secret value from the OS keychain. | `warmplane secret get github_pat` |
+| `secret delete` | Deletes a secret from the OS keychain. | `warmplane secret delete github_pat` |
+| `secret list` | Lists all secret keys managed by Warmplane. | `warmplane secret list` |
 
 #### Configuration, Aliases, Policy, Resilience, Audit, and Reload (`warmplane config` & `warmplane reload`)
 
@@ -672,7 +743,7 @@ Run single-shot CLI commands for administration, configuration management, appro
 | :--- | :--- | :--- |
 | `config init` | Scaffolds a clean `mcp_servers.json` configuration file. | `warmplane config init` |
 | `config show` | Pretty-prints the merged configuration file. | `warmplane config show` |
-| `config import` | Discovers and imports servers from Claude Desktop, Cursor, or custom files. | `warmplane config import` |
+| `config import` | Discovers and imports servers from Claude Desktop, OpenCode, Claude Code, Cursor, Zed, Windsurf, or Cline. | `warmplane config import` |
 | `config alias set` | Registers a capability/tool, resource, or prompt alias. | `warmplane config alias set tool git-commit github.create_commit` |
 | `config alias remove` | Removes an alias mapping. | `warmplane config alias remove tool git-commit` |
 | `config alias list` | Lists all active capability, resource, and prompt aliases. | `warmplane config alias list` |
@@ -739,7 +810,11 @@ All HTTP API endpoints return standard JSON response envelopes.
 | `GET` | `/v1/config` | Read current daemon configuration and upstream server statuses. | No |
 | `POST` | `/v1/config/servers` | Add or update an upstream server configuration. | No |
 | `DELETE` | `/v1/config/servers/:id` | Remove an upstream server configuration. | No |
-| `GET` | `/v1/config/ecosystem` | Discover installed MCP configurations from Claude/Cursor. | No |
+| `POST` | `/v1/config/servers/:id/restart` | Restart an upstream MCP server process. | No |
+| `GET` | `/v1/clients` | List detected AI clients and integration statuses. | No |
+| `POST` | `/v1/clients/:id/attach` | Inject Warmplane MCP proxy into target AI client. | No |
+| `POST` | `/v1/clients/:id/detach` | Remove Warmplane MCP proxy from target AI client. | No |
+| `GET` | `/v1/config/sources` | Discover installed MCP configurations across AI clients. | No |
 | `POST` | `/v1/config/import` | Import MCP servers from external client configurations. | No |
 | `POST` | `/v1/config/alias` | Add or remove capability, resource, or prompt aliases. | No |
 | `POST` | `/v1/config/policy` | Update security access policies and redaction keys. | No |
