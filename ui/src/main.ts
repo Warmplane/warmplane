@@ -475,13 +475,34 @@ class WarmplaneApp {
 
     if (inputKeys.length > 0) {
       for (const k of inputKeys) {
-        const el = document.getElementById(`task-input-${taskId}-${k}`) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null;
-        if (el) {
-          const val = el.value.trim();
-          try {
-            responses[k] = JSON.parse(val);
-          } catch {
-            responses[k] = val;
+        const reqDef = inputReqs[k];
+        if (reqDef && reqDef.type === 'approval_review') {
+          const decisionEl = document.getElementById(`task-input-${taskId}-${k}-decision`) as HTMLSelectElement | null;
+          const argsEl = document.getElementById(`task-input-${taskId}-${k}`) as HTMLTextAreaElement | null;
+          const isApproved = decisionEl ? decisionEl.value === 'true' : true;
+          let modArgs: any = undefined;
+          if (argsEl && argsEl.value.trim()) {
+            try {
+              modArgs = JSON.parse(argsEl.value.trim());
+            } catch {
+              alert('Invalid JSON in parameters editor');
+              return;
+            }
+          }
+          responses[k] = {
+            approved: isApproved,
+            modified_args: modArgs,
+            reason: isApproved ? undefined : 'Operator rejected execution via Tasks review',
+          };
+        } else {
+          const el = document.getElementById(`task-input-${taskId}-${k}`) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null;
+          if (el) {
+            const val = el.value.trim();
+            try {
+              responses[k] = JSON.parse(val);
+            } catch {
+              responses[k] = val;
+            }
           }
         }
       }
@@ -935,6 +956,33 @@ class WarmplaneApp {
         }
       });
     }
+  }
+
+  async cancelActiveOperation() {
+    const state = store.getState();
+    const reqId = state.activeRequestId;
+    if (reqId) {
+      try {
+        await api.cancelOperation(reqId);
+      } catch (e) {
+        console.warn('Failed to send cancel signal:', e);
+      }
+    }
+    store.setState({
+      isExecuting: false,
+      activeRequestId: null,
+      executionResult: {
+        status: 499,
+        durationMs: 0,
+        data: {
+          ok: false,
+          error: {
+            code: 'CANCELLED',
+            message: 'Operation cancelled by operator'
+          }
+        }
+      }
+    });
   }
 
   openBatchModal() {
