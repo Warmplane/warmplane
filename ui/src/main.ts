@@ -2332,6 +2332,34 @@ class WarmplaneApp {
     }
   }
 
+  async toggleServerInProfile(profileName: string, serverId: string, include: boolean) {
+    const state = store.getState();
+    const prof = state.config.profiles?.[profileName];
+    if (!prof) return;
+
+    let servers = [...(prof.servers || [])];
+    if (include) {
+      if (!servers.includes(serverId)) servers.push(serverId);
+    } else {
+      servers = servers.filter(s => s !== serverId);
+      if (servers.length === 0) {
+        alert('A profile must contain at least one server. To remove the profile, delete it in the Profiles tab.');
+        return;
+      }
+    }
+
+    try {
+      const res = await api.upsertProfile(profileName, servers, prof.description, prof.policy);
+      if (res.ok) {
+        await this.refreshData();
+      } else {
+        alert(`Failed to update profile constellation: ${res.error || 'Unknown error'}`);
+      }
+    } catch (e: any) {
+      alert(`Error updating profile constellation: ${e.message}`);
+    }
+  }
+
   closeModals() {
     document.querySelectorAll('.modal-backdrop').forEach(el => el.classList.remove('active'));
   }

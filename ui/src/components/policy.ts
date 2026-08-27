@@ -75,8 +75,67 @@ export function renderPolicy(): string {
     </div>
   `;
 
+  const allServerKeys = Object.keys(state.config.mcpServers || {});
+  const includedServers = activeProfile?.servers || [];
+  const excludedServers = isProfileScope ? allServerKeys.filter(s => !includedServers.includes(s)) : [];
+
+  const constellationBoundaryHtml = isProfileScope ? `
+    <div class="bento-card" style="margin-bottom: 16px; border: 1px solid rgba(245, 158, 11, 0.2); background: rgba(0, 0, 0, 0.2);">
+      <div class="stat-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <span class="stat-label" style="color: var(--amber-400);">Constellation Server Boundaries (Profile: ${escapeHtml(activeProfName!)})</span>
+        <span style="font-size: 11px; color: var(--text-dim);">${includedServers.length} of ${allServerKeys.length} servers active</span>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 10px;">
+        <div style="background: var(--surface); padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
+          <div style="font-size: 11px; font-weight: 600; color: var(--green-400); text-transform: uppercase; margin-bottom: 6px;">
+            ✔ Included Servers (${includedServers.length})
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+            ${includedServers.length > 0 ? includedServers.map(s => `
+              <span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25); background: rgba(34, 211, 238, 0.05);">
+                ${escapeHtml(s)}
+              </span>
+            `).join('') : '<span style="font-size: 11px; color: var(--text-dim);">No servers included</span>'}
+          </div>
+        </div>
+
+        <div style="background: var(--surface); padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
+          <div style="font-size: 11px; font-weight: 600; color: var(--amber-400); text-transform: uppercase; margin-bottom: 6px;">
+            🚫 Excluded Servers (${excludedServers.length}) · Implicitly Denied
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
+            ${excludedServers.length > 0 ? excludedServers.map(s => `
+              <span class="brand-badge" style="color: var(--text-muted); border-color: rgba(245, 158, 11, 0.2); background: rgba(245, 158, 11, 0.04); display: inline-flex; align-items: center; gap: 4px;">
+                ${escapeHtml(s)}
+                <button style="background: none; border: none; color: var(--amber-400); font-size: 10px; cursor: pointer; padding: 0 2px;" title="Include in profile" onclick="window.app.toggleServerInProfile('${escapeHtml(activeProfName!)}', '${escapeHtml(s)}', true)">+</button>
+              </span>
+            `).join('') : '<span style="font-size: 11px; color: var(--text-dim);">All servers included in constellation</span>'}
+          </div>
+        </div>
+      </div>
+    </div>
+  ` : '';
+
+  const implicitServerDenyHtml = (isProfileScope && excludedServers.length > 0) ? `
+    <div style="border-top: 1px dashed var(--border); padding-top: 8px; margin-top: 8px;">
+      <div style="font-size: 10.5px; color: var(--text-dim); text-transform: uppercase; font-weight: 600; margin-bottom: 6px;">
+        Implicit Boundary Denials (${excludedServers.length})
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        ${excludedServers.map(s => `
+          <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(245, 158, 11, 0.03); padding: 5px 8px; border-radius: var(--radius-xs); border: 1px dashed rgba(245, 158, 11, 0.2);">
+            <span style="font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim);">✖ ${escapeHtml(s)}.*</span>
+            <span style="font-size: 9.5px; color: var(--amber-400); font-family: var(--ff-mono);">server excluded</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  ` : '';
+
   return `
     ${scopeBannerHtml}
+
+    ${constellationBoundaryHtml}
 
     <div class="bento-grid">
       <!-- Allow Rules -->
@@ -100,6 +159,7 @@ export function renderPolicy(): string {
         </div>
         <div style="display: flex; flex-direction: column; gap: 8px; margin: 12px 0;">
           ${denyHtml}
+          ${implicitServerDenyHtml}
         </div>
         <div style="display: flex; gap: 8px; margin-top: 14px;">
           <input type="text" class="form-input" id="policy-new-deny" placeholder="e.g. *.drop_*, filesystem.write_*" onkeydown="if(event.key==='Enter') window.app.submitPolicyRule('deny')">

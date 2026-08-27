@@ -5,6 +5,10 @@ export function renderServers(): string {
   const state = store.getState();
   const servers = state.config.mcpServers || {};
   const keys = Object.keys(servers);
+  const activeProfName = state.activeProfile;
+  const activeProfile = activeProfName ? state.config.profiles?.[activeProfName] : undefined;
+  const isProfileActive = !!activeProfile;
+  const includedServers = activeProfile?.servers || [];
 
   let contentHtml = '';
   if (keys.length === 0) {
@@ -27,6 +31,8 @@ export function renderServers(): string {
       const transport = s.command ? 'stdio' : 'http / sse';
       const cmd = s.command ? `${s.command} ${(s.args || []).join(' ')}` : s.url;
       const statusInfo = state.serverStatuses[k] || { status: 'connected', protocol_version: '2026-07-28' };
+      const isIncludedInProfile = !isProfileActive || includedServers.includes(k);
+
       const envBadges = s.env ? Object.entries(s.env).map(([k, v]) => {
         if (v.startsWith('keychain://')) return `<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">🔒 ${escapeHtml(k)} (Keychain)</span>`;
         if (v.startsWith('op://')) return `<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">🔒 ${escapeHtml(k)} (1Password)</span>`;
@@ -60,17 +66,28 @@ export function renderServers(): string {
         </div>
       ` : '';
 
+      const profileBoundaryBadge = isProfileActive ? (
+        isIncludedInProfile
+          ? `<span class="brand-badge" style="color: var(--green-400); border-color: rgba(34, 197, 94, 0.3); background: rgba(34, 197, 94, 0.08);">✔ IN CONSTELLATION</span>`
+          : `<span class="brand-badge" style="color: var(--amber-400); border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.08);">🚫 EXCLUDED FROM PROFILE: ${escapeHtml(activeProfName!)}</span>`
+      ) : '';
+
+      const cardStyle = (isProfileActive && !isIncludedInProfile)
+        ? `margin-bottom: 12px; opacity: 0.65; border: 1px dashed rgba(245, 158, 11, 0.4); background: rgba(0, 0, 0, 0.2);`
+        : `margin-bottom: 12px; border-color: ${isDegraded ? 'rgba(251, 191, 36, 0.3)' : isError ? 'rgba(248, 113, 113, 0.3)' : 'var(--border)'};`;
+
       return `
-        <div class="bento-card" style="margin-bottom: 12px; border-color: ${isDegraded ? 'rgba(251, 191, 36, 0.3)' : isError ? 'rgba(248, 113, 113, 0.3)' : 'var(--border)'};">
+        <div class="bento-card" style="${cardStyle}">
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
-              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap;">
                 <span style="width: 8px; height: 8px; border-radius: 50%; background: ${statusColor}; display: inline-block;"></span>
                 <span style="font-size: 15px; font-weight: 700; color: var(--text-main);">${escapeHtml(k)}</span>
                 <span class="brand-badge">${transport}</span>
                 <span class="brand-badge" style="color: ${statusColor}; border-color: rgba(245, 158, 11, 0.3);">Status: ${escapeHtml(statusInfo.status)}</span>
                 <span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">Protocol: ${statusInfo.protocol_version}</span>
                 ${cbBadge}
+                ${profileBoundaryBadge}
               </div>
               <div style="font-family: var(--ff-mono); font-size: 12px; color: var(--text-muted); margin-top: 4px;">
                 ${s.command ? 'Command: ' : 'URL: '}<code>${escapeHtml(cmd || '')}</code>
@@ -81,6 +98,17 @@ export function renderServers(): string {
               </div>
             </div>
             <div style="display: flex; gap: 8px; align-items: center;">
+              ${isProfileActive ? (
+                isIncludedInProfile ? `
+                  <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px; color: var(--amber-400); border-color: rgba(245, 158, 11, 0.3);" onclick="window.app.toggleServerInProfile('${escapeHtml(activeProfName!)}', '${escapeHtml(k)}', false)">
+                    Exclude from Profile
+                  </button>
+                ` : `
+                  <button class="btn btn-primary" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.toggleServerInProfile('${escapeHtml(activeProfName!)}', '${escapeHtml(k)}', true)">
+                    + Include in Profile
+                  </button>
+                `
+              ) : ''}
               <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px; color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);" onclick="window.app.restartServer('${escapeHtml(k)}')">⚡ Restart</button>
               <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openServerDiagnosticsModal('${escapeHtml(k)}')">🔍 Diagnostics</button>
               <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openEditServerModal('${escapeHtml(k)}')">✏️ Edit</button>
@@ -93,6 +121,27 @@ export function renderServers(): string {
     }).join('');
   }
 
+  const profileConstellationBanner = isProfileActive ? `
+    <div class="bento-card" style="margin-bottom: 16px; background: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.3); display: flex; justify-content: space-between; align-items: center;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 18px;">🌌</span>
+        <div>
+          <div style="font-size: 13px; font-weight: 700; color: var(--amber-400);">
+            Active Profile Constellation: <code style="font-size: 13px; color: var(--text-main);">${escapeHtml(activeProfName!)}</code>
+            <span class="brand-badge" style="margin-left: 8px; color: var(--text-main);">${includedServers.length} of ${keys.length} servers included</span>
+          </div>
+          <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px;">
+            Excluded servers are unavailable to clients connected via this profile. Tools from excluded servers are automatically hidden.
+          </div>
+        </div>
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn btn-ghost" style="font-size: 11px; padding: 4px 10px;" onclick="window.app.switchTab('profiles')">Manage Profiles</button>
+        <button class="btn btn-ghost" style="font-size: 11px; padding: 4px 10px;" onclick="window.app.setActiveProfile(null)">View All Servers</button>
+      </div>
+    </div>
+  ` : '';
+
   return `
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px;">
       <div>
@@ -103,6 +152,8 @@ export function renderServers(): string {
         <button class="btn btn-ghost" onclick="window.app.reloadFromDisk()">⟳ Reload Config</button>
       </div>
     </div>
+
+    ${profileConstellationBanner}
 
     ${contentHtml}
 
