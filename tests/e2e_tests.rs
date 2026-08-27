@@ -631,3 +631,62 @@ async fn test_e2e_http_supervisor_degraded_boot_on_unreachable_endpoint() {
     assert_eq!(status["transport"], "http");
     assert!(status["error"].is_string());
 }
+
+#[tokio::test]
+async fn test_e2e_server_restart_endpoint() {
+    let temp_config = NamedTempFile::new().unwrap();
+    let config_path = temp_config.path().to_str().unwrap().to_string();
+
+    let mut mcp_servers = HashMap::new();
+    mcp_servers.insert(
+        "restart_test_srv".to_string(),
+        ServerConfig {
+            command: Some("echo".to_string()),
+            args: vec!["hello".to_string()],
+            env: HashMap::new(),
+            url: None,
+            auth: None,
+            protocol_version: None,
+            allow_stateless: None,
+            headers: HashMap::new(),
+            resilience: None,
+        },
+    );
+
+    let initial_config = McpConfig {
+        mcp_servers,
+        ..Default::default()
+    };
+    save_config(&config_path, &initial_config).unwrap();
+
+    let state = initialize_state(initial_config, &config_path)
+        .await
+        .unwrap();
+    let app = build_router(state.clone());
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let server_task = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = reqwest::Client::new();
+    let restart_url = format!(
+        "http://127.0.0.1:{}/v1/config/servers/restart_test_srv/restart",
+        port
+    );
+
+    let restart_res = client
+        .post(&restart_url)
+        .send()
+        .await
+        .expect("failed to call restart endpoint");
+
+    assert_eq!(restart_res.status(), StatusCode::OK);
+    let res_json: serde_json::Value = restart_res.json().await.unwrap();
+    assert_eq!(res_json["ok"], true);
+    assert_eq!(res_json["server_id"], "restart_test_srv");
+
+    server_task.abort();
+}

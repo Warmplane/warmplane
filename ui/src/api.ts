@@ -511,6 +511,13 @@ export class WarmplaneClient {
     return res.json();
   }
 
+  async restartServer(name: string): Promise<{ ok: boolean; message?: string; error?: string; status?: any }> {
+    const res = await fetch(`${this.baseUrl}/v1/config/servers/${encodeURIComponent(name)}/restart`, {
+      method: 'POST'
+    });
+    return res.json();
+  }
+
   async upsertProfile(name: string, servers: string[], description?: string): Promise<{ ok: boolean; error?: string }> {
     const res = await fetch(`${this.baseUrl}/v1/config/profiles`, {
       method: 'POST',

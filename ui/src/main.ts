@@ -1365,6 +1365,84 @@ class WarmplaneApp {
     await this.refreshData();
   }
 
+  async restartServer(name: string) {
+    try {
+      const res = await api.restartServer(name);
+      if (res.ok) {
+        await this.refreshData();
+      } else {
+        alert(`Failed to restart server '${name}': ${res.error || 'Unknown error'}`);
+      }
+    } catch (e: any) {
+      alert(`Error restarting server '${name}': ${e.message}`);
+    }
+  }
+
+  openServerDiagnosticsModal(name: string) {
+    this.closeModals();
+    const state = store.getState();
+    const serverCfg = state.config.mcpServers?.[name];
+    const statusInfo = state.serverStatuses?.[name];
+    const cb = (state.circuitBreakers || []).find(c => c.server_id === name);
+
+    const modal = document.getElementById('modal-server-diagnostics');
+    if (!modal) return;
+
+    const titleEl = document.getElementById('modal-diag-title');
+    const bodyEl = document.getElementById('modal-diag-body');
+    if (titleEl) titleEl.textContent = `Live Diagnostics: ${name}`;
+
+    if (bodyEl) {
+      const isDegraded = statusInfo?.status === 'degraded';
+      const statusColor = isDegraded ? 'var(--amber-400)' : statusInfo?.status === 'connected' ? 'var(--green-400)' : 'var(--red-400)';
+      const errorMsg = statusInfo?.error || 'No active crash or error reported. Server is healthy.';
+
+      bodyEl.innerHTML = `
+        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 16px;">
+          <span style="width: 10px; height: 10px; border-radius: 50%; background: ${statusColor};"></span>
+          <span style="font-weight: 700; font-size: 14px; color: var(--text-main);">Current Status: <span style="color: ${statusColor}; text-transform: uppercase;">${escapeHtml(statusInfo?.status || 'unknown')}</span></span>
+          <span class="brand-badge" style="color: var(--cyan-400);">Protocol: ${escapeHtml(statusInfo?.protocol_version || '2026-07-28')}</span>
+        </div>
+
+        <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; margin-bottom: 14px;">
+          <div style="font-size: 11px; font-weight: 700; color: var(--amber-400); text-transform: uppercase; margin-bottom: 6px;">
+            ⚠️ Diagnostic Details / Failure Root Cause
+          </div>
+          <pre style="font-family: var(--ff-mono); font-size: 11.5px; color: ${isDegraded ? 'var(--red-300)' : 'var(--text-dim)'}; white-space: pre-wrap; word-break: break-word; margin: 0;">${escapeHtml(errorMsg)}</pre>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;">
+          <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px;">
+            <div style="font-size: 10.5px; color: var(--text-dim);">Circuit Breaker State</div>
+            <div style="font-weight: 700; font-size: 13px; color: var(--text-main); margin-top: 2px;">
+              ${cb ? `${cb.state.toUpperCase()} (${cb.consecutive_failures} failures)` : 'CLOSED (Healthy)'}
+            </div>
+          </div>
+          <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px;">
+            <div style="font-size: 10.5px; color: var(--text-dim);">Process Supervision</div>
+            <div style="font-weight: 700; font-size: 13px; color: var(--text-main); margin-top: 2px;">
+              Auto-Restart: ${serverCfg?.resilience?.autoRestart !== false ? 'ENABLED' : 'DISABLED'}
+            </div>
+          </div>
+        </div>
+
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; margin-bottom: 16px;">
+          <div style="font-size: 10.5px; color: var(--text-dim); margin-bottom: 4px;">Configured Execution Target</div>
+          <code style="font-family: var(--ff-mono); font-size: 11px; color: var(--cyan-400); display: block; word-break: break-all;">
+            ${serverCfg?.command ? `${escapeHtml(serverCfg.command)} ${escapeHtml((serverCfg.args || []).join(' '))}` : escapeHtml(serverCfg?.url || '')}
+          </code>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 8px;">
+          <button class="btn btn-primary" onclick="window.app.restartServer('${escapeHtml(name)}'); window.app.closeModals();">⚡ Restart &amp; Probe Now</button>
+          <button class="btn btn-ghost" onclick="window.app.closeModals()">Close</button>
+        </div>
+      `;
+    }
+
+    modal.classList.add('active');
+  }
+
   openAddServerModal() {
     this.closeModals();
     const titleEl = document.getElementById('modal-srv-title');

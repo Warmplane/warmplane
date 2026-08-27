@@ -33,7 +33,7 @@ export interface BatchStepState {
 export interface AppState {
   configPath: string;
   config: McpConfig;
-  serverStatuses: Record<string, { transport: string; protocol_version: string; status: string }>;
+  serverStatuses: Record<string, { transport: string; protocol_version: string; status: string; error?: string }>;
   circuitBreakers: CircuitBreakerSnapshot[];
   clients: ClientAppStatus[];
   secrets: SecretItem[];
