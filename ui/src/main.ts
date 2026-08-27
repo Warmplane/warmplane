@@ -83,23 +83,38 @@ class WarmplaneApp {
       }
 
       if (capsRes && Array.isArray(capsRes.capabilities)) {
+        const currentSelectedCapId = store.getState().selectedCapabilityId;
+        const capExists = capsRes.capabilities.some(c => c.id === currentSelectedCapId);
+        const newSelectedCapId = capExists ? currentSelectedCapId : (capsRes.capabilities.length > 0 ? capsRes.capabilities[0].id : null);
+
         store.setState({
           capabilities: capsRes.capabilities,
           capabilitiesHiddenByPolicy: capsRes.hidden_by_policy || 0,
+          selectedCapabilityId: newSelectedCapId,
         });
       }
 
       if (resRes && Array.isArray(resRes.resources)) {
+        const currentSelectedId = store.getState().selectedResourceId;
+        const resExists = resRes.resources.some(r => (r.uri === currentSelectedId || r.id === currentSelectedId));
+        const newSelectedId = resExists ? currentSelectedId : (resRes.resources.length > 0 ? (resRes.resources[0].uri || resRes.resources[0].id || null) : null);
+
         store.setState({
           resources: resRes.resources,
           resourcesHiddenByPolicy: resRes.hidden_by_policy || 0,
+          selectedResourceId: newSelectedId,
         });
       }
 
       if (promptsRes && Array.isArray(promptsRes.prompts)) {
+        const currentSelectedId = store.getState().selectedPromptId;
+        const promptExists = promptsRes.prompts.some(p => (p.name === currentSelectedId || p.id === currentSelectedId));
+        const newSelectedId = promptExists ? currentSelectedId : (promptsRes.prompts.length > 0 ? (promptsRes.prompts[0].name || promptsRes.prompts[0].id || null) : null);
+
         store.setState({
           prompts: promptsRes.prompts,
           promptsHiddenByPolicy: promptsRes.hidden_by_policy || 0,
+          selectedPromptId: newSelectedId,
         });
       }
 
@@ -2329,6 +2344,34 @@ class WarmplaneApp {
       }
     } catch (e: any) {
       alert(`Error deleting profile: ${e.message}`);
+    }
+  }
+
+  async toggleServerInProfile(profileName: string, serverId: string, include: boolean) {
+    const state = store.getState();
+    const prof = state.config.profiles?.[profileName];
+    if (!prof) return;
+
+    let servers = [...(prof.servers || [])];
+    if (include) {
+      if (!servers.includes(serverId)) servers.push(serverId);
+    } else {
+      servers = servers.filter(s => s !== serverId);
+      if (servers.length === 0) {
+        alert('A profile must contain at least one server. To remove the profile, delete it in the Profiles tab.');
+        return;
+      }
+    }
+
+    try {
+      const res = await api.upsertProfile(profileName, servers, prof.description, prof.policy);
+      if (res.ok) {
+        await this.refreshData();
+      } else {
+        alert(`Failed to update profile constellation: ${res.error || 'Unknown error'}`);
+      }
+    } catch (e: any) {
+      alert(`Error updating profile constellation: ${e.message}`);
     }
   }
 

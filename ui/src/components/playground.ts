@@ -12,6 +12,10 @@ export function renderPlayground(): string {
   const resHidden = state.resourcesHiddenByPolicy || 0;
   const promptsHidden = state.promptsHiddenByPolicy || 0;
 
+  const activeProfName = state.activeProfile;
+  const activeProfile = activeProfName ? state.config.profiles?.[activeProfName] : undefined;
+  const isProfileActive = !!activeProfile;
+
   // Top Mode Switcher Bar
   const modeSwitcherHtml = `
     <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;">
@@ -22,7 +26,7 @@ export function renderPlayground(): string {
           onclick="window.app.setPlaygroundMode('tools')"
         >
           <span>🛠️ Tools (${caps.length})</span>
-          ${capsHidden > 0 ? `<span class="badge" style="background: rgba(245, 158, 11, 0.2); color: var(--amber-300); font-size: 9.5px; padding: 1px 5px;" title="${capsHidden} tools hidden by policy/profile">+${capsHidden} hidden</span>` : ''}
+          ${capsHidden > 0 ? `<span class="badge" style="background: rgba(245, 158, 11, 0.2); color: var(--amber-300); font-size: 9.5px; padding: 1px 5px;" title="${capsHidden} tools hidden by constellation/policy">+${capsHidden} hidden</span>` : ''}
         </button>
         <button 
           class="btn ${mode === 'resources' ? 'btn-primary' : 'btn-ghost'}" 
@@ -30,7 +34,7 @@ export function renderPlayground(): string {
           onclick="window.app.setPlaygroundMode('resources')"
         >
           <span>📄 Resources (${resources.length})</span>
-          ${resHidden > 0 ? `<span class="badge" style="background: rgba(245, 158, 11, 0.2); color: var(--amber-300); font-size: 9.5px; padding: 1px 5px;" title="${resHidden} resources hidden by policy/profile">+${resHidden} hidden</span>` : ''}
+          ${resHidden > 0 ? `<span class="badge" style="background: rgba(245, 158, 11, 0.2); color: var(--amber-300); font-size: 9.5px; padding: 1px 5px;" title="${resHidden} resources hidden by constellation/policy">+${resHidden} hidden</span>` : ''}
         </button>
         <button 
           class="btn ${mode === 'prompts' ? 'btn-primary' : 'btn-ghost'}" 
@@ -38,25 +42,28 @@ export function renderPlayground(): string {
           onclick="window.app.setPlaygroundMode('prompts')"
         >
           <span>💬 Prompts (${prompts.length})</span>
-          ${promptsHidden > 0 ? `<span class="badge" style="background: rgba(245, 158, 11, 0.2); color: var(--amber-300); font-size: 9.5px; padding: 1px 5px;" title="${promptsHidden} prompts hidden by policy/profile">+${promptsHidden} hidden</span>` : ''}
+          ${promptsHidden > 0 ? `<span class="badge" style="background: rgba(245, 158, 11, 0.2); color: var(--amber-300); font-size: 9.5px; padding: 1px 5px;" title="${promptsHidden} prompts hidden by constellation/policy">+${promptsHidden} hidden</span>` : ''}
         </button>
       </div>
 
       <div style="display: flex; align-items: center; gap: 12px;">
         ${(mode === 'tools' && capsHidden > 0) ? `
           <div style="font-size: 11px; color: var(--amber-300); background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.25); padding: 3px 8px; border-radius: var(--radius-sm); display: flex; align-items: center; gap: 6px;">
-            <span>🛡️ ${capsHidden} tool${capsHidden > 1 ? 's' : ''} filtered by policy/profile</span>
+            <span>🛡️ ${capsHidden} tool${capsHidden > 1 ? 's' : ''} filtered ${isProfileActive ? `(Profile: ${escapeHtml(activeProfName!)})` : 'by policy'}</span>
             <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600;">View Policy</a>
+            ${isProfileActive ? `<a href="javascript:void(0)" onclick="window.app.switchTab('servers')" style="color: var(--cyan-400); text-decoration: underline; font-weight: 600; margin-left: 4px;">Server Hub</a>` : ''}
           </div>
         ` : (mode === 'resources' && resHidden > 0) ? `
           <div style="font-size: 11px; color: var(--amber-300); background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.25); padding: 3px 8px; border-radius: var(--radius-sm); display: flex; align-items: center; gap: 6px;">
-            <span>🛡️ ${resHidden} resource${resHidden > 1 ? 's' : ''} filtered by policy/profile</span>
+            <span>🛡️ ${resHidden} resource${resHidden > 1 ? 's' : ''} filtered ${isProfileActive ? `(Profile: ${escapeHtml(activeProfName!)})` : 'by policy'}</span>
             <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600;">View Policy</a>
+            ${isProfileActive ? `<a href="javascript:void(0)" onclick="window.app.switchTab('servers')" style="color: var(--cyan-400); text-decoration: underline; font-weight: 600; margin-left: 4px;">Server Hub</a>` : ''}
           </div>
         ` : (mode === 'prompts' && promptsHidden > 0) ? `
           <div style="font-size: 11px; color: var(--amber-300); background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.25); padding: 3px 8px; border-radius: var(--radius-sm); display: flex; align-items: center; gap: 6px;">
-            <span>🛡️ ${promptsHidden} prompt${promptsHidden > 1 ? 's' : ''} filtered by policy/profile</span>
+            <span>🛡️ ${promptsHidden} prompt${promptsHidden > 1 ? 's' : ''} filtered ${isProfileActive ? `(Profile: ${escapeHtml(activeProfName!)})` : 'by policy'}</span>
             <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600;">View Policy</a>
+            ${isProfileActive ? `<a href="javascript:void(0)" onclick="window.app.switchTab('servers')" style="color: var(--cyan-400); text-decoration: underline; font-weight: 600; margin-left: 4px;">Server Hub</a>` : ''}
           </div>
         ` : `
           <div style="font-size: 11.5px; color: var(--text-dim);">
@@ -136,10 +143,12 @@ export function generateSampleArgsFromSchema(schema: any, onlyRequired: boolean 
 
 function renderToolsPlayground(state: any): string {
   const caps = state.capabilities || [];
-  const capsHidden = state.capabilitiesHiddenByPolicy || 0;
   const selectedId = state.selectedCapabilityId || (caps.length > 0 ? caps[0].id : null);
   const selectedCap = caps.find((c: any) => c.id === selectedId);
-  const isExecuting = !!state.isExecuting;
+  const isExecuting = state.isExecutingCapability;
+  const capsHidden = state.capabilitiesHiddenByPolicy || 0;
+  const activeProfName = state.activeProfile;
+  const isProfileActive = !!(activeProfName && state.config.profiles?.[activeProfName]);
 
   let capListHtml = '';
   if (caps.length === 0) {
@@ -217,8 +226,11 @@ function renderToolsPlayground(state: any): string {
         </div>
         ${capsHidden > 0 ? `
           <div style="padding: 8px 12px; background: rgba(245, 158, 11, 0.08); border-top: 1px solid rgba(245, 158, 11, 0.2); font-size: 11px; color: var(--amber-300); display: flex; justify-content: space-between; align-items: center;">
-            <span>🛡️ ${capsHidden} tool${capsHidden > 1 ? 's' : ''} hidden by policy</span>
-            <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600; font-size: 10.5px;">Edit Policy</a>
+            <span>🛡️ ${capsHidden} tool${capsHidden > 1 ? 's' : ''} filtered ${isProfileActive ? `(${escapeHtml(activeProfName!)})` : ''}</span>
+            <div style="display: flex; gap: 6px;">
+              <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600; font-size: 10.5px;">Policy</a>
+              ${isProfileActive ? `<a href="javascript:void(0)" onclick="window.app.switchTab('servers')" style="color: var(--cyan-400); text-decoration: underline; font-weight: 600; font-size: 10.5px;">Servers</a>` : ''}
+            </div>
           </div>
         ` : ''}
       </div>
