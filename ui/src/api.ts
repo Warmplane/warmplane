@@ -37,6 +37,8 @@ export interface ListResourcesResponse {
   version: string;
   catalog_version: string;
   resources: ResourceItem[];
+  total_unfiltered?: number;
+  hidden_by_policy?: number;
 }
 
 export interface ReadResourceRequest {
@@ -71,6 +73,8 @@ export interface ListPromptsResponse {
   version: string;
   catalog_version: string;
   prompts: PromptItem[];
+  total_unfiltered?: number;
+  hidden_by_policy?: number;
 }
 
 export interface GetPromptRequest {
@@ -361,6 +365,8 @@ export interface ListCapabilitiesResponse {
   version: string;
   catalog_version: string;
   capabilities: CapabilityItem[];
+  total_unfiltered?: number;
+  hidden_by_policy?: number;
 }
 
 export interface CallCapabilityRequest {

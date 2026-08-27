@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-15
+// Rust guideline compliant 2026-08-27
 
 //! Catalog discovery and exploration endpoints for tools, resources, prompts, completions, and change feeds.
 
@@ -413,6 +413,7 @@ pub async fn handle_list_capabilities(
     }
 
     let caps_guard = state.capabilities.read().await;
+    let total_unfiltered = caps_guard.len();
     let mut capabilities = caps_guard
         .iter()
         .filter(|(id, meta)| pol.allows(id) && prof_ctx.is_server_allowed(&meta.server))
@@ -436,6 +437,9 @@ pub async fn handle_list_capabilities(
             .cmp(&b.get("id").and_then(|v| v.as_str()))
     });
 
+    let allowed_count = capabilities.len();
+    let hidden_by_policy = total_unfiltered.saturating_sub(allowed_count);
+
     (
         StatusCode::OK,
         make_etag_header(&catalog_ver),
@@ -445,6 +449,8 @@ pub async fn handle_list_capabilities(
             "ttl_ms": 300000,
             "cache_scope": "public",
             "capabilities": capabilities,
+            "total_unfiltered": total_unfiltered,
+            "hidden_by_policy": hidden_by_policy,
         })),
     )
         .into_response()
@@ -569,6 +575,7 @@ pub async fn handle_list_resources(
     }
 
     let res_guard = state.resources.read().await;
+    let total_unfiltered = res_guard.len();
     let mut resources = res_guard
         .iter()
         .filter(|(id, meta)| pol.allows(id) && prof_ctx.is_server_allowed(&meta.server))
@@ -591,6 +598,9 @@ pub async fn handle_list_resources(
             .cmp(&b.get("id").and_then(|v| v.as_str()))
     });
 
+    let allowed_count = resources.len();
+    let hidden_by_policy = total_unfiltered.saturating_sub(allowed_count);
+
     (
         StatusCode::OK,
         make_etag_header(&catalog_ver),
@@ -600,6 +610,8 @@ pub async fn handle_list_resources(
             "ttl_ms": 300000,
             "cache_scope": "public",
             "resources": resources,
+            "total_unfiltered": total_unfiltered,
+            "hidden_by_policy": hidden_by_policy,
         })),
     )
         .into_response()
@@ -634,6 +646,7 @@ pub async fn handle_list_prompts(
     }
 
     let prompts_guard = state.prompts.read().await;
+    let total_unfiltered = prompts_guard.len();
     let mut prompts = prompts_guard
         .iter()
         .filter(|(id, meta)| pol.allows(id) && prof_ctx.is_server_allowed(&meta.server))
@@ -656,6 +669,9 @@ pub async fn handle_list_prompts(
             .cmp(&b.get("id").and_then(|v| v.as_str()))
     });
 
+    let allowed_count = prompts.len();
+    let hidden_by_policy = total_unfiltered.saturating_sub(allowed_count);
+
     (
         StatusCode::OK,
         make_etag_header(&catalog_ver),
@@ -665,6 +681,8 @@ pub async fn handle_list_prompts(
             "ttl_ms": 300000,
             "cache_scope": "public",
             "prompts": prompts,
+            "total_unfiltered": total_unfiltered,
+            "hidden_by_policy": hidden_by_policy,
         })),
     )
         .into_response()

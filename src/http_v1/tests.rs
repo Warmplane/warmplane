@@ -1617,3 +1617,60 @@ async fn test_task_update_bridges_to_approval_resolution() {
         ),
     }
 }
+
+#[tokio::test]
+async fn test_catalog_policy_hidden_counts() {
+    let policy = crate::daemon::Policy {
+        allow: vec!["sqlite.*".to_string()],
+        ..Default::default()
+    };
+
+    let mut capabilities = HashMap::new();
+    capabilities.insert(
+        "sqlite.query".to_string(),
+        CapabilityMeta {
+            summary: "query".to_string(),
+            description: "query".to_string(),
+            server: "sqlite".to_string(),
+            tool: "query".to_string(),
+            tags: vec![],
+            input_schema: serde_json::Value::Null,
+            examples: vec![],
+        },
+    );
+    capabilities.insert(
+        "filesystem.read".to_string(),
+        CapabilityMeta {
+            summary: "read".to_string(),
+            description: "read".to_string(),
+            server: "filesystem".to_string(),
+            tool: "read".to_string(),
+            tags: vec![],
+            input_schema: serde_json::Value::Null,
+            examples: vec![],
+        },
+    );
+
+    let state = AppState::builder()
+        .policy(policy)
+        .capabilities(capabilities)
+        .build();
+
+    let res = crate::http_v1::catalog::handle_list_capabilities(
+        State(state),
+        axum::extract::Extension(None),
+        None,
+        HeaderMap::new(),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let val: Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(val["total_unfiltered"], 2);
+    assert_eq!(val["hidden_by_policy"], 1);
+    assert_eq!(val["capabilities"].as_array().unwrap().len(), 1);
+    assert_eq!(val["capabilities"][0]["id"], "sqlite.query");
+}

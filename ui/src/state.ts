@@ -39,8 +39,11 @@ export interface AppState {
   secrets: SecretItem[];
   clientsCollapsed: boolean;
   capabilities: CapabilityItem[];
+  capabilitiesHiddenByPolicy: number;
   resources: ResourceItem[];
+  resourcesHiddenByPolicy: number;
   prompts: PromptItem[];
+  promptsHiddenByPolicy: number;
   catalogEvents: CatalogEventItem[];
   tasks: TaskItem[];
   selectedTaskId: string | null;
@@ -88,8 +91,11 @@ class Store {
     secrets: [],
     clientsCollapsed: false,
     capabilities: [],
+    capabilitiesHiddenByPolicy: 0,
     resources: [],
+    resourcesHiddenByPolicy: 0,
     prompts: [],
+    promptsHiddenByPolicy: 0,
     catalogEvents: [],
     tasks: [],
     selectedTaskId: null,
