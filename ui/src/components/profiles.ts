@@ -34,6 +34,13 @@ export function renderProfiles(): string {
       // Count matching capabilities
       const matchingCapsCount = (state.capabilities || []).filter(c => prof.servers.includes(c.server)).length;
 
+      // Policy stats if custom policy is defined
+      const hasPolicy = !!prof.policy;
+      const allowCount = prof.policy?.allow?.length || 0;
+      const denyCount = prof.policy?.deny?.length || 0;
+      const hitlCount = (prof.policy?.require_approval || prof.policy?.requireApproval || []).length;
+      const redactCount = (prof.policy?.redact_keys || prof.policy?.redactKeys || []).length;
+
       return `
         <div class="bento-card" style="margin-bottom: 14px; border-left: ${isSelected ? '3px solid var(--amber-400)' : '1px solid var(--border)'};">
           <div style="display: flex; justify-content: space-between; align-items: flex-start;">
@@ -43,14 +50,25 @@ export function renderProfiles(): string {
                 ${isSelected ? '<span class="brand-badge" style="color: var(--amber-400); border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.1);">ACTIVE IN UI</span>' : ''}
                 <span class="brand-badge">${prof.servers.length} server${prof.servers.length === 1 ? '' : 's'}</span>
                 <span class="brand-badge" style="color: var(--text-dim);">${matchingCapsCount} capabilities</span>
+                ${hasPolicy ? '<span class="brand-badge" style="color: var(--green-400); border-color: rgba(34, 197, 94, 0.3); background: rgba(34, 197, 94, 0.08);">CUSTOM POLICY</span>' : ''}
               </div>
               <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">
                 ${escapeHtml(prof.description || 'No description provided')}
               </div>
-              <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
+              <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: ${hasPolicy ? '8px' : '0'};">
                 <span style="font-size: 11px; color: var(--text-dim); font-weight: 600; text-transform: uppercase;">Servers:</span>
                 ${serverBadges || '<span style="font-size: 11px; color: var(--text-dim);">None</span>'}
               </div>
+              ${hasPolicy ? `
+                <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 11px;">
+                  <span style="color: var(--text-dim); font-weight: 600; text-transform: uppercase;">Policy Overlay:</span>
+                  ${allowCount > 0 ? `<span class="brand-badge" style="color: var(--green-400);">Allow: ${allowCount}</span>` : ''}
+                  ${denyCount > 0 ? `<span class="brand-badge" style="color: var(--red-400);">Deny: ${denyCount}</span>` : ''}
+                  ${hitlCount > 0 ? `<span class="brand-badge" style="color: var(--amber-400);">HITL: ${hitlCount}</span>` : ''}
+                  ${redactCount > 0 ? `<span class="brand-badge" style="color: var(--text-muted);">Redact: ${redactCount}</span>` : ''}
+                  ${allowCount === 0 && denyCount === 0 && hitlCount === 0 && redactCount === 0 ? `<span style="color: var(--text-dim);">Configured</span>` : ''}
+                </div>
+              ` : ''}
             </div>
             
             <div style="display: flex; gap: 8px; align-items: center;">

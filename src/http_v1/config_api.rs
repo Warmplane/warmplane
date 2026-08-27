@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-15
+// Rust guideline compliant 2026-08-27
 
 //! Configuration and control deck REST API handlers for server management, ecosystem import, aliases, and policies.
 
@@ -542,6 +542,7 @@ pub async fn handle_upsert_profile(
     let prof_cfg = crate::config::ProfileConfig {
         servers: payload.servers,
         description: payload.description,
+        policy: payload.policy,
     };
 
     config

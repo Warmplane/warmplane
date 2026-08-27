@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-19
+// Rust guideline compliant 2026-08-27
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -164,6 +164,9 @@ pub struct ProfileConfig {
     /// Optional human-readable description of this profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Optional per-profile security and governance policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<PolicyConfig>,
 }
 
 /// Persistent runtime state configuration.
@@ -1069,6 +1072,7 @@ mod tests {
             ProfileConfig {
                 servers: vec!["srv_a".to_string()],
                 description: Some("test profile".to_string()),
+                policy: None,
             },
         );
 
@@ -1085,6 +1089,7 @@ mod tests {
             ProfileConfig {
                 servers: vec!["srv_c".to_string()],
                 description: None,
+                policy: None,
             },
         );
         let bad_config = McpConfig {

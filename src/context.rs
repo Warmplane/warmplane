@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-13
+// Rust guideline compliant 2026-08-27
 
 use axum::http::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -177,14 +177,17 @@ pub struct ProfileContext {
     pub profile_id: Option<String>,
     /// Set of allowed server identifiers under this profile constellation.
     pub allowed_servers: Option<std::collections::HashSet<String>>,
+    /// Optional security policy rules specific to this profile constellation.
+    pub profile_policy: Option<crate::daemon::Policy>,
 }
 
 impl ProfileContext {
-    /// Creates an unrestricted `ProfileContext` (all servers allowed).
+    /// Creates an unrestricted `ProfileContext` (all servers allowed, no profile policy overlay).
     pub fn unrestricted() -> Self {
         Self {
             profile_id: None,
             allowed_servers: None,
+            profile_policy: None,
         }
     }
 
@@ -197,6 +200,21 @@ impl ProfileContext {
         Self {
             profile_id: Some(profile_id.into()),
             allowed_servers: Some(set),
+            profile_policy: None,
+        }
+    }
+
+    /// Creates a scoped `ProfileContext` with profile ID, server whitelist, and optional profile policy.
+    pub fn scoped_with_policy(
+        profile_id: impl Into<String>,
+        servers: impl IntoIterator<Item = impl Into<String>>,
+        policy: Option<crate::daemon::Policy>,
+    ) -> Self {
+        let set: std::collections::HashSet<String> = servers.into_iter().map(Into::into).collect();
+        Self {
+            profile_id: Some(profile_id.into()),
+            allowed_servers: Some(set),
+            profile_policy: policy,
         }
     }
 

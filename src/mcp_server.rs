@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-19
+// Rust guideline compliant 2026-08-27
 
 //! MCP server facade interface exposing compact tools/resources/prompts endpoints.
 //!
@@ -618,9 +618,14 @@ impl FacadeMcpServer {
         if let Some(ref prof_id) = self.profile {
             let profiles_guard = self.state.profiles.read().await;
             if let Some(prof_cfg) = profiles_guard.get(prof_id) {
-                return crate::context::ProfileContext::scoped(
+                let prof_policy = prof_cfg
+                    .policy
+                    .as_ref()
+                    .map(|p| crate::daemon::Policy::from_config(Some(p.clone())));
+                return crate::context::ProfileContext::scoped_with_policy(
                     prof_id.clone(),
                     prof_cfg.servers.clone(),
+                    prof_policy,
                 );
             }
         }
@@ -1314,6 +1319,7 @@ mod tests {
             ProfileConfig {
                 servers: vec!["sqlite".to_string()],
                 description: None,
+                policy: None,
             },
         );
 

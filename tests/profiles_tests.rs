@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-19
+// Rust guideline compliant 2026-08-27
 
 //! Integration tests for Warmplane Named Profiles constellations (`M-CANONICAL-DOCS`).
 
@@ -55,6 +55,7 @@ async fn test_profile_http_filtering_and_etag_caching() {
         ProfileConfig {
             servers: vec!["server_a".to_string()],
             description: Some("Profile with only server A".to_string()),
+            policy: None,
         },
     );
 

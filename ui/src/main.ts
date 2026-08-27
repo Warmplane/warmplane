@@ -2104,6 +2104,15 @@ class WarmplaneApp {
     if (descInput) descInput.value = '';
     if (modeInput) modeInput.value = 'create';
 
+    const allowInput = document.getElementById('modal-prof-allow') as HTMLInputElement | null;
+    const denyInput = document.getElementById('modal-prof-deny') as HTMLInputElement | null;
+    const hitlInput = document.getElementById('modal-prof-hitl') as HTMLInputElement | null;
+    const redactInput = document.getElementById('modal-prof-redact') as HTMLInputElement | null;
+    if (allowInput) allowInput.value = '';
+    if (denyInput) denyInput.value = '';
+    if (hitlInput) hitlInput.value = '';
+    if (redactInput) redactInput.value = '';
+
     this.renderProfileServerCheckboxes([]);
 
     const modal = document.getElementById('modal-add-profile');
@@ -2128,6 +2137,17 @@ class WarmplaneApp {
     }
     if (descInput) descInput.value = prof.description || '';
     if (modeInput) modeInput.value = 'edit';
+
+    const allowInput = document.getElementById('modal-prof-allow') as HTMLInputElement | null;
+    const denyInput = document.getElementById('modal-prof-deny') as HTMLInputElement | null;
+    const hitlInput = document.getElementById('modal-prof-hitl') as HTMLInputElement | null;
+    const redactInput = document.getElementById('modal-prof-redact') as HTMLInputElement | null;
+
+    const pol = prof.policy;
+    if (allowInput) allowInput.value = (pol?.allow || []).join(', ');
+    if (denyInput) denyInput.value = (pol?.deny || []).join(', ');
+    if (hitlInput) hitlInput.value = (pol?.require_approval || pol?.requireApproval || []).join(', ');
+    if (redactInput) redactInput.value = (pol?.redact_keys || pol?.redactKeys || []).join(', ');
 
     this.renderProfileServerCheckboxes(prof.servers || []);
 
@@ -2180,8 +2200,33 @@ class WarmplaneApp {
       return;
     }
 
+    const parseCsv = (val: string | undefined): string[] => {
+      if (!val) return [];
+      return val.split(',').map(s => s.trim()).filter(s => s.length > 0);
+    };
+
+    const allowInput = document.getElementById('modal-prof-allow') as HTMLInputElement | null;
+    const denyInput = document.getElementById('modal-prof-deny') as HTMLInputElement | null;
+    const hitlInput = document.getElementById('modal-prof-hitl') as HTMLInputElement | null;
+    const redactInput = document.getElementById('modal-prof-redact') as HTMLInputElement | null;
+
+    const allow = parseCsv(allowInput?.value);
+    const deny = parseCsv(denyInput?.value);
+    const requireApproval = parseCsv(hitlInput?.value);
+    const redactKeys = parseCsv(redactInput?.value);
+
+    let policy: any = undefined;
+    if (allow.length > 0 || deny.length > 0 || requireApproval.length > 0 || redactKeys.length > 0) {
+      policy = {
+        allow,
+        deny,
+        requireApproval,
+        redactKeys,
+      };
+    }
+
     try {
-      const res = await api.upsertProfile(name, servers, desc || undefined);
+      const res = await api.upsertProfile(name, servers, desc || undefined, policy);
       if (res.ok) {
         this.closeModals();
         await this.refreshData();
