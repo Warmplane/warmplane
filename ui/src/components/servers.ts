@@ -120,8 +120,9 @@ function renderClientIntegrations(): string {
       badge = `<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">○ App Installed</span>`;
     }
 
+    const activeProfile = state.activeProfile;
     const profileOptions = profiles.map(p => `
-      <option value="${escapeHtml(p)}" ${c.attached_profile === p ? 'selected' : ''}>Profile: ${escapeHtml(p)}</option>
+      <option value="${escapeHtml(p)}" ${activeProfile === p || c.attached_profile === p ? 'selected' : ''}>Profile: ${escapeHtml(p)}</option>
     `).join('');
 
     const actionBtn = isAttached
@@ -172,7 +173,7 @@ function renderClientIntegrations(): string {
         <button class="btn btn-ghost" style="padding: 3px 8px; font-size: 11px;" onclick="window.app.refreshClients()">⟳ Scan IDEs</button>
       </div>
 
-      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px;">
+      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;">
         ${clientCards}
       </div>
     </div>
