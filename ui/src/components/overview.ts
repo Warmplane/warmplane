@@ -97,6 +97,78 @@ export function renderOverview(): string {
   const inputReqTasks = tasks.filter(t => t.status === 'input_required').length;
   const activeTasks = tasks.filter(t => t.status === 'working' || t.status === 'input_required').length;
 
+  const clients = state.clients || [];
+  const attachedClientsCount = clients.filter(c => c.is_attached).length;
+  const detectedClientsCount = clients.filter(c => c.config_exists && !c.is_attached).length;
+  const isCollapsed = state.clientsCollapsed;
+
+  const clientsHeaderBadge = attachedClientsCount > 0
+    ? `<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ ${attachedClientsCount} Connected</span>`
+    : detectedClientsCount > 0
+    ? `<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.1);">○ ${detectedClientsCount} Ready to Connect</span>`
+    : `<span class="brand-badge" style="color: var(--text-dim);">No Apps Detected</span>`;
+
+  const miniClientPills = clients.map(c => {
+    const isAttached = c.is_attached;
+    const isDetected = c.config_exists;
+    const isInstalled = c.app_installed;
+    
+    let dotColor = 'rgba(255, 255, 255, 0.2)';
+    let statusText = 'Not Found';
+    if (isAttached) {
+      dotColor = 'var(--green-400)';
+      statusText = c.attached_profile ? `Connected (${c.attached_profile})` : 'Connected';
+    } else if (isDetected) {
+      dotColor = 'var(--amber-300)';
+      statusText = 'Ready to Attach';
+    } else if (isInstalled) {
+      dotColor = 'var(--cyan-400)';
+      statusText = 'Installed';
+    }
+
+    const actionBtn = isAttached
+      ? `<button class="btn btn-ghost" style="padding: 2px 7px; font-size: 10px; color: var(--red-400);" onclick="event.stopPropagation(); window.app.detachClient('${escapeHtml(c.id)}')">Detach</button>`
+      : isDetected || isInstalled
+      ? `<button class="btn btn-primary" style="padding: 2px 7px; font-size: 10px;" onclick="event.stopPropagation(); window.app.attachClient('${escapeHtml(c.id)}')">⚡ Connect</button>`
+      : '';
+
+    return `
+      <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
+          <span style="width: 7px; height: 7px; border-radius: 50%; background: ${dotColor}; flex-shrink: 0;"></span>
+          <div style="overflow: hidden;">
+            <div style="font-weight: 600; font-size: 12px; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(c.name)}</div>
+            <div style="font-size: 10px; color: var(--text-dim);">${escapeHtml(statusText)}</div>
+          </div>
+        </div>
+        ${actionBtn}
+      </div>
+    `;
+  }).join('');
+
+  const clientsSectionHtml = `
+    <div class="bento-card" style="margin-top: 18px; padding: 12px 16px; border-color: rgba(245, 158, 11, 0.25); background: rgba(18, 24, 38, 0.4);">
+      <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;" onclick="window.app.toggleClientsCollapse()">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 13.5px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
+            <span>⚡ 1-Click AI Client Integrations</span>
+          </span>
+          ${clientsHeaderBadge}
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 11px;" onclick="event.stopPropagation(); window.app.refreshClients()">⟳ Scan</button>
+          <span style="font-size: 12px; color: var(--text-dim);">${isCollapsed ? '▼ Show' : '▲ Hide'}</span>
+        </div>
+      </div>
+
+      ${!isCollapsed ? `
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-subtle);">
+          ${miniClientPills}
+        </div>
+      ` : ''}
+    </div>
+  `;
+
   return `
     <div class="bento-grid">
       <div class="bento-card col-3">
@@ -120,6 +192,8 @@ export function renderOverview(): string {
         <div class="stat-sub">${warmCount > 0 ? 'Persistent worker task channels' : 'No active upstream servers'}</div>
       </div>
     </div>
+
+    ${clientsSectionHtml}
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin: 24px 0 12px;">
       <div style="font-size: 15px; font-weight: 700; color: var(--text-main);">Connected Upstream Servers</div>

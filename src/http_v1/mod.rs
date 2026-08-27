@@ -33,10 +33,10 @@ pub use catalog::{
     handle_search_capabilities,
 };
 pub use config_api::{
-    handle_attach_client, handle_delete_profile, handle_delete_server, handle_detach_client,
-    handle_get_config, handle_get_ecosystem_sources, handle_import_config, handle_list_clients,
-    handle_reload_config, handle_update_alias, handle_update_policy, handle_upsert_profile,
-    handle_upsert_server,
+    handle_attach_client, handle_delete_profile, handle_delete_secret, handle_delete_server,
+    handle_detach_client, handle_get_config, handle_get_ecosystem_sources, handle_import_config,
+    handle_list_clients, handle_list_secrets, handle_reload_config, handle_update_alias,
+    handle_update_policy, handle_upsert_profile, handle_upsert_secret, handle_upsert_server,
 };
 pub use execute::{
     handle_batch_call_capabilities, handle_call_capability, handle_cancel_operation,

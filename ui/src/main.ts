@@ -9,6 +9,7 @@ import { renderAudit } from './components/audit';
 import { renderPolicy } from './components/policy';
 import { renderAliases } from './components/aliases';
 import { renderProfiles } from './components/profiles';
+import { renderSecrets } from './components/secrets';
 import { SERVER_TEMPLATES, ServerTemplate } from './templates';
 
 class WarmplaneApp {
@@ -37,7 +38,7 @@ class WarmplaneApp {
       const state = store.getState();
       const filters = state.auditFilters;
       const prof = state.activeProfile || undefined;
-      const [configRes, capsRes, resRes, promptsRes, eventsRes, apprRes, tasksRes, auditEventsRes, auditStatsRes, clientsRes] = await Promise.all([
+      const [configRes, capsRes, resRes, promptsRes, eventsRes, apprRes, tasksRes, auditEventsRes, auditStatsRes, clientsRes, secretsRes] = await Promise.all([
         api.getConfig(),
         api.listCapabilities(prof),
         api.listResources(prof),
@@ -54,11 +55,16 @@ class WarmplaneApp {
           offset: filters.offset,
         }),
         api.getAuditStats(),
-        api.getClients().catch(() => ({ ok: false, clients: [] }))
+        api.getClients().catch(() => ({ ok: false, clients: [] })),
+        api.getSecrets().catch(() => ({ ok: false, secrets: [], keychain_service: 'warmplane' })),
       ]);
 
       if (clientsRes && clientsRes.ok && Array.isArray(clientsRes.clients)) {
         store.setState({ clients: clientsRes.clients });
+      }
+
+      if (secretsRes && secretsRes.ok && Array.isArray(secretsRes.secrets)) {
+        store.setState({ secrets: secretsRes.secrets });
       }
 
       if (configRes.ok) {
@@ -280,7 +286,7 @@ class WarmplaneApp {
     }
   }
 
-  switchTab(tab: 'overview' | 'servers' | 'playground' | 'tasks' | 'approvals' | 'audit' | 'policy' | 'aliases' | 'profiles') {
+  switchTab(tab: 'overview' | 'servers' | 'playground' | 'tasks' | 'approvals' | 'audit' | 'policy' | 'secrets' | 'aliases' | 'profiles') {
     store.setState({ activeTab: tab });
     this.refreshData();
   }
@@ -320,6 +326,7 @@ class WarmplaneApp {
       approvals: 'SEP-2663 Tasks & HITL Review',
       audit: 'WORM Audit & Compliance Ledger',
       policy: 'Security Governance & Redaction',
+      secrets: 'Native OS Keychain & Secrets Vault',
       aliases: 'Facade & Alias Studio',
       profiles: 'Server Constellation Profiles'
     };
@@ -348,12 +355,95 @@ class WarmplaneApp {
       case 'policy':
         mainEl.innerHTML = renderPolicy();
         break;
+      case 'secrets':
+        mainEl.innerHTML = renderSecrets();
+        break;
       case 'aliases':
         mainEl.innerHTML = renderAliases();
         break;
       case 'profiles':
         mainEl.innerHTML = renderProfiles();
         break;
+    }
+  }
+
+  toggleClientsCollapse() {
+    const current = store.getState().clientsCollapsed;
+    store.setState({ clientsCollapsed: !current });
+    this.render();
+  }
+
+  async saveNewVaultSecret() {
+    const keyEl = document.getElementById('vault-new-key') as HTMLInputElement;
+    const valEl = document.getElementById('vault-new-val') as HTMLInputElement;
+    const srvEl = document.getElementById('vault-new-service') as HTMLInputElement;
+
+    const key = keyEl?.value.trim();
+    const val = valEl?.value.trim();
+    const service = srvEl?.value.trim() || 'warmplane';
+
+    if (!key || !val) {
+      alert('Key and secret value are required');
+      return;
+    }
+
+    try {
+      const res = await api.saveSecret(key, val, service);
+      if (res.ok) {
+        alert(`Secret '${key}' saved securely into OS Keychain!\nReference: ${res.uri}`);
+        if (keyEl) keyEl.value = '';
+        if (valEl) valEl.value = '';
+        await this.refreshData();
+      } else {
+        alert(`Failed to save secret: ${res.error}`);
+      }
+    } catch (e: any) {
+      alert(`Error saving secret: ${e.message}`);
+    }
+  }
+
+  async deleteVaultSecret(key: string) {
+    if (!confirm(`Are you sure you want to remove secret '${key}' from OS Keychain?`)) return;
+    try {
+      const res = await api.deleteSecret(key);
+      if (res.ok) {
+        await this.refreshData();
+      } else {
+        alert(`Failed to delete secret: ${res.error}`);
+      }
+    } catch (e: any) {
+      alert(`Error deleting secret: ${e.message}`);
+    }
+  }
+
+  async quickVaultEnv(serverName: string, envKey: string) {
+    const secretVal = prompt(`Enter secret value to store in OS Keychain for ${serverName}.${envKey}:`);
+    if (!secretVal) return;
+
+    try {
+      const saveRes = await api.saveSecret(envKey, secretVal, 'warmplane');
+      if (!saveRes.ok) {
+        alert(`Failed to save to Keychain: ${saveRes.error}`);
+        return;
+      }
+
+      // Update server config to use keychain URI
+      const state = store.getState();
+      const servers = state.config.mcpServers || {};
+      const srv = servers[serverName];
+      if (srv) {
+        const updatedEnv = { ...(srv.env || {}), [envKey]: `keychain://warmplane/${envKey}` };
+        const updatedSrv = { ...srv, env: updatedEnv };
+        const upsertRes = await api.upsertServer(serverName, updatedSrv);
+        if (upsertRes.ok) {
+          await this.refreshData();
+          alert(`Successfully migrated ${serverName}.${envKey} to OS Keychain!`);
+        } else {
+          alert(`Failed to update server config: ${upsertRes.error}`);
+        }
+      }
+    } catch (e: any) {
+      alert(`Error during migration: ${e.message}`);
     }
   }
 

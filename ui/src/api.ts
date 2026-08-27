@@ -141,6 +141,15 @@ export interface ClientAppStatus {
   other_servers_count: number;
 }
 
+export interface SecretItem {
+  server: string;
+  key: string;
+  uri: string;
+  is_vault: boolean;
+  backend: string;
+  display: string;
+}
+
 export interface TaskItem {
   taskId: string;
   status: 'working' | 'input_required' | 'completed' | 'cancelled' | 'failed' | string;
@@ -684,6 +693,27 @@ export class WarmplaneClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: url || undefined, format: format || undefined }),
+    });
+    return res.json();
+  }
+
+  async getSecrets(): Promise<{ ok: boolean; secrets: SecretItem[]; keychain_service: string; error?: string }> {
+    const res = await fetch(`${this.baseUrl}/v1/secrets`);
+    return res.json();
+  }
+
+  async saveSecret(key: string, value: string, service?: string): Promise<{ ok: boolean; uri?: string; message?: string; error?: string }> {
+    const res = await fetch(`${this.baseUrl}/v1/secrets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, value, service }),
+    });
+    return res.json();
+  }
+
+  async deleteSecret(key: string): Promise<{ ok: boolean; message?: string; error?: string }> {
+    const res = await fetch(`${this.baseUrl}/v1/secrets/${encodeURIComponent(key)}`, {
+      method: 'DELETE',
     });
     return res.json();
   }

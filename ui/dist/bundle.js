@@ -1,4 +1,4 @@
-class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatuses:{},circuitBreakers:[],clients:[],capabilities:[],resources:[],prompts:[],catalogEvents:[],tasks:[],selectedTaskId:null,taskFilterStatus:"all",approvals:[],auditEvents:[],auditTotal:0,auditFilters:{search:"",status:"all",eventType:"all",serverId:"all",limit:25,offset:0},auditSelectedEvent:null,auditStats:null,auditVerification:null,selectedCapabilityId:null,selectedResourceId:null,selectedPromptId:null,playgroundMode:"tools",playgroundArgs:{},isExecuting:!1,playgroundAsyncTask:!1,activeRequestId:null,isBatchModalOpen:!1,batchSteps:[{id:"step_1",capability_id:"",argsJson:"{}",continue_on_error:!1},{id:"step_2",capability_id:"",argsJson:"{}",continue_on_error:!0}],activeTab:"overview",activeProfile:null,eventLogs:[],executionResult:null,resourceReadResult:null,promptGetResult:null,metrics:{totalCatalogRequests:0,totalEtagHits:0,totalToolCalls:0,totalToolDurationUs:0}};listeners=[];getState(){return this.state}setState(e){this.state={...this.state,...e},this.listeners.forEach((t)=>t(this.state))}subscribe(e){return this.listeners.push(e),()=>{this.listeners=this.listeners.filter((t)=>t!==e)}}addEventLog(e,t,r,n){let s=[{time:new Date().toLocaleTimeString(),method:e,target:t,status:r,latency:n},...this.state.eventLogs].slice(0,50);this.setState({eventLogs:s})}}var l=new F;class D{baseUrl;constructor(e=""){this.baseUrl=e}async getConfig(){return(await fetch(`${this.baseUrl}/v1/config`)).json()}async listCapabilities(e){let t={};if(e)t["X-Warmplane-Profile"]=e;return(await fetch(`${this.baseUrl}/v1/capabilities`,{headers:t})).json()}async listResources(e){let t={};if(e)t["X-Warmplane-Profile"]=e;return(await fetch(`${this.baseUrl}/v1/resources`,{headers:t})).json()}async readResource(e,t){let r=performance.now(),n={"Content-Type":"application/json"};if(t)n["X-Warmplane-Profile"]=t;let a=await fetch(`${this.baseUrl}/v1/resources/read`,{method:"POST",headers:n,body:JSON.stringify(e)}),s=performance.now()-r,o=await a.json();return{status:a.status,durationMs:s,data:o}}async listPrompts(e){let t={};if(e)t["X-Warmplane-Profile"]=e;return(await fetch(`${this.baseUrl}/v1/prompts`,{headers:t})).json()}async getPrompt(e,t){let r=performance.now(),n={"Content-Type":"application/json"};if(t)n["X-Warmplane-Profile"]=t;let a=await fetch(`${this.baseUrl}/v1/prompts/get`,{method:"POST",headers:n,body:JSON.stringify(e)}),s=performance.now()-r,o=await a.json();return{status:a.status,durationMs:s,data:o}}async getCatalogEvents(e){let t=e?`?after=${encodeURIComponent(e)}`:"";return(await fetch(`${this.baseUrl}/v1/catalog/events${t}`)).json()}async callCapability(e,t){let r=performance.now(),n={"Content-Type":"application/json"};if(t)n["X-Warmplane-Profile"]=t;let a=await fetch(`${this.baseUrl}/v1/tools/call`,{method:"POST",headers:n,body:JSON.stringify(e)}),s=performance.now()-r,o=await a.json();return{status:a.status,durationMs:s,data:o}}async batchCallCapabilities(e,t){let r=performance.now(),n={"Content-Type":"application/json"};if(t)n["X-Warmplane-Profile"]=t;let a=await fetch(`${this.baseUrl}/v1/tools/batch_call`,{method:"POST",headers:n,body:JSON.stringify({steps:e})}),s=performance.now()-r,o=await a.json();return{status:a.status,durationMs:s,data:o}}async cancelOperation(e){return(await fetch(`${this.baseUrl}/v1/operations/${encodeURIComponent(e)}/cancel`,{method:"POST"})).json()}async completeArgument(e){return(await fetch(`${this.baseUrl}/v1/completion/complete`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(e)})).json()}async upsertServer(e,t){return(await fetch(`${this.baseUrl}/v1/config/servers`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:e,server:t})})).json()}async deleteServer(e){return(await fetch(`${this.baseUrl}/v1/config/servers/${encodeURIComponent(e)}`,{method:"DELETE"})).json()}async upsertProfile(e,t,r){return(await fetch(`${this.baseUrl}/v1/config/profiles`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:e,servers:t,description:r})})).json()}async deleteProfile(e){return(await fetch(`${this.baseUrl}/v1/config/profiles/${encodeURIComponent(e)}`,{method:"DELETE"})).json()}async getEcosystemSources(){return(await fetch(`${this.baseUrl}/v1/config/ecosystem`)).json()}async importConfig(e,t=!1){return(await fetch(`${this.baseUrl}/v1/config/import`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source_path:e,overwrite:t})})).json()}async savePolicy(e){let t={allow:e.allow||[],deny:e.deny||[],redactKeys:e.redact_keys||e.redactKeys||[],requireApproval:e.require_approval||e.requireApproval||[],approvalTimeoutSecs:e.approvalTimeoutSecs||e.approval_timeout_secs||300,webhook:e.webhook};return(await fetch(`${this.baseUrl}/v1/config/policy`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(t)})).json()}async listTasks(){return(await fetch(`${this.baseUrl}/v1/tasks`)).json()}async getTask(e){return(await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(e)}`)).json()}async updateTask(e,t){return(await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(e)}/update`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({inputResponses:t})})).json()}async cancelTask(e,t){return(await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(e)}/cancel`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({reason:t})})).json()}async listApprovals(){return(await fetch(`${this.baseUrl}/v1/approvals`)).json()}async approveTicket(e,t,r){return(await fetch(`${this.baseUrl}/v1/approvals/${encodeURIComponent(e)}/approve`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({operator:t,modified_args:r})})).json()}async rejectTicket(e,t,r){return(await fetch(`${this.baseUrl}/v1/approvals/${encodeURIComponent(e)}/reject`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({operator:t,reason:r})})).json()}async updateAlias(e,t,r){return(await fetch(`${this.baseUrl}/v1/config/alias`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({kind:e,alias:t,target:r})})).json()}async reloadConfig(){return(await fetch(`${this.baseUrl}/v1/config/reload`,{method:"POST"})).json()}async listAuditEvents(e){let t=new URLSearchParams;if(e?.actor_id)t.set("actor_id",e.actor_id);if(e?.server_id&&e.server_id!=="all")t.set("server_id",e.server_id);if(e?.capability_id)t.set("capability_id",e.capability_id);if(e?.event_type&&e.event_type!=="all")t.set("event_type",e.event_type);if(e?.status&&e.status!=="all")t.set("status",e.status);if(e?.trace_id)t.set("trace_id",e.trace_id);if(e?.request_id)t.set("request_id",e.request_id);if(e?.search)t.set("search",e.search);if(e?.limit)t.set("limit",String(e.limit));if(e?.offset!==void 0)t.set("offset",String(e.offset));let r=t.toString();return(await fetch(`${this.baseUrl}/v1/audit/events${r?`?${r}`:""}`)).json()}getAuditExportUrl(e,t="csv"){let r=new URLSearchParams;if(r.set("format",t),e?.actor_id)r.set("actor_id",e.actor_id);if(e?.server_id&&e.server_id!=="all")r.set("server_id",e.server_id);if(e?.capability_id)r.set("capability_id",e.capability_id);if(e?.event_type&&e.event_type!=="all")r.set("event_type",e.event_type);if(e?.status&&e.status!=="all")r.set("status",e.status);if(e?.trace_id)r.set("trace_id",e.trace_id);if(e?.request_id)r.set("request_id",e.request_id);if(e?.search)r.set("search",e.search);return`${this.baseUrl}/v1/audit/export?${r.toString()}`}async verifyAuditChain(){return(await fetch(`${this.baseUrl}/v1/audit/verify`)).json()}async getAuditStats(){return(await fetch(`${this.baseUrl}/v1/audit/stats`)).json()}async getClients(){return(await fetch(`${this.baseUrl}/v1/clients`)).json()}async attachClient(e,t){return(await fetch(`${this.baseUrl}/v1/clients/${encodeURIComponent(e)}/attach`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({profile:t||void 0})})).json()}async detachClient(e){return(await fetch(`${this.baseUrl}/v1/clients/${encodeURIComponent(e)}/detach`,{method:"POST",headers:{"Content-Type":"application/json"}})).json()}async testWebhook(e,t){return(await fetch(`${this.baseUrl}/v1/webhooks/test`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:e||void 0,format:t||void 0})})).json()}}var v=new D;function U(){let e=l.getState(),t=e.config.mcpServers||{},r=Object.keys(t),n=r.length,a="";if(r.length===0)a=`
+class Q{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatuses:{},circuitBreakers:[],clients:[],secrets:[],clientsCollapsed:!1,capabilities:[],resources:[],prompts:[],catalogEvents:[],tasks:[],selectedTaskId:null,taskFilterStatus:"all",approvals:[],auditEvents:[],auditTotal:0,auditFilters:{search:"",status:"all",eventType:"all",serverId:"all",limit:25,offset:0},auditSelectedEvent:null,auditStats:null,auditVerification:null,selectedCapabilityId:null,selectedResourceId:null,selectedPromptId:null,playgroundMode:"tools",playgroundArgs:{},isExecuting:!1,playgroundAsyncTask:!1,activeRequestId:null,isBatchModalOpen:!1,batchSteps:[{id:"step_1",capability_id:"",argsJson:"{}",continue_on_error:!1},{id:"step_2",capability_id:"",argsJson:"{}",continue_on_error:!0}],activeTab:"overview",activeProfile:null,eventLogs:[],executionResult:null,resourceReadResult:null,promptGetResult:null,metrics:{totalCatalogRequests:0,totalEtagHits:0,totalToolCalls:0,totalToolDurationUs:0}};listeners=[];getState(){return this.state}setState(e){this.state={...this.state,...e},this.listeners.forEach((t)=>t(this.state))}subscribe(e){return this.listeners.push(e),()=>{this.listeners=this.listeners.filter((t)=>t!==e)}}addEventLog(e,t,r,n){let a=[{time:new Date().toLocaleTimeString(),method:e,target:t,status:r,latency:n},...this.state.eventLogs].slice(0,50);this.setState({eventLogs:a})}}var i=new Q;class Y{baseUrl;constructor(e=""){this.baseUrl=e}async getConfig(){return(await fetch(`${this.baseUrl}/v1/config`)).json()}async listCapabilities(e){let t={};if(e)t["X-Warmplane-Profile"]=e;return(await fetch(`${this.baseUrl}/v1/capabilities`,{headers:t})).json()}async listResources(e){let t={};if(e)t["X-Warmplane-Profile"]=e;return(await fetch(`${this.baseUrl}/v1/resources`,{headers:t})).json()}async readResource(e,t){let r=performance.now(),n={"Content-Type":"application/json"};if(t)n["X-Warmplane-Profile"]=t;let s=await fetch(`${this.baseUrl}/v1/resources/read`,{method:"POST",headers:n,body:JSON.stringify(e)}),a=performance.now()-r,o=await s.json();return{status:s.status,durationMs:a,data:o}}async listPrompts(e){let t={};if(e)t["X-Warmplane-Profile"]=e;return(await fetch(`${this.baseUrl}/v1/prompts`,{headers:t})).json()}async getPrompt(e,t){let r=performance.now(),n={"Content-Type":"application/json"};if(t)n["X-Warmplane-Profile"]=t;let s=await fetch(`${this.baseUrl}/v1/prompts/get`,{method:"POST",headers:n,body:JSON.stringify(e)}),a=performance.now()-r,o=await s.json();return{status:s.status,durationMs:a,data:o}}async getCatalogEvents(e){let t=e?`?after=${encodeURIComponent(e)}`:"";return(await fetch(`${this.baseUrl}/v1/catalog/events${t}`)).json()}async callCapability(e,t){let r=performance.now(),n={"Content-Type":"application/json"};if(t)n["X-Warmplane-Profile"]=t;let s=await fetch(`${this.baseUrl}/v1/tools/call`,{method:"POST",headers:n,body:JSON.stringify(e)}),a=performance.now()-r,o=await s.json();return{status:s.status,durationMs:a,data:o}}async batchCallCapabilities(e,t){let r=performance.now(),n={"Content-Type":"application/json"};if(t)n["X-Warmplane-Profile"]=t;let s=await fetch(`${this.baseUrl}/v1/tools/batch_call`,{method:"POST",headers:n,body:JSON.stringify({steps:e})}),a=performance.now()-r,o=await s.json();return{status:s.status,durationMs:a,data:o}}async cancelOperation(e){return(await fetch(`${this.baseUrl}/v1/operations/${encodeURIComponent(e)}/cancel`,{method:"POST"})).json()}async completeArgument(e){return(await fetch(`${this.baseUrl}/v1/completion/complete`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(e)})).json()}async upsertServer(e,t){return(await fetch(`${this.baseUrl}/v1/config/servers`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:e,server:t})})).json()}async deleteServer(e){return(await fetch(`${this.baseUrl}/v1/config/servers/${encodeURIComponent(e)}`,{method:"DELETE"})).json()}async upsertProfile(e,t,r){return(await fetch(`${this.baseUrl}/v1/config/profiles`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:e,servers:t,description:r})})).json()}async deleteProfile(e){return(await fetch(`${this.baseUrl}/v1/config/profiles/${encodeURIComponent(e)}`,{method:"DELETE"})).json()}async getEcosystemSources(){return(await fetch(`${this.baseUrl}/v1/config/ecosystem`)).json()}async importConfig(e,t=!1){return(await fetch(`${this.baseUrl}/v1/config/import`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source_path:e,overwrite:t})})).json()}async savePolicy(e){let t={allow:e.allow||[],deny:e.deny||[],redactKeys:e.redact_keys||e.redactKeys||[],requireApproval:e.require_approval||e.requireApproval||[],approvalTimeoutSecs:e.approvalTimeoutSecs||e.approval_timeout_secs||300,webhook:e.webhook};return(await fetch(`${this.baseUrl}/v1/config/policy`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(t)})).json()}async listTasks(){return(await fetch(`${this.baseUrl}/v1/tasks`)).json()}async getTask(e){return(await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(e)}`)).json()}async updateTask(e,t){return(await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(e)}/update`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({inputResponses:t})})).json()}async cancelTask(e,t){return(await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(e)}/cancel`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({reason:t})})).json()}async listApprovals(){return(await fetch(`${this.baseUrl}/v1/approvals`)).json()}async approveTicket(e,t,r){return(await fetch(`${this.baseUrl}/v1/approvals/${encodeURIComponent(e)}/approve`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({operator:t,modified_args:r})})).json()}async rejectTicket(e,t,r){return(await fetch(`${this.baseUrl}/v1/approvals/${encodeURIComponent(e)}/reject`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({operator:t,reason:r})})).json()}async updateAlias(e,t,r){return(await fetch(`${this.baseUrl}/v1/config/alias`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({kind:e,alias:t,target:r})})).json()}async reloadConfig(){return(await fetch(`${this.baseUrl}/v1/config/reload`,{method:"POST"})).json()}async listAuditEvents(e){let t=new URLSearchParams;if(e?.actor_id)t.set("actor_id",e.actor_id);if(e?.server_id&&e.server_id!=="all")t.set("server_id",e.server_id);if(e?.capability_id)t.set("capability_id",e.capability_id);if(e?.event_type&&e.event_type!=="all")t.set("event_type",e.event_type);if(e?.status&&e.status!=="all")t.set("status",e.status);if(e?.trace_id)t.set("trace_id",e.trace_id);if(e?.request_id)t.set("request_id",e.request_id);if(e?.search)t.set("search",e.search);if(e?.limit)t.set("limit",String(e.limit));if(e?.offset!==void 0)t.set("offset",String(e.offset));let r=t.toString();return(await fetch(`${this.baseUrl}/v1/audit/events${r?`?${r}`:""}`)).json()}getAuditExportUrl(e,t="csv"){let r=new URLSearchParams;if(r.set("format",t),e?.actor_id)r.set("actor_id",e.actor_id);if(e?.server_id&&e.server_id!=="all")r.set("server_id",e.server_id);if(e?.capability_id)r.set("capability_id",e.capability_id);if(e?.event_type&&e.event_type!=="all")r.set("event_type",e.event_type);if(e?.status&&e.status!=="all")r.set("status",e.status);if(e?.trace_id)r.set("trace_id",e.trace_id);if(e?.request_id)r.set("request_id",e.request_id);if(e?.search)r.set("search",e.search);return`${this.baseUrl}/v1/audit/export?${r.toString()}`}async verifyAuditChain(){return(await fetch(`${this.baseUrl}/v1/audit/verify`)).json()}async getAuditStats(){return(await fetch(`${this.baseUrl}/v1/audit/stats`)).json()}async getClients(){return(await fetch(`${this.baseUrl}/v1/clients`)).json()}async attachClient(e,t){return(await fetch(`${this.baseUrl}/v1/clients/${encodeURIComponent(e)}/attach`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({profile:t||void 0})})).json()}async detachClient(e){return(await fetch(`${this.baseUrl}/v1/clients/${encodeURIComponent(e)}/detach`,{method:"POST",headers:{"Content-Type":"application/json"}})).json()}async testWebhook(e,t){return(await fetch(`${this.baseUrl}/v1/webhooks/test`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:e||void 0,format:t||void 0})})).json()}async getSecrets(){return(await fetch(`${this.baseUrl}/v1/secrets`)).json()}async saveSecret(e,t,r){return(await fetch(`${this.baseUrl}/v1/secrets`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:e,value:t,service:r})})).json()}async deleteSecret(e){return(await fetch(`${this.baseUrl}/v1/secrets/${encodeURIComponent(e)}`,{method:"DELETE"})).json()}}var m=new Y;function X(){let e=i.getState(),t=e.config.mcpServers||{},r=Object.keys(t),n=r.length,s="";if(r.length===0)s=`
       <div style="grid-column: 1 / -1; padding: 32px; text-align: center; color: var(--text-dim); background: var(--surface-card); border-radius: var(--radius-md); border: 1px dashed var(--border);">
         <div style="font-size: 14px; color: var(--text-main); font-weight: 600; margin-bottom: 6px;">No Upstream MCP Servers Connected</div>
         <div style="font-size: 12px; margin-bottom: 16px;">Initialize connections by adding a server or syncing existing IDE configurations.</div>
@@ -8,24 +8,24 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
           <button class="btn btn-ghost" onclick="window.app.openImportModal()">Sync from IDEs</button>
         </div>
       </div>
-    `;else a=r.map((x)=>{let P=t[x],b=P.command?"stdio":"http / sse",L=P.command?`${P.command} ${(P.args||[]).join(" ")}`:P.url,C=e.serverStatuses[x]||{status:"connected",protocol_version:"2026-07-28"},H=C.status==="degraded",q=C.status==="error"||C.status==="disconnected",O=H?"var(--amber-400)":q?"var(--red-400)":"var(--green-400)";return`
+    `;else s=r.map((x)=>{let R=t[x],q=R.command?"stdio":"http / sse",D=R.command?`${R.command} ${(R.args||[]).join(" ")}`:R.url,z=e.serverStatuses[x]||{status:"connected",protocol_version:"2026-07-28"},N=z.status==="degraded",V=z.status==="error"||z.status==="disconnected",G=N?"var(--amber-400)":V?"var(--red-400)":"var(--green-400)";return`
         <div class="bento-card col-4" style="background: var(--surface); border: 1px solid var(--border);">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
             <span style="font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
-              <span style="width: 8px; height: 8px; border-radius: 50%; background: ${O}; display: inline-block;"></span>
-              ${z(x)}
+              <span style="width: 8px; height: 8px; border-radius: 50%; background: ${G}; display: inline-block;"></span>
+              ${P(x)}
             </span>
-            <span class="brand-badge">${b}</span>
+            <span class="brand-badge">${q}</span>
           </div>
-          <div style="font-family: var(--ff-mono); font-size: 11.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 12px;" title="${z(L||"")}">
-            ${z(L||"")}
+          <div style="font-family: var(--ff-mono); font-size: 11.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 12px;" title="${P(D||"")}">
+            ${P(D||"")}
           </div>
           <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); border-top: 1px solid var(--border); padding-top: 8px;">
-            <span>Status: <strong style="color: ${O};">${z(C.status)}</strong></span>
-            <span>Protocol: ${C.protocol_version}</span>
+            <span>Status: <strong style="color: ${G};">${P(z.status)}</strong></span>
+            <span>Protocol: ${z.protocol_version}</span>
           </div>
         </div>
-      `}).join("");let s=e.eventLogs.length===0?`
+      `}).join("");let a=e.eventLogs.length===0?`
     <div class="feed-row" style="grid-template-columns: 80px 100px 1fr 100px 80px;">
       <span style="color: var(--text-dim);">ready</span>
       <span style="color: var(--cyan-400); font-weight: 600;">SSE</span>
@@ -35,13 +35,45 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
     </div>
   `:e.eventLogs.map((x)=>`
     <div class="feed-row" style="grid-template-columns: 80px 100px 1fr 100px 80px;">
-      <span style="color: var(--text-dim);">${z(x.time)}</span>
-      <span style="color: var(--cyan-400); font-weight: 600;">${z(x.method)}</span>
-      <span style="color: var(--text-main); font-family: var(--ff-mono);">${z(x.target)}</span>
-      <span style="color: var(--green-400);">${z(x.status)}</span>
-      <span style="color: var(--amber-300); text-align: right;">${z(x.latency)}</span>
+      <span style="color: var(--text-dim);">${P(x.time)}</span>
+      <span style="color: var(--cyan-400); font-weight: 600;">${P(x.method)}</span>
+      <span style="color: var(--text-main); font-family: var(--ff-mono);">${P(x.target)}</span>
+      <span style="color: var(--green-400);">${P(x.status)}</span>
+      <span style="color: var(--amber-300); text-align: right;">${P(x.latency)}</span>
     </div>
-  `).join(""),o=e.metrics,i=o.totalCatalogRequests,d=o.totalEtagHits,p=i>0?`${(d/i*100).toFixed(1)}%`:"0.0%",g=i>0?`${d} of ${i} requests served via HTTP 304`:"Waiting for client requests",u=o.totalToolCalls,m=u>0?`${(o.totalToolDurationUs/u/1000).toFixed(1)}ms`:"0.0ms",c=u>0?`${u} tool executions processed`:"Local worker task queues warm",h=Object.keys(e.config.capabilityAliases||{}).length+Object.keys(e.config.resourceAliases||{}).length+Object.keys(e.config.promptAliases||{}).length,k=h>0?`${h*18}B / call`:"0B",E=h>0?`${h} active facade aliases pruning prompt size`:"Configure aliases in Studio to reduce prompt size",T=e.tasks||[],A=T.filter((x)=>x.status==="input_required").length,I=T.filter((x)=>x.status==="working"||x.status==="input_required").length;return`
+  `).join(""),o=e.metrics,l=o.totalCatalogRequests,d=o.totalEtagHits,p=l>0?`${(d/l*100).toFixed(1)}%`:"0.0%",g=l>0?`${d} of ${l} requests served via HTTP 304`:"Waiting for client requests",u=o.totalToolCalls,v=u>0?`${(o.totalToolDurationUs/u/1000).toFixed(1)}ms`:"0.0ms",c=u>0?`${u} tool executions processed`:"Local worker task queues warm",h=Object.keys(e.config.capabilityAliases||{}).length+Object.keys(e.config.resourceAliases||{}).length+Object.keys(e.config.promptAliases||{}).length,k=h>0?`${h*18}B / call`:"0B",E=h>0?`${h} active facade aliases pruning prompt size`:"Configure aliases in Studio to reduce prompt size",T=e.tasks||[],I=T.filter((x)=>x.status==="input_required").length,C=T.filter((x)=>x.status==="working"||x.status==="input_required").length,A=e.clients||[],M=A.filter((x)=>x.is_attached).length,b=A.filter((x)=>x.config_exists&&!x.is_attached).length,j=e.clientsCollapsed,O=M>0?`<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ ${M} Connected</span>`:b>0?`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.1);">○ ${b} Ready to Connect</span>`:'<span class="brand-badge" style="color: var(--text-dim);">No Apps Detected</span>',J=A.map((x)=>{let{is_attached:R,config_exists:q,app_installed:D}=x,z="rgba(255, 255, 255, 0.2)",N="Not Found";if(R)z="var(--green-400)",N=x.attached_profile?`Connected (${x.attached_profile})`:"Connected";else if(q)z="var(--amber-300)",N="Ready to Attach";else if(D)z="var(--cyan-400)",N="Installed";let V=R?`<button class="btn btn-ghost" style="padding: 2px 7px; font-size: 10px; color: var(--red-400);" onclick="event.stopPropagation(); window.app.detachClient('${P(x.id)}')">Detach</button>`:q||D?`<button class="btn btn-primary" style="padding: 2px 7px; font-size: 10px;" onclick="event.stopPropagation(); window.app.attachClient('${P(x.id)}')">⚡ Connect</button>`:"";return`
+      <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
+          <span style="width: 7px; height: 7px; border-radius: 50%; background: ${z}; flex-shrink: 0;"></span>
+          <div style="overflow: hidden;">
+            <div style="font-weight: 600; font-size: 12px; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${P(x.name)}</div>
+            <div style="font-size: 10px; color: var(--text-dim);">${P(N)}</div>
+          </div>
+        </div>
+        ${V}
+      </div>
+    `}).join(""),K=`
+    <div class="bento-card" style="margin-top: 18px; padding: 12px 16px; border-color: rgba(245, 158, 11, 0.25); background: rgba(18, 24, 38, 0.4);">
+      <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;" onclick="window.app.toggleClientsCollapse()">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-size: 13.5px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
+            <span>⚡ 1-Click AI Client Integrations</span>
+          </span>
+          ${O}
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 11px;" onclick="event.stopPropagation(); window.app.refreshClients()">⟳ Scan</button>
+          <span style="font-size: 12px; color: var(--text-dim);">${j?"▼ Show":"▲ Hide"}</span>
+        </div>
+      </div>
+
+      ${!j?`
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-subtle);">
+          ${J}
+        </div>
+      `:""}
+    </div>
+  `;return`
     <div class="bento-grid">
       <div class="bento-card col-3">
         <div class="stat-label">Token Savings Rate</div>
@@ -55,8 +87,8 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
       </div>
       <div class="bento-card col-3">
         <div class="stat-label">Tasks &amp; HITL State</div>
-        <div class="stat-value" style="color: ${A>0?"var(--amber-400)":"var(--green-400)"};">${A>0?`${A} Action Req`:`${I} Active`}</div>
-        <div class="stat-sub">${A>0?"Awaiting Human-in-the-Loop decision":`${T.length} total registered tasks`}</div>
+        <div class="stat-value" style="color: ${I>0?"var(--amber-400)":"var(--green-400)"};">${I>0?`${I} Action Req`:`${C} Active`}</div>
+        <div class="stat-sub">${I>0?"Awaiting Human-in-the-Loop decision":`${T.length} total registered tasks`}</div>
       </div>
       <div class="bento-card col-3">
         <div class="stat-label">Connected Upstreams</div>
@@ -65,13 +97,15 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
       </div>
     </div>
 
+    ${K}
+
     <div style="display: flex; justify-content: space-between; align-items: center; margin: 24px 0 12px;">
       <div style="font-size: 15px; font-weight: 700; color: var(--text-main);">Connected Upstream Servers</div>
       <button class="btn btn-ghost" onclick="window.app.switchTab('servers')">Manage All (${n}) →</button>
     </div>
 
     <div class="bento-grid" style="margin-bottom: 24px;">
-      ${a}
+      ${s}
     </div>
 
     <div style="font-size: 15px; font-weight: 700; color: var(--text-main); margin-bottom: 12px;">
@@ -86,10 +120,10 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         <span style="text-align: right;">LATENCY</span>
       </div>
       <div id="overview-event-rows">
-        ${s}
+        ${a}
       </div>
     </div>
-  `}function z(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function J(){let e=l.getState(),t=e.config.mcpServers||{},r=Object.keys(t),n="";if(r.length===0)n=`
+  `}function P(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function Z(){let e=i.getState(),t=e.config.mcpServers||{},r=Object.keys(t),n="";if(r.length===0)n=`
       <div style="padding: 40px; text-align: center; color: var(--text-dim); background: var(--surface-card); border-radius: var(--radius-md); border: 1px dashed var(--border);">
         <div style="font-size: 15px; color: var(--text-main); font-weight: 600; margin-bottom: 8px;">No Servers Configured in ${_(e.configPath)}</div>
         <p style="font-size: 12px; margin-bottom: 20px; max-width: 480px; margin-left: auto; margin-right: auto;">
@@ -101,32 +135,32 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
           <button class="btn btn-ghost" onclick="window.app.openImportModal()">Sync from IDEs</button>
         </div>
       </div>
-    `;else n=r.map((a)=>{let s=t[a],o=s.command?"stdio":"http / sse",i=s.command?`${s.command} ${(s.args||[]).join(" ")}`:s.url,d=e.serverStatuses[a]||{status:"connected",protocol_version:"2026-07-28"},p=s.env?Object.entries(s.env).map(([T,A])=>{if(A.startsWith("keychain://"))return`<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">\uD83D\uDD12 ${_(T)} (Keychain)</span>`;if(A.startsWith("op://"))return`<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">\uD83D\uDD12 ${_(T)} (1Password)</span>`;if(A.startsWith("env://"))return`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3);">\uD83D\uDD12 ${_(T)} (Env)</span>`;return`<span style="color: var(--text-dim);">${_(T)}=***</span>`}).join(" "):"None",g=(e.circuitBreakers||[]).find((T)=>T.server_id===a),u='<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.25);">Circuit: CLOSED</span>';if(g){if(g.state==="open")u=`<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);">Circuit: OPEN (${g.consecutive_failures} failures)</span>`;else if(g.state==="half_open")u=`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.1);">Circuit: HALF-OPEN (${g.consecutive_successes} probe)</span>`}let m=s.resilience||e.config.resilience,c=m?`FT: ${m.failureThreshold||3} · Cooldown: ${(m.cooldownMs||30000)/1000}s · AutoRestart: ${m.autoRestart!==!1?"ON":"OFF"}`:"Default Resilience",h=d.status==="degraded",k=d.status==="error"||d.status==="disconnected",E=h?"var(--amber-400)":k?"var(--red-400)":"var(--green-400)";return`
+    `;else n=r.map((s)=>{let a=t[s],o=a.command?"stdio":"http / sse",l=a.command?`${a.command} ${(a.args||[]).join(" ")}`:a.url,d=e.serverStatuses[s]||{status:"connected",protocol_version:"2026-07-28"},p=a.env?Object.entries(a.env).map(([T,I])=>{if(I.startsWith("keychain://"))return`<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">\uD83D\uDD12 ${_(T)} (Keychain)</span>`;if(I.startsWith("op://"))return`<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">\uD83D\uDD12 ${_(T)} (1Password)</span>`;if(I.startsWith("env://"))return`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3);">\uD83D\uDD12 ${_(T)} (Env)</span>`;return`<span style="color: var(--text-dim);">${_(T)}=***</span>`}).join(" "):"None",g=(e.circuitBreakers||[]).find((T)=>T.server_id===s),u='<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.25);">Circuit: CLOSED</span>';if(g){if(g.state==="open")u=`<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);">Circuit: OPEN (${g.consecutive_failures} failures)</span>`;else if(g.state==="half_open")u=`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.1);">Circuit: HALF-OPEN (${g.consecutive_successes} probe)</span>`}let v=a.resilience||e.config.resilience,c=v?`FT: ${v.failureThreshold||3} · Cooldown: ${(v.cooldownMs||30000)/1000}s · AutoRestart: ${v.autoRestart!==!1?"ON":"OFF"}`:"Default Resilience",h=d.status==="degraded",k=d.status==="error"||d.status==="disconnected",E=h?"var(--amber-400)":k?"var(--red-400)":"var(--green-400)";return`
         <div class="bento-card" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
           <div>
             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
               <span style="width: 8px; height: 8px; border-radius: 50%; background: ${E}; display: inline-block;"></span>
-              <span style="font-size: 15px; font-weight: 700; color: var(--text-main);">${_(a)}</span>
+              <span style="font-size: 15px; font-weight: 700; color: var(--text-main);">${_(s)}</span>
               <span class="brand-badge">${o}</span>
               <span class="brand-badge" style="color: ${E}; border-color: rgba(245, 158, 11, 0.3);">Status: ${_(d.status)}</span>
               <span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">Protocol: ${d.protocol_version}</span>
               ${u}
             </div>
             <div style="font-family: var(--ff-mono); font-size: 12px; color: var(--text-muted); margin-top: 4px;">
-              ${s.command?"Command: ":"URL: "}<code>${_(i||"")}</code>
+              ${a.command?"Command: ":"URL: "}<code>${_(l||"")}</code>
             </div>
             <div style="display: flex; gap: 14px; font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim); margin-top: 4px; align-items: center; flex-wrap: wrap;">
               <span>\uD83D\uDEE1️ ${_(c)}</span>
-              ${s.env&&Object.keys(s.env).length>0?`<span>Env: ${p}</span>`:""}
+              ${a.env&&Object.keys(a.env).length>0?`<span>Env: ${p}</span>`:""}
             </div>
           </div>
           <div style="display: flex; gap: 8px;">
-            <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openEditServerModal('${_(a)}')">✏️ Edit</button>
-            <button class="btn btn-danger" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.deleteServer('${_(a)}')">Remove</button>
+            <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openEditServerModal('${_(s)}')">✏️ Edit</button>
+            <button class="btn btn-danger" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.deleteServer('${_(s)}')">Remove</button>
           </div>
         </div>
       `}).join("");return`
-    ${se()}
+    ${de()}
 
     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 24px; margin-bottom: 18px;">
       <div>
@@ -139,7 +173,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
     </div>
 
     ${n}
-  `}function se(){let e=l.getState(),t=e.clients||[],r=Object.keys(e.config.profiles||{});if(t.length===0)return"";return`
+  `}function de(){let e=i.getState(),t=e.clients||[],r=Object.keys(e.config.profiles||{});if(t.length===0)return"";return`
     <div class="bento-card" style="margin-bottom: 20px; padding: 16px 18px; border-color: rgba(245, 158, 11, 0.2);">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
         <div>
@@ -155,38 +189,38 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
       </div>
 
       <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px;">
-        ${t.map((a)=>{let{is_attached:s,config_exists:o,app_installed:i}=a,d='<span class="brand-badge" style="color: var(--text-dim); border-color: rgba(255, 255, 255, 0.1);">Not Found</span>';if(s){let u=a.attached_profile?` · Profile: ${a.attached_profile}`:"";d=`<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ Connected${_(u)}</span>`}else if(o)d='<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.08);">○ Ready to Connect</span>';else if(i)d='<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">○ App Installed</span>';let p=r.map((u)=>`
-      <option value="${_(u)}" ${a.attached_profile===u?"selected":""}>Profile: ${_(u)}</option>
-    `).join(""),g=s?`<button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11px; color: var(--red-400); border-color: rgba(248, 113, 113, 0.3);" onclick="window.app.detachClient('${_(a.id)}')">Disconnect</button>`:`<button class="btn btn-primary" style="padding: 4px 10px; font-size: 11px;" onclick="window.app.attachClient('${_(a.id)}')">⚡ Connect</button>`;return`
+        ${t.map((s)=>{let{is_attached:a,config_exists:o,app_installed:l}=s,d='<span class="brand-badge" style="color: var(--text-dim); border-color: rgba(255, 255, 255, 0.1);">Not Found</span>';if(a){let u=s.attached_profile?` · Profile: ${s.attached_profile}`:"";d=`<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ Connected${_(u)}</span>`}else if(o)d='<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.08);">○ Ready to Connect</span>';else if(l)d='<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">○ App Installed</span>';let p=r.map((u)=>`
+      <option value="${_(u)}" ${s.attached_profile===u?"selected":""}>Profile: ${_(u)}</option>
+    `).join(""),g=a?`<button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11px; color: var(--red-400); border-color: rgba(248, 113, 113, 0.3);" onclick="window.app.detachClient('${_(s.id)}')">Disconnect</button>`:`<button class="btn btn-primary" style="padding: 4px 10px; font-size: 11px;" onclick="window.app.attachClient('${_(s.id)}')">⚡ Connect</button>`;return`
       <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; display: flex; flex-direction: column; justify-content: space-between; gap: 8px;">
         <div style="display: flex; justify-content: space-between; align-items: flex-start;">
           <div>
             <div style="font-weight: 700; font-size: 13.5px; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
-              <span>${_(a.name)}</span>
+              <span>${_(s.name)}</span>
             </div>
-            <div style="font-size: 10.5px; color: var(--text-dim); margin-top: 2px;">${_(a.category)}</div>
+            <div style="font-size: 10.5px; color: var(--text-dim); margin-top: 2px;">${_(s.category)}</div>
           </div>
           ${d}
         </div>
         
-        <div style="font-family: var(--ff-mono); font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${_(a.config_path)}">
-          ${_(a.config_path)}
+        <div style="font-family: var(--ff-mono); font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${_(s.config_path)}">
+          ${_(s.config_path)}
         </div>
 
         <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--border-subtle);">
-          ${r.length>0&&!s?`
-            <select id="client-prof-${_(a.id)}" class="form-input" style="font-size: 10.5px; padding: 2px 6px; height: 26px; width: 130px;">
+          ${r.length>0&&!a?`
+            <select id="client-prof-${_(s.id)}" class="form-input" style="font-size: 10.5px; padding: 2px 6px; height: 26px; width: 130px;">
               <option value="">All Tools (Default)</option>
               ${p}
             </select>
-          `:`<div style="font-size: 10.5px; color: var(--text-dim);">${a.other_servers_count>0?`${a.other_servers_count} other tools`:"Single tool facade"}</div>`}
+          `:`<div style="font-size: 10.5px; color: var(--text-dim);">${s.other_servers_count>0?`${s.other_servers_count} other tools`:"Single tool facade"}</div>`}
           ${g}
         </div>
       </div>
     `}).join("")}
       </div>
     </div>
-  `}function _(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function K(){let e=l.getState(),t=e.playgroundMode||"tools",r=e.capabilities||[],n=e.resources||[],a=e.prompts||[],s=`
+  `}function _(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function ee(){let e=i.getState(),t=e.playgroundMode||"tools",r=e.capabilities||[],n=e.resources||[],s=e.prompts||[],a=`
     <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center; justify-content: space-between;">
       <div style="display: inline-flex; padding: 3px; background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: var(--radius-sm);">
         <button 
@@ -208,7 +242,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
           style="padding: 4px 12px; font-size: 11.5px; height: 28px;"
           onclick="window.app.setPlaygroundMode('prompts')"
         >
-          \uD83D\uDCAC Prompts (${a.length})
+          \uD83D\uDCAC Prompts (${s.length})
         </button>
       </div>
 
@@ -217,43 +251,43 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
       </div>
     </div>
   `;if(t==="resources")return`
-      ${s}
-      ${re(e)}
+      ${a}
+      ${pe(e)}
     `;if(t==="prompts")return`
-      ${s}
-      ${ne(e)}
+      ${a}
+      ${ue(e)}
     `;return`
-    ${s}
-    ${ae(e)}
-    ${e.isBatchModalOpen?oe(e):""}
-  `}function B(e,t=!1){if(!e||!e.properties)return{};let r=e.properties||{},n=Array.isArray(e.required)?e.required:[],a={};for(let[s,o]of Object.entries(r)){let i=n.includes(s);if(t&&!i)continue;if(o.default!==void 0)a[s]=o.default;else if(Array.isArray(o.enum)&&o.enum.length>0)a[s]=o.enum[0];else if(o.examples&&Array.isArray(o.examples)&&o.examples.length>0)a[s]=o.examples[0];else if(o.example!==void 0)a[s]=o.example;else switch(o.type||"string"){case"string":a[s]=i?`sample_${s}`:"";break;case"number":case"integer":a[s]=0;break;case"boolean":a[s]=!0;break;case"array":a[s]=[];break;case"object":a[s]={};break;default:a[s]=`sample_${s}`}}return a}function ae(e){let t=e.capabilities||[],r=e.selectedCapabilityId||(t.length>0?t[0].id:null),n=t.find((m)=>m.id===r),a=!!e.isExecuting,s="";if(t.length===0)s=`
+    ${a}
+    ${ce(e)}
+    ${e.isBatchModalOpen?ge(e):""}
+  `}function U(e,t=!1){if(!e||!e.properties)return{};let r=e.properties||{},n=Array.isArray(e.required)?e.required:[],s={};for(let[a,o]of Object.entries(r)){let l=n.includes(a);if(t&&!l)continue;if(o.default!==void 0)s[a]=o.default;else if(Array.isArray(o.enum)&&o.enum.length>0)s[a]=o.enum[0];else if(o.examples&&Array.isArray(o.examples)&&o.examples.length>0)s[a]=o.examples[0];else if(o.example!==void 0)s[a]=o.example;else switch(o.type||"string"){case"string":s[a]=l?`sample_${a}`:"";break;case"number":case"integer":s[a]=0;break;case"boolean":s[a]=!0;break;case"array":s[a]=[];break;case"object":s[a]={};break;default:s[a]=`sample_${a}`}}return s}function ce(e){let t=e.capabilities||[],r=e.selectedCapabilityId||(t.length>0?t[0].id:null),n=t.find((v)=>v.id===r),s=!!e.isExecuting,a="";if(t.length===0)a=`
       <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
         No tools or capabilities discovered from connected servers.
       </div>
-    `;else s=t.map((m)=>`
-        <div class="cap-item ${m.id===r?"active":""}" onclick="window.app.selectCapability('${f(m.id)}')">
+    `;else a=t.map((v)=>`
+        <div class="cap-item ${v.id===r?"active":""}" onclick="window.app.selectCapability('${f(v.id)}')">
           <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${f(m.id)}</span>
-            <span style="font-size: 10px; color: var(--green-400);">${f(m.mode||"read")}</span>
+            <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${f(v.id)}</span>
+            <span style="font-size: 10px; color: var(--green-400);">${f(v.mode||"read")}</span>
           </div>
-          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">server: ${f(m.server||"local")}</div>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">server: ${f(v.server||"local")}</div>
         </div>
-      `).join("");let o=n?.input_schema,i=o?.properties||{},d=Array.isArray(o?.required)?o.required:[],p=Object.entries(i),g="";if(p.length>0)g=`
+      `).join("");let o=n?.input_schema,l=o?.properties||{},d=Array.isArray(o?.required)?o.required:[],p=Object.entries(l),g="";if(p.length>0)g=`
       <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; align-items: center;">
         <span style="font-size: 10px; font-weight: 700; color: var(--text-dim); text-transform: uppercase;">Fields:</span>
-        ${p.map(([m,c])=>{let h=d.includes(m),k=c.type||(c.enum?"enum":"any"),E=h?"rgba(239, 68, 68, 0.15)":"rgba(148, 163, 184, 0.1)",T=h?"var(--red-400)":"var(--text-muted)",A=h?"rgba(239, 68, 68, 0.3)":"var(--border)",I=c.description?` - ${c.description}`:"";return`
+        ${p.map(([v,c])=>{let h=d.includes(v),k=c.type||(c.enum?"enum":"any"),E=h?"rgba(239, 68, 68, 0.15)":"rgba(148, 163, 184, 0.1)",T=h?"var(--red-400)":"var(--text-muted)",I=h?"rgba(239, 68, 68, 0.3)":"var(--border)",C=c.description?` - ${c.description}`:"";return`
             <button 
               type="button" 
               class="btn" 
-              style="padding: 2px 7px; font-size: 10.5px; font-family: var(--ff-mono); background: ${E}; color: ${T}; border: 1px solid ${A}; border-radius: var(--radius-sm);" 
-              title="Click to insert '${m}' (${k}${I})" 
-              onclick="window.app.insertPlaygroundArgKey('${f(m)}', '${f(k)}', ${f(JSON.stringify(c.default??null))})"
+              style="padding: 2px 7px; font-size: 10.5px; font-family: var(--ff-mono); background: ${E}; color: ${T}; border: 1px solid ${I}; border-radius: var(--radius-sm);" 
+              title="Click to insert '${v}' (${k}${C})" 
+              onclick="window.app.insertPlaygroundArgKey('${f(v)}', '${f(k)}', ${f(JSON.stringify(c.default??null))})"
             >
-              + ${f(m)} <span style="font-size: 9px; opacity: 0.7;">(${k}${h?" *":""})</span>
+              + ${f(v)} <span style="font-size: 9px; opacity: 0.7;">(${k}${h?" *":""})</span>
             </button>
           `}).join("")}
       </div>
-    `;let u="{}";if(r&&e.playgroundArgs&&e.playgroundArgs[r]!==void 0)u=e.playgroundArgs[r];else{let m=B(o,!1);u=JSON.stringify(m,null,2)}return`
+    `;let u="{}";if(r&&e.playgroundArgs&&e.playgroundArgs[r]!==void 0)u=e.playgroundArgs[r];else{let v=U(o,!1);u=JSON.stringify(v,null,2)}return`
     <div style="display: grid; grid-template-columns: 320px 1fr; gap: 16px; height: calc(100vh - 165px);">
       <!-- Left Sidebar: Capabilities Catalog -->
       <div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); display: flex; flex-direction: column; overflow: hidden;">
@@ -261,7 +295,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
           <input type="text" class="form-input" placeholder="Search ${t.length} capabilities..." oninput="window.app.filterCapabilities(this.value)">
         </div>
         <div style="flex: 1; overflow-y: auto; padding: 8px;" id="pg-cap-list">
-          ${s}
+          ${a}
         </div>
       </div>
 
@@ -278,7 +312,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
           </div>
           
           <div style="display: flex; align-items: center; gap: 10px;">
-            ${a?`
+            ${s?`
               <div style="display: flex; gap: 8px; align-items: center;">
                 <span class="badge" style="background: rgba(234, 179, 8, 0.15); color: var(--amber-400); font-family: var(--ff-mono); font-size: 11px; padding: 4px 8px; display: inline-flex; align-items: center; gap: 6px;">
                   <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--amber-400); display: inline-block;"></span>
@@ -402,12 +436,12 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         </div>
       </div>
     </div>
-  `}function re(e){let t=e.resources||[],r=e.selectedResourceId||(t.length>0?t[0].id:null),n=t.find((o)=>o.id===r),a=e.resourceReadResult,s="";if(t.length===0)s=`
+  `}function pe(e){let t=e.resources||[],r=e.selectedResourceId||(t.length>0?t[0].id:null),n=t.find((o)=>o.id===r),s=e.resourceReadResult,a="";if(t.length===0)a=`
       <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
         No resources exposed by connected MCP servers.
       </div>
-    `;else s=t.map((o)=>{let i=o.id===r?"active":"",d=o.uri?o.uri.split(":")[0]:"res";return`
-        <div class="cap-item ${i}" onclick="window.app.selectResource('${f(o.id)}')">
+    `;else a=t.map((o)=>{let l=o.id===r?"active":"",d=o.uri?o.uri.split(":")[0]:"res";return`
+        <div class="cap-item ${l}" onclick="window.app.selectResource('${f(o.id)}')">
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${f(o.name||o.id)}</span>
             <span class="badge" style="font-size: 9.5px; background: rgba(56, 189, 248, 0.15); color: var(--cyan-400);">${f(d)}</span>
@@ -426,7 +460,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
           <input type="text" class="form-input" placeholder="Search ${t.length} resources..." oninput="window.app.filterResources(this.value)">
         </div>
         <div style="flex: 1; overflow-y: auto; padding: 8px;" id="pg-res-list">
-          ${s}
+          ${a}
         </div>
       </div>
 
@@ -490,36 +524,36 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
           <div style="padding: 16px; background: var(--bg-app); display: flex; flex-direction: column; overflow: hidden;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
               <span style="font-size: 11px; font-weight: 600; color: var(--text-dim);">RESOURCE CONTENT ENVELOPE</span>
-              <span style="font-size: 11px; font-weight: 600; color: ${a?a.status===200?"var(--green-400)":"var(--red-400)":"var(--text-dim)"}; font-family: var(--ff-mono);">
-                ${a?`HTTP ${a.status} · ${a.durationMs.toFixed(1)}ms`:"READY"}
+              <span style="font-size: 11px; font-weight: 600; color: ${s?s.status===200?"var(--green-400)":"var(--red-400)":"var(--text-dim)"}; font-family: var(--ff-mono);">
+                ${s?`HTTP ${s.status} · ${s.durationMs.toFixed(1)}ms`:"READY"}
               </span>
             </div>
-            <pre style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: var(--cyan-400); font-size: 11.5px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-word;">${a?f(JSON.stringify(a.data,null,2)):'// Click "Read Resource Content" to inspect live payload'}</pre>
+            <pre style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: var(--cyan-400); font-size: 11.5px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-word;">${s?f(JSON.stringify(s.data,null,2)):'// Click "Read Resource Content" to inspect live payload'}</pre>
           </div>
         </div>
       </div>
     </div>
-  `}function ne(e){let t=e.prompts||[],r=e.selectedPromptId||(t.length>0?t[0].id:null),n=t.find((i)=>i.id===r),a=e.promptGetResult,s="";if(t.length===0)s=`
+  `}function ue(e){let t=e.prompts||[],r=e.selectedPromptId||(t.length>0?t[0].id:null),n=t.find((l)=>l.id===r),s=e.promptGetResult,a="";if(t.length===0)a=`
       <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
         No prompt templates registered by connected MCP servers.
       </div>
-    `;else s=t.map((i)=>{let d=i.id===r?"active":"",p=i.arguments?i.arguments.length:0;return`
-        <div class="cap-item ${d}" onclick="window.app.selectPrompt('${f(i.id)}')">
+    `;else a=t.map((l)=>{let d=l.id===r?"active":"",p=l.arguments?l.arguments.length:0;return`
+        <div class="cap-item ${d}" onclick="window.app.selectPrompt('${f(l.id)}')">
           <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${f(i.name||i.id)}</span>
+            <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${f(l.name||l.id)}</span>
             <span class="badge" style="font-size: 9.5px; background: rgba(168, 85, 247, 0.15); color: var(--purple-400);">${p} args</span>
           </div>
-          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">${f(i.description||i.title||"Prompt template")}</div>
-          <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">server: ${f(i.server||"local")}</div>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">${f(l.description||l.title||"Prompt template")}</div>
+          <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">server: ${f(l.server||"local")}</div>
         </div>
-      `}).join("");let o="";if(n&&n.arguments&&n.arguments.length>0)o=n.arguments.map((i)=>`
+      `}).join("");let o="";if(n&&n.arguments&&n.arguments.length>0)o=n.arguments.map((l)=>`
       <div class="form-group" style="margin-bottom: 12px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-          <label class="form-label" style="margin: 0; font-family: var(--ff-mono);">${f(i.name)}</label>
-          ${i.required?'<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--red-400); font-size: 9px;">REQUIRED</span>':'<span style="font-size: 10px; color: var(--text-dim);">optional</span>'}
+          <label class="form-label" style="margin: 0; font-family: var(--ff-mono);">${f(l.name)}</label>
+          ${l.required?'<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--red-400); font-size: 9px;">REQUIRED</span>':'<span style="font-size: 10px; color: var(--text-dim);">optional</span>'}
         </div>
-        ${i.description?`<div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">${f(i.description)}</div>`:""}
-        <input type="text" class="form-input prompt-arg-input" data-arg-name="${f(i.name)}" placeholder="Enter ${f(i.name)}..." />
+        ${l.description?`<div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">${f(l.description)}</div>`:""}
+        <input type="text" class="form-input prompt-arg-input" data-arg-name="${f(l.name)}" placeholder="Enter ${f(l.name)}..." />
       </div>
     `).join("");else if(n)o=`
       <div style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: var(--radius-sm); border: 1px solid var(--border); font-size: 11.5px; color: var(--text-dim);">
@@ -533,7 +567,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
           <input type="text" class="form-input" placeholder="Search ${t.length} prompts..." oninput="window.app.filterPrompts(this.value)">
         </div>
         <div style="flex: 1; overflow-y: auto; padding: 8px;" id="pg-prompt-list">
-          ${s}
+          ${a}
         </div>
       </div>
 
@@ -567,16 +601,16 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
           <div style="padding: 16px; background: var(--bg-app); display: flex; flex-direction: column; overflow: hidden;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
               <span style="font-size: 11px; font-weight: 600; color: var(--text-dim);">RENDERED PROMPT MESSAGES</span>
-              <span style="font-size: 11px; font-weight: 600; color: ${a?a.status===200?"var(--green-400)":"var(--red-400)":"var(--text-dim)"}; font-family: var(--ff-mono);">
-                ${a?`HTTP ${a.status} · ${a.durationMs.toFixed(1)}ms`:"READY"}
+              <span style="font-size: 11px; font-weight: 600; color: ${s?s.status===200?"var(--green-400)":"var(--red-400)":"var(--text-dim)"}; font-family: var(--ff-mono);">
+                ${s?`HTTP ${s.status} · ${s.durationMs.toFixed(1)}ms`:"READY"}
               </span>
             </div>
-            <pre style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: #c084fc; font-size: 11.5px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-word;">${a?f(JSON.stringify(a.data,null,2)):'// Click "Render Prompt Messages" to view resolved system/user messages'}</pre>
+            <pre style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: #c084fc; font-size: 11.5px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-word;">${s?f(JSON.stringify(s.data,null,2)):'// Click "Render Prompt Messages" to view resolved system/user messages'}</pre>
           </div>
         </div>
       </div>
     </div>
-  `}function oe(e){let t=e.capabilities||[],r=e.batchSteps||[];return`
+  `}function ge(e){let t=e.capabilities||[],r=e.batchSteps||[];return`
     <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.75); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 24px;" onclick="if(event.target === this) window.app.closeBatchModal()">
       <div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); width: 840px; max-width: 95vw; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
         <div style="padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
@@ -592,11 +626,11 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         </div>
 
         <div style="flex: 1; overflow-y: auto; padding: 20px;">
-          ${r.map((a,s)=>{let o=t.find((c)=>c.id===a.capability_id),i=o?.input_schema,d=i?.properties||{},p=Array.isArray(i?.required)?i.required:[],g=Object.entries(d),u=t.map((c)=>`
-      <option value="${f(c.id)}" ${c.id===a.capability_id?"selected":""}>
+          ${r.map((s,a)=>{let o=t.find((c)=>c.id===s.capability_id),l=o?.input_schema,d=l?.properties||{},p=Array.isArray(l?.required)?l.required:[],g=Object.entries(d),u=t.map((c)=>`
+      <option value="${f(c.id)}" ${c.id===s.capability_id?"selected":""}>
         ${f(c.id)} (${f(c.server||"local")})
       </option>
-    `).join(""),m="";if(g.length>0)m=`
+    `).join(""),v="";if(g.length>0)v=`
         <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; margin-bottom: 6px; align-items: center;">
           <span style="font-size: 9.5px; font-weight: 700; color: var(--text-dim); text-transform: uppercase;">Parameters:</span>
           ${g.map(([c,h])=>{let k=p.includes(c),E=h.type||(h.enum?"enum":"any");return`
@@ -609,10 +643,10 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
       <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; margin-bottom: 12px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
           <div style="display: flex; align-items: center; gap: 8px;">
-            <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: var(--cyan-400); font-family: var(--ff-mono); font-weight: 700;">STEP ${s+1}</span>
-            <span style="font-size: 11px; font-family: var(--ff-mono); color: var(--text-dim);">id: ${f(a.id)}</span>
+            <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: var(--cyan-400); font-family: var(--ff-mono); font-weight: 700;">STEP ${a+1}</span>
+            <span style="font-size: 11px; font-family: var(--ff-mono); color: var(--text-dim);">id: ${f(s.id)}</span>
           </div>
-          <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 11px; color: var(--red-400);" onclick="window.app.removeBatchStep(${s})">
+          <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 11px; color: var(--red-400);" onclick="window.app.removeBatchStep(${a})">
             ✕ Remove
           </button>
         </div>
@@ -620,42 +654,42 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 6px;">
           <div class="form-group" style="margin: 0;">
             <label class="form-label" style="font-size: 11px;">Target Capability</label>
-            <select class="form-input" style="font-size: 11.5px;" onchange="window.app.updateBatchStepCapability(${s}, this.value)">
+            <select class="form-input" style="font-size: 11.5px;" onchange="window.app.updateBatchStepCapability(${a}, this.value)">
               <option value="">-- Select Capability --</option>
               ${u}
             </select>
           </div>
           <div style="display: flex; align-items: flex-end; padding-bottom: 6px;">
             <label style="display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-muted); cursor: pointer;">
-              <input type="checkbox" ${a.continue_on_error?"checked":""} onchange="window.app.updateBatchStepContinueOnError(${s}, this.checked)" />
+              <input type="checkbox" ${s.continue_on_error?"checked":""} onchange="window.app.updateBatchStepContinueOnError(${a}, this.checked)" />
               <span>Continue pipeline on step failure</span>
             </label>
           </div>
         </div>
 
-        ${m}
+        ${v}
 
         <div class="form-group" style="margin: 0;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
             <div style="display: flex; align-items: center; gap: 8px;">
               <label class="form-label" style="margin: 0; font-size: 11px;">Step Arguments JSON</label>
               ${o?`
-                <button type="button" class="btn btn-ghost" style="padding: 1px 6px; font-size: 9.5px;" onclick="window.app.fillBatchStepSampleArgs(${s})">✨ Sample Args</button>
+                <button type="button" class="btn btn-ghost" style="padding: 1px 6px; font-size: 9.5px;" onclick="window.app.fillBatchStepSampleArgs(${a})">✨ Sample Args</button>
               `:""}
             </div>
             <div style="display: flex; gap: 6px; font-size: 10px; color: var(--cyan-400); font-family: var(--ff-mono);">
               <span>Helpers:</span>
-              <code style="cursor: pointer; background: rgba(0,0,0,0.3); padding: 1px 4px; border-radius: 2px;" onclick="window.app.appendBatchVariable(${s}, '\${steps[0].result.id}')">\${steps[0].result.id}</code>
-              <code style="cursor: pointer; background: rgba(0,0,0,0.3); padding: 1px 4px; border-radius: 2px;" onclick="window.app.appendBatchVariable(${s}, '\${steps[0].result.data}')">\${steps[0].result.data}</code>
+              <code style="cursor: pointer; background: rgba(0,0,0,0.3); padding: 1px 4px; border-radius: 2px;" onclick="window.app.appendBatchVariable(${a}, '\${steps[0].result.id}')">\${steps[0].result.id}</code>
+              <code style="cursor: pointer; background: rgba(0,0,0,0.3); padding: 1px 4px; border-radius: 2px;" onclick="window.app.appendBatchVariable(${a}, '\${steps[0].result.data}')">\${steps[0].result.data}</code>
             </div>
           </div>
           <textarea 
-            id="batch-step-args-${s}"
+            id="batch-step-args-${a}"
             class="form-textarea" 
             rows="3" 
             style="font-size: 11px; font-family: var(--ff-mono);" 
-            oninput="window.app.updateBatchStepArgs(${s}, this.value)"
-          >${f(a.argsJson)}</textarea>
+            oninput="window.app.updateBatchStepArgs(${a}, this.value)"
+          >${f(s.argsJson)}</textarea>
         </div>
       </div>
     `}).join("")}
@@ -681,7 +715,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         </div>
       </div>
     </div>
-  `}function f(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function W(e){let t=e.tasks||[],r=e.taskFilterStatus||"all",n=t.filter((c)=>c.status==="input_required"),a=t.filter((c)=>c.status==="working"),s=t.filter((c)=>c.status==="completed"),o=t.filter((c)=>c.status==="cancelled"),i=t.filter((c)=>c.status==="failed"),d=r==="all"?t:t.filter((c)=>c.status===r),p=e.config.policy?.require_approval||e.config.policy?.requireApproval||[],g=n.length===0?`
+  `}function f(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function te(e){let t=e.tasks||[],r=e.taskFilterStatus||"all",n=t.filter((c)=>c.status==="input_required"),s=t.filter((c)=>c.status==="working"),a=t.filter((c)=>c.status==="completed"),o=t.filter((c)=>c.status==="cancelled"),l=t.filter((c)=>c.status==="failed"),d=r==="all"?t:t.filter((c)=>c.status===r),p=e.config.policy?.require_approval||e.config.policy?.requireApproval||[],g=n.length===0?`
     <div style="padding: 36px 24px; text-align: center; background: var(--surface-card); border-radius: var(--radius-md); border: 1px dashed var(--border);">
       <div style="width: 44px; height: 44px; border-radius: 50%; background: rgba(52, 211, 153, 0.12); border: 1px solid rgba(52, 211, 153, 0.3); display: flex; align-items: center; justify-content: center; margin: 0 auto 12px; color: var(--green-400); font-size: 18px; font-weight: 700;">
         ✓
@@ -691,7 +725,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         Tool calls requiring Human-in-the-Loop approval or returning asynchronous <code style="color: var(--amber-300); font-family: var(--ff-mono);">input_required</code> tasks will suspend here for operator inspection, parameter editing, and response submission.
       </div>
     </div>
-  `:n.map((c)=>{let h=c.inputRequests||{},k=Object.keys(h),E=k.length>0,T=Math.floor(Date.now()/1000),A=c.expiresAtEpochSecs?Math.max(0,c.expiresAtEpochSecs-T):c.ttlSeconds||300;return`
+  `:n.map((c)=>{let h=c.inputRequests||{},k=Object.keys(h),E=k.length>0,T=Math.floor(Date.now()/1000),I=c.expiresAtEpochSecs?Math.max(0,c.expiresAtEpochSecs-T):c.ttlSeconds||300;return`
       <div class="bento-card" style="border: 1px solid rgba(245, 158, 11, 0.35); background: var(--surface-card); margin-bottom: 14px; padding: 18px;">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
           <div>
@@ -711,7 +745,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
 
           <div style="text-align: right; font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim);">
             ${c.createdAtEpochSecs?`<div>Created: <span style="color: var(--text-muted);">${new Date(c.createdAtEpochSecs*1000).toLocaleTimeString()}</span></div>`:""}
-            <div style="color: var(--amber-400); margin-top: 2px;">TTL Remaining: ${A}s</div>
+            <div style="color: var(--amber-400); margin-top: 2px;">TTL Remaining: ${I}s</div>
           </div>
         </div>
 
@@ -732,22 +766,22 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
 
           ${E?`
             <div style="display: flex; flex-direction: column; gap: 10px;">
-              ${k.map((I)=>{let x=h[I]||{},P=typeof x==="string"?x:x.prompt||x.description||x.title||I,b=x.type||"text",L=x.default!==void 0?JSON.stringify(x.default):x.value!==void 0?JSON.stringify(x.value):x.sanitized_args?JSON.stringify(x.sanitized_args,null,2):"";return`
+              ${k.map((C)=>{let A=h[C]||{},M=typeof A==="string"?A:A.prompt||A.description||A.title||C,b=A.type||"text",j=A.default!==void 0?JSON.stringify(A.default):A.value!==void 0?JSON.stringify(A.value):A.sanitized_args?JSON.stringify(A.sanitized_args,null,2):"";return`
                   <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                      <label style="font-size: 11.5px; font-weight: 600; color: var(--amber-300); font-family: var(--ff-mono);">${S(I)}</label>
+                      <label style="font-size: 11.5px; font-weight: 600; color: var(--amber-300); font-family: var(--ff-mono);">${S(C)}</label>
                       <span class="brand-badge" style="font-size: 9.5px; padding: 1px 5px;">${S(b)}</span>
                     </div>
-                    <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">${S(P)}</div>
+                    <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">${S(M)}</div>
                     ${b==="confirmation"||b==="boolean"?`
-                      <select id="task-input-${S(c.taskId)}-${S(I)}" class="form-input" style="font-size: 11.5px; font-family: var(--ff-mono); padding: 4px 8px;">
+                      <select id="task-input-${S(c.taskId)}-${S(C)}" class="form-input" style="font-size: 11.5px; font-family: var(--ff-mono); padding: 4px 8px;">
                         <option value="true" selected>true (Approve / Confirm)</option>
                         <option value="false">false (Reject / Deny)</option>
                       </select>
-                    `:x.sanitized_args||b==="object"||b==="json"?`
-                      <textarea id="task-input-${S(c.taskId)}-${S(I)}" class="form-textarea" rows="3" style="color: var(--green-400); font-family: var(--ff-mono); font-size: 11.5px;">${S(L)}</textarea>
+                    `:A.sanitized_args||b==="object"||b==="json"?`
+                      <textarea id="task-input-${S(c.taskId)}-${S(C)}" class="form-textarea" rows="3" style="color: var(--green-400); font-family: var(--ff-mono); font-size: 11.5px;">${S(j)}</textarea>
                     `:`
-                      <input id="task-input-${S(c.taskId)}-${S(I)}" type="text" class="form-input" value="${S(L)}" placeholder="Enter ${S(I)} response..." style="font-size: 11.5px; font-family: var(--ff-mono);">
+                      <input id="task-input-${S(c.taskId)}-${S(C)}" type="text" class="form-input" value="${S(j)}" placeholder="Enter ${S(C)} response..." style="font-size: 11.5px; font-family: var(--ff-mono);">
                     `}
                   </div>
                 `}).join("")}
@@ -782,7 +816,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
       <span style="font-family: var(--ff-mono); font-size: 11.5px; color: var(--amber-300); font-weight: 500;">\uD83D\uDEE1️ ${S(c)}</span>
       <span class="brand-badge" style="font-size: 9.5px; padding: 1px 5px;">GATED</span>
     </div>
-  `).join(""),m=d.length===0?`
+  `).join(""),v=d.length===0?`
     <tr>
       <td colspan="6" style="padding: 24px; text-align: center; color: var(--text-dim); font-size: 12px;">
         No tasks found matching filter "${S(r)}".
@@ -848,17 +882,17 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
       </div>
       <div class="bento-card col-3">
         <div class="stat-label">Working / In-Flight</div>
-        <div class="stat-value" style="color: var(--cyan-400);">${a.length}</div>
+        <div class="stat-value" style="color: var(--cyan-400);">${s.length}</div>
         <div class="stat-sub">Asynchronous active executions</div>
       </div>
       <div class="bento-card col-3">
         <div class="stat-label">Completed Tasks</div>
-        <div class="stat-value" style="color: var(--green-400);">${s.length}</div>
+        <div class="stat-value" style="color: var(--green-400);">${a.length}</div>
         <div class="stat-sub">Finished successfully</div>
       </div>
       <div class="bento-card col-3">
         <div class="stat-label">Cancelled / Failed</div>
-        <div class="stat-value" style="color: ${i.length>0?"var(--red-400)":"var(--text-muted)"};">${o.length+i.length}</div>
+        <div class="stat-value" style="color: ${l.length>0?"var(--red-400)":"var(--text-muted)"};">${o.length+l.length}</div>
         <div class="stat-sub">Terminated or errored</div>
       </div>
     </div>
@@ -926,12 +960,12 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
             </tr>
           </thead>
           <tbody>
-            ${m}
+            ${v}
           </tbody>
         </table>
       </div>
     </div>
-  `}function S(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function G(){let e=l.getState(),t=e.auditEvents||[],r=e.auditStats||{total_events:0,by_status:{success:0,failed:0,denied:0,intercepted:0}},n=e.auditVerification,a=e.auditFilters,s=e.auditTotal??t.length,o=e.auditSelectedEvent,i=Object.keys(e.config?.mcpServers||{}),d=a.limit||25,p=a.offset||0,g=Math.floor(p/d)+1,u=Math.max(1,Math.ceil(s/d)),m=s===0?0:p+1,c=Math.min(p+d,s),h=v.getAuditExportUrl({actor_id:a.search?void 0:void 0,server_id:a.serverId!=="all"?a.serverId:void 0,event_type:a.eventType!=="all"?a.eventType:void 0,status:a.status!=="all"?a.status:void 0,search:a.search.trim()?a.search.trim():void 0},"csv"),k=v.getAuditExportUrl({server_id:a.serverId!=="all"?a.serverId:void 0,event_type:a.eventType!=="all"?a.eventType:void 0,status:a.status!=="all"?a.status:void 0,search:a.search.trim()?a.search.trim():void 0},"jsonl"),E=n?n.is_valid?`
+  `}function S(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function se(){let e=i.getState(),t=e.auditEvents||[],r=e.auditStats||{total_events:0,by_status:{success:0,failed:0,denied:0,intercepted:0}},n=e.auditVerification,s=e.auditFilters,a=e.auditTotal??t.length,o=e.auditSelectedEvent,l=Object.keys(e.config?.mcpServers||{}),d=s.limit||25,p=s.offset||0,g=Math.floor(p/d)+1,u=Math.max(1,Math.ceil(a/d)),v=a===0?0:p+1,c=Math.min(p+d,a),h=m.getAuditExportUrl({actor_id:s.search?void 0:void 0,server_id:s.serverId!=="all"?s.serverId:void 0,event_type:s.eventType!=="all"?s.eventType:void 0,status:s.status!=="all"?s.status:void 0,search:s.search.trim()?s.search.trim():void 0},"csv"),k=m.getAuditExportUrl({server_id:s.serverId!=="all"?s.serverId:void 0,event_type:s.eventType!=="all"?s.eventType:void 0,status:s.status!=="all"?s.status:void 0,search:s.search.trim()?s.search.trim():void 0},"jsonl"),E=n?n.is_valid?`
       <div style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: var(--radius-sm); font-size: 11.5px; color: var(--green-400);">
         <span>\uD83D\uDEE1️</span>
         <span style="font-weight: 600;">Chain Verified: 100% Tamper Free (${n.total_records} events)</span>
@@ -945,7 +979,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
     <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.verifyAuditChain()">
       \uD83D\uDEE1️ Verify Cryptographic Hash Chain
     </button>
-  `,T=i.map((b)=>`<option value="${w(b)}" ${a.serverId===b?"selected":""}>${w(b)}</option>`).join(""),A=`
+  `,T=l.map((b)=>`<option value="${w(b)}" ${s.serverId===b?"selected":""}>${w(b)}</option>`).join(""),I=`
     <div class="bento-card" style="padding: 14px 16px; margin-bottom: 16px; background: rgba(18, 24, 38, 0.7); border: 1px solid var(--border);">
       <div style="display: grid; grid-template-columns: 2fr 1fr 1.2fr 1.2fr auto auto; gap: 10px; align-items: center;">
         <!-- Full-text search input -->
@@ -956,7 +990,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
             class="form-input" 
             style="width: 100%; padding-left: 28px; font-size: 12px; height: 32px;"
             placeholder="Search trace, actor, capability, hash, error..." 
-            value="${w(a.search)}"
+            value="${w(s.search)}"
             oninput="window.app.handleAuditSearchInput(this.value)"
           />
           <span style="position: absolute; left: 8px; top: 7px; font-size: 12px; color: var(--text-dim);">\uD83D\uDD0D</span>
@@ -969,12 +1003,12 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
             style="width: 100%; font-size: 12px; height: 32px;"
             onchange="window.app.handleAuditStatusFilter(this.value)"
           >
-            <option value="all" ${a.status==="all"?"selected":""}>All Statuses</option>
-            <option value="success" ${a.status==="success"?"selected":""}>\uD83D\uDFE2 Success</option>
-            <option value="denied" ${a.status==="denied"?"selected":""}>\uD83D\uDD34 Denied</option>
-            <option value="intercepted" ${a.status==="intercepted"?"selected":""}>\uD83D\uDFE1 HITL Intercept</option>
-            <option value="failed" ${a.status==="failed"?"selected":""}>❌ Failed</option>
-            <option value="cancelled" ${a.status==="cancelled"?"selected":""}>⚪ Cancelled</option>
+            <option value="all" ${s.status==="all"?"selected":""}>All Statuses</option>
+            <option value="success" ${s.status==="success"?"selected":""}>\uD83D\uDFE2 Success</option>
+            <option value="denied" ${s.status==="denied"?"selected":""}>\uD83D\uDD34 Denied</option>
+            <option value="intercepted" ${s.status==="intercepted"?"selected":""}>\uD83D\uDFE1 HITL Intercept</option>
+            <option value="failed" ${s.status==="failed"?"selected":""}>❌ Failed</option>
+            <option value="cancelled" ${s.status==="cancelled"?"selected":""}>⚪ Cancelled</option>
           </select>
         </div>
 
@@ -985,16 +1019,16 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
             style="width: 100%; font-size: 12px; height: 32px;"
             onchange="window.app.handleAuditEventTypeFilter(this.value)"
           >
-            <option value="all" ${a.eventType==="all"?"selected":""}>All Event Types</option>
-            <option value="tool_execution" ${a.eventType==="tool_execution"?"selected":""}>Tool Execution</option>
-            <option value="tool_intercepted_hitl" ${a.eventType==="tool_intercepted_hitl"?"selected":""}>HITL Intercept</option>
-            <option value="approval_granted" ${a.eventType==="approval_granted"?"selected":""}>Approval Granted</option>
-            <option value="approval_rejected" ${a.eventType==="approval_rejected"?"selected":""}>Approval Rejected</option>
-            <option value="approval_expired" ${a.eventType==="approval_expired"?"selected":""}>Approval Expired</option>
-            <option value="policy_violation" ${a.eventType==="policy_violation"?"selected":""}>Policy Violation</option>
-            <option value="config_mutation" ${a.eventType==="config_mutation"?"selected":""}>Config Mutation</option>
-            <option value="sampling_call" ${a.eventType==="sampling_call"?"selected":""}>Sampling Call</option>
-            <option value="resource_access" ${a.eventType==="resource_access"?"selected":""}>Resource Access</option>
+            <option value="all" ${s.eventType==="all"?"selected":""}>All Event Types</option>
+            <option value="tool_execution" ${s.eventType==="tool_execution"?"selected":""}>Tool Execution</option>
+            <option value="tool_intercepted_hitl" ${s.eventType==="tool_intercepted_hitl"?"selected":""}>HITL Intercept</option>
+            <option value="approval_granted" ${s.eventType==="approval_granted"?"selected":""}>Approval Granted</option>
+            <option value="approval_rejected" ${s.eventType==="approval_rejected"?"selected":""}>Approval Rejected</option>
+            <option value="approval_expired" ${s.eventType==="approval_expired"?"selected":""}>Approval Expired</option>
+            <option value="policy_violation" ${s.eventType==="policy_violation"?"selected":""}>Policy Violation</option>
+            <option value="config_mutation" ${s.eventType==="config_mutation"?"selected":""}>Config Mutation</option>
+            <option value="sampling_call" ${s.eventType==="sampling_call"?"selected":""}>Sampling Call</option>
+            <option value="resource_access" ${s.eventType==="resource_access"?"selected":""}>Resource Access</option>
           </select>
         </div>
 
@@ -1005,7 +1039,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
             style="width: 100%; font-size: 12px; height: 32px;"
             onchange="window.app.handleAuditServerFilter(this.value)"
           >
-            <option value="all" ${a.serverId==="all"?"selected":""}>All MCP Servers</option>
+            <option value="all" ${s.serverId==="all"?"selected":""}>All MCP Servers</option>
             ${T}
           </select>
         </div>
@@ -1023,10 +1057,10 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         </div>
       </div>
     </div>
-  `,I=`
+  `,C=`
     <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: rgba(18, 24, 38, 0.5); border-radius: var(--radius-md); border: 1px solid var(--border); margin-top: 16px;">
       <div style="font-size: 12px; color: var(--text-dim); display: flex; align-items: center; gap: 8px;">
-        <span>Showing <strong style="color: var(--text-main);">${m}–${c}</strong> of <strong style="color: var(--text-main);">${s}</strong> events</span>
+        <span>Showing <strong style="color: var(--text-main);">${v}–${c}</strong> of <strong style="color: var(--text-main);">${a}</strong> events</span>
         <span style="color: var(--border);">|</span>
         <span>Page Size:</span>
         <select 
@@ -1081,23 +1115,23 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         </button>
       </div>
     </div>
-  `,x="";if(t.length===0)x=`
+  `,A="";if(t.length===0)A=`
       <div style="padding: 48px 24px; text-align: center; color: var(--text-dim); background: var(--surface-card); border-radius: var(--radius-md); border: 1px dashed var(--border);">
         <div style="font-size: 28px; margin-bottom: 8px;">\uD83D\uDD0D</div>
         <div style="font-size: 14px; font-weight: 600; color: var(--text-main); margin-bottom: 4px;">No Matching Audit Events</div>
         <div style="font-size: 12px; max-width: 420px; margin: 0 auto;">No audit records match your currently selected filters. Try broadening your search or resetting filters.</div>
         <button class="btn btn-ghost" style="margin-top: 14px; font-size: 11.5px;" onclick="window.app.clearAuditFilters()">Reset Filters</button>
       </div>
-    `;else x=t.map((b)=>{let L=new Date(Math.floor(b.timestamp_ns/1e6)).toLocaleString(),C='<span class="badge" style="background: rgba(34, 197, 94, 0.15); color: var(--green-400); font-weight: 600;">SUCCESS</span>';if(b.status==="denied")C='<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--red-400); font-weight: 600;">DENIED</span>';else if(b.status==="intercepted")C='<span class="badge" style="background: rgba(234, 179, 8, 0.15); color: var(--amber-300); font-weight: 600;">HITL INTERCEPT</span>';else if(b.status==="failed")C='<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--red-400); font-weight: 600;">FAILED</span>';else if(b.status==="cancelled")C='<span class="badge" style="background: rgba(148, 163, 184, 0.15); color: var(--text-muted); font-weight: 600;">CANCELLED</span>';let H=b.sanitized_args?JSON.stringify(b.sanitized_args):"-",q=b.actor_id||b.operator_id||"anonymous",O=b.server_id||"system",ee=b.capability_id||b.event_type,te=b.execution_latency_us?`${(b.execution_latency_us/1000).toFixed(1)}ms`:"-";return`
+    `;else A=t.map((b)=>{let j=new Date(Math.floor(b.timestamp_ns/1e6)).toLocaleString(),O='<span class="badge" style="background: rgba(34, 197, 94, 0.15); color: var(--green-400); font-weight: 600;">SUCCESS</span>';if(b.status==="denied")O='<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--red-400); font-weight: 600;">DENIED</span>';else if(b.status==="intercepted")O='<span class="badge" style="background: rgba(234, 179, 8, 0.15); color: var(--amber-300); font-weight: 600;">HITL INTERCEPT</span>';else if(b.status==="failed")O='<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--red-400); font-weight: 600;">FAILED</span>';else if(b.status==="cancelled")O='<span class="badge" style="background: rgba(148, 163, 184, 0.15); color: var(--text-muted); font-weight: 600;">CANCELLED</span>';let J=b.sanitized_args?JSON.stringify(b.sanitized_args):"-",K=b.actor_id||b.operator_id||"anonymous",x=b.server_id||"system",R=b.capability_id||b.event_type,q=b.execution_latency_us?`${(b.execution_latency_us/1000).toFixed(1)}ms`:"-";return`
         <div class="bento-card" style="margin-bottom: 12px; padding: 16px; border: 1px solid var(--border); transition: border-color 0.15s ease;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
             <div style="display: flex; align-items: center; gap: 8px;">
               <span style="font-family: var(--ff-mono); font-size: 11px; font-weight: 700; color: var(--text-dim);">${w(b.id)}</span>
-              ${C}
-              <span style="font-size: 12px; font-weight: 600; color: var(--text-main);">${w(ee)}</span>
+              ${O}
+              <span style="font-size: 12px; font-weight: 600; color: var(--text-main);">${w(R)}</span>
             </div>
             <div style="display: flex; align-items: center; gap: 10px;">
-              <div style="font-family: var(--ff-mono); font-size: 11px; color: var(--text-muted);">${w(L)}</div>
+              <div style="font-family: var(--ff-mono); font-size: 11px; color: var(--text-muted);">${w(j)}</div>
               <button 
                 class="btn btn-ghost" 
                 style="padding: 2px 8px; font-size: 11px; height: 24px;" 
@@ -1110,14 +1144,14 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
           </div>
           
           <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; font-size: 11.5px; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: var(--radius-sm); margin-bottom: 8px;">
-            <div><span style="color: var(--text-muted);">Actor:</span> <strong style="color: var(--text-main);">${w(q)}</strong></div>
-            <div><span style="color: var(--text-muted);">Server:</span> <strong style="color: var(--cyan-400);">${w(O)}</strong></div>
+            <div><span style="color: var(--text-muted);">Actor:</span> <strong style="color: var(--text-main);">${w(K)}</strong></div>
+            <div><span style="color: var(--text-muted);">Server:</span> <strong style="color: var(--cyan-400);">${w(x)}</strong></div>
             <div><span style="color: var(--text-muted);">Trace:</span> <code style="color: var(--cyan-400); font-size: 10.5px;">${w(b.trace_id)}</code></div>
-            <div><span style="color: var(--text-muted);">Latency:</span> <span style="color: var(--amber-300);">${te}</span></div>
+            <div><span style="color: var(--text-muted);">Latency:</span> <span style="color: var(--amber-300);">${q}</span></div>
           </div>
 
           <div style="font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim); margin-bottom: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-            <span style="color: var(--text-muted);">Args:</span> ${w(H)}
+            <span style="color: var(--text-muted);">Args:</span> ${w(J)}
           </div>
 
           <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border); padding-top: 6px; font-size: 10.5px; font-family: var(--ff-mono); color: var(--text-muted);">
@@ -1125,7 +1159,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
             <div><span style="color: var(--text-dim);">hash:</span> <span style="color: var(--green-400);">${w(b.hash.slice(0,16))}...</span></div>
           </div>
         </div>
-      `}).join("");let P="";if(o){let b=new Date(Math.floor(o.timestamp_ns/1e6)).toISOString();P=`
+      `}).join("");let M="";if(o){let b=new Date(Math.floor(o.timestamp_ns/1e6)).toISOString();M=`
       <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 24px;" onclick="if (event.target === this) window.app.selectAuditEvent(null)">
         <div class="bento-card" style="width: 100%; max-width: 720px; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden; background: #0f172a; border: 1px solid var(--border); box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
           <!-- Modal Header -->
@@ -1228,7 +1262,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
     </div>
 
     <!-- Search & Filter Toolbar -->
-    ${A}
+    ${I}
 
     <!-- Event Timeline List Header -->
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
@@ -1238,40 +1272,40 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
 
     <!-- Event Rows -->
     <div>
-      ${x}
+      ${A}
     </div>
 
     <!-- Pagination Footer -->
-    ${s>0?I:""}
+    ${a>0?C:""}
 
     <!-- Modal Popup for Event Inspection -->
-    ${P}
-  `}function w(e){if(!e)return"";return String(e).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;")}function V(){let t=l.getState().config.policy||{},r=t.allow||[],n=t.deny||[],a=t.redact_keys||t.redactKeys||[],s=t.require_approval||t.requireApproval||[],o=r.length===0?`
+    ${M}
+  `}function w(e){if(!e)return"";return String(e).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;")}function ae(){let t=i.getState().config.policy||{},r=t.allow||[],n=t.deny||[],s=t.redact_keys||t.redactKeys||[],a=t.require_approval||t.requireApproval||[],o=r.length===0?`
     <div style="color: var(--text-dim); font-size: 12px;">No allow list (all non-denied operations permitted)</div>
   `:r.map((g,u)=>`
     <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface); padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
-      <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--green-400);">✔ ${M(g)}</span>
+      <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--green-400);">✔ ${H(g)}</span>
       <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 11px; color: var(--red-400);" onclick="window.app.removePolicyRule('allow', ${u})">✕</button>
     </div>
-  `).join(""),i=n.length===0?`
+  `).join(""),l=n.length===0?`
     <div style="color: var(--text-dim); font-size: 12px;">No deny rules configured</div>
   `:n.map((g,u)=>`
     <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface); padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
-      <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--red-400);">✖ ${M(g)}</span>
+      <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--red-400);">✖ ${H(g)}</span>
       <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 11px; color: var(--red-400);" onclick="window.app.removePolicyRule('deny', ${u})">✕</button>
     </div>
-  `).join(""),d=s.length===0?`
+  `).join(""),d=a.length===0?`
     <div style="color: var(--text-dim); font-size: 12px;">No human-in-the-loop approval rules configured</div>
-  `:s.map((g,u)=>`
+  `:a.map((g,u)=>`
     <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface); padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
-      <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--amber-400);">\uD83D\uDEE1️ ${M(g)}</span>
+      <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--amber-400);">\uD83D\uDEE1️ ${H(g)}</span>
       <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 11px; color: var(--red-400);" onclick="window.app.removePolicyRule('requireApproval', ${u})">✕</button>
     </div>
-  `).join(""),p=a.length===0?`
+  `).join(""),p=s.length===0?`
     <div style="color: var(--text-dim); font-size: 12px;">No key redaction patterns configured</div>
-  `:a.map((g,u)=>`
+  `:s.map((g,u)=>`
     <span class="brand-badge" style="color: var(--amber-300); padding: 5px 10px; font-size: 11px; display: inline-flex; align-items: center; gap: 6px;">
-      ${M(g)}
+      ${H(g)}
       <span style="cursor: pointer; color: var(--red-400); font-weight: bold;" onclick="window.app.removePolicyRule('redact', ${u})">✕</span>
     </span>
   `).join("");return`
@@ -1301,7 +1335,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
           <span class="stat-label" style="color: var(--red-400);">Deny List Patterns (Strict Precedence)</span>
         </div>
         <div style="display: flex; flex-direction: column; gap: 8px; margin: 12px 0;">
-          ${i}
+          ${l}
         </div>
         <div style="display: flex; gap: 8px; margin-top: 14px;">
           <input type="text" class="form-input" id="policy-new-deny" placeholder="e.g. *.drop_*, filesystem.write_*" onkeydown="if(event.key==='Enter') window.app.submitPolicyRule('deny')">
@@ -1351,7 +1385,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 14px;">
           <div>
             <label class="form-label" style="font-size: 11px;">Target Webhook URL</label>
-            <input type="text" class="form-input" id="policy-webhook-url" placeholder="https://hooks.slack.com/services/... or Discord webhook URL" value="${M(typeof t.webhook==="object"&&t.webhook?t.webhook.url||"":"")}">
+            <input type="text" class="form-input" id="policy-webhook-url" placeholder="https://hooks.slack.com/services/... or Discord webhook URL" value="${H(typeof t.webhook==="object"&&t.webhook?t.webhook.url||"":"")}">
           </div>
           <div>
             <label class="form-label" style="font-size: 11px;">Payload Layout Format</label>
@@ -1364,7 +1398,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
           </div>
           <div>
             <label class="form-label" style="font-size: 11px;">HMAC Secret (or Env Var)</label>
-            <input type="text" class="form-input" id="policy-webhook-secret" placeholder="e.g. WARMPLANE_WEBHOOK_SECRET" value="${M(typeof t.webhook==="object"&&t.webhook?t.webhook.secret_env||t.webhook.secretEnv||t.webhook.secret||"":"")}">
+            <input type="text" class="form-input" id="policy-webhook-secret" placeholder="e.g. WARMPLANE_WEBHOOK_SECRET" value="${H(typeof t.webhook==="object"&&t.webhook?t.webhook.secret_env||t.webhook.secretEnv||t.webhook.secret||"":"")}">
           </div>
         </div>
 
@@ -1374,7 +1408,7 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
             <button class="btn btn-ghost" onclick="window.app.testWebhook()">⚡ Send Test Event</button>
           </div>
           <div id="policy-webhook-status" style="font-size: 11px; font-family: var(--ff-mono); color: var(--text-dim);">
-            ${typeof t.webhook==="object"&&t.webhook?.url?`Active Target: ${M(t.webhook.url)}`:"No webhook configured"}
+            ${typeof t.webhook==="object"&&t.webhook?.url?`Active Target: ${H(t.webhook.url)}`:"No webhook configured"}
           </div>
         </div>
       </div>
@@ -1393,35 +1427,35 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         </div>
       </div>
     </div>
-  `}function M(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function Q(){let e=l.getState(),t=e.config,r=Object.entries(t.capabilityAliases||{}),n=Object.entries(t.resourceAliases||{}),a=Object.entries(t.promptAliases||{}),s="";if(r.length===0&&n.length===0&&a.length===0)s=`
+  `}function H(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function re(){let e=i.getState(),t=e.config,r=Object.entries(t.capabilityAliases||{}),n=Object.entries(t.resourceAliases||{}),s=Object.entries(t.promptAliases||{}),a="";if(r.length===0&&n.length===0&&s.length===0)a=`
       <div style="padding: 24px; text-align: center; color: var(--text-dim);">
-        No facade aliases configured in ${R(e.configPath)}. Add short names to prune token payload sizes.
+        No facade aliases configured in ${L(e.configPath)}. Add short names to prune token payload sizes.
       </div>
-    `;else{for(let[o,i]of r)s+=`
+    `;else{for(let[o,l]of r)a+=`
         <div class="feed-row" style="grid-template-columns: 90px 180px 1fr 80px;">
           <span style="color: var(--cyan-400);">Tool</span>
-          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${R(o)}</span>
-          <span style="color: var(--text-dim); font-family: var(--ff-mono);">${R(i)}</span>
+          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${L(o)}</span>
+          <span style="color: var(--text-dim); font-family: var(--ff-mono);">${L(l)}</span>
           <div style="text-align: right;">
-            <button class="btn btn-ghost" style="padding: 2px 6px; color: var(--red-400);" onclick="window.app.deleteAlias('tool', '${R(o)}')">✕</button>
+            <button class="btn btn-ghost" style="padding: 2px 6px; color: var(--red-400);" onclick="window.app.deleteAlias('tool', '${L(o)}')">✕</button>
           </div>
         </div>
-      `;for(let[o,i]of n)s+=`
+      `;for(let[o,l]of n)a+=`
         <div class="feed-row" style="grid-template-columns: 90px 180px 1fr 80px;">
           <span style="color: var(--green-400);">Resource</span>
-          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${R(o)}</span>
-          <span style="color: var(--text-dim); font-family: var(--ff-mono);">${R(i)}</span>
+          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${L(o)}</span>
+          <span style="color: var(--text-dim); font-family: var(--ff-mono);">${L(l)}</span>
           <div style="text-align: right;">
-            <button class="btn btn-ghost" style="padding: 2px 6px; color: var(--red-400);" onclick="window.app.deleteAlias('resource', '${R(o)}')">✕</button>
+            <button class="btn btn-ghost" style="padding: 2px 6px; color: var(--red-400);" onclick="window.app.deleteAlias('resource', '${L(o)}')">✕</button>
           </div>
         </div>
-      `;for(let[o,i]of a)s+=`
+      `;for(let[o,l]of s)a+=`
         <div class="feed-row" style="grid-template-columns: 90px 180px 1fr 80px;">
           <span style="color: var(--amber-300);">Prompt</span>
-          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${R(o)}</span>
-          <span style="color: var(--text-dim); font-family: var(--ff-mono);">${R(i)}</span>
+          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${L(o)}</span>
+          <span style="color: var(--text-dim); font-family: var(--ff-mono);">${L(l)}</span>
           <div style="text-align: right;">
-            <button class="btn btn-ghost" style="padding: 2px 6px; color: var(--red-400);" onclick="window.app.deleteAlias('prompt', '${R(o)}')">✕</button>
+            <button class="btn btn-ghost" style="padding: 2px 6px; color: var(--red-400);" onclick="window.app.deleteAlias('prompt', '${L(o)}')">✕</button>
           </div>
         </div>
       `}return`
@@ -1458,9 +1492,9 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         <span>CANONICAL TARGET</span>
         <span style="text-align: right;">ACTION</span>
       </div>
-      ${s}
+      ${a}
     </div>
-  `}function R(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function Y(){let e=l.getState(),t=e.config,r=t.profiles||{},n=Object.entries(r),a=t.mcpServers||{},s=e.activeProfile,o="";if(n.length===0)o=`
+  `}function L(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function ne(){let e=i.getState(),t=e.config,r=t.profiles||{},n=Object.entries(r),s=t.mcpServers||{},a=e.activeProfile,o="";if(n.length===0)o=`
       <div style="padding: 40px; text-align: center; color: var(--text-dim); background: var(--surface-card); border-radius: var(--radius-md); border: 1px dashed var(--border);">
         <div style="font-size: 15px; color: var(--text-main); font-weight: 600; margin-bottom: 8px;">No Profiles Configured</div>
         <p style="font-size: 12px; margin-bottom: 20px; max-width: 480px; margin-left: auto; margin-right: auto;">
@@ -1468,18 +1502,18 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         </p>
         <button class="btn btn-primary" onclick="window.app.openAddProfileModal()">+ Create First Profile</button>
       </div>
-    `;else o=n.map(([i,d])=>{let p=s===i,g=d.servers.map((m)=>`<span class="brand-badge" style="${a[m]?"color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25); background: rgba(34, 211, 238, 0.05);":"color: var(--red-400); border-color: rgba(248, 113, 113, 0.3); background: rgba(248, 113, 113, 0.05);"}">${j(m)}</span>`).join(" "),u=(e.capabilities||[]).filter((m)=>d.servers.includes(m.server)).length;return`
+    `;else o=n.map(([l,d])=>{let p=a===l,g=d.servers.map((v)=>`<span class="brand-badge" style="${s[v]?"color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25); background: rgba(34, 211, 238, 0.05);":"color: var(--red-400); border-color: rgba(248, 113, 113, 0.3); background: rgba(248, 113, 113, 0.05);"}">${F(v)}</span>`).join(" "),u=(e.capabilities||[]).filter((v)=>d.servers.includes(v.server)).length;return`
         <div class="bento-card" style="margin-bottom: 14px; border-left: ${p?"3px solid var(--amber-400)":"1px solid var(--border)"};">
           <div style="display: flex; justify-content: space-between; align-items: flex-start;">
             <div>
               <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-                <span style="font-size: 16px; font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${j(i)}</span>
+                <span style="font-size: 16px; font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${F(l)}</span>
                 ${p?'<span class="brand-badge" style="color: var(--amber-400); border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.1);">ACTIVE IN UI</span>':""}
                 <span class="brand-badge">${d.servers.length} server${d.servers.length===1?"":"s"}</span>
                 <span class="brand-badge" style="color: var(--text-dim);">${u} capabilities</span>
               </div>
               <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;">
-                ${j(d.description||"No description provided")}
+                ${F(d.description||"No description provided")}
               </div>
               <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
                 <span style="font-size: 11px; color: var(--text-dim); font-weight: 600; text-transform: uppercase;">Servers:</span>
@@ -1493,14 +1527,14 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
                   Deselect
                 </button>
               `:`
-                <button class="btn btn-primary" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.setActiveProfile('${j(i)}')">
+                <button class="btn btn-primary" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.setActiveProfile('${F(l)}')">
                   Activate in UI
                 </button>
               `}
-              <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openEditProfileModal('${j(i)}')">
+              <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openEditProfileModal('${F(l)}')">
                 ✏️ Edit
               </button>
-              <button class="btn btn-danger" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.deleteProfile('${j(i)}')">
+              <button class="btn btn-danger" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.deleteProfile('${F(l)}')">
                 Remove
               </button>
             </div>
@@ -1528,85 +1562,154 @@ class F{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
     </div>
 
     ${o}
-  `}function j(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}var N=[{id:"github",name:"GitHub",category:"devtools",description:"Explore repositories, issues, pull requests, branches, and commit histories.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-github"],envFields:[{key:"GITHUB_PERSONAL_ACCESS_TOKEN",label:"GitHub Personal Access Token",placeholder:"ghp_...",required:!0,description:"Classic or fine-grained token with repo scope."}]},{id:"git",name:"Git (Local)",category:"devtools",description:"Read local Git repository status, diffs, log histories, and commit changes.",badge:"Official / uvx",command:"uvx",defaultArgs:["mcp-server-git","--repository","."],argsPlaceholder:"mcp-server-git --repository /path/to/repo",envFields:[]},{id:"filesystem",name:"Filesystem",category:"devtools",description:"Secure, sandboxed access to local files and directories for AI workflows.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-filesystem","."],argsPlaceholder:"-y @modelcontextprotocol/server-filesystem /allowed/dir1 /allowed/dir2",envFields:[]},{id:"memory",name:"Memory Graph",category:"devtools",description:"Persistent knowledge-graph based memory for multi-turn agent learning.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-memory"],envFields:[]},{id:"chrome-devtools",name:"Chrome DevTools",category:"devtools",description:"Inspect live DOM, execute scripts, read console logs, and capture network traces in Chrome.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-puppeteer"],envFields:[]},{id:"sentry",name:"Sentry",category:"devtools",description:"Query production error events, stack traces, and issue frequencies directly from Sentry.",badge:"uvx / Telemetry",command:"uvx",defaultArgs:["mcp-server-sentry"],envFields:[{key:"SENTRY_AUTH_TOKEN",label:"Sentry Auth Token",placeholder:"sntrys_...",required:!0}]},{id:"playwright",name:"Playwright Browser",category:"browser",description:"Headless / headed browser automation for scraping, form filling, and UI interaction.",badge:"Popular #1 / npx",command:"npx",defaultArgs:["-y","@executeautomation/playwright-mcp-server"],envFields:[]},{id:"puppeteer",name:"Puppeteer",category:"browser",description:"Official browser automation server for web page scraping and screenshot capture.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-puppeteer"],envFields:[]},{id:"brave-search",name:"Brave Search",category:"browser",description:"Real-time privacy-preserving web search and local point-of-interest query engine.",badge:"Official / Search",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-brave-search"],envFields:[{key:"BRAVE_API_KEY",label:"Brave Search API Key",placeholder:"BSA...",required:!0}]},{id:"tavily",name:"Tavily Search",category:"browser",description:"AI-optimized web search engine structured specifically for LLM context injection.",badge:"Community / Stdio",command:"npx",defaultArgs:["-y","@tavily/mcp-server"],envFields:[{key:"TAVILY_API_KEY",label:"Tavily API Key",placeholder:"tvly-...",required:!0}]},{id:"fetch",name:"Fetch / Web Markdown",category:"browser",description:"Download web pages, strip clutter, and convert raw HTML to clean markdown text.",badge:"Official / uvx",command:"uvx",defaultArgs:["mcp-server-fetch"],envFields:[]},{id:"postgres",name:"PostgreSQL",category:"database",description:"Read schemas, inspect tables, and execute SQL queries against PostgreSQL databases.",badge:"Official / Database",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-postgres","postgresql://user:pass@localhost:5432/mydb"],argsPlaceholder:"-y @modelcontextprotocol/server-postgres postgresql://user:pass@localhost:5432/dbname",envFields:[]},{id:"sqlite",name:"SQLite",category:"database",description:"Local embedded SQLite query runner and schema inspector.",badge:"Official / uvx",command:"uvx",defaultArgs:["--with","mcp<2","mcp-server-sqlite","--db-path","./app.db"],argsPlaceholder:"--with mcp<2 mcp-server-sqlite --db-path /path/to/database.sqlite",envFields:[]},{id:"supabase",name:"Supabase",category:"database",description:"Query database tables, manage auth policies, and inspect storage in Supabase.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@supabase/mcp-server"],envFields:[{key:"SUPABASE_ACCESS_TOKEN",label:"Supabase Personal Access Token",placeholder:"sbp_...",required:!0},{key:"SUPABASE_PROJECT_REF",label:"Supabase Project Reference ID",placeholder:"abcdefghijklmnop",required:!1}]},{id:"redis",name:"Redis",category:"database",description:"Inspect cached keys, hash sets, lists, TTLs, and pub/sub channels in Redis.",badge:"uvx / Key-Value",command:"uvx",defaultArgs:["mcp-server-redis","--url","redis://localhost:6379"],argsPlaceholder:"mcp-server-redis --url redis://localhost:6379",envFields:[]},{id:"s3",name:"AWS S3 / Cloud Storage",category:"database",description:"Browse S3 buckets, fetch object metadata, and download files from cloud storage.",badge:"uvx / Cloud Storage",command:"uvx",defaultArgs:["mcp-server-s3","--bucket","my-bucket-name"],argsPlaceholder:"mcp-server-s3 --bucket bucket-name --region us-east-1",envFields:[{key:"AWS_ACCESS_KEY_ID",label:"AWS Access Key ID",placeholder:"AKIA...",required:!0},{key:"AWS_SECRET_ACCESS_KEY",label:"AWS Secret Access Key",placeholder:"...",required:!0},{key:"AWS_REGION",label:"AWS Region",placeholder:"us-east-1",required:!1}]},{id:"linear",name:"Linear",category:"productivity",description:"Search, create, and triage Linear issues, cycles, teams, and project roadmaps.",badge:"Productivity / Stdio",command:"npx",defaultArgs:["-y","mcp-linear"],envFields:[{key:"LINEAR_API_KEY",label:"Linear API Key",placeholder:"lin_api_...",required:!0}]},{id:"slack",name:"Slack",category:"productivity",description:"Read channels, post messages, inspect threads, and search team discussions.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-slack"],envFields:[{key:"SLACK_BOT_TOKEN",label:"Slack Bot User Token",placeholder:"xoxb-...",required:!0},{key:"SLACK_TEAM_ID",label:"Slack Team ID",placeholder:"T01234567",required:!0}]},{id:"notion",name:"Notion",category:"productivity",description:"Search Notion workspace pages, read nested blocks, and query database entries.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-notion"],envFields:[{key:"NOTION_API_KEY",label:"Notion Internal Integration Token",placeholder:"secret_...",required:!0}]},{id:"jira",name:"Jira / Atlassian",category:"productivity",description:"Manage Jira issues, search JQL, read sprint statuses, and inspect boards.",badge:"uvx / Atlassian",command:"uvx",defaultArgs:["mcp-server-jira","--url","https://your-domain.atlassian.net","--email","user@example.com"],argsPlaceholder:"mcp-server-jira --url https://org.atlassian.net --email me@org.com",envFields:[{key:"JIRA_API_TOKEN",label:"Atlassian API Token",placeholder:"ATATT3...",required:!0}]},{id:"google-drive",name:"Google Drive",category:"productivity",description:"Search, list, and read documents, spreadsheets, and drive files.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-gdrive"],envFields:[{key:"GOOGLE_APPLICATION_CREDENTIALS",label:"Google Credentials JSON Path",placeholder:"/path/to/credentials.json",required:!0}]},{id:"docker",name:"Docker",category:"cloud",description:"Inspect running containers, tail container logs, list images, and manage compose services.",badge:"uvx / DevOps",command:"uvx",defaultArgs:["mcp-server-docker"],envFields:[]},{id:"kubernetes",name:"Kubernetes (K8s)",category:"cloud",description:"Query cluster pods, services, deployment status, and inspect Kubernetes logs.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-kubernetes"],envFields:[{key:"KUBECONFIG",label:"Kubeconfig File Path (Optional)",placeholder:"~/.kube/config",required:!1}]},{id:"cloudflare",name:"Cloudflare",category:"cloud",description:"Manage Cloudflare Workers, KV namespaces, D1 databases, Vectorize indexes, and DNS.",badge:"Official / Cloudflare",command:"npx",defaultArgs:["-y","@cloudflare/mcp-server-cloudflare"],envFields:[{key:"CLOUDFLARE_API_TOKEN",label:"Cloudflare API Token",placeholder:"...",required:!0},{key:"CLOUDFLARE_ACCOUNT_ID",label:"Cloudflare Account ID",placeholder:"...",required:!0}]},{id:"terraform",name:"Terraform",category:"cloud",description:"Inspect Terraform state files, resource dependency graphs, and plan previews.",badge:"uvx / IaC",command:"uvx",defaultArgs:["mcp-server-terraform"],envFields:[]}];class X{activeTemplateCategory="all";activeTemplateFilter="";selectedTemplate=null;async init(){let e=window.location.port?`:${window.location.port}`:"",t=document.getElementById("daemon-port-label");if(t)t.textContent=`Daemon ${e}`;await this.refreshData(),this.initSSE(),this.render(),l.subscribe(()=>{this.render()})}auditSearchTimeout=null;async refreshData(){try{let e=l.getState(),t=e.auditFilters,r=e.activeProfile||void 0,[n,a,s,o,i,d,p,g,u,m]=await Promise.all([v.getConfig(),v.listCapabilities(r),v.listResources(r),v.listPrompts(r),v.getCatalogEvents(),v.listApprovals(),v.listTasks(),v.listAuditEvents({server_id:t.serverId!=="all"?t.serverId:void 0,event_type:t.eventType!=="all"?t.eventType:void 0,status:t.status!=="all"?t.status:void 0,search:t.search.trim()?t.search.trim():void 0,limit:t.limit,offset:t.offset}),v.getAuditStats(),v.getClients().catch(()=>({ok:!1,clients:[]}))]);if(m&&m.ok&&Array.isArray(m.clients))l.setState({clients:m.clients});if(n.ok)l.setState({configPath:n.config_path,config:n.config,serverStatuses:n.server_statuses||{},circuitBreakers:n.circuit_breakers||[],metrics:{totalCatalogRequests:n.metrics?.total_catalog_requests||0,totalEtagHits:n.metrics?.total_etag_hits||0,totalToolCalls:n.metrics?.total_tool_calls||0,totalToolDurationUs:n.metrics?.total_tool_duration_us||0}});if(a&&Array.isArray(a.capabilities))l.setState({capabilities:a.capabilities});if(s&&Array.isArray(s.resources))l.setState({resources:s.resources});if(o&&Array.isArray(o.prompts))l.setState({prompts:o.prompts});if(i&&Array.isArray(i.events))l.setState({catalogEvents:i.events});if(d&&Array.isArray(d.approvals))l.setState({approvals:d.approvals});if(p&&Array.isArray(p.tasks))l.setState({tasks:p.tasks});if(g&&Array.isArray(g.events))l.setState({auditEvents:g.events,auditTotal:g.total??g.events.length});if(u&&u.ok)l.setState({auditStats:u})}catch(e){console.error("Failed to fetch daemon state:",e)}}async refreshAuditEvents(){try{let t=l.getState().auditFilters,[r,n]=await Promise.all([v.listAuditEvents({server_id:t.serverId!=="all"?t.serverId:void 0,event_type:t.eventType!=="all"?t.eventType:void 0,status:t.status!=="all"?t.status:void 0,search:t.search.trim()?t.search.trim():void 0,limit:t.limit,offset:t.offset}),v.getAuditStats()]);if(r&&Array.isArray(r.events))l.setState({auditEvents:r.events,auditTotal:r.total??r.events.length});if(n&&n.ok)l.setState({auditStats:n})}catch(e){console.error("Failed to refresh audit events:",e)}}handleAuditSearchInput(e){let r={...l.getState().auditFilters,search:e,offset:0};l.setState({auditFilters:r}),clearTimeout(this.auditSearchTimeout),this.auditSearchTimeout=setTimeout(()=>{this.refreshAuditEvents()},250)}handleAuditStatusFilter(e){let t=l.getState();l.setState({auditFilters:{...t.auditFilters,status:e,offset:0}}),this.refreshAuditEvents()}handleAuditEventTypeFilter(e){let t=l.getState();l.setState({auditFilters:{...t.auditFilters,eventType:e,offset:0}}),this.refreshAuditEvents()}handleAuditServerFilter(e){let t=l.getState();l.setState({auditFilters:{...t.auditFilters,serverId:e,offset:0}}),this.refreshAuditEvents()}handleAuditPageSize(e){let t=parseInt(e,10)||25,r=l.getState();l.setState({auditFilters:{...r.auditFilters,limit:t,offset:0}}),this.refreshAuditEvents()}clearAuditFilters(){let e=l.getState();l.setState({auditFilters:{search:"",status:"all",eventType:"all",serverId:"all",limit:e.auditFilters.limit||25,offset:0}}),this.refreshAuditEvents()}auditPrevPage(){let e=l.getState(),{limit:t,offset:r}=e.auditFilters,n=Math.max(0,r-t);if(n!==r)l.setState({auditFilters:{...e.auditFilters,offset:n}}),this.refreshAuditEvents()}auditNextPage(){let e=l.getState(),{limit:t,offset:r}=e.auditFilters,n=e.auditTotal;if(r+t<n)l.setState({auditFilters:{...e.auditFilters,offset:r+t}}),this.refreshAuditEvents()}auditGoToPage(e){let t=l.getState(),{limit:r}=t.auditFilters,n=Math.max(0,(e-1)*r);l.setState({auditFilters:{...t.auditFilters,offset:n}}),this.refreshAuditEvents()}selectAuditEvent(e){if(!e){l.setState({auditSelectedEvent:null});return}let r=l.getState().auditEvents.find((n)=>n.id===e)||null;l.setState({auditSelectedEvent:r})}async verifyAuditChain(){try{let e=await v.verifyAuditChain();if(e&&e.report)l.setState({auditVerification:e.report})}catch(e){console.error("Failed to verify audit chain:",e)}}async refreshApprovals(){try{let e=await v.listApprovals();if(e&&Array.isArray(e.approvals))l.setState({approvals:e.approvals})}catch(e){console.error("Failed to refresh approvals:",e)}}initSSE(){try{let e=new EventSource("/v1/resources/updates");e.onmessage=(t)=>{l.addEventLog("SSE","/v1/resources/updates","UPDATED","0.1ms"),this.refreshData()}}catch(e){console.warn("SSE connection unavailable")}}switchTab(e){l.setState({activeTab:e}),this.refreshData()}render(){let e=l.getState(),t=document.getElementById("app-main");if(!t)return;let r=(e.tasks||[]).filter((d)=>d.status==="input_required").length,n=(e.approvals||[]).filter((d)=>d.status==="pending").length,a=Math.max(r,n),s=document.getElementById("nav-approvals-badge");if(s)s.textContent=a>0?`${a}`:"",s.style.display=a>0?"inline-block":"none";document.querySelectorAll(".nav-item").forEach((d)=>{let p=d.getAttribute("data-tab");if(p===e.activeTab||e.activeTab==="tasks"&&p==="approvals"||e.activeTab==="approvals"&&p==="tasks")d.classList.add("active");else d.classList.remove("active")});let o=document.getElementById("top-title"),i={overview:"Overview Cockpit",servers:"Server Hub & Connections",playground:"MCP Capability Playground",tasks:"SEP-2663 Tasks & HITL Review",approvals:"SEP-2663 Tasks & HITL Review",audit:"WORM Audit & Compliance Ledger",policy:"Security Governance & Redaction",aliases:"Facade & Alias Studio",profiles:"Server Constellation Profiles"};if(o)o.textContent=i[e.activeTab]||"Control Deck";switch(this.renderTopProfileSelector(),e.activeTab){case"overview":t.innerHTML=U();break;case"servers":t.innerHTML=J();break;case"playground":t.innerHTML=K();break;case"tasks":case"approvals":t.innerHTML=W(e);break;case"audit":t.innerHTML=G();break;case"policy":t.innerHTML=V();break;case"aliases":t.innerHTML=Q();break;case"profiles":t.innerHTML=Y();break}}async refreshTasks(){try{let e=await v.listTasks();if(e&&Array.isArray(e.tasks))l.setState({tasks:e.tasks})}catch(e){console.error("Failed to refresh tasks:",e)}}filterTasksByStatus(e){l.setState({taskFilterStatus:e})}togglePlaygroundAsyncTask(e){l.setState({playgroundAsyncTask:e})}async submitTaskInputResponses(e){let r=l.getState().tasks.find((s)=>s.taskId===e)?.inputRequests||{},n=Object.keys(r),a={};if(n.length>0)for(let s of n){let o=document.getElementById(`task-input-${e}-${s}`);if(o){let i=o.value.trim();try{a[s]=JSON.parse(i)}catch{a[s]=i}}}else{let s=document.getElementById(`task-raw-input-${e}`);if(s&&s.value.trim())try{Object.assign(a,JSON.parse(s.value.trim()))}catch{alert("Invalid JSON in raw input responses");return}}try{let s=await v.updateTask(e,a);if(s.ok)await this.refreshTasks();else alert(`Task update failed: ${s.error?.message||s.error||"Unknown error"}`)}catch(s){alert(`Error updating task: ${s.message}`)}}async promptCancelTask(e){let t=prompt("Reason for cancelling task:");if(t===null)return;try{let r=await v.cancelTask(e,t||void 0);if(r.ok)await this.refreshTasks();else alert(`Task cancellation failed: ${r.error?.message||r.error||"Unknown error"}`)}catch(r){alert(`Error cancelling task: ${r.message}`)}}async inspectTaskDetails(e){try{let t=await v.getTask(e);if(t.ok&&t.task)alert(`Task [${t.task.taskId}]
+  `}function F(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function oe(){let t=i.getState().secrets||[],r=t.length,n=t.filter((o)=>o.is_vault).length,s=r-n,a=t.length===0?`
+    <div style="padding: 32px; text-align: center; color: var(--text-dim);">
+      No environment variables or secrets configured in active servers.
+    </div>
+  `:t.map((o)=>{let l='<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);">Plaintext (Unsecured)</span>';if(o.is_vault)l=`<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">\uD83D\uDD12 ${B(o.backend)}</span>`;return`
+      <div style="display: grid; grid-template-columns: 140px 180px 1fr 180px auto; padding: 10px 16px; border-bottom: 1px solid var(--border-subtle); align-items: center; font-size: 12px;">
+        <span style="font-weight: 700; color: var(--text-main);">${B(o.server)}</span>
+        <span style="font-family: var(--ff-mono); color: var(--amber-300);">${B(o.key)}</span>
+        <span style="font-family: var(--ff-mono); font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${B(o.display)}</span>
+        <div>${l}</div>
+        <div style="display: flex; gap: 6px; justify-content: flex-end;">
+          ${!o.is_vault?`
+            <button class="btn btn-primary" style="padding: 2px 8px; font-size: 11px;" onclick="window.app.quickVaultEnv('${B(o.server)}', '${B(o.key)}')">\uD83D\uDD12 Move to Keychain</button>
+          `:`
+            <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 11px; color: var(--red-400);" onclick="window.app.deleteVaultSecret('${B(o.key)}')">Delete Key</button>
+          `}
+        </div>
+      </div>
+    `}).join("");return`
+    <div style="margin-bottom: 16px; font-size: 12px; color: var(--text-dim);">
+      Manage native OS Keychain credentials (macOS Keychain, Linux Secret Service, 1Password). Secrets are injected directly in-memory at process launch and never saved to disk in plaintext.
+    </div>
+
+    <!-- Stat Header Cards -->
+    <div class="bento-grid" style="margin-bottom: 20px;">
+      <div class="bento-card col-4">
+        <div class="stat-label">Total Secret References</div>
+        <div class="stat-value" style="color: var(--cyan-400);">${r}</div>
+        <div class="stat-sub">Across all configured MCP servers</div>
+      </div>
+      <div class="bento-card col-4">
+        <div class="stat-label">Secured via Vault / Keychain</div>
+        <div class="stat-value" style="color: var(--green-400);">${n}</div>
+        <div class="stat-sub">Zero-disk plaintext exposure</div>
+      </div>
+      <div class="bento-card col-4">
+        <div class="stat-label">Plaintext Secrets</div>
+        <div class="stat-value" style="color: ${s>0?"var(--red-400)":"var(--green-400)"};">${s}</div>
+        <div class="stat-sub">${s>0?"Recommend migrating to Keychain":"All credentials protected"}</div>
+      </div>
+    </div>
+
+    <!-- Action Drawer / Store New Secret -->
+    <div class="bento-card" style="margin-bottom: 20px; padding: 14px 18px; border-color: rgba(59, 130, 246, 0.3);">
+      <div style="font-size: 13.5px; font-weight: 700; color: var(--text-main); margin-bottom: 10px;">
+        \uD83D\uDD11 Store New Secret in OS Keychain
+      </div>
+      <div style="display: grid; grid-template-columns: 200px 1fr 140px auto; gap: 10px; align-items: center;">
+        <input type="text" class="form-input" id="vault-new-key" placeholder="Key identifier, e.g. github_token" style="font-size: 12px;">
+        <input type="password" class="form-input" id="vault-new-val" placeholder="Secret value (will be written to OS Keychain)" style="font-size: 12px;">
+        <input type="text" class="form-input" id="vault-new-service" placeholder="Service (warmplane)" value="warmplane" style="font-size: 12px;">
+        <button class="btn btn-primary" onclick="window.app.saveNewVaultSecret()">Save to Keychain</button>
+      </div>
+    </div>
+
+    <!-- Secrets Ledger Table -->
+    <div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden;">
+      <div style="display: grid; grid-template-columns: 140px 180px 1fr 180px auto; padding: 8px 16px; background: var(--surface-hover); border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 11px; font-weight: 600;">
+        <span>SERVER</span>
+        <span>VARIABLE KEY</span>
+        <span>VALUE / URI SCHEME</span>
+        <span>SECURITY STATUS</span>
+        <span style="text-align: right;">ACTION</span>
+      </div>
+      <div id="secrets-table-rows">
+        ${a}
+      </div>
+    </div>
+  `}function B(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}var W=[{id:"github",name:"GitHub",category:"devtools",description:"Explore repositories, issues, pull requests, branches, and commit histories.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-github"],envFields:[{key:"GITHUB_PERSONAL_ACCESS_TOKEN",label:"GitHub Personal Access Token",placeholder:"ghp_...",required:!0,description:"Classic or fine-grained token with repo scope."}]},{id:"git",name:"Git (Local)",category:"devtools",description:"Read local Git repository status, diffs, log histories, and commit changes.",badge:"Official / uvx",command:"uvx",defaultArgs:["mcp-server-git","--repository","."],argsPlaceholder:"mcp-server-git --repository /path/to/repo",envFields:[]},{id:"filesystem",name:"Filesystem",category:"devtools",description:"Secure, sandboxed access to local files and directories for AI workflows.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-filesystem","."],argsPlaceholder:"-y @modelcontextprotocol/server-filesystem /allowed/dir1 /allowed/dir2",envFields:[]},{id:"memory",name:"Memory Graph",category:"devtools",description:"Persistent knowledge-graph based memory for multi-turn agent learning.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-memory"],envFields:[]},{id:"chrome-devtools",name:"Chrome DevTools",category:"devtools",description:"Inspect live DOM, execute scripts, read console logs, and capture network traces in Chrome.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-puppeteer"],envFields:[]},{id:"sentry",name:"Sentry",category:"devtools",description:"Query production error events, stack traces, and issue frequencies directly from Sentry.",badge:"uvx / Telemetry",command:"uvx",defaultArgs:["mcp-server-sentry"],envFields:[{key:"SENTRY_AUTH_TOKEN",label:"Sentry Auth Token",placeholder:"sntrys_...",required:!0}]},{id:"playwright",name:"Playwright Browser",category:"browser",description:"Headless / headed browser automation for scraping, form filling, and UI interaction.",badge:"Popular #1 / npx",command:"npx",defaultArgs:["-y","@executeautomation/playwright-mcp-server"],envFields:[]},{id:"puppeteer",name:"Puppeteer",category:"browser",description:"Official browser automation server for web page scraping and screenshot capture.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-puppeteer"],envFields:[]},{id:"brave-search",name:"Brave Search",category:"browser",description:"Real-time privacy-preserving web search and local point-of-interest query engine.",badge:"Official / Search",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-brave-search"],envFields:[{key:"BRAVE_API_KEY",label:"Brave Search API Key",placeholder:"BSA...",required:!0}]},{id:"tavily",name:"Tavily Search",category:"browser",description:"AI-optimized web search engine structured specifically for LLM context injection.",badge:"Community / Stdio",command:"npx",defaultArgs:["-y","@tavily/mcp-server"],envFields:[{key:"TAVILY_API_KEY",label:"Tavily API Key",placeholder:"tvly-...",required:!0}]},{id:"fetch",name:"Fetch / Web Markdown",category:"browser",description:"Download web pages, strip clutter, and convert raw HTML to clean markdown text.",badge:"Official / uvx",command:"uvx",defaultArgs:["mcp-server-fetch"],envFields:[]},{id:"postgres",name:"PostgreSQL",category:"database",description:"Read schemas, inspect tables, and execute SQL queries against PostgreSQL databases.",badge:"Official / Database",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-postgres","postgresql://user:pass@localhost:5432/mydb"],argsPlaceholder:"-y @modelcontextprotocol/server-postgres postgresql://user:pass@localhost:5432/dbname",envFields:[]},{id:"sqlite",name:"SQLite",category:"database",description:"Local embedded SQLite query runner and schema inspector.",badge:"Official / uvx",command:"uvx",defaultArgs:["--with","mcp<2","mcp-server-sqlite","--db-path","./app.db"],argsPlaceholder:"--with mcp<2 mcp-server-sqlite --db-path /path/to/database.sqlite",envFields:[]},{id:"supabase",name:"Supabase",category:"database",description:"Query database tables, manage auth policies, and inspect storage in Supabase.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@supabase/mcp-server"],envFields:[{key:"SUPABASE_ACCESS_TOKEN",label:"Supabase Personal Access Token",placeholder:"sbp_...",required:!0},{key:"SUPABASE_PROJECT_REF",label:"Supabase Project Reference ID",placeholder:"abcdefghijklmnop",required:!1}]},{id:"redis",name:"Redis",category:"database",description:"Inspect cached keys, hash sets, lists, TTLs, and pub/sub channels in Redis.",badge:"uvx / Key-Value",command:"uvx",defaultArgs:["mcp-server-redis","--url","redis://localhost:6379"],argsPlaceholder:"mcp-server-redis --url redis://localhost:6379",envFields:[]},{id:"s3",name:"AWS S3 / Cloud Storage",category:"database",description:"Browse S3 buckets, fetch object metadata, and download files from cloud storage.",badge:"uvx / Cloud Storage",command:"uvx",defaultArgs:["mcp-server-s3","--bucket","my-bucket-name"],argsPlaceholder:"mcp-server-s3 --bucket bucket-name --region us-east-1",envFields:[{key:"AWS_ACCESS_KEY_ID",label:"AWS Access Key ID",placeholder:"AKIA...",required:!0},{key:"AWS_SECRET_ACCESS_KEY",label:"AWS Secret Access Key",placeholder:"...",required:!0},{key:"AWS_REGION",label:"AWS Region",placeholder:"us-east-1",required:!1}]},{id:"linear",name:"Linear",category:"productivity",description:"Search, create, and triage Linear issues, cycles, teams, and project roadmaps.",badge:"Productivity / Stdio",command:"npx",defaultArgs:["-y","mcp-linear"],envFields:[{key:"LINEAR_API_KEY",label:"Linear API Key",placeholder:"lin_api_...",required:!0}]},{id:"slack",name:"Slack",category:"productivity",description:"Read channels, post messages, inspect threads, and search team discussions.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-slack"],envFields:[{key:"SLACK_BOT_TOKEN",label:"Slack Bot User Token",placeholder:"xoxb-...",required:!0},{key:"SLACK_TEAM_ID",label:"Slack Team ID",placeholder:"T01234567",required:!0}]},{id:"notion",name:"Notion",category:"productivity",description:"Search Notion workspace pages, read nested blocks, and query database entries.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-notion"],envFields:[{key:"NOTION_API_KEY",label:"Notion Internal Integration Token",placeholder:"secret_...",required:!0}]},{id:"jira",name:"Jira / Atlassian",category:"productivity",description:"Manage Jira issues, search JQL, read sprint statuses, and inspect boards.",badge:"uvx / Atlassian",command:"uvx",defaultArgs:["mcp-server-jira","--url","https://your-domain.atlassian.net","--email","user@example.com"],argsPlaceholder:"mcp-server-jira --url https://org.atlassian.net --email me@org.com",envFields:[{key:"JIRA_API_TOKEN",label:"Atlassian API Token",placeholder:"ATATT3...",required:!0}]},{id:"google-drive",name:"Google Drive",category:"productivity",description:"Search, list, and read documents, spreadsheets, and drive files.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-gdrive"],envFields:[{key:"GOOGLE_APPLICATION_CREDENTIALS",label:"Google Credentials JSON Path",placeholder:"/path/to/credentials.json",required:!0}]},{id:"docker",name:"Docker",category:"cloud",description:"Inspect running containers, tail container logs, list images, and manage compose services.",badge:"uvx / DevOps",command:"uvx",defaultArgs:["mcp-server-docker"],envFields:[]},{id:"kubernetes",name:"Kubernetes (K8s)",category:"cloud",description:"Query cluster pods, services, deployment status, and inspect Kubernetes logs.",badge:"Official / Stdio",command:"npx",defaultArgs:["-y","@modelcontextprotocol/server-kubernetes"],envFields:[{key:"KUBECONFIG",label:"Kubeconfig File Path (Optional)",placeholder:"~/.kube/config",required:!1}]},{id:"cloudflare",name:"Cloudflare",category:"cloud",description:"Manage Cloudflare Workers, KV namespaces, D1 databases, Vectorize indexes, and DNS.",badge:"Official / Cloudflare",command:"npx",defaultArgs:["-y","@cloudflare/mcp-server-cloudflare"],envFields:[{key:"CLOUDFLARE_API_TOKEN",label:"Cloudflare API Token",placeholder:"...",required:!0},{key:"CLOUDFLARE_ACCOUNT_ID",label:"Cloudflare Account ID",placeholder:"...",required:!0}]},{id:"terraform",name:"Terraform",category:"cloud",description:"Inspect Terraform state files, resource dependency graphs, and plan previews.",badge:"uvx / IaC",command:"uvx",defaultArgs:["mcp-server-terraform"],envFields:[]}];class ie{activeTemplateCategory="all";activeTemplateFilter="";selectedTemplate=null;async init(){let e=window.location.port?`:${window.location.port}`:"",t=document.getElementById("daemon-port-label");if(t)t.textContent=`Daemon ${e}`;await this.refreshData(),this.initSSE(),this.render(),i.subscribe(()=>{this.render()})}auditSearchTimeout=null;async refreshData(){try{let e=i.getState(),t=e.auditFilters,r=e.activeProfile||void 0,[n,s,a,o,l,d,p,g,u,v,c]=await Promise.all([m.getConfig(),m.listCapabilities(r),m.listResources(r),m.listPrompts(r),m.getCatalogEvents(),m.listApprovals(),m.listTasks(),m.listAuditEvents({server_id:t.serverId!=="all"?t.serverId:void 0,event_type:t.eventType!=="all"?t.eventType:void 0,status:t.status!=="all"?t.status:void 0,search:t.search.trim()?t.search.trim():void 0,limit:t.limit,offset:t.offset}),m.getAuditStats(),m.getClients().catch(()=>({ok:!1,clients:[]})),m.getSecrets().catch(()=>({ok:!1,secrets:[],keychain_service:"warmplane"}))]);if(v&&v.ok&&Array.isArray(v.clients))i.setState({clients:v.clients});if(c&&c.ok&&Array.isArray(c.secrets))i.setState({secrets:c.secrets});if(n.ok)i.setState({configPath:n.config_path,config:n.config,serverStatuses:n.server_statuses||{},circuitBreakers:n.circuit_breakers||[],metrics:{totalCatalogRequests:n.metrics?.total_catalog_requests||0,totalEtagHits:n.metrics?.total_etag_hits||0,totalToolCalls:n.metrics?.total_tool_calls||0,totalToolDurationUs:n.metrics?.total_tool_duration_us||0}});if(s&&Array.isArray(s.capabilities))i.setState({capabilities:s.capabilities});if(a&&Array.isArray(a.resources))i.setState({resources:a.resources});if(o&&Array.isArray(o.prompts))i.setState({prompts:o.prompts});if(l&&Array.isArray(l.events))i.setState({catalogEvents:l.events});if(d&&Array.isArray(d.approvals))i.setState({approvals:d.approvals});if(p&&Array.isArray(p.tasks))i.setState({tasks:p.tasks});if(g&&Array.isArray(g.events))i.setState({auditEvents:g.events,auditTotal:g.total??g.events.length});if(u&&u.ok)i.setState({auditStats:u})}catch(e){console.error("Failed to fetch daemon state:",e)}}async refreshAuditEvents(){try{let t=i.getState().auditFilters,[r,n]=await Promise.all([m.listAuditEvents({server_id:t.serverId!=="all"?t.serverId:void 0,event_type:t.eventType!=="all"?t.eventType:void 0,status:t.status!=="all"?t.status:void 0,search:t.search.trim()?t.search.trim():void 0,limit:t.limit,offset:t.offset}),m.getAuditStats()]);if(r&&Array.isArray(r.events))i.setState({auditEvents:r.events,auditTotal:r.total??r.events.length});if(n&&n.ok)i.setState({auditStats:n})}catch(e){console.error("Failed to refresh audit events:",e)}}handleAuditSearchInput(e){let r={...i.getState().auditFilters,search:e,offset:0};i.setState({auditFilters:r}),clearTimeout(this.auditSearchTimeout),this.auditSearchTimeout=setTimeout(()=>{this.refreshAuditEvents()},250)}handleAuditStatusFilter(e){let t=i.getState();i.setState({auditFilters:{...t.auditFilters,status:e,offset:0}}),this.refreshAuditEvents()}handleAuditEventTypeFilter(e){let t=i.getState();i.setState({auditFilters:{...t.auditFilters,eventType:e,offset:0}}),this.refreshAuditEvents()}handleAuditServerFilter(e){let t=i.getState();i.setState({auditFilters:{...t.auditFilters,serverId:e,offset:0}}),this.refreshAuditEvents()}handleAuditPageSize(e){let t=parseInt(e,10)||25,r=i.getState();i.setState({auditFilters:{...r.auditFilters,limit:t,offset:0}}),this.refreshAuditEvents()}clearAuditFilters(){let e=i.getState();i.setState({auditFilters:{search:"",status:"all",eventType:"all",serverId:"all",limit:e.auditFilters.limit||25,offset:0}}),this.refreshAuditEvents()}auditPrevPage(){let e=i.getState(),{limit:t,offset:r}=e.auditFilters,n=Math.max(0,r-t);if(n!==r)i.setState({auditFilters:{...e.auditFilters,offset:n}}),this.refreshAuditEvents()}auditNextPage(){let e=i.getState(),{limit:t,offset:r}=e.auditFilters,n=e.auditTotal;if(r+t<n)i.setState({auditFilters:{...e.auditFilters,offset:r+t}}),this.refreshAuditEvents()}auditGoToPage(e){let t=i.getState(),{limit:r}=t.auditFilters,n=Math.max(0,(e-1)*r);i.setState({auditFilters:{...t.auditFilters,offset:n}}),this.refreshAuditEvents()}selectAuditEvent(e){if(!e){i.setState({auditSelectedEvent:null});return}let r=i.getState().auditEvents.find((n)=>n.id===e)||null;i.setState({auditSelectedEvent:r})}async verifyAuditChain(){try{let e=await m.verifyAuditChain();if(e&&e.report)i.setState({auditVerification:e.report})}catch(e){console.error("Failed to verify audit chain:",e)}}async refreshApprovals(){try{let e=await m.listApprovals();if(e&&Array.isArray(e.approvals))i.setState({approvals:e.approvals})}catch(e){console.error("Failed to refresh approvals:",e)}}initSSE(){try{let e=new EventSource("/v1/resources/updates");e.onmessage=(t)=>{i.addEventLog("SSE","/v1/resources/updates","UPDATED","0.1ms"),this.refreshData()}}catch(e){console.warn("SSE connection unavailable")}}switchTab(e){i.setState({activeTab:e}),this.refreshData()}render(){let e=i.getState(),t=document.getElementById("app-main");if(!t)return;let r=(e.tasks||[]).filter((d)=>d.status==="input_required").length,n=(e.approvals||[]).filter((d)=>d.status==="pending").length,s=Math.max(r,n),a=document.getElementById("nav-approvals-badge");if(a)a.textContent=s>0?`${s}`:"",a.style.display=s>0?"inline-block":"none";document.querySelectorAll(".nav-item").forEach((d)=>{let p=d.getAttribute("data-tab");if(p===e.activeTab||e.activeTab==="tasks"&&p==="approvals"||e.activeTab==="approvals"&&p==="tasks")d.classList.add("active");else d.classList.remove("active")});let o=document.getElementById("top-title"),l={overview:"Overview Cockpit",servers:"Server Hub & Connections",playground:"MCP Capability Playground",tasks:"SEP-2663 Tasks & HITL Review",approvals:"SEP-2663 Tasks & HITL Review",audit:"WORM Audit & Compliance Ledger",policy:"Security Governance & Redaction",secrets:"Native OS Keychain & Secrets Vault",aliases:"Facade & Alias Studio",profiles:"Server Constellation Profiles"};if(o)o.textContent=l[e.activeTab]||"Control Deck";switch(this.renderTopProfileSelector(),e.activeTab){case"overview":t.innerHTML=X();break;case"servers":t.innerHTML=Z();break;case"playground":t.innerHTML=ee();break;case"tasks":case"approvals":t.innerHTML=te(e);break;case"audit":t.innerHTML=se();break;case"policy":t.innerHTML=ae();break;case"secrets":t.innerHTML=oe();break;case"aliases":t.innerHTML=re();break;case"profiles":t.innerHTML=ne();break}}toggleClientsCollapse(){let e=i.getState().clientsCollapsed;i.setState({clientsCollapsed:!e}),this.render()}async saveNewVaultSecret(){let e=document.getElementById("vault-new-key"),t=document.getElementById("vault-new-val"),r=document.getElementById("vault-new-service"),n=e?.value.trim(),s=t?.value.trim(),a=r?.value.trim()||"warmplane";if(!n||!s){alert("Key and secret value are required");return}try{let o=await m.saveSecret(n,s,a);if(o.ok){if(alert(`Secret '${n}' saved securely into OS Keychain!
+Reference: ${o.uri}`),e)e.value="";if(t)t.value="";await this.refreshData()}else alert(`Failed to save secret: ${o.error}`)}catch(o){alert(`Error saving secret: ${o.message}`)}}async deleteVaultSecret(e){if(!confirm(`Are you sure you want to remove secret '${e}' from OS Keychain?`))return;try{let t=await m.deleteSecret(e);if(t.ok)await this.refreshData();else alert(`Failed to delete secret: ${t.error}`)}catch(t){alert(`Error deleting secret: ${t.message}`)}}async quickVaultEnv(e,t){let r=prompt(`Enter secret value to store in OS Keychain for ${e}.${t}:`);if(!r)return;try{let n=await m.saveSecret(t,r,"warmplane");if(!n.ok){alert(`Failed to save to Keychain: ${n.error}`);return}let o=(i.getState().config.mcpServers||{})[e];if(o){let l={...o.env||{},[t]:`keychain://warmplane/${t}`},d={...o,env:l},p=await m.upsertServer(e,d);if(p.ok)await this.refreshData(),alert(`Successfully migrated ${e}.${t} to OS Keychain!`);else alert(`Failed to update server config: ${p.error}`)}}catch(n){alert(`Error during migration: ${n.message}`)}}async refreshTasks(){try{let e=await m.listTasks();if(e&&Array.isArray(e.tasks))i.setState({tasks:e.tasks})}catch(e){console.error("Failed to refresh tasks:",e)}}filterTasksByStatus(e){i.setState({taskFilterStatus:e})}togglePlaygroundAsyncTask(e){i.setState({playgroundAsyncTask:e})}async submitTaskInputResponses(e){let r=i.getState().tasks.find((a)=>a.taskId===e)?.inputRequests||{},n=Object.keys(r),s={};if(n.length>0)for(let a of n){let o=document.getElementById(`task-input-${e}-${a}`);if(o){let l=o.value.trim();try{s[a]=JSON.parse(l)}catch{s[a]=l}}}else{let a=document.getElementById(`task-raw-input-${e}`);if(a&&a.value.trim())try{Object.assign(s,JSON.parse(a.value.trim()))}catch{alert("Invalid JSON in raw input responses");return}}try{let a=await m.updateTask(e,s);if(a.ok)await this.refreshTasks();else alert(`Task update failed: ${a.error?.message||a.error||"Unknown error"}`)}catch(a){alert(`Error updating task: ${a.message}`)}}async promptCancelTask(e){let t=prompt("Reason for cancelling task:");if(t===null)return;try{let r=await m.cancelTask(e,t||void 0);if(r.ok)await this.refreshTasks();else alert(`Task cancellation failed: ${r.error?.message||r.error||"Unknown error"}`)}catch(r){alert(`Error cancelling task: ${r.message}`)}}async inspectTaskDetails(e){try{let t=await m.getTask(e);if(t.ok&&t.task)alert(`Task [${t.task.taskId}]
 Status: ${t.task.status}
 Progress: ${Math.round((t.task.progress||0)*100)}%
-Payload: ${JSON.stringify(t.task.result||t.task.error||t.task.inputRequests||{},null,2)}`)}catch(t){alert(`Failed to fetch task: ${t.message}`)}}async submitApproval(e){let t=document.getElementById(`appr-operator-${e}`),r=document.getElementById(`appr-args-${e}`),n=t?.value.trim()||"security-operator",a=void 0;if(r&&r.value.trim())try{a=JSON.parse(r.value.trim())}catch{alert("Invalid JSON in arguments editor");return}let s=await v.approveTicket(e,n,a);if(s.ok)await this.refreshApprovals(),await this.refreshTasks();else alert(`Approval failed: ${s.error||"Unknown error"}`)}async promptReject(e){let t=prompt("Reason for rejection (will be returned to the calling agent):");if(t===null)return;let n=document.getElementById(`appr-operator-${e}`)?.value.trim()||"security-operator",a=await v.rejectTicket(e,n,t);if(a.ok)await this.refreshApprovals(),await this.refreshTasks();else alert(`Rejection failed: ${a.error||"Unknown error"}`)}setPlaygroundMode(e){l.setState({playgroundMode:e})}selectCapability(e){l.setState({selectedCapabilityId:e});let t=l.getState().capabilities.find((n)=>n.id===e),r=document.getElementById("pg-args-input");if(t){let n=B(t.input_schema,!1),a=JSON.stringify(n,null,2);if(r)r.value=a;let s={...l.getState().playgroundArgs||{}};s[e]=a,l.getState().playgroundArgs=s}}selectResource(e){l.setState({selectedResourceId:e})}selectPrompt(e){l.setState({selectedPromptId:e})}filterResources(e){let t=e.toLowerCase().trim(),n=(l.getState().resources||[]).filter((s)=>s.id.toLowerCase().includes(t)||s.name&&s.name.toLowerCase().includes(t)||s.uri&&s.uri.toLowerCase().includes(t)||s.server&&s.server.toLowerCase().includes(t)),a=document.getElementById("pg-res-list");if(a)if(n.length===0)a.innerHTML=`
+Payload: ${JSON.stringify(t.task.result||t.task.error||t.task.inputRequests||{},null,2)}`)}catch(t){alert(`Failed to fetch task: ${t.message}`)}}async submitApproval(e){let t=document.getElementById(`appr-operator-${e}`),r=document.getElementById(`appr-args-${e}`),n=t?.value.trim()||"security-operator",s=void 0;if(r&&r.value.trim())try{s=JSON.parse(r.value.trim())}catch{alert("Invalid JSON in arguments editor");return}let a=await m.approveTicket(e,n,s);if(a.ok)await this.refreshApprovals(),await this.refreshTasks();else alert(`Approval failed: ${a.error||"Unknown error"}`)}async promptReject(e){let t=prompt("Reason for rejection (will be returned to the calling agent):");if(t===null)return;let n=document.getElementById(`appr-operator-${e}`)?.value.trim()||"security-operator",s=await m.rejectTicket(e,n,t);if(s.ok)await this.refreshApprovals(),await this.refreshTasks();else alert(`Rejection failed: ${s.error||"Unknown error"}`)}setPlaygroundMode(e){i.setState({playgroundMode:e})}selectCapability(e){i.setState({selectedCapabilityId:e});let t=i.getState().capabilities.find((n)=>n.id===e),r=document.getElementById("pg-args-input");if(t){let n=U(t.input_schema,!1),s=JSON.stringify(n,null,2);if(r)r.value=s;let a={...i.getState().playgroundArgs||{}};a[e]=s,i.getState().playgroundArgs=a}}selectResource(e){i.setState({selectedResourceId:e})}selectPrompt(e){i.setState({selectedPromptId:e})}filterResources(e){let t=e.toLowerCase().trim(),n=(i.getState().resources||[]).filter((a)=>a.id.toLowerCase().includes(t)||a.name&&a.name.toLowerCase().includes(t)||a.uri&&a.uri.toLowerCase().includes(t)||a.server&&a.server.toLowerCase().includes(t)),s=document.getElementById("pg-res-list");if(s)if(n.length===0)s.innerHTML=`
           <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
             No resources match "${y(e)}"
           </div>
-        `;else a.innerHTML=n.map((s)=>{let o=s.id===l.getState().selectedResourceId?"active":"",i=s.uri?s.uri.split(":")[0]:"res";return`
-            <div class="cap-item ${o}" onclick="window.app.selectResource('${y(s.id)}')">
+        `;else s.innerHTML=n.map((a)=>{let o=a.id===i.getState().selectedResourceId?"active":"",l=a.uri?a.uri.split(":")[0]:"res";return`
+            <div class="cap-item ${o}" onclick="window.app.selectResource('${y(a.id)}')">
               <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${y(s.name||s.id)}</span>
-                <span class="badge" style="font-size: 9.5px; background: rgba(56, 189, 248, 0.15); color: var(--cyan-400);">${y(i)}</span>
+                <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${y(a.name||a.id)}</span>
+                <span class="badge" style="font-size: 9.5px; background: rgba(56, 189, 248, 0.15); color: var(--cyan-400);">${y(l)}</span>
               </div>
-              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${y(s.uri)}</div>
+              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${y(a.uri)}</div>
               <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 4px;">
-                <span>server: ${y(s.server||"local")}</span>
-                <span>${y(s.mime_type||"text/plain")}</span>
+                <span>server: ${y(a.server||"local")}</span>
+                <span>${y(a.mime_type||"text/plain")}</span>
               </div>
             </div>
-          `}).join("")}filterPrompts(e){let t=e.toLowerCase().trim(),n=(l.getState().prompts||[]).filter((s)=>s.id.toLowerCase().includes(t)||s.name&&s.name.toLowerCase().includes(t)||s.description&&s.description.toLowerCase().includes(t)||s.server&&s.server.toLowerCase().includes(t)),a=document.getElementById("pg-prompt-list");if(a)if(n.length===0)a.innerHTML=`
+          `}).join("")}filterPrompts(e){let t=e.toLowerCase().trim(),n=(i.getState().prompts||[]).filter((a)=>a.id.toLowerCase().includes(t)||a.name&&a.name.toLowerCase().includes(t)||a.description&&a.description.toLowerCase().includes(t)||a.server&&a.server.toLowerCase().includes(t)),s=document.getElementById("pg-prompt-list");if(s)if(n.length===0)s.innerHTML=`
           <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
             No prompts match "${y(e)}"
           </div>
-        `;else a.innerHTML=n.map((s)=>{let o=s.id===l.getState().selectedPromptId?"active":"",i=s.arguments?s.arguments.length:0;return`
-            <div class="cap-item ${o}" onclick="window.app.selectPrompt('${y(s.id)}')">
+        `;else s.innerHTML=n.map((a)=>{let o=a.id===i.getState().selectedPromptId?"active":"",l=a.arguments?a.arguments.length:0;return`
+            <div class="cap-item ${o}" onclick="window.app.selectPrompt('${y(a.id)}')">
               <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${y(s.name||s.id)}</span>
-                <span class="badge" style="font-size: 9.5px; background: rgba(168, 85, 247, 0.15); color: var(--purple-400);">${i} args</span>
+                <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${y(a.name||a.id)}</span>
+                <span class="badge" style="font-size: 9.5px; background: rgba(168, 85, 247, 0.15); color: var(--purple-400);">${l} args</span>
               </div>
-              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">${y(s.description||s.title||"Prompt template")}</div>
-              <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">server: ${y(s.server||"local")}</div>
+              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">${y(a.description||a.title||"Prompt template")}</div>
+              <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">server: ${y(a.server||"local")}</div>
             </div>
-          `}).join("")}updatePlaygroundArgs(e){let t=l.getState(),r=t.selectedCapabilityId||(t.capabilities[0]?t.capabilities[0].id:null);if(!r)return;let n={...t.playgroundArgs||{}};n[r]=e,t.playgroundArgs=n}fillPlaygroundSampleArgs(e=!1){let t=l.getState(),r=t.selectedCapabilityId||(t.capabilities[0]?t.capabilities[0].id:null),n=t.capabilities.find((i)=>i.id===r),a=document.getElementById("pg-args-input");if(!a)return;if(!n||!n.input_schema){if(a.value="{}",r){let i={...t.playgroundArgs||{}};i[r]="{}",t.playgroundArgs=i}return}let s=B(n.input_schema,e),o=JSON.stringify(s,null,2);if(a.value=o,r){let i={...t.playgroundArgs||{}};i[r]=o,t.playgroundArgs=i}}formatPlaygroundArgs(){let e=l.getState(),t=e.selectedCapabilityId||(e.capabilities[0]?e.capabilities[0].id:null),r=document.getElementById("pg-args-input");if(r)try{let n=JSON.parse(r.value||"{}"),a=JSON.stringify(n,null,2);if(r.value=a,t){let s={...e.playgroundArgs||{}};s[t]=a,e.playgroundArgs=s}}catch(n){alert(`Cannot format JSON: ${n.message}`)}}insertPlaygroundArgKey(e,t,r){let n=l.getState(),a=n.selectedCapabilityId||(n.capabilities[0]?n.capabilities[0].id:null),s=document.getElementById("pg-args-input");if(s){let o={};try{o=JSON.parse(s.value||"{}")}catch{o={}}if(o[e]===void 0)if(r!==null&&r!==void 0)o[e]=r;else switch(t){case"string":o[e]=`sample_${e}`;break;case"number":case"integer":o[e]=0;break;case"boolean":o[e]=!0;break;case"array":o[e]=[];break;case"object":o[e]={};break;default:o[e]=`sample_${e}`}let i=JSON.stringify(o,null,2);if(s.value=i,a){let d={...n.playgroundArgs||{}};d[a]=i,n.playgroundArgs=d}}}fillBatchStepSampleArgs(e){let t=l.getState(),r=[...t.batchSteps||[]],n=r[e];if(!n||!n.capability_id)return;let a=t.capabilities.find((d)=>d.id===n.capability_id);if(!a||!a.input_schema)return;let s=a.input_schema.properties||{},o={};for(let[d,p]of Object.entries(s))if(p.default!==void 0)o[d]=p.default;else if(Array.isArray(p.enum)&&p.enum.length>0)o[d]=p.enum[0];else switch(p.type||"string"){case"string":o[d]=`sample_${d}`;break;case"number":case"integer":o[d]=0;break;case"boolean":o[d]=!0;break;case"array":o[d]=[];break;case"object":o[d]={};break;default:o[d]=`sample_${d}`}let i=JSON.stringify(o,null,2);r[e]={...r[e],argsJson:i},l.setState({batchSteps:r})}filterCapabilities(e){let t=e.toLowerCase().trim(),n=l.getState().capabilities.filter((s)=>s.id.toLowerCase().includes(t)||s.summary&&s.summary.toLowerCase().includes(t)||s.server&&s.server.toLowerCase().includes(t)),a=document.getElementById("pg-cap-list");if(a)if(n.length===0)a.innerHTML=`
+          `}).join("")}updatePlaygroundArgs(e){let t=i.getState(),r=t.selectedCapabilityId||(t.capabilities[0]?t.capabilities[0].id:null);if(!r)return;let n={...t.playgroundArgs||{}};n[r]=e,t.playgroundArgs=n}fillPlaygroundSampleArgs(e=!1){let t=i.getState(),r=t.selectedCapabilityId||(t.capabilities[0]?t.capabilities[0].id:null),n=t.capabilities.find((l)=>l.id===r),s=document.getElementById("pg-args-input");if(!s)return;if(!n||!n.input_schema){if(s.value="{}",r){let l={...t.playgroundArgs||{}};l[r]="{}",t.playgroundArgs=l}return}let a=U(n.input_schema,e),o=JSON.stringify(a,null,2);if(s.value=o,r){let l={...t.playgroundArgs||{}};l[r]=o,t.playgroundArgs=l}}formatPlaygroundArgs(){let e=i.getState(),t=e.selectedCapabilityId||(e.capabilities[0]?e.capabilities[0].id:null),r=document.getElementById("pg-args-input");if(r)try{let n=JSON.parse(r.value||"{}"),s=JSON.stringify(n,null,2);if(r.value=s,t){let a={...e.playgroundArgs||{}};a[t]=s,e.playgroundArgs=a}}catch(n){alert(`Cannot format JSON: ${n.message}`)}}insertPlaygroundArgKey(e,t,r){let n=i.getState(),s=n.selectedCapabilityId||(n.capabilities[0]?n.capabilities[0].id:null),a=document.getElementById("pg-args-input");if(a){let o={};try{o=JSON.parse(a.value||"{}")}catch{o={}}if(o[e]===void 0)if(r!==null&&r!==void 0)o[e]=r;else switch(t){case"string":o[e]=`sample_${e}`;break;case"number":case"integer":o[e]=0;break;case"boolean":o[e]=!0;break;case"array":o[e]=[];break;case"object":o[e]={};break;default:o[e]=`sample_${e}`}let l=JSON.stringify(o,null,2);if(a.value=l,s){let d={...n.playgroundArgs||{}};d[s]=l,n.playgroundArgs=d}}}fillBatchStepSampleArgs(e){let t=i.getState(),r=[...t.batchSteps||[]],n=r[e];if(!n||!n.capability_id)return;let s=t.capabilities.find((d)=>d.id===n.capability_id);if(!s||!s.input_schema)return;let a=s.input_schema.properties||{},o={};for(let[d,p]of Object.entries(a))if(p.default!==void 0)o[d]=p.default;else if(Array.isArray(p.enum)&&p.enum.length>0)o[d]=p.enum[0];else switch(p.type||"string"){case"string":o[d]=`sample_${d}`;break;case"number":case"integer":o[d]=0;break;case"boolean":o[d]=!0;break;case"array":o[d]=[];break;case"object":o[d]={};break;default:o[d]=`sample_${d}`}let l=JSON.stringify(o,null,2);r[e]={...r[e],argsJson:l},i.setState({batchSteps:r})}filterCapabilities(e){let t=e.toLowerCase().trim(),n=i.getState().capabilities.filter((a)=>a.id.toLowerCase().includes(t)||a.summary&&a.summary.toLowerCase().includes(t)||a.server&&a.server.toLowerCase().includes(t)),s=document.getElementById("pg-cap-list");if(s)if(n.length===0)s.innerHTML=`
           <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
             No capabilities match "${y(e)}"
           </div>
-        `;else a.innerHTML=n.map((s)=>`
-          <div class="cap-item ${s.id===l.getState().selectedCapabilityId?"active":""}" onclick="window.app.selectCapability('${y(s.id)}')">
+        `;else s.innerHTML=n.map((a)=>`
+          <div class="cap-item ${a.id===i.getState().selectedCapabilityId?"active":""}" onclick="window.app.selectCapability('${y(a.id)}')">
             <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${y(s.id)}</span>
-              <span style="font-size: 10px; color: var(--green-400);">${y(s.mode||"read")}</span>
+              <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${y(a.id)}</span>
+              <span style="font-size: 10px; color: var(--green-400);">${y(a.mode||"read")}</span>
             </div>
-            <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">server: ${y(s.server||"local")}</div>
+            <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">server: ${y(a.server||"local")}</div>
           </div>
-        `).join("")}async executePlaygroundTool(){let e=l.getState(),t=e.selectedCapabilityId||(e.capabilities[0]?e.capabilities[0].id:null);if(!t)return;let r=document.getElementById("pg-args-input")?.value||"{}",n=document.getElementById("pg-context-input")?.value||void 0,a=document.getElementById("pg-jsonpath-input")?.value.trim()||void 0,s=document.getElementById("pg-limit-lines-input")?.value.trim()||void 0,o=document.getElementById("pg-truncate-bytes-input")?.value.trim()||void 0,i={};try{i=JSON.parse(r)}catch{alert("Invalid arguments JSON object");return}if(a)i._jsonpath=a;if(s&&!isNaN(Number(s)))i._limit_lines=Number(s);if(o&&!isNaN(Number(o)))i._truncate_bytes=Number(o);let d=`op-${Date.now()}`;l.setState({isExecuting:!0,activeRequestId:d});let p=e.activeProfile||void 0,g=e.playgroundAsyncTask||!1;try{let u=await v.callCapability({capability_id:t,args:i,request_id:d,async_task:g?!0:void 0,context:{operation_id:n||d}},p);if(l.setState({isExecuting:!1,activeRequestId:null,executionResult:{status:u.status,durationMs:u.durationMs,data:u.data}}),u.status===202||u.data?.resultType==="task")this.refreshTasks();l.addEventLog("POST",`/v1/tools/call → ${t}`,u.status===200?"200 OK":`HTTP ${u.status}`,`${u.durationMs.toFixed(1)}ms`),v.getConfig().then((m)=>{if(m.ok&&m.circuit_breakers)l.setState({circuitBreakers:m.circuit_breakers})})}catch(u){l.setState({isExecuting:!1,activeRequestId:null,executionResult:{status:500,durationMs:0,data:{error:u.toString()}}})}}openBatchModal(){let e=l.getState(),t=e.batchSteps;if(!t||t.length===0)t=[{id:"step_1",capability_id:e.selectedCapabilityId||(e.capabilities[0]?e.capabilities[0].id:""),argsJson:"{}",continue_on_error:!1},{id:"step_2",capability_id:"",argsJson:"{}",continue_on_error:!0}],l.setState({batchSteps:t});l.setState({isBatchModalOpen:!0})}closeBatchModal(){l.setState({isBatchModalOpen:!1})}addBatchStep(){let t=[...l.getState().batchSteps||[]],r=t.length+1;t.push({id:`step_${r}`,capability_id:"",argsJson:"{}",continue_on_error:!1}),l.setState({batchSteps:t})}removeBatchStep(e){let r=[...l.getState().batchSteps||[]];if(r.length<=1){alert("Pipeline must contain at least one execution step.");return}r.splice(e,1);let n=r.map((a,s)=>({...a,id:`step_${s+1}`}));l.setState({batchSteps:n})}updateBatchStepCapability(e,t){let n=[...l.getState().batchSteps||[]];if(n[e])n[e]={...n[e],capability_id:t},l.setState({batchSteps:n})}updateBatchStepContinueOnError(e,t){let n=[...l.getState().batchSteps||[]];if(n[e])n[e]={...n[e],continue_on_error:t},l.setState({batchSteps:n})}updateBatchStepArgs(e,t){let r=l.getState(),n=[...r.batchSteps||[]];if(n[e])n[e]={...n[e],argsJson:t},r.batchSteps[e].argsJson=t}appendBatchVariable(e,t){let n=[...l.getState().batchSteps||[]],a=document.getElementById(`batch-step-args-${e}`);if(a){let s=a.value,o=a.selectionStart||s.length,i=a.selectionEnd||s.length,d=s.substring(0,o)+t+s.substring(i);if(a.value=d,n[e])n[e]={...n[e],argsJson:d},l.setState({batchSteps:n})}}async executeBatchPipeline(){let e=l.getState(),t=e.batchSteps||[],r=[];for(let a=0;a<t.length;a++){let s=t[a];if(!s.capability_id){alert(`Please select a capability for Step ${a+1}`);return}let o={};try{o=JSON.parse(s.argsJson||"{}")}catch{alert(`Invalid JSON in Step ${a+1} arguments`);return}r.push({id:s.id||`step_${a+1}`,capability_id:s.capability_id,args:o,continue_on_error:s.continue_on_error})}l.setState({isBatchModalOpen:!1});let n=e.activeProfile||void 0;try{let a=await v.batchCallCapabilities(r,n);l.setState({executionResult:{status:a.status,durationMs:a.durationMs,data:a.data}}),l.addEventLog("POST",`/v1/tools/batch_call (${t.length} steps)`,a.status===200?"200 OK":`HTTP ${a.status}`,`${a.durationMs.toFixed(1)}ms`)}catch(a){l.setState({executionResult:{status:500,durationMs:0,data:{error:a.toString()}}})}}async executeReadResource(){let e=l.getState(),t=e.selectedResourceId||(e.resources[0]?e.resources[0].id:null);if(!t)return;let r=document.getElementById("pg-res-jsonpath-input")?.value.trim()||void 0,n=document.getElementById("pg-res-lines-input")?.value.trim()||void 0,a=document.getElementById("pg-res-bytes-input")?.value.trim()||void 0,s={resource_id:t};if(r)s._jsonpath=r;if(n&&!isNaN(Number(n)))s._limit_lines=Number(n);if(a&&!isNaN(Number(a)))s._truncate_bytes=Number(a);let o=e.activeProfile||void 0;try{let i=await v.readResource({resource_id:t,input_responses:s},o);l.setState({resourceReadResult:{status:i.status,durationMs:i.durationMs,data:i.data}}),l.addEventLog("POST",`/v1/resources/read → ${t}`,i.status===200?"200 OK":`HTTP ${i.status}`,`${i.durationMs.toFixed(1)}ms`)}catch(i){l.setState({resourceReadResult:{status:500,durationMs:0,data:{error:i.toString()}}})}}async executeGetPrompt(){let e=l.getState(),t=e.selectedPromptId||(e.prompts[0]?e.prompts[0].id:null);if(!t)return;let r=document.querySelectorAll(".prompt-arg-input"),n={};r.forEach((s)=>{let o=s,i=o.getAttribute("data-arg-name");if(i&&o.value.trim())n[i]=o.value.trim()});let a=e.activeProfile||void 0;try{let s=await v.getPrompt({prompt_id:t,arguments:n},a);l.setState({promptGetResult:{status:s.status,durationMs:s.durationMs,data:s.data}}),l.addEventLog("POST",`/v1/prompts/get → ${t}`,s.status===200?"200 OK":`HTTP ${s.status}`,`${s.durationMs.toFixed(1)}ms`)}catch(s){l.setState({promptGetResult:{status:500,durationMs:0,data:{error:s.toString()}}})}}toggleBatchPlayground(){let e=document.getElementById("pg-args-input");if(!e)return;let t=[{id:"step_1",capability_id:"sqlite.read_query",args:{query:"SELECT * FROM users LIMIT 2"}},{id:"step_2",capability_id:"github.issues.search",args:{query:"label:bug"},continue_on_error:!0}];e.value=JSON.stringify(t,null,2)}async submitPolicyRule(e){let t=e==="allow"?"policy-new-allow":e==="deny"?"policy-new-deny":"policy-new-redact",r=document.getElementById(t);if(!r)return;let n=r.value.trim();if(!n)return;await this.addPolicyRule(e,n),r.value=""}async addPolicyRule(e,t){let r=(t||"").trim();if(!r)return;let a=l.getState().config.policy||{},s=[...a.allow||[]],o=[...a.deny||[]],i=[...a.redact_keys||a.redactKeys||[]];if(e==="allow"&&!s.includes(r))s.push(r);if(e==="deny"&&!o.includes(r))o.push(r);if(e==="redact"&&!i.includes(r))i.push(r);let d=await v.savePolicy({allow:s,deny:o,redact_keys:i,redactKeys:i});if(!d.ok)alert(`Failed to save policy rule: ${d.error||"Unknown error"}`);await this.refreshData()}async removePolicyRule(e,t){let n=l.getState().config.policy||{},a=[...n.allow||[]],s=[...n.deny||[]],o=[...n.redact_keys||n.redactKeys||[]];if(e==="allow")a.splice(t,1);if(e==="deny")s.splice(t,1);if(e==="redact")o.splice(t,1);let i=await v.savePolicy({allow:a,deny:s,redact_keys:o,redactKeys:o});if(!i.ok)alert(`Failed to update policy: ${i.error||"Unknown error"}`);await this.refreshData()}async saveWebhookConfig(){let e=document.getElementById("policy-webhook-url"),t=document.getElementById("policy-webhook-format"),r=document.getElementById("policy-webhook-secret"),n=e?e.value.trim():"",a=t?t.value:"generic",s=r?r.value.trim():"",i=l.getState().config.policy||{},d=n?{url:n,format:a,secret:s&&!s.startsWith("WARMPLANE_")&&!s.includes("_")?s:void 0,secret_env:s&&(s.startsWith("WARMPLANE_")||s.includes("_"))?s:void 0,events:["approval.requested","circuit_breaker.tripped","policy.violation"]}:void 0,p=await v.savePolicy({...i,webhook:d});if(p.ok)alert("Webhook settings saved successfully");else alert(`Failed to save webhook settings: ${p.error||"Unknown error"}`);await this.refreshData()}async testWebhook(){let e=document.getElementById("policy-webhook-url"),t=document.getElementById("policy-webhook-format"),r=e?e.value.trim():void 0,n=t?t.value:void 0,a=document.getElementById("policy-webhook-status");if(a)a.textContent="Sending test event...",a.style.color="var(--cyan-400)";try{let s=await v.testWebhook(r,n);if(s.ok){if(alert(`Test webhook sent successfully! (${s.message})`),a)a.textContent=`✔ Test sent (HTTP ${s.status_code||200})`,a.style.color="var(--green-400)"}else if(alert(`Test webhook failed: ${s.error||"Unknown error"}`),a)a.textContent=`✖ Failed: ${s.error}`,a.style.color="var(--red-400)"}catch(s){alert(`Error sending test webhook: ${s.message}`)}}testPolicySandbox(e){let t=document.getElementById("policy-test-verdict");if(!t)return;let r=e.trim();if(!r){t.textContent="ENTER ID",t.style.color="var(--text-dim)";return}let a=l.getState().config.policy||{},s=a.deny||[],o=a.allow||[],i=(d,p)=>{if(d==="*")return!0;if(d.endsWith("*"))return p.startsWith(d.slice(0,-1));return d===p};if(s.some((d)=>i(d,r))){t.textContent="DENIED (Strict Block)",t.style.color="var(--red-400)";return}if(o.length>0&&!o.some((d)=>i(d,r))){t.textContent="DENIED (Not in Allow List)",t.style.color="var(--red-400)";return}t.textContent="ALLOWED",t.style.color="var(--green-400)"}async deleteServer(e){if(!confirm(`Are you sure you want to remove server '${e}' from config?`))return;await v.deleteServer(e),await this.refreshData()}openAddServerModal(){this.closeModals();let e=document.getElementById("modal-srv-title"),t=document.getElementById("modal-srv-template-banner"),r=document.getElementById("modal-srv-name"),n=document.getElementById("modal-srv-transport"),a=document.getElementById("modal-srv-command"),s=document.getElementById("modal-srv-url"),o=document.getElementById("modal-srv-ft"),i=document.getElementById("modal-srv-cd"),d=document.getElementById("modal-srv-autorestart"),p=document.getElementById("modal-srv-maxrestarts");if(e)e.textContent="Add Upstream MCP Server";if(t)t.style.display="flex";if(r)r.value="",r.disabled=!1;if(n)n.value="stdio";if(a)a.value="";if(s)s.value="";let g=document.getElementById("modal-group-cmd"),u=document.getElementById("modal-group-url");if(g)g.style.display="block";if(u)u.style.display="none";if(o)o.value="3";if(i)i.value="30000";if(d)d.value="true";if(p)p.value="5";let m=document.getElementById("modal-add-server");if(m)m.classList.add("active")}openEditServerModal(e){this.closeModals();let t=l.getState(),r=t.config.mcpServers?.[e];if(!r){alert(`Server '${e}' not found in configuration.`);return}let n=document.getElementById("modal-srv-title"),a=document.getElementById("modal-srv-template-banner"),s=document.getElementById("modal-srv-name"),o=document.getElementById("modal-srv-transport"),i=document.getElementById("modal-srv-command"),d=document.getElementById("modal-srv-url"),p=document.getElementById("modal-srv-ft"),g=document.getElementById("modal-srv-cd"),u=document.getElementById("modal-srv-autorestart"),m=document.getElementById("modal-srv-maxrestarts");if(n)n.textContent=`Edit Server '${e}'`;if(a)a.style.display="none";if(s)s.value=e,s.disabled=!0;let c=!!r.command;if(o)o.value=c?"stdio":"http";let h=document.getElementById("modal-group-cmd"),k=document.getElementById("modal-group-url");if(h)h.style.display=c?"block":"none";if(k)k.style.display=c?"none":"block";if(i)i.value=c?`${r.command} ${(r.args||[]).join(" ")}`.trim():"";if(d)d.value=r.url||"";let E=r.resilience||t.config.resilience;if(p)p.value=String(E?.failureThreshold??3);if(g)g.value=String(E?.cooldownMs??30000);if(u)u.value=E?.autoRestart===!1?"false":"true";if(m)m.value=String(E?.maxRestarts??5);let T=document.getElementById("modal-add-server");if(T)T.classList.add("active")}async submitAddServer(){let e=document.getElementById("modal-srv-name"),t=e?.value.trim(),r=document.getElementById("modal-srv-transport")?.value;if(!t){alert("Server name is required");return}if(e&&!e.disabled){if((l.getState().config.mcpServers||{})[t]){if(!confirm(`Server '${t}' already exists in configuration. Do you want to overwrite it?`))return}}let n={};if(r==="stdio"){let g=(document.getElementById("modal-srv-command")?.value.trim()).split(/\s+/).filter(Boolean);if(g.length===0){alert("Command is required");return}n.command=g[0],n.args=g.slice(1)}else{let p=document.getElementById("modal-srv-url")?.value.trim();if(!p){alert("URL is required");return}n.url=p}let a=document.getElementById("modal-srv-ft")?.value.trim(),s=document.getElementById("modal-srv-cd")?.value.trim(),o=document.getElementById("modal-srv-autorestart")?.value,i=document.getElementById("modal-srv-maxrestarts")?.value.trim();if(a||s||o||i)n.resilience={failureThreshold:a?Number(a):3,cooldownMs:s?Number(s):30000,autoRestart:o!=="false",maxRestarts:i?Number(i):5};let d=await v.upsertServer(t,n);if(d.ok)this.closeModals(),await this.refreshData();else alert(`Failed to save server: ${d.error}`)}openTemplateCatalog(){this.closeModals();let e=document.getElementById("modal-templates");if(e)e.classList.add("active");this.renderTemplateGrid()}setTemplateCategory(e){this.activeTemplateCategory=e,document.querySelectorAll(".tmpl-cat-btn").forEach((t)=>{if(t.getAttribute("data-category")===e)t.classList.add("active"),t.style.background="var(--surface-elevated)",t.style.color="var(--amber-400)";else t.classList.remove("active"),t.style.background="var(--surface-card)",t.style.color="var(--text-main)"}),this.renderTemplateGrid()}filterTemplates(e){this.activeTemplateFilter=e.toLowerCase().trim(),this.renderTemplateGrid()}renderTemplateGrid(){let e=document.getElementById("tmpl-grid");if(!e)return;let t=N.filter((a)=>{let s=this.activeTemplateCategory==="all"||a.category===this.activeTemplateCategory,o=!this.activeTemplateFilter||a.name.toLowerCase().includes(this.activeTemplateFilter)||a.id.toLowerCase().includes(this.activeTemplateFilter)||a.description.toLowerCase().includes(this.activeTemplateFilter)||a.command.toLowerCase().includes(this.activeTemplateFilter)||a.envFields.some((i)=>i.key.toLowerCase().includes(this.activeTemplateFilter));return s&&o});if(t.length===0){e.innerHTML=`
+        `).join("")}async executePlaygroundTool(){let e=i.getState(),t=e.selectedCapabilityId||(e.capabilities[0]?e.capabilities[0].id:null);if(!t)return;let r=document.getElementById("pg-args-input")?.value||"{}",n=document.getElementById("pg-context-input")?.value||void 0,s=document.getElementById("pg-jsonpath-input")?.value.trim()||void 0,a=document.getElementById("pg-limit-lines-input")?.value.trim()||void 0,o=document.getElementById("pg-truncate-bytes-input")?.value.trim()||void 0,l={};try{l=JSON.parse(r)}catch{alert("Invalid arguments JSON object");return}if(s)l._jsonpath=s;if(a&&!isNaN(Number(a)))l._limit_lines=Number(a);if(o&&!isNaN(Number(o)))l._truncate_bytes=Number(o);let d=`op-${Date.now()}`;i.setState({isExecuting:!0,activeRequestId:d});let p=e.activeProfile||void 0,g=e.playgroundAsyncTask||!1;try{let u=await m.callCapability({capability_id:t,args:l,request_id:d,async_task:g?!0:void 0,context:{operation_id:n||d}},p);if(i.setState({isExecuting:!1,activeRequestId:null,executionResult:{status:u.status,durationMs:u.durationMs,data:u.data}}),u.status===202||u.data?.resultType==="task")this.refreshTasks();i.addEventLog("POST",`/v1/tools/call → ${t}`,u.status===200?"200 OK":`HTTP ${u.status}`,`${u.durationMs.toFixed(1)}ms`),m.getConfig().then((v)=>{if(v.ok&&v.circuit_breakers)i.setState({circuitBreakers:v.circuit_breakers})})}catch(u){i.setState({isExecuting:!1,activeRequestId:null,executionResult:{status:500,durationMs:0,data:{error:u.toString()}}})}}openBatchModal(){let e=i.getState(),t=e.batchSteps;if(!t||t.length===0)t=[{id:"step_1",capability_id:e.selectedCapabilityId||(e.capabilities[0]?e.capabilities[0].id:""),argsJson:"{}",continue_on_error:!1},{id:"step_2",capability_id:"",argsJson:"{}",continue_on_error:!0}],i.setState({batchSteps:t});i.setState({isBatchModalOpen:!0})}closeBatchModal(){i.setState({isBatchModalOpen:!1})}addBatchStep(){let t=[...i.getState().batchSteps||[]],r=t.length+1;t.push({id:`step_${r}`,capability_id:"",argsJson:"{}",continue_on_error:!1}),i.setState({batchSteps:t})}removeBatchStep(e){let r=[...i.getState().batchSteps||[]];if(r.length<=1){alert("Pipeline must contain at least one execution step.");return}r.splice(e,1);let n=r.map((s,a)=>({...s,id:`step_${a+1}`}));i.setState({batchSteps:n})}updateBatchStepCapability(e,t){let n=[...i.getState().batchSteps||[]];if(n[e])n[e]={...n[e],capability_id:t},i.setState({batchSteps:n})}updateBatchStepContinueOnError(e,t){let n=[...i.getState().batchSteps||[]];if(n[e])n[e]={...n[e],continue_on_error:t},i.setState({batchSteps:n})}updateBatchStepArgs(e,t){let r=i.getState(),n=[...r.batchSteps||[]];if(n[e])n[e]={...n[e],argsJson:t},r.batchSteps[e].argsJson=t}appendBatchVariable(e,t){let n=[...i.getState().batchSteps||[]],s=document.getElementById(`batch-step-args-${e}`);if(s){let a=s.value,o=s.selectionStart||a.length,l=s.selectionEnd||a.length,d=a.substring(0,o)+t+a.substring(l);if(s.value=d,n[e])n[e]={...n[e],argsJson:d},i.setState({batchSteps:n})}}async executeBatchPipeline(){let e=i.getState(),t=e.batchSteps||[],r=[];for(let s=0;s<t.length;s++){let a=t[s];if(!a.capability_id){alert(`Please select a capability for Step ${s+1}`);return}let o={};try{o=JSON.parse(a.argsJson||"{}")}catch{alert(`Invalid JSON in Step ${s+1} arguments`);return}r.push({id:a.id||`step_${s+1}`,capability_id:a.capability_id,args:o,continue_on_error:a.continue_on_error})}i.setState({isBatchModalOpen:!1});let n=e.activeProfile||void 0;try{let s=await m.batchCallCapabilities(r,n);i.setState({executionResult:{status:s.status,durationMs:s.durationMs,data:s.data}}),i.addEventLog("POST",`/v1/tools/batch_call (${t.length} steps)`,s.status===200?"200 OK":`HTTP ${s.status}`,`${s.durationMs.toFixed(1)}ms`)}catch(s){i.setState({executionResult:{status:500,durationMs:0,data:{error:s.toString()}}})}}async executeReadResource(){let e=i.getState(),t=e.selectedResourceId||(e.resources[0]?e.resources[0].id:null);if(!t)return;let r=document.getElementById("pg-res-jsonpath-input")?.value.trim()||void 0,n=document.getElementById("pg-res-lines-input")?.value.trim()||void 0,s=document.getElementById("pg-res-bytes-input")?.value.trim()||void 0,a={resource_id:t};if(r)a._jsonpath=r;if(n&&!isNaN(Number(n)))a._limit_lines=Number(n);if(s&&!isNaN(Number(s)))a._truncate_bytes=Number(s);let o=e.activeProfile||void 0;try{let l=await m.readResource({resource_id:t,input_responses:a},o);i.setState({resourceReadResult:{status:l.status,durationMs:l.durationMs,data:l.data}}),i.addEventLog("POST",`/v1/resources/read → ${t}`,l.status===200?"200 OK":`HTTP ${l.status}`,`${l.durationMs.toFixed(1)}ms`)}catch(l){i.setState({resourceReadResult:{status:500,durationMs:0,data:{error:l.toString()}}})}}async executeGetPrompt(){let e=i.getState(),t=e.selectedPromptId||(e.prompts[0]?e.prompts[0].id:null);if(!t)return;let r=document.querySelectorAll(".prompt-arg-input"),n={};r.forEach((a)=>{let o=a,l=o.getAttribute("data-arg-name");if(l&&o.value.trim())n[l]=o.value.trim()});let s=e.activeProfile||void 0;try{let a=await m.getPrompt({prompt_id:t,arguments:n},s);i.setState({promptGetResult:{status:a.status,durationMs:a.durationMs,data:a.data}}),i.addEventLog("POST",`/v1/prompts/get → ${t}`,a.status===200?"200 OK":`HTTP ${a.status}`,`${a.durationMs.toFixed(1)}ms`)}catch(a){i.setState({promptGetResult:{status:500,durationMs:0,data:{error:a.toString()}}})}}toggleBatchPlayground(){let e=document.getElementById("pg-args-input");if(!e)return;let t=[{id:"step_1",capability_id:"sqlite.read_query",args:{query:"SELECT * FROM users LIMIT 2"}},{id:"step_2",capability_id:"github.issues.search",args:{query:"label:bug"},continue_on_error:!0}];e.value=JSON.stringify(t,null,2)}async submitPolicyRule(e){let t=e==="allow"?"policy-new-allow":e==="deny"?"policy-new-deny":"policy-new-redact",r=document.getElementById(t);if(!r)return;let n=r.value.trim();if(!n)return;await this.addPolicyRule(e,n),r.value=""}async addPolicyRule(e,t){let r=(t||"").trim();if(!r)return;let s=i.getState().config.policy||{},a=[...s.allow||[]],o=[...s.deny||[]],l=[...s.redact_keys||s.redactKeys||[]];if(e==="allow"&&!a.includes(r))a.push(r);if(e==="deny"&&!o.includes(r))o.push(r);if(e==="redact"&&!l.includes(r))l.push(r);let d=await m.savePolicy({allow:a,deny:o,redact_keys:l,redactKeys:l});if(!d.ok)alert(`Failed to save policy rule: ${d.error||"Unknown error"}`);await this.refreshData()}async removePolicyRule(e,t){let n=i.getState().config.policy||{},s=[...n.allow||[]],a=[...n.deny||[]],o=[...n.redact_keys||n.redactKeys||[]];if(e==="allow")s.splice(t,1);if(e==="deny")a.splice(t,1);if(e==="redact")o.splice(t,1);let l=await m.savePolicy({allow:s,deny:a,redact_keys:o,redactKeys:o});if(!l.ok)alert(`Failed to update policy: ${l.error||"Unknown error"}`);await this.refreshData()}async saveWebhookConfig(){let e=document.getElementById("policy-webhook-url"),t=document.getElementById("policy-webhook-format"),r=document.getElementById("policy-webhook-secret"),n=e?e.value.trim():"",s=t?t.value:"generic",a=r?r.value.trim():"",l=i.getState().config.policy||{},d=n?{url:n,format:s,secret:a&&!a.startsWith("WARMPLANE_")&&!a.includes("_")?a:void 0,secret_env:a&&(a.startsWith("WARMPLANE_")||a.includes("_"))?a:void 0,events:["approval.requested","circuit_breaker.tripped","policy.violation"]}:void 0,p=await m.savePolicy({...l,webhook:d});if(p.ok)alert("Webhook settings saved successfully");else alert(`Failed to save webhook settings: ${p.error||"Unknown error"}`);await this.refreshData()}async testWebhook(){let e=document.getElementById("policy-webhook-url"),t=document.getElementById("policy-webhook-format"),r=e?e.value.trim():void 0,n=t?t.value:void 0,s=document.getElementById("policy-webhook-status");if(s)s.textContent="Sending test event...",s.style.color="var(--cyan-400)";try{let a=await m.testWebhook(r,n);if(a.ok){if(alert(`Test webhook sent successfully! (${a.message})`),s)s.textContent=`✔ Test sent (HTTP ${a.status_code||200})`,s.style.color="var(--green-400)"}else if(alert(`Test webhook failed: ${a.error||"Unknown error"}`),s)s.textContent=`✖ Failed: ${a.error}`,s.style.color="var(--red-400)"}catch(a){alert(`Error sending test webhook: ${a.message}`)}}testPolicySandbox(e){let t=document.getElementById("policy-test-verdict");if(!t)return;let r=e.trim();if(!r){t.textContent="ENTER ID",t.style.color="var(--text-dim)";return}let s=i.getState().config.policy||{},a=s.deny||[],o=s.allow||[],l=(d,p)=>{if(d==="*")return!0;if(d.endsWith("*"))return p.startsWith(d.slice(0,-1));return d===p};if(a.some((d)=>l(d,r))){t.textContent="DENIED (Strict Block)",t.style.color="var(--red-400)";return}if(o.length>0&&!o.some((d)=>l(d,r))){t.textContent="DENIED (Not in Allow List)",t.style.color="var(--red-400)";return}t.textContent="ALLOWED",t.style.color="var(--green-400)"}async deleteServer(e){if(!confirm(`Are you sure you want to remove server '${e}' from config?`))return;await m.deleteServer(e),await this.refreshData()}openAddServerModal(){this.closeModals();let e=document.getElementById("modal-srv-title"),t=document.getElementById("modal-srv-template-banner"),r=document.getElementById("modal-srv-name"),n=document.getElementById("modal-srv-transport"),s=document.getElementById("modal-srv-command"),a=document.getElementById("modal-srv-url"),o=document.getElementById("modal-srv-ft"),l=document.getElementById("modal-srv-cd"),d=document.getElementById("modal-srv-autorestart"),p=document.getElementById("modal-srv-maxrestarts");if(e)e.textContent="Add Upstream MCP Server";if(t)t.style.display="flex";if(r)r.value="",r.disabled=!1;if(n)n.value="stdio";if(s)s.value="";if(a)a.value="";let g=document.getElementById("modal-group-cmd"),u=document.getElementById("modal-group-url");if(g)g.style.display="block";if(u)u.style.display="none";if(o)o.value="3";if(l)l.value="30000";if(d)d.value="true";if(p)p.value="5";let v=document.getElementById("modal-add-server");if(v)v.classList.add("active")}openEditServerModal(e){this.closeModals();let t=i.getState(),r=t.config.mcpServers?.[e];if(!r){alert(`Server '${e}' not found in configuration.`);return}let n=document.getElementById("modal-srv-title"),s=document.getElementById("modal-srv-template-banner"),a=document.getElementById("modal-srv-name"),o=document.getElementById("modal-srv-transport"),l=document.getElementById("modal-srv-command"),d=document.getElementById("modal-srv-url"),p=document.getElementById("modal-srv-ft"),g=document.getElementById("modal-srv-cd"),u=document.getElementById("modal-srv-autorestart"),v=document.getElementById("modal-srv-maxrestarts");if(n)n.textContent=`Edit Server '${e}'`;if(s)s.style.display="none";if(a)a.value=e,a.disabled=!0;let c=!!r.command;if(o)o.value=c?"stdio":"http";let h=document.getElementById("modal-group-cmd"),k=document.getElementById("modal-group-url");if(h)h.style.display=c?"block":"none";if(k)k.style.display=c?"none":"block";if(l)l.value=c?`${r.command} ${(r.args||[]).join(" ")}`.trim():"";if(d)d.value=r.url||"";let E=r.resilience||t.config.resilience;if(p)p.value=String(E?.failureThreshold??3);if(g)g.value=String(E?.cooldownMs??30000);if(u)u.value=E?.autoRestart===!1?"false":"true";if(v)v.value=String(E?.maxRestarts??5);let T=document.getElementById("modal-add-server");if(T)T.classList.add("active")}async submitAddServer(){let e=document.getElementById("modal-srv-name"),t=e?.value.trim(),r=document.getElementById("modal-srv-transport")?.value;if(!t){alert("Server name is required");return}if(e&&!e.disabled){if((i.getState().config.mcpServers||{})[t]){if(!confirm(`Server '${t}' already exists in configuration. Do you want to overwrite it?`))return}}let n={};if(r==="stdio"){let g=(document.getElementById("modal-srv-command")?.value.trim()).split(/\s+/).filter(Boolean);if(g.length===0){alert("Command is required");return}n.command=g[0],n.args=g.slice(1)}else{let p=document.getElementById("modal-srv-url")?.value.trim();if(!p){alert("URL is required");return}n.url=p}let s=document.getElementById("modal-srv-ft")?.value.trim(),a=document.getElementById("modal-srv-cd")?.value.trim(),o=document.getElementById("modal-srv-autorestart")?.value,l=document.getElementById("modal-srv-maxrestarts")?.value.trim();if(s||a||o||l)n.resilience={failureThreshold:s?Number(s):3,cooldownMs:a?Number(a):30000,autoRestart:o!=="false",maxRestarts:l?Number(l):5};let d=await m.upsertServer(t,n);if(d.ok)this.closeModals(),await this.refreshData();else alert(`Failed to save server: ${d.error}`)}openTemplateCatalog(){this.closeModals();let e=document.getElementById("modal-templates");if(e)e.classList.add("active");this.renderTemplateGrid()}setTemplateCategory(e){this.activeTemplateCategory=e,document.querySelectorAll(".tmpl-cat-btn").forEach((t)=>{if(t.getAttribute("data-category")===e)t.classList.add("active"),t.style.background="var(--surface-elevated)",t.style.color="var(--amber-400)";else t.classList.remove("active"),t.style.background="var(--surface-card)",t.style.color="var(--text-main)"}),this.renderTemplateGrid()}filterTemplates(e){this.activeTemplateFilter=e.toLowerCase().trim(),this.renderTemplateGrid()}renderTemplateGrid(){let e=document.getElementById("tmpl-grid");if(!e)return;let t=W.filter((s)=>{let a=this.activeTemplateCategory==="all"||s.category===this.activeTemplateCategory,o=!this.activeTemplateFilter||s.name.toLowerCase().includes(this.activeTemplateFilter)||s.id.toLowerCase().includes(this.activeTemplateFilter)||s.description.toLowerCase().includes(this.activeTemplateFilter)||s.command.toLowerCase().includes(this.activeTemplateFilter)||s.envFields.some((l)=>l.key.toLowerCase().includes(this.activeTemplateFilter));return a&&o});if(t.length===0){e.innerHTML=`
         <div style="grid-column: span 2; padding: 32px; text-align: center; color: var(--text-dim);">
           No matching MCP server templates found.
         </div>
-      `;return}let n=l.getState().config.mcpServers||{};e.innerHTML=t.map((a)=>{let s=!!n[a.id],o=`${a.command} ${a.defaultArgs.join(" ")}`;return`
+      `;return}let n=i.getState().config.mcpServers||{};e.innerHTML=t.map((s)=>{let a=!!n[s.id],o=`${s.command} ${s.defaultArgs.join(" ")}`;return`
         <div class="bento-card" style="display: flex; flex-direction: column; justify-content: space-between; padding: 14px; background: var(--surface); border: 1px solid var(--border); min-width: 0; transition: transform 0.15s, border-color 0.15s;">
           <div>
             <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
               <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
-                <span style="font-weight: 700; font-size: 13.5px; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${y(a.name)}</span>
-                <span class="brand-badge" style="font-size: 9.5px; padding: 1px 6px; flex-shrink: 0;">${y(a.badge)}</span>
+                <span style="font-weight: 700; font-size: 13.5px; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${y(s.name)}</span>
+                <span class="brand-badge" style="font-size: 9.5px; padding: 1px 6px; flex-shrink: 0;">${y(s.badge)}</span>
               </div>
-              ${s?'<span style="font-size: 10px; color: var(--green-400); font-weight: 600; flex-shrink: 0;">CONNECTED</span>':""}
+              ${a?'<span style="font-size: 10px; color: var(--green-400); font-weight: 600; flex-shrink: 0;">CONNECTED</span>':""}
             </div>
             <div style="font-size: 11.5px; color: var(--text-muted); line-height: 1.4; margin-bottom: 8px;">
-              ${y(a.description)}
+              ${y(s.description)}
             </div>
             <div style="font-family: var(--ff-mono); font-size: 10.5px; color: var(--text-dim); background: var(--surface-card); padding: 5px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
               <code>${y(o)}</code>
             </div>
-            ${a.envFields.length>0?`
+            ${s.envFields.length>0?`
               <div style="font-size: 10.5px; color: var(--amber-400); margin-top: 6px; display: flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                 <span>⚡ Needs:</span>
-                <code style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${a.envFields.map((i)=>y(i.key)).join(", ")}</code>
+                <code style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${s.envFields.map((l)=>y(l.key)).join(", ")}</code>
               </div>
             `:""}
           </div>
 
           <div style="display: flex; justify-content: flex-end; margin-top: 12px; gap: 6px;">
-            <button class="btn btn-primary" style="font-size: 11.5px; padding: 4px 10px;" onclick="window.app.selectTemplate('${y(a.id)}')">
-              ${s?"Configure Another":"✨ 1-Click Setup"}
+            <button class="btn btn-primary" style="font-size: 11.5px; padding: 4px 10px;" onclick="window.app.selectTemplate('${y(s.id)}')">
+              ${a?"Configure Another":"✨ 1-Click Setup"}
             </button>
           </div>
         </div>
-      `}).join("")}selectTemplate(e){let t=N.find((d)=>d.id===e);if(!t)return;this.selectedTemplate=t,this.closeModals();let r=document.getElementById("modal-configure-template");if(r)r.classList.add("active");let n=document.getElementById("cfg-tmpl-title"),a=document.getElementById("cfg-tmpl-desc"),s=document.getElementById("cfg-tmpl-form");if(n)n.textContent=`Configure ${t.name} Server`;if(a)a.textContent=t.description;let o=l.getState().config.mcpServers||{},i=t.id;if(o[i]){let d=2;while(o[`${t.id}-${d}`])d++;i=`${t.id}-${d}`}if(s){let d="";if(t.envFields.length>0)d=`
+      `}).join("")}selectTemplate(e){let t=W.find((d)=>d.id===e);if(!t)return;this.selectedTemplate=t,this.closeModals();let r=document.getElementById("modal-configure-template");if(r)r.classList.add("active");let n=document.getElementById("cfg-tmpl-title"),s=document.getElementById("cfg-tmpl-desc"),a=document.getElementById("cfg-tmpl-form");if(n)n.textContent=`Configure ${t.name} Server`;if(s)s.textContent=t.description;let o=i.getState().config.mcpServers||{},l=t.id;if(o[l]){let d=2;while(o[`${t.id}-${d}`])d++;l=`${t.id}-${d}`}if(a){let d="";if(t.envFields.length>0)d=`
           <div style="margin-top: 14px; margin-bottom: 6px; font-weight: 700; font-size: 11px; text-transform: uppercase; color: var(--amber-400); letter-spacing: 0.5px;">
             Environment Variables &amp; API Keys
           </div>
@@ -1617,10 +1720,10 @@ Payload: ${JSON.stringify(t.task.result||t.task.error||t.task.inputRequests||{},
               ${p.description?`<div style="font-size: 10.5px; color: var(--text-dim); margin-top: 3px;">${y(p.description)}</div>`:""}
             </div>
           `).join("")}
-        `;s.innerHTML=`
+        `;a.innerHTML=`
         <div class="form-group">
           <label class="form-label">Server Identifier (Name)</label>
-          <input type="text" class="form-input" id="cfg-srv-id" value="${y(i)}">
+          <input type="text" class="form-input" id="cfg-srv-id" value="${y(l)}">
           <div style="font-size: 10.5px; color: var(--text-dim); margin-top: 3px;">Must be unique across all configured servers.</div>
         </div>
         <div class="form-group">
@@ -1655,7 +1758,7 @@ Payload: ${JSON.stringify(t.task.result||t.task.error||t.task.inputRequests||{},
             </div>
           </div>
         </details>
-      `}}async submitTemplateServer(){if(!this.selectedTemplate)return;let e=this.selectedTemplate,t=document.getElementById("cfg-srv-id")?.value.trim(),r=document.getElementById("cfg-srv-args")?.value.trim();if(!t){alert("Server identifier is required");return}if((l.getState().config.mcpServers||{})[t]){if(!confirm(`Server '${t}' already exists. Do you want to overwrite its configuration?`))return}let s=r?r.split(/\s+/).filter(Boolean):[],o={},i=document.querySelectorAll(".tmpl-env-input");for(let h of Array.from(i)){let k=h.getAttribute("data-key"),E=h.value.trim(),T=e.envFields.find((A)=>A.key===k);if(T?.required&&!E){alert(`Required field '${T.label}' is missing.`);return}if(k&&E)o[k]=E}let d={command:e.command,args:s};if(Object.keys(o).length>0)d.env=o;let p=document.getElementById("cfg-srv-ft")?.value.trim(),g=document.getElementById("cfg-srv-cd")?.value.trim(),u=document.getElementById("cfg-srv-autorestart")?.value,m=document.getElementById("cfg-srv-maxrestarts")?.value.trim();if(p||g||u||m)d.resilience={failureThreshold:p?Number(p):3,cooldownMs:g?Number(g):30000,autoRestart:u!=="false",maxRestarts:m?Number(m):5};let c=await v.upsertServer(t,d);if(c.ok)this.closeModals(),await this.refreshData();else alert(`Failed to save server: ${c.error}`)}async openImportModal(){this.closeModals();let e=document.getElementById("modal-import");if(e)e.classList.add("active");let t=document.getElementById("modal-eco-list");if(!t)return;t.innerHTML='<div style="color: var(--text-dim); padding: 12px; text-align: center;">Scanning IDE configs...</div>';try{let r=await v.getEcosystemSources();if(r.sources&&r.sources.length>0)t.innerHTML=r.sources.map((n)=>`
+      `}}async submitTemplateServer(){if(!this.selectedTemplate)return;let e=this.selectedTemplate,t=document.getElementById("cfg-srv-id")?.value.trim(),r=document.getElementById("cfg-srv-args")?.value.trim();if(!t){alert("Server identifier is required");return}if((i.getState().config.mcpServers||{})[t]){if(!confirm(`Server '${t}' already exists. Do you want to overwrite its configuration?`))return}let a=r?r.split(/\s+/).filter(Boolean):[],o={},l=document.querySelectorAll(".tmpl-env-input");for(let h of Array.from(l)){let k=h.getAttribute("data-key"),E=h.value.trim(),T=e.envFields.find((I)=>I.key===k);if(T?.required&&!E){alert(`Required field '${T.label}' is missing.`);return}if(k&&E)o[k]=E}let d={command:e.command,args:a};if(Object.keys(o).length>0)d.env=o;let p=document.getElementById("cfg-srv-ft")?.value.trim(),g=document.getElementById("cfg-srv-cd")?.value.trim(),u=document.getElementById("cfg-srv-autorestart")?.value,v=document.getElementById("cfg-srv-maxrestarts")?.value.trim();if(p||g||u||v)d.resilience={failureThreshold:p?Number(p):3,cooldownMs:g?Number(g):30000,autoRestart:u!=="false",maxRestarts:v?Number(v):5};let c=await m.upsertServer(t,d);if(c.ok)this.closeModals(),await this.refreshData();else alert(`Failed to save server: ${c.error}`)}async openImportModal(){this.closeModals();let e=document.getElementById("modal-import");if(e)e.classList.add("active");let t=document.getElementById("modal-eco-list");if(!t)return;t.innerHTML='<div style="color: var(--text-dim); padding: 12px; text-align: center;">Scanning IDE configs...</div>';try{let r=await m.getEcosystemSources();if(r.sources&&r.sources.length>0)t.innerHTML=r.sources.map((n)=>`
           <label style="display: flex; align-items: center; gap: 10px; background: var(--surface); padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border); cursor: pointer;">
             <input type="checkbox" class="eco-checkbox" value="${n.path}" checked>
             <div>
@@ -1663,25 +1766,25 @@ Payload: ${JSON.stringify(t.task.result||t.task.error||t.task.inputRequests||{},
               <div style="font-size: 11px; color: var(--text-dim);">${n.server_count} servers (${n.servers.join(", ")})</div>
             </div>
           </label>
-        `).join("");else t.innerHTML='<div style="color: var(--text-dim); padding: 12px; text-align: center;">No external MCP configuration files found on this system.</div>'}catch{t.innerHTML='<div style="color: var(--red-400); padding: 12px; text-align: center;">Failed to scan ecosystem sources.</div>'}}async submitImport(){let e=document.querySelectorAll(".eco-checkbox:checked");if(e.length===0){alert("No sources selected");return}for(let t of Array.from(e))await v.importConfig(t.value,!1);this.closeModals(),await this.refreshData()}async refreshClients(){try{let e=await v.getClients();if(e.ok&&Array.isArray(e.clients))l.setState({clients:e.clients})}catch(e){console.error("Failed to scan clients:",e)}}async attachClient(e){let t=document.getElementById(`client-prof-${e}`),r=t?t.value:void 0,n=await v.attachClient(e,r);if(!n.ok)alert(`Failed to attach client: ${n.error||n.message||"Unknown error"}`);else await this.refreshData()}async detachClient(e){if(!confirm("Disconnect Warmplane from this client?"))return;let t=await v.detachClient(e);if(!t.ok)alert(`Failed to detach client: ${t.error||t.message||"Unknown error"}`);else await this.refreshData()}handleAliasTargetInput(e){let t=document.getElementById("alias-suggestions-dropdown");if(!t)return;let r=(e||"").trim().toLowerCase();if(r.length<2){t.style.display="none";return}let a=l.getState().capabilities.filter((s)=>s.id.toLowerCase().includes(r)||s.summary&&s.summary.toLowerCase().includes(r)||s.description&&s.description.toLowerCase().includes(r)||s.server&&s.server.toLowerCase().includes(r)).slice(0,8);if(a.length===0){t.style.display="none";return}t.innerHTML=a.map((s)=>`
+        `).join("");else t.innerHTML='<div style="color: var(--text-dim); padding: 12px; text-align: center;">No external MCP configuration files found on this system.</div>'}catch{t.innerHTML='<div style="color: var(--red-400); padding: 12px; text-align: center;">Failed to scan ecosystem sources.</div>'}}async submitImport(){let e=document.querySelectorAll(".eco-checkbox:checked");if(e.length===0){alert("No sources selected");return}for(let t of Array.from(e))await m.importConfig(t.value,!1);this.closeModals(),await this.refreshData()}async refreshClients(){try{let e=await m.getClients();if(e.ok&&Array.isArray(e.clients))i.setState({clients:e.clients})}catch(e){console.error("Failed to scan clients:",e)}}async attachClient(e){let t=document.getElementById(`client-prof-${e}`),r=t?t.value:void 0,n=await m.attachClient(e,r);if(!n.ok)alert(`Failed to attach client: ${n.error||n.message||"Unknown error"}`);else await this.refreshData()}async detachClient(e){if(!confirm("Disconnect Warmplane from this client?"))return;let t=await m.detachClient(e);if(!t.ok)alert(`Failed to detach client: ${t.error||t.message||"Unknown error"}`);else await this.refreshData()}handleAliasTargetInput(e){let t=document.getElementById("alias-suggestions-dropdown");if(!t)return;let r=(e||"").trim().toLowerCase();if(r.length<2){t.style.display="none";return}let s=i.getState().capabilities.filter((a)=>a.id.toLowerCase().includes(r)||a.summary&&a.summary.toLowerCase().includes(r)||a.description&&a.description.toLowerCase().includes(r)||a.server&&a.server.toLowerCase().includes(r)).slice(0,8);if(s.length===0){t.style.display="none";return}t.innerHTML=s.map((a)=>`
       <div style="padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; transition: background 0.1s;"
            onmouseover="this.style.background='var(--surface-hover)'"
            onmouseout="this.style.background='transparent'"
-           onmousedown="window.app.selectAliasSuggestion('${y(s.id)}')">
+           onmousedown="window.app.selectAliasSuggestion('${y(a.id)}')">
         <div>
-          <div style="font-weight: 700; color: var(--text-main);">${y(s.id)}</div>
-          <div style="font-size: 10.5px; color: var(--text-dim); margin-top: 2px;">${y(s.summary||s.description||"")}</div>
+          <div style="font-weight: 700; color: var(--text-main);">${y(a.id)}</div>
+          <div style="font-size: 10.5px; color: var(--text-dim); margin-top: 2px;">${y(a.summary||a.description||"")}</div>
         </div>
-        <span style="font-size: 10px; color: var(--cyan-400);">${y(s.server||"local")}</span>
+        <span style="font-size: 10px; color: var(--cyan-400);">${y(a.server||"local")}</span>
       </div>
-    `).join(""),t.style.display="block"}selectAliasSuggestion(e){let t=document.getElementById("alias-target");if(t)t.value=e;this.hideAliasDropdown()}hideAliasDropdown(){let e=document.getElementById("alias-suggestions-dropdown");if(e)e.style.display="none"}async createAlias(){let e=document.getElementById("alias-kind")?.value,t=document.getElementById("alias-name")?.value.trim(),r=document.getElementById("alias-target")?.value.trim();if(!t||!r){alert("Please provide both alias name and canonical target");return}await v.updateAlias(e,t,r),await this.refreshData()}async deleteAlias(e,t){await v.updateAlias(e,t,void 0),await this.refreshData()}async reloadFromDisk(){try{let e=await v.reloadConfig();if(e.ok){let t="Hot-reload completed successfully!";if(e.mounted&&e.mounted.length>0)t+=`
+    `).join(""),t.style.display="block"}selectAliasSuggestion(e){let t=document.getElementById("alias-target");if(t)t.value=e;this.hideAliasDropdown()}hideAliasDropdown(){let e=document.getElementById("alias-suggestions-dropdown");if(e)e.style.display="none"}async createAlias(){let e=document.getElementById("alias-kind")?.value,t=document.getElementById("alias-name")?.value.trim(),r=document.getElementById("alias-target")?.value.trim();if(!t||!r){alert("Please provide both alias name and canonical target");return}await m.updateAlias(e,t,r),await this.refreshData()}async deleteAlias(e,t){await m.updateAlias(e,t,void 0),await this.refreshData()}async reloadFromDisk(){try{let e=await m.reloadConfig();if(e.ok){let t="Hot-reload completed successfully!";if(e.mounted&&e.mounted.length>0)t+=`
 Mounted: ${e.mounted.join(", ")}`;if(e.unmounted&&e.unmounted.length>0)t+=`
 Unmounted: ${e.unmounted.join(", ")}`;if(e.warnings&&e.warnings.length>0)t+=`
 Warnings:
 ${e.warnings.join(`
-`)}`;alert(t)}else alert(`Hot-reload failed: ${e.error||"Unknown error"}`)}catch(e){alert(`Error reaching daemon: ${e.message}`)}await this.refreshData()}renderTopProfileSelector(){let e=document.getElementById("top-profile-selector");if(!e)return;let t=l.getState(),r=t.config.profiles||{},n=Object.keys(r),a=t.activeProfile,s='<option value="">All Servers (Unrestricted)</option>';for(let o of n){let i=a===o?"selected":"";s+=`<option value="${y(o)}" ${i}>Profile: ${y(o)}</option>`}e.innerHTML=s}async setActiveProfile(e){l.setState({activeProfile:e||null}),await this.refreshData()}openAddProfileModal(){let e=document.getElementById("modal-prof-title");if(e)e.textContent="Create Server Constellation Profile";let t=document.getElementById("modal-prof-name"),r=document.getElementById("modal-prof-desc"),n=document.getElementById("modal-prof-mode");if(t)t.value="",t.disabled=!1;if(r)r.value="";if(n)n.value="create";this.renderProfileServerCheckboxes([]);let a=document.getElementById("modal-add-profile");if(a)a.classList.add("active")}openEditProfileModal(e){let r=l.getState().config.profiles?.[e];if(!r)return;let n=document.getElementById("modal-prof-title");if(n)n.textContent=`Edit Profile: ${e}`;let a=document.getElementById("modal-prof-name"),s=document.getElementById("modal-prof-desc"),o=document.getElementById("modal-prof-mode");if(a)a.value=e,a.disabled=!0;if(s)s.value=r.description||"";if(o)o.value="edit";this.renderProfileServerCheckboxes(r.servers||[]);let i=document.getElementById("modal-add-profile");if(i)i.classList.add("active")}renderProfileServerCheckboxes(e){let t=document.getElementById("modal-prof-servers-list");if(!t)return;let r=l.getState(),n=Object.keys(r.config.mcpServers||{});if(n.length===0){t.innerHTML='<div style="font-size: 11.5px; color: var(--text-dim);">No MCP servers configured yet. Add servers first.</div>';return}t.innerHTML=n.map((a)=>{let s=e.includes(a)?"checked":"";return`
+`)}`;alert(t)}else alert(`Hot-reload failed: ${e.error||"Unknown error"}`)}catch(e){alert(`Error reaching daemon: ${e.message}`)}await this.refreshData()}renderTopProfileSelector(){let e=document.getElementById("top-profile-selector");if(!e)return;let t=i.getState(),r=t.config.profiles||{},n=Object.keys(r),s=t.activeProfile,a='<option value="">All Servers (Unrestricted)</option>';for(let o of n){let l=s===o?"selected":"";a+=`<option value="${y(o)}" ${l}>Profile: ${y(o)}</option>`}e.innerHTML=a}async setActiveProfile(e){i.setState({activeProfile:e||null}),await this.refreshData()}openAddProfileModal(){let e=document.getElementById("modal-prof-title");if(e)e.textContent="Create Server Constellation Profile";let t=document.getElementById("modal-prof-name"),r=document.getElementById("modal-prof-desc"),n=document.getElementById("modal-prof-mode");if(t)t.value="",t.disabled=!1;if(r)r.value="";if(n)n.value="create";this.renderProfileServerCheckboxes([]);let s=document.getElementById("modal-add-profile");if(s)s.classList.add("active")}openEditProfileModal(e){let r=i.getState().config.profiles?.[e];if(!r)return;let n=document.getElementById("modal-prof-title");if(n)n.textContent=`Edit Profile: ${e}`;let s=document.getElementById("modal-prof-name"),a=document.getElementById("modal-prof-desc"),o=document.getElementById("modal-prof-mode");if(s)s.value=e,s.disabled=!0;if(a)a.value=r.description||"";if(o)o.value="edit";this.renderProfileServerCheckboxes(r.servers||[]);let l=document.getElementById("modal-add-profile");if(l)l.classList.add("active")}renderProfileServerCheckboxes(e){let t=document.getElementById("modal-prof-servers-list");if(!t)return;let r=i.getState(),n=Object.keys(r.config.mcpServers||{});if(n.length===0){t.innerHTML='<div style="font-size: 11.5px; color: var(--text-dim);">No MCP servers configured yet. Add servers first.</div>';return}t.innerHTML=n.map((s)=>{let a=e.includes(s)?"checked":"";return`
         <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer; padding: 4px 6px; border-radius: var(--radius-sm); transition: background 0.15s;" onmouseover="this.style.background='var(--surface-hover)'" onmouseout="this.style.background='transparent'">
-          <input type="checkbox" class="prof-server-checkbox" value="${y(a)}" ${s} style="accent-color: var(--amber-400);">
-          <span style="font-family: var(--ff-mono); font-weight: 600; color: var(--text-main);">${y(a)}</span>
+          <input type="checkbox" class="prof-server-checkbox" value="${y(s)}" ${a} style="accent-color: var(--amber-400);">
+          <span style="font-family: var(--ff-mono); font-weight: 600; color: var(--text-main);">${y(s)}</span>
         </label>
-      `}).join("")}async saveProfile(){let e=document.getElementById("modal-prof-name"),t=document.getElementById("modal-prof-desc"),r=e?.value.trim(),n=t?.value.trim();if(!r){alert("Please enter a profile name");return}let a=document.querySelectorAll(".prof-server-checkbox:checked"),s=[];if(a.forEach((o)=>{s.push(o.value)}),s.length===0){alert("Please select at least one server to include in this constellation");return}try{let o=await v.upsertProfile(r,s,n||void 0);if(o.ok)this.closeModals(),await this.refreshData();else alert(`Failed to save profile: ${o.error||"Unknown error"}`)}catch(o){alert(`Error saving profile: ${o.message}`)}}async deleteProfile(e){if(!confirm(`Are you sure you want to delete profile '${e}'?`))return;try{let t=await v.deleteProfile(e);if(t.ok){if(l.getState().activeProfile===e)l.setState({activeProfile:null});await this.refreshData()}else alert(`Failed to delete profile: ${t.error||"Unknown error"}`)}catch(t){alert(`Error deleting profile: ${t.message}`)}}closeModals(){document.querySelectorAll(".modal-backdrop").forEach((e)=>e.classList.remove("active"))}}function y(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}var Z=new X;window.app=Z;window.addEventListener("DOMContentLoaded",()=>Z.init());
+      `}).join("")}async saveProfile(){let e=document.getElementById("modal-prof-name"),t=document.getElementById("modal-prof-desc"),r=e?.value.trim(),n=t?.value.trim();if(!r){alert("Please enter a profile name");return}let s=document.querySelectorAll(".prof-server-checkbox:checked"),a=[];if(s.forEach((o)=>{a.push(o.value)}),a.length===0){alert("Please select at least one server to include in this constellation");return}try{let o=await m.upsertProfile(r,a,n||void 0);if(o.ok)this.closeModals(),await this.refreshData();else alert(`Failed to save profile: ${o.error||"Unknown error"}`)}catch(o){alert(`Error saving profile: ${o.message}`)}}async deleteProfile(e){if(!confirm(`Are you sure you want to delete profile '${e}'?`))return;try{let t=await m.deleteProfile(e);if(t.ok){if(i.getState().activeProfile===e)i.setState({activeProfile:null});await this.refreshData()}else alert(`Failed to delete profile: ${t.error||"Unknown error"}`)}catch(t){alert(`Error deleting profile: ${t.message}`)}}closeModals(){document.querySelectorAll(".modal-backdrop").forEach((e)=>e.classList.remove("active"))}}function y(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}var le=new ie;window.app=le;window.addEventListener("DOMContentLoaded",()=>le.init());

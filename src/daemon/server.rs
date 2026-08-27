@@ -316,6 +316,15 @@ pub fn build_router(app_state: AppState) -> Router {
             "/v1/clients/:id/detach",
             post(http_v1::handle_detach_client),
         )
+        // Secrets Vault & OS Keychain Endpoints
+        .route(
+            "/v1/secrets",
+            get(http_v1::handle_list_secrets).post(http_v1::handle_upsert_secret),
+        )
+        .route(
+            "/v1/secrets/:key",
+            axum::routing::delete(http_v1::handle_delete_secret),
+        )
         // Human-in-the-Loop (HITL) Approvals Endpoints
         .route("/v1/approvals", get(http_v1::handle_list_approvals))
         .route("/v1/approvals/:id", get(http_v1::handle_get_approval))
