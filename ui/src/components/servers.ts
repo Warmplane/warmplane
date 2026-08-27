@@ -78,8 +78,8 @@ export function renderServers(): string {
 
       return `
         <div class="bento-card" style="${cardStyle}">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 280px;">
               <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap;">
                 <span style="width: 8px; height: 8px; border-radius: 50%; background: ${statusColor}; display: inline-block;"></span>
                 <span style="font-size: 15px; font-weight: 700; color: var(--text-main);">${escapeHtml(k)}</span>
@@ -97,7 +97,7 @@ export function renderServers(): string {
                 ${s.env && Object.keys(s.env).length > 0 ? `<span>Env: ${envBadges}</span>` : ''}
               </div>
             </div>
-            <div style="display: flex; gap: 8px; align-items: center;">
+            <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0; flex-wrap: wrap;">
               ${isProfileActive ? (
                 isIncludedInProfile ? `
                   <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px; color: var(--amber-400); border-color: rgba(245, 158, 11, 0.3);" onclick="window.app.toggleServerInProfile('${escapeHtml(activeProfName!)}', '${escapeHtml(k)}', false)">
