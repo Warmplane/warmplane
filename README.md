@@ -263,6 +263,10 @@ warmplane mcp-server
 
 | Capability | Version | Description |
 |---|---|---|
+| **1-Click AI Client Injector & Sync** | v0.26.0 | Bidirectional MCP adapter engine for Claude Desktop, OpenCode, Claude Code, Cursor, Zed, Windsurf, Cline |
+| **Native OS Keychain Vault** | v0.26.0 | Secure OS Keychain storage and dynamic secret URI resolution (`keychain://`, `op://`, `env://`) |
+| **Actionable ChatOps Webhooks** | v0.26.0 | Bidirectional Slack, Discord, and Microsoft Teams approval cards with HMAC-SHA256 signatures |
+| **Per-Profile Governance & Constellations** | v0.26.0 | Fine-grained per-profile policy rules, constellation boundary badges, and live filter metrics |
 | **Control Deck Tasks & HITL UI** | v0.25.0 | Live Tasks & Approvals hub, MRTR input resolution forms, Playground async toggle, and embedded task API |
 | **SEP-2663 Tasks Extension** | v0.24.0 | Non-blocking `io.modelcontextprotocol/tasks` capability, unified HITL state machine, REST & CLI commands |
 | **In-Process Embedded Rust Engine** | v0.23.0 | `EmbeddedWarmplane` & `ControlPlaneHandle` for zero-overhead library integration |
@@ -286,11 +290,15 @@ warmplane mcp-server
 
 ## Changelog
 
-### v0.26.0 — Constellation Boundaries, 100% Agent Import Parity & ETag Re-Population
-- **Constellation Server Boundaries & Dynamic Visibility**: Visual profile constellation boundaries across Server Hub and Policy tabs (`✔ IN CONSTELLATION`, `🚫 EXCLUDED FROM PROFILE`), implicit governance policy deny rules (`<server>.*`), and 1-click profile server membership toggles.
-- **100% Agent Import & 1-Click Integration Parity**: Full ecosystem auto-discovery and dialect-aware parsing (`StandardMcpServers`, OpenCode `mcp`, Zed `context_servers`) across Claude Desktop, OpenCode, Claude Code CLI, Cursor, Zed, Windsurf, and Roo Code / Cline.
-- **Dynamic Catalog ETag Fingerprinting**: Immediate ETag cache invalidation and catalog re-population in the Web UI and MCP Playground when profile server constellations or policy rules change.
-- **Responsive Layout & Scrollbar Stabilization**: Zero viewport layout shift across desktop and mobile screens.
+### v0.26.0 — 1-Click AI Client Sync, Native Secrets Vault, ChatOps & Profile Governance
+- **1-Click AI Client Injector & Ecosystem Sync (`src/client_sync.rs`):** Zero-configuration bidirectional MCP adapter engine. Detects, injects, and detaches Warmplane proxy configurations with profile binding across Claude Desktop (macOS, Linux, Windows), OpenCode, Claude Code CLI (`CLAUDE_CONFIG_DIR`), Cursor (Global & Workspace), Zed Editor (`context_servers`), Windsurf, and Roo Code / Cline.
+- **100% Agent Config Import Parity (`src/config_import.rs`):** Unified external config discovery with dialect-aware parsers (`StandardMcpServers`, OpenCode `mcp`, Zed `context_servers`) and self-proxy protection.
+- **Native OS Keychain Vault & Dynamic Secrets (`src/vault/`):** Added secure OS-level credential management (`warmplane secret set/get/delete`) and dynamic runtime secret expansion (`keychain://`, `op://`, `env://`) in environment variables with masked logs.
+- **Actionable ChatOps & Bidirectional Webhooks (`src/chatops/`):** Rich interactive approval cards for Slack (Block Kit), Discord (Embeds), and Microsoft Teams (Adaptive Cards) with HMAC-SHA256 signature verification.
+- **Per-Profile Governance Policies (`src/policy.rs`, `ui/src/components/policy.ts`):** Fine-grained per-profile `allow`, `deny`, and `requireApproval` rules overriding or scoping global policies.
+- **Constellation Boundaries & Dynamic Visibility (`ui/src/components/servers.ts`):** Visual constellation badges (`✔ IN CONSTELLATION`, `🚫 EXCLUDED FROM PROFILE`), auto-derived `<server>.*` implicit policy denials, and 1-click membership toggles.
+- **Server Diagnostics & 1-Click Restart:** Added live error diagnostics modals, server restart endpoint (`POST /v1/config/servers/:id/restart`), and automated smoke testing suite for all 25 MCP server templates (`scripts/test-templates.ts`).
+- **Dynamic Catalog ETag Fingerprinting & Layout Stabilization:** Profile-aware fingerprint hashing (`sha256:...-p:<profile_id>:<hash>`) ensuring immediate ETag invalidation and playground catalog re-population. Stabilized viewport layouts with continuous scrollbar gutter reservation.
 
 ### v0.25.2 — Official MCP Registry Metadata & MCPB Packaging Format
 - **MCPB Distribution Format (`packaging/mcpb/`, `.github/workflows/release-artifacts.yml`):** Added automated build and packaging of platform-specific Model Context Protocol Bundles (`.mcpb`) containing standalone binaries, bootstrap configurations, and standardized manifests (`manifest_version: "0.3"`).
