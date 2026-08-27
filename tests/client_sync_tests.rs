@@ -155,3 +155,15 @@ fn test_zed_dialect_injection() {
     );
     assert_eq!(reloaded["ui_font_size"], serde_json::json!(14));
 }
+
+#[test]
+fn test_claude_code_config_dir_override() {
+    let dir = tempdir().unwrap();
+    let custom_config = dir.path().join("claude.json");
+    fs::write(&custom_config, r#"{"mcpServers": {}}"#).unwrap();
+
+    std::env::set_var("CLAUDE_CONFIG_DIR", dir.path().to_str().unwrap());
+    let resolved = warmplane::client_sync::resolve_client_config_path("claude-code").unwrap();
+    assert_eq!(resolved, custom_config);
+    std::env::remove_var("CLAUDE_CONFIG_DIR");
+}
