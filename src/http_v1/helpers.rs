@@ -123,7 +123,24 @@ pub fn get_profile_scoped_catalog_version(
     profile_ctx: &crate::context::ProfileContext,
 ) -> String {
     match &profile_ctx.profile_id {
-        Some(pid) => format!("{}-p:{}", base_version.as_ref(), pid),
+        Some(pid) => {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            use std::hash::{Hash, Hasher};
+            if let Some(srvs) = &profile_ctx.allowed_servers {
+                let mut sorted: Vec<&String> = srvs.iter().collect();
+                sorted.sort();
+                for s in sorted {
+                    s.hash(&mut hasher);
+                }
+            }
+            if let Some(pol) = &profile_ctx.profile_policy {
+                pol.allow.hash(&mut hasher);
+                pol.deny.hash(&mut hasher);
+                pol.require_approval.hash(&mut hasher);
+            }
+            let fingerprint = hasher.finish();
+            format!("{}-p:{}:{:x}", base_version.as_ref(), pid, fingerprint)
+        }
         None => base_version.as_ref().to_string(),
     }
 }
