@@ -1328,6 +1328,7 @@ class WarmplaneApp {
     const policy = state.config.policy || {};
     const deny = policy.deny || [];
     const allow = policy.allow || [];
+    const requireApproval = policy.require_approval || policy.requireApproval || [];
 
     const wildcard = (pat: string, v: string) => {
       if (pat === '*') return true;
@@ -1344,6 +1345,12 @@ class WarmplaneApp {
     if (allow.length > 0 && !allow.some(a => wildcard(a, testId))) {
       verdictEl.textContent = 'DENIED (Not in Allow List)';
       verdictEl.style.color = 'var(--red-400)';
+      return;
+    }
+
+    if (requireApproval.some(r => wildcard(r, testId))) {
+      verdictEl.textContent = 'REQUIRE APPROVAL (HITL Gate)';
+      verdictEl.style.color = 'var(--amber-400)';
       return;
     }
 
