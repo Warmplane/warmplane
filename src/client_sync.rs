@@ -189,6 +189,20 @@ pub fn resolve_client_config_path(client_id: &str) -> Option<PathBuf> {
             None
         }
         "claude-code" => {
+            // Check CLAUDE_CONFIG_DIR environment variable first
+            if let Ok(config_dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+                let dir_path = PathBuf::from(config_dir.trim());
+                let cand_json = dir_path.join("claude.json");
+                let cand_dot = dir_path.join(".claude.json");
+                if cand_json.exists() {
+                    return Some(cand_json);
+                }
+                if cand_dot.exists() {
+                    return Some(cand_dot);
+                }
+                return Some(cand_dot);
+            }
+
             #[cfg(target_os = "windows")]
             if let Some(ref up) = userprofile {
                 return Some(up.join(".claude.json"));
