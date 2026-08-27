@@ -120,8 +120,9 @@ function renderClientIntegrations(): string {
       badge = `<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">○ App Installed</span>`;
     }
 
+    const activeProfile = state.activeProfile;
     const profileOptions = profiles.map(p => `
-      <option value="${escapeHtml(p)}" ${c.attached_profile === p ? 'selected' : ''}>Profile: ${escapeHtml(p)}</option>
+      <option value="${escapeHtml(p)}" ${activeProfile === p || c.attached_profile === p ? 'selected' : ''}>Profile: ${escapeHtml(p)}</option>
     `).join('');
 
     const actionBtn = isAttached

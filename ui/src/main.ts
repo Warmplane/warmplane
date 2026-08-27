@@ -1794,9 +1794,16 @@ class WarmplaneApp {
     }
   }
 
-  async attachClient(clientId: string) {
-    const profSelect = document.getElementById(`client-prof-${clientId}`) as HTMLSelectElement | null;
-    const profile = profSelect ? profSelect.value : undefined;
+  async attachClient(clientId: string, explicitProfile?: string) {
+    let profile = explicitProfile;
+    if (!profile) {
+      const profSelect = (document.getElementById(`client-prof-${clientId}`) || document.getElementById(`overview-client-prof-${clientId}`)) as HTMLSelectElement | null;
+      if (profSelect) {
+        profile = profSelect.value || undefined;
+      } else {
+        profile = store.getState().activeProfile || undefined;
+      }
+    }
     const res = await api.attachClient(clientId, profile);
     if (!res.ok) {
       alert(`Failed to attach client: ${res.error || res.message || 'Unknown error'}`);

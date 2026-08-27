@@ -108,6 +108,9 @@ export function renderOverview(): string {
     ? `<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.1);">○ ${detectedClientsCount} Ready to Connect</span>`
     : `<span class="brand-badge" style="color: var(--text-dim);">No Apps Detected</span>`;
 
+  const profiles = Object.keys(state.config.profiles || {});
+  const activeProfile = state.activeProfile;
+
   const miniClientPills = clients.map(c => {
     const isAttached = c.is_attached;
     const isDetected = c.config_exists;
@@ -117,7 +120,7 @@ export function renderOverview(): string {
     let statusText = 'Not Found';
     if (isAttached) {
       dotColor = 'var(--green-400)';
-      statusText = c.attached_profile ? `Connected (${c.attached_profile})` : 'Connected';
+      statusText = c.attached_profile ? `Connected (${c.attached_profile})` : 'Connected (All Tools)';
     } else if (isDetected) {
       dotColor = 'var(--amber-300)';
       statusText = 'Ready to Attach';
@@ -126,10 +129,24 @@ export function renderOverview(): string {
       statusText = 'Installed';
     }
 
+    const profileOptions = profiles.map(p => `
+      <option value="${escapeHtml(p)}" ${activeProfile === p || c.attached_profile === p ? 'selected' : ''}>${escapeHtml(p)}</option>
+    `).join('');
+
     const actionBtn = isAttached
       ? `<button class="btn btn-ghost" style="padding: 2px 7px; font-size: 10px; color: var(--red-400);" onclick="event.stopPropagation(); window.app.detachClient('${escapeHtml(c.id)}')">Detach</button>`
       : isDetected || isInstalled
-      ? `<button class="btn btn-primary" style="padding: 2px 7px; font-size: 10px;" onclick="event.stopPropagation(); window.app.attachClient('${escapeHtml(c.id)}')">⚡ Connect</button>`
+      ? `
+        <div style="display: flex; align-items: center; gap: 4px;" onclick="event.stopPropagation();">
+          ${profiles.length > 0 ? `
+            <select id="overview-client-prof-${escapeHtml(c.id)}" class="form-input" style="font-size: 10px; padding: 1px 4px; height: 22px; width: 85px;" title="Select constellation profile">
+              <option value="" ${!activeProfile ? 'selected' : ''}>All Tools</option>
+              ${profileOptions}
+            </select>
+          ` : ''}
+          <button class="btn btn-primary" style="padding: 2px 7px; font-size: 10px;" onclick="window.app.attachClient('${escapeHtml(c.id)}')">⚡ Connect</button>
+        </div>
+      `
       : '';
 
     return `
