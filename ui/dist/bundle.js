@@ -194,20 +194,20 @@ class Z{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
           ${M}
         </div>
       `}).join("");let l=s?`
-    <div class="bento-card" style="margin-bottom: 16px; background: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.3); display: flex; justify-content: space-between; align-items: center;">
-      <div style="display: flex; align-items: center; gap: 10px;">
-        <span style="font-size: 18px;">\uD83C\uDF0C</span>
+    <div class="bento-card" style="margin-bottom: 16px; background: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.3); display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap;">
+      <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 260px;">
+        <span style="font-size: 18px; flex-shrink: 0;">\uD83C\uDF0C</span>
         <div>
-          <div style="font-size: 13px; font-weight: 700; color: var(--amber-400);">
-            Active Profile Constellation: <code style="font-size: 13px; color: var(--text-main);">${T(n)}</code>
-            <span class="brand-badge" style="margin-left: 8px; color: var(--text-main);">${o.length} of ${r.length} servers included</span>
+          <div style="font-size: 13px; font-weight: 700; color: var(--amber-400); display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <span>Active Profile Constellation: <code style="font-size: 13px; color: var(--text-main);">${T(n)}</code></span>
+            <span class="brand-badge" style="color: var(--text-main);">${o.length} of ${r.length} servers included</span>
           </div>
           <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px;">
             Excluded servers are unavailable to clients connected via this profile. Tools from excluded servers are automatically hidden.
           </div>
         </div>
       </div>
-      <div style="display: flex; gap: 8px;">
+      <div style="display: flex; gap: 8px; flex-shrink: 0;">
         <button class="btn btn-ghost" style="font-size: 11px; padding: 4px 10px;" onclick="window.app.switchTab('profiles')">Manage Profiles</button>
         <button class="btn btn-ghost" style="font-size: 11px; padding: 4px 10px;" onclick="window.app.setActiveProfile(null)">View All Servers</button>
       </div>
