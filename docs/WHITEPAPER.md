@@ -44,14 +44,17 @@ This paper contributes:
 
 1. A practical architecture for MCP session persistence and compact interaction surfaces.
 2. A deterministic execution model across Web UI, CLI, HTTP REST, and MCP-native client modes.
-3. A Human-in-the-Loop governance model providing non-blocking suspension, parameter modification, and signed webhook notifications for sensitive capability execution.
-4. A Write-Once-Read-Many (WORM) cryptographic audit log architecture guaranteeing tamper-evident traceability and seamless SIEM forwarding.
-5. In-flight context distillation (`_jsonpath`, `_limit_lines`, `_truncate_bytes`) and multi-step chained batch execution with reference interpolation (`$step.field`).
-6. A reproducible token-efficiency evaluation harness and measured baselines across real-world workloads.
-7. Micro-benchmark profiling demonstrating sub-microsecond control-plane overheads.
-8. A hybrid BM25 and ONNX vector search engine for sub-linear capability discovery over dense catalogs across HTTP and MCP facade interfaces.
-9. A deterministic catalog digest model for conditional cache revalidation (`304 Not Modified`) and cursor-based event feeds.
-10. An execution governance framework providing multi-tenant request context propagation, idempotency deduplication, retry safety classification, and active in-flight operation cancellation.
+3. A 1-click AI client injection and ecosystem adapter engine enabling zero-configuration attachment across Claude Desktop, OpenCode, Claude Code CLI, Cursor, Zed, Windsurf, and Roo Code / Cline.
+4. A Human-in-the-Loop governance model providing non-blocking suspension, parameter modification, and signed webhook notifications for sensitive capability execution.
+5. Actionable ChatOps integrations supporting interactive approval cards across Slack (Block Kit), Discord (Embeds), and Microsoft Teams (Adaptive Cards) with HMAC-SHA256 signature verification.
+6. A Native OS Keychain vault subsystem with dynamic runtime secret URI resolution (`keychain://`, `op://`, `env://`).
+7. Per-profile governance policies and constellation boundary enforcement with automatic implicit denial derivation and partitioned ETag invalidation.
+8. A Write-Once-Read-Many (WORM) cryptographic audit log architecture guaranteeing tamper-evident traceability and seamless SIEM forwarding.
+9. In-flight context distillation (`_jsonpath`, `_limit_lines`, `_truncate_bytes`) and multi-step chained batch execution with reference interpolation (`$step.field`).
+10. A reproducible token-efficiency evaluation harness and measured baselines across real-world workloads.
+11. Micro-benchmark profiling demonstrating sub-microsecond control-plane overheads.
+12. A hybrid BM25 and ONNX vector search engine for sub-linear capability discovery over dense catalogs across HTTP and MCP facade interfaces.
+13. An execution governance framework providing multi-tenant request context propagation, idempotency deduplication, retry safety classification, and active in-flight operation cancellation.
 
 ---
 
@@ -153,22 +156,28 @@ Warmplane consists of five major components:
    - Houses an asynchronous background batching queue with automatic SIEM dispatchers (Splunk HEC, HTTP Webhooks).
    - Exposes mathematical integrity verification (`/v1/audit/verify`) and streaming exports (`/v1/audit/export`).
 
-6. **Access Modes & Profiles**
+6. **1-Click AI Client Sync and Native Secrets Vault**
+   - **Ecosystem Integration Adapter**: Automated discovery and bidirectional proxy injection across Claude Desktop, OpenCode, Claude Code CLI, Cursor, Zed, Windsurf, and Roo Code / Cline with multi-dialect support (`StandardMcpServers`, OpenCode `mcp`, Zed `context_servers`).
+   - **Native OS Keychain Vault**: Secure OS-level credential storage with dynamic runtime URI resolution (`keychain://`, `op://`, `env://`).
+   - **Actionable ChatOps**: Bidirectional webhook approval cards for Slack (Block Kit), Discord (Embeds), and Microsoft Teams (Adaptive Cards) signed with HMAC-SHA256.
+
+7. **Access Modes & Profiles**
    - Embedded Control Deck Web UI (`/ui` and `/`).
    - HTTP `/v1` facade (exposing capabilities, hybrid search, tool execution, batch calls, catalog events, approvals, WORM audit verification/export, operation cancellation, SSE resource updates, argument completion, sampling, resources, and prompts).
-   - CLI facade (`warmplane server`, `config`, `approvals`, `search-capabilities`, `list-catalog-events`, `cancel-operation`).
+   - CLI facade (`warmplane server`, `config`, `client`, `secret`, `approvals`, `search-capabilities`, `list-catalog-events`, `cancel-operation`).
    - MCP stdio server mode exposing lightweight synthetic tools (`capability_search`, `capabilities_batch_call`, `subscriptions_listen`, `completion_complete`, etc.) and native resources/prompts methods.
-   - **Named Server Constellations (Profiles)**: Dynamic per-request (`X-Warmplane-Profile` / `?profile=`) or stdio-scoped (`--profile`) subset partitioning of upstream MCP servers with independent ETag caching (`-p:<profile_id>`).
+   - **Named Server Constellations (Profiles)**: Dynamic per-request (`X-Warmplane-Profile` / `?profile=`) or stdio-scoped (`--profile`) subset partitioning of upstream MCP servers with independent ETag caching (`-p:<profile_id>:<hash>`).
 
-### 3.2 Named Server Constellations ("Profiles")
+### 3.2 Named Server Constellations ("Profiles") and Per-Profile Governance
 
-While Multi-Tenant RBAC enforces identity and role authorization boundaries (*who* can call *what*), **Profiles** provide task-relevant view selection (*which constellation of tools is relevant to a task*):
+While Multi-Tenant RBAC enforces identity and role authorization boundaries (*who* can call *what*), **Profiles** provide task-relevant view selection (*which constellation of tools is relevant to a task*) and fine-grained per-task governance:
 
 1. **Keep-Warm Persistence**: All upstream servers remain connected and active in the background. Slicing into a profile does not disconnect or restart upstream processes.
 2. **Deterministic Partitioning**: Catalog discovery (`/v1/capabilities`, `/v1/resources`, `/v1/prompts`), hybrid search, and execution boundaries are filtered to the declared subset of servers.
-3. **Partitioned Cache Versioning**: ETags are derived deterministically per active profile ($\text{ETag}_{\text{profile}} = \text{base\_version} \mathbin{\Vert} \text{"-p:"} \mathbin{\Vert} \text{profile\_id}$), preserving zero-token `304 Not Modified` validations across independent client constellations.
-4. **Clean Algebraic Composition**: Profiles compose with RBAC and policy evaluation:
-   $$\text{Visible Capabilities} = \text{Full Catalog} \cap \text{Profile Servers} \cap \text{RBAC Scopes} \cap \text{Policy}$$
+3. **Per-Profile Policy & Constellation Boundary Enforcement**: Profiles support nested `policy` definitions (`allow`, `deny`, `requireApproval`, `redactKeys`). Unincluded constellation servers are visually distinguished and automatically receive implicit `<server>.*` denial rules.
+4. **Partitioned Cache Versioning**: ETags are derived deterministically per active profile ($\text{ETag}_{\text{profile}} = \text{base\_version} \mathbin{\Vert} \text{"-p:"} \mathbin{\Vert} \text{profile\_id} \mathbin{\Vert} \text{":"} \mathbin{\Vert} \text{hash}(\text{servers} \mathbin{\Vert} \text{policy})$), preserving zero-token `304 Not Modified` validations across independent client constellations while instantly invalidating when profile membership or policy changes.
+5. **Clean Algebraic Composition**: Profiles compose with RBAC and policy evaluation:
+   $$\text{Visible Capabilities} = \text{Full Catalog} \cap \text{Profile Servers} \cap \text{RBAC Scopes} \cap \text{Effective Policy}$$
 
 ### 3.3 Transport Model
 

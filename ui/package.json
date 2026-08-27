@@ -1,6 +1,6 @@
 {
   "name": "warmplane-control-deck",
-  "version": "0.25.2",
+  "version": "0.26.0",
   "private": true,
   "scripts": {
     "typecheck": "tsc --noEmit",
