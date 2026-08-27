@@ -68,8 +68,14 @@ export function renderServers(): string {
 
       const profileBoundaryBadge = isProfileActive ? (
         isIncludedInProfile
-          ? `<span class="brand-badge" style="color: var(--green-400); border-color: rgba(34, 197, 94, 0.3); background: rgba(34, 197, 94, 0.08);">✔ IN CONSTELLATION</span>`
-          : `<span class="brand-badge" style="color: var(--amber-400); border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.08);">🚫 EXCLUDED FROM PROFILE: ${escapeHtml(activeProfName!)}</span>`
+          ? `<span class="brand-badge" style="color: var(--green-400); border-color: rgba(34, 197, 94, 0.3); background: rgba(34, 197, 94, 0.08); display: inline-flex; align-items: center; gap: 6px;">
+              ✔ IN CONSTELLATION
+              <button style="background: none; border: none; color: var(--amber-400); font-size: 10px; cursor: pointer; padding: 0 2px; text-decoration: underline;" onclick="window.app.toggleServerInProfile('${escapeHtml(activeProfName!)}', '${escapeHtml(k)}', false)">Exclude</button>
+            </span>`
+          : `<span class="brand-badge" style="color: var(--amber-400); border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.08); display: inline-flex; align-items: center; gap: 6px;">
+              🚫 EXCLUDED FROM PROFILE: ${escapeHtml(activeProfName!)}
+              <button style="background: none; border: none; color: var(--green-400); font-size: 10px; cursor: pointer; padding: 0 2px; text-decoration: underline; font-weight: 700;" onclick="window.app.toggleServerInProfile('${escapeHtml(activeProfName!)}', '${escapeHtml(k)}', true)">+ Include</button>
+            </span>`
       ) : '';
 
       const cardStyle = (isProfileActive && !isIncludedInProfile)
@@ -79,7 +85,7 @@ export function renderServers(): string {
       return `
         <div class="bento-card" style="${cardStyle}">
           <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;">
-            <div style="flex: 1; min-width: 280px;">
+            <div style="flex: 1; min-width: 260px;">
               <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap;">
                 <span style="width: 8px; height: 8px; border-radius: 50%; background: ${statusColor}; display: inline-block;"></span>
                 <span style="font-size: 15px; font-weight: 700; color: var(--text-main);">${escapeHtml(k)}</span>
@@ -97,18 +103,7 @@ export function renderServers(): string {
                 ${s.env && Object.keys(s.env).length > 0 ? `<span>Env: ${envBadges}</span>` : ''}
               </div>
             </div>
-            <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0; flex-wrap: wrap;">
-              ${isProfileActive ? (
-                isIncludedInProfile ? `
-                  <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px; color: var(--amber-400); border-color: rgba(245, 158, 11, 0.3);" onclick="window.app.toggleServerInProfile('${escapeHtml(activeProfName!)}', '${escapeHtml(k)}', false)">
-                    Exclude from Profile
-                  </button>
-                ` : `
-                  <button class="btn btn-primary" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.toggleServerInProfile('${escapeHtml(activeProfName!)}', '${escapeHtml(k)}', true)">
-                    + Include in Profile
-                  </button>
-                `
-              ) : ''}
+            <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0;">
               <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px; color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);" onclick="window.app.restartServer('${escapeHtml(k)}')">⚡ Restart</button>
               <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openServerDiagnosticsModal('${escapeHtml(k)}')">🔍 Diagnostics</button>
               <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openEditServerModal('${escapeHtml(k)}')">✏️ Edit</button>
