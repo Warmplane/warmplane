@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-15
+// Rust guideline compliant 2026-08-27
 
 //! Request and response data transfer objects and envelope constructors for HTTP v1 facade API.
 
@@ -220,6 +220,9 @@ pub struct UpsertProfileRequest {
     /// Optional human-readable description.
     #[serde(default)]
     pub description: Option<String>,
+    /// Optional per-profile security and governance policy.
+    #[serde(default)]
+    pub policy: Option<crate::config::PolicyConfig>,
 }
 
 /// Request body for approving a pending capability execution.

@@ -413,8 +413,32 @@
       </div>
       <div class="form-group">
         <label class="form-label">Included MCP Upstream Servers</label>
-        <div id="modal-prof-servers-list" style="max-height: 180px; overflow-y: auto; background: var(--surface-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; display: flex; flex-direction: column; gap: 4px;">
+        <div id="modal-prof-servers-list" style="max-height: 140px; overflow-y: auto; background: var(--surface-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px; display: flex; flex-direction: column; gap: 4px;">
           <!-- Rendered dynamically -->
+        </div>
+      </div>
+      <div style="border-top: 1px solid var(--border); padding-top: 12px; margin-top: 14px;">
+        <div style="font-size: 13px; font-weight: 600; color: var(--text-main); margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
+          <span>🛡️</span> Profile Governance Policy Overrides (Optional)
+        </div>
+        <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 12px;">
+          Define custom allow/deny wildcards and human-in-the-loop triggers for this profile constellation (comma-separated).
+        </div>
+        <div class="form-group" style="margin-bottom: 8px;">
+          <label class="form-label" style="color: var(--green-400);">Allow List Patterns</label>
+          <input type="text" class="form-input" id="modal-prof-allow" placeholder="e.g. sqlite.*, filesystem.read_* (empty inherits global)">
+        </div>
+        <div class="form-group" style="margin-bottom: 8px;">
+          <label class="form-label" style="color: var(--red-400);">Deny List Patterns (Strict Precedence)</label>
+          <input type="text" class="form-input" id="modal-prof-deny" placeholder="e.g. *.delete, filesystem.write_*">
+        </div>
+        <div class="form-group" style="margin-bottom: 8px;">
+          <label class="form-label" style="color: var(--amber-400);">Human-in-the-Loop Triggers (HITL)</label>
+          <input type="text" class="form-input" id="modal-prof-hitl" placeholder="e.g. db.write*, execute_query">
+        </div>
+        <div class="form-group">
+          <label class="form-label" style="color: var(--text-muted);">Redact Keys</label>
+          <input type="text" class="form-input" id="modal-prof-redact" placeholder="e.g. secret, token, password">
         </div>
       </div>
       <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px;">

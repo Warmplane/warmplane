@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-15
+// Rust guideline compliant 2026-08-27
 
 //! Security policy rules governing access, redaction, and Human-in-the-Loop approvals.
 
@@ -81,6 +81,63 @@ impl Policy {
         self.require_approval
             .iter()
             .any(|pattern| wildcard_match(pattern, id_ref))
+    }
+
+    /// Combines this base policy with an optional profile-specific policy overlay.
+    ///
+    /// # Inheritance & Precedence Rules:
+    /// - **Deny (Union):** Deny rules from base and profile are unioned (strict defense-in-depth).
+    /// - **Require Approval (Union):** HITL triggers from base and profile are unioned.
+    /// - **Redact Keys (Union):** Sensitive redaction keys are unioned.
+    /// - **Allow:** If profile policy defines a non-empty `allow` list, it restricts capabilities to that list; otherwise inherits base `allow`.
+    /// - **Approval Timeout:** Overridden by profile if present.
+    /// - **Webhook:** Overridden by profile if present.
+    pub fn merge_with_profile(&self, profile_policy: Option<&Policy>) -> Policy {
+        let Some(prof_pol) = profile_policy else {
+            return self.clone();
+        };
+
+        let mut deny = self.deny.clone();
+        for d in &prof_pol.deny {
+            if !deny.contains(d) {
+                deny.push(d.clone());
+            }
+        }
+
+        let mut require_approval = self.require_approval.clone();
+        for r in &prof_pol.require_approval {
+            if !require_approval.contains(r) {
+                require_approval.push(r.clone());
+            }
+        }
+
+        let mut redact_keys = self.redact_keys.clone();
+        for k in &prof_pol.redact_keys {
+            if !redact_keys.contains(k) {
+                redact_keys.push(k.clone());
+            }
+        }
+
+        let allow = if !prof_pol.allow.is_empty() {
+            prof_pol.allow.clone()
+        } else {
+            self.allow.clone()
+        };
+
+        Policy {
+            allow,
+            deny,
+            redact_keys,
+            require_approval,
+            approval_timeout_secs: if prof_pol.approval_timeout_secs > 0
+                && prof_pol.approval_timeout_secs != 300
+            {
+                prof_pol.approval_timeout_secs
+            } else {
+                self.approval_timeout_secs
+            },
+            webhook: prof_pol.webhook.clone().or_else(|| self.webhook.clone()),
+        }
     }
 }
 

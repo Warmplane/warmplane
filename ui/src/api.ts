@@ -320,6 +320,7 @@ export interface RbacConfig {
 export interface ProfileConfig {
   servers: string[];
   description?: string;
+  policy?: PolicyConfig;
 }
 
 export interface McpConfig {
@@ -524,11 +525,11 @@ export class WarmplaneClient {
     return res.json();
   }
 
-  async upsertProfile(name: string, servers: string[], description?: string): Promise<{ ok: boolean; error?: string }> {
+  async upsertProfile(name: string, servers: string[], description?: string, policy?: PolicyConfig): Promise<{ ok: boolean; error?: string }> {
     const res = await fetch(`${this.baseUrl}/v1/config/profiles`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, servers, description })
+      body: JSON.stringify({ name, servers, description, policy })
     });
     return res.json();
   }

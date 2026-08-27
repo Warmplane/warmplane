@@ -1246,56 +1246,118 @@ class WarmplaneApp {
     const trimmed = (val || '').trim();
     if (!trimmed) return;
     const state = store.getState();
-    const current = state.config.policy || {};
-    const allow = [...(current.allow || [])];
-    const deny = [...(current.deny || [])];
-    const redact = [...(current.redact_keys || current.redactKeys || [])];
-    const requireApproval = [...(current.require_approval || current.requireApproval || [])];
+    const activeProfName = state.activeProfile;
+    const activeProf = activeProfName ? state.config.profiles?.[activeProfName] : undefined;
 
-    if (type === 'allow' && !allow.includes(trimmed)) allow.push(trimmed);
-    if (type === 'deny' && !deny.includes(trimmed)) deny.push(trimmed);
-    if (type === 'redact' && !redact.includes(trimmed)) redact.push(trimmed);
-    if (type === 'requireApproval' && !requireApproval.includes(trimmed)) requireApproval.push(trimmed);
+    if (activeProf && activeProfName) {
+      // Add rule to active profile's policy
+      const current = activeProf.policy || {};
+      const allow = [...(current.allow || [])];
+      const deny = [...(current.deny || [])];
+      const redact = [...(current.redact_keys || current.redactKeys || [])];
+      const requireApproval = [...(current.require_approval || current.requireApproval || [])];
 
-    const res = await api.savePolicy({
-      ...current,
-      allow,
-      deny,
-      redact_keys: redact,
-      redactKeys: redact,
-      require_approval: requireApproval,
-      requireApproval,
-    });
-    if (!res.ok) {
-      alert(`Failed to save policy rule: ${res.error || 'Unknown error'}`);
+      if (type === 'allow' && !allow.includes(trimmed)) allow.push(trimmed);
+      if (type === 'deny' && !deny.includes(trimmed)) deny.push(trimmed);
+      if (type === 'redact' && !redact.includes(trimmed)) redact.push(trimmed);
+      if (type === 'requireApproval' && !requireApproval.includes(trimmed)) requireApproval.push(trimmed);
+
+      const updatedPolicy = {
+        ...current,
+        allow,
+        deny,
+        redactKeys: redact,
+        requireApproval,
+      };
+
+      const res = await api.upsertProfile(activeProfName, activeProf.servers, activeProf.description, updatedPolicy);
+      if (!res.ok) {
+        alert(`Failed to save profile policy rule: ${res.error || 'Unknown error'}`);
+      }
+    } else {
+      // Add rule to global daemon policy
+      const current = state.config.policy || {};
+      const allow = [...(current.allow || [])];
+      const deny = [...(current.deny || [])];
+      const redact = [...(current.redact_keys || current.redactKeys || [])];
+      const requireApproval = [...(current.require_approval || current.requireApproval || [])];
+
+      if (type === 'allow' && !allow.includes(trimmed)) allow.push(trimmed);
+      if (type === 'deny' && !deny.includes(trimmed)) deny.push(trimmed);
+      if (type === 'redact' && !redact.includes(trimmed)) redact.push(trimmed);
+      if (type === 'requireApproval' && !requireApproval.includes(trimmed)) requireApproval.push(trimmed);
+
+      const res = await api.savePolicy({
+        ...current,
+        allow,
+        deny,
+        redact_keys: redact,
+        redactKeys: redact,
+        require_approval: requireApproval,
+        requireApproval,
+      });
+      if (!res.ok) {
+        alert(`Failed to save policy rule: ${res.error || 'Unknown error'}`);
+      }
     }
     await this.refreshData();
   }
 
   async removePolicyRule(type: 'allow' | 'deny' | 'redact' | 'requireApproval', index: number) {
     const state = store.getState();
-    const current = state.config.policy || {};
-    const allow = [...(current.allow || [])];
-    const deny = [...(current.deny || [])];
-    const redact = [...(current.redact_keys || current.redactKeys || [])];
-    const requireApproval = [...(current.require_approval || current.requireApproval || [])];
+    const activeProfName = state.activeProfile;
+    const activeProf = activeProfName ? state.config.profiles?.[activeProfName] : undefined;
 
-    if (type === 'allow') allow.splice(index, 1);
-    if (type === 'deny') deny.splice(index, 1);
-    if (type === 'redact') redact.splice(index, 1);
-    if (type === 'requireApproval') requireApproval.splice(index, 1);
+    if (activeProf && activeProfName) {
+      // Remove rule from active profile's policy
+      const current = activeProf.policy || {};
+      const allow = [...(current.allow || [])];
+      const deny = [...(current.deny || [])];
+      const redact = [...(current.redact_keys || current.redactKeys || [])];
+      const requireApproval = [...(current.require_approval || current.requireApproval || [])];
 
-    const res = await api.savePolicy({
-      ...current,
-      allow,
-      deny,
-      redact_keys: redact,
-      redactKeys: redact,
-      require_approval: requireApproval,
-      requireApproval,
-    });
-    if (!res.ok) {
-      alert(`Failed to update policy: ${res.error || 'Unknown error'}`);
+      if (type === 'allow') allow.splice(index, 1);
+      if (type === 'deny') deny.splice(index, 1);
+      if (type === 'redact') redact.splice(index, 1);
+      if (type === 'requireApproval') requireApproval.splice(index, 1);
+
+      const updatedPolicy = {
+        ...current,
+        allow,
+        deny,
+        redactKeys: redact,
+        requireApproval,
+      };
+
+      const res = await api.upsertProfile(activeProfName, activeProf.servers, activeProf.description, updatedPolicy);
+      if (!res.ok) {
+        alert(`Failed to update profile policy: ${res.error || 'Unknown error'}`);
+      }
+    } else {
+      // Remove rule from global policy
+      const current = state.config.policy || {};
+      const allow = [...(current.allow || [])];
+      const deny = [...(current.deny || [])];
+      const redact = [...(current.redact_keys || current.redactKeys || [])];
+      const requireApproval = [...(current.require_approval || current.requireApproval || [])];
+
+      if (type === 'allow') allow.splice(index, 1);
+      if (type === 'deny') deny.splice(index, 1);
+      if (type === 'redact') redact.splice(index, 1);
+      if (type === 'requireApproval') requireApproval.splice(index, 1);
+
+      const res = await api.savePolicy({
+        ...current,
+        allow,
+        deny,
+        redact_keys: redact,
+        redactKeys: redact,
+        require_approval: requireApproval,
+        requireApproval,
+      });
+      if (!res.ok) {
+        alert(`Failed to update policy: ${res.error || 'Unknown error'}`);
+      }
     }
     await this.refreshData();
   }
@@ -1376,10 +1438,24 @@ class WarmplaneApp {
     }
 
     const state = store.getState();
-    const policy = state.config.policy || {};
-    const deny = policy.deny || [];
-    const allow = policy.allow || [];
-    const requireApproval = policy.require_approval || policy.requireApproval || [];
+    const activeProfName = state.activeProfile;
+    const activeProf = activeProfName ? state.config.profiles?.[activeProfName] : undefined;
+
+    const basePolicy = state.config.policy || {};
+    const profPolicy = activeProf?.policy;
+
+    // Merge policy: deny union, hitl union, allow scoped to profile if present
+    const baseDeny = basePolicy.deny || [];
+    const profDeny = profPolicy?.deny || [];
+    const deny = Array.from(new Set([...baseDeny, ...profDeny]));
+
+    const baseHitl = basePolicy.require_approval || basePolicy.requireApproval || [];
+    const profHitl = profPolicy?.require_approval || profPolicy?.requireApproval || [];
+    const requireApproval = Array.from(new Set([...baseHitl, ...profHitl]));
+
+    const allow = profPolicy && profPolicy.allow && profPolicy.allow.length > 0 
+      ? profPolicy.allow 
+      : (basePolicy.allow || []);
 
     const wildcard = (pat: string, v: string) => {
       if (pat === '*') return true;
@@ -2104,6 +2180,15 @@ class WarmplaneApp {
     if (descInput) descInput.value = '';
     if (modeInput) modeInput.value = 'create';
 
+    const allowInput = document.getElementById('modal-prof-allow') as HTMLInputElement | null;
+    const denyInput = document.getElementById('modal-prof-deny') as HTMLInputElement | null;
+    const hitlInput = document.getElementById('modal-prof-hitl') as HTMLInputElement | null;
+    const redactInput = document.getElementById('modal-prof-redact') as HTMLInputElement | null;
+    if (allowInput) allowInput.value = '';
+    if (denyInput) denyInput.value = '';
+    if (hitlInput) hitlInput.value = '';
+    if (redactInput) redactInput.value = '';
+
     this.renderProfileServerCheckboxes([]);
 
     const modal = document.getElementById('modal-add-profile');
@@ -2128,6 +2213,17 @@ class WarmplaneApp {
     }
     if (descInput) descInput.value = prof.description || '';
     if (modeInput) modeInput.value = 'edit';
+
+    const allowInput = document.getElementById('modal-prof-allow') as HTMLInputElement | null;
+    const denyInput = document.getElementById('modal-prof-deny') as HTMLInputElement | null;
+    const hitlInput = document.getElementById('modal-prof-hitl') as HTMLInputElement | null;
+    const redactInput = document.getElementById('modal-prof-redact') as HTMLInputElement | null;
+
+    const pol = prof.policy;
+    if (allowInput) allowInput.value = (pol?.allow || []).join(', ');
+    if (denyInput) denyInput.value = (pol?.deny || []).join(', ');
+    if (hitlInput) hitlInput.value = (pol?.require_approval || pol?.requireApproval || []).join(', ');
+    if (redactInput) redactInput.value = (pol?.redact_keys || pol?.redactKeys || []).join(', ');
 
     this.renderProfileServerCheckboxes(prof.servers || []);
 
@@ -2180,8 +2276,33 @@ class WarmplaneApp {
       return;
     }
 
+    const parseCsv = (val: string | undefined): string[] => {
+      if (!val) return [];
+      return val.split(',').map(s => s.trim()).filter(s => s.length > 0);
+    };
+
+    const allowInput = document.getElementById('modal-prof-allow') as HTMLInputElement | null;
+    const denyInput = document.getElementById('modal-prof-deny') as HTMLInputElement | null;
+    const hitlInput = document.getElementById('modal-prof-hitl') as HTMLInputElement | null;
+    const redactInput = document.getElementById('modal-prof-redact') as HTMLInputElement | null;
+
+    const allow = parseCsv(allowInput?.value);
+    const deny = parseCsv(denyInput?.value);
+    const requireApproval = parseCsv(hitlInput?.value);
+    const redactKeys = parseCsv(redactInput?.value);
+
+    let policy: any = undefined;
+    if (allow.length > 0 || deny.length > 0 || requireApproval.length > 0 || redactKeys.length > 0) {
+      policy = {
+        allow,
+        deny,
+        requireApproval,
+        redactKeys,
+      };
+    }
+
     try {
-      const res = await api.upsertProfile(name, servers, desc || undefined);
+      const res = await api.upsertProfile(name, servers, desc || undefined, policy);
       if (res.ok) {
         this.closeModals();
         await this.refreshData();

@@ -1478,6 +1478,7 @@ async fn test_ui_config_profiles_crud() {
             name: "dev".to_string(),
             servers: vec!["s1".to_string()],
             description: Some("Developer tools".to_string()),
+            policy: None,
         }),
     )
     .await
@@ -1500,6 +1501,7 @@ async fn test_ui_config_profiles_crud() {
             name: "invalid".to_string(),
             servers: vec!["nonexistent_srv".to_string()],
             description: None,
+            policy: None,
         }),
     )
     .await
@@ -1673,4 +1675,89 @@ async fn test_catalog_policy_hidden_counts() {
     assert_eq!(val["hidden_by_policy"], 1);
     assert_eq!(val["capabilities"].as_array().unwrap().len(), 1);
     assert_eq!(val["capabilities"][0]["id"], "sqlite.query");
+}
+
+#[tokio::test]
+async fn test_per_profile_policy_filtering_and_execution() {
+    let mut capabilities = HashMap::new();
+    capabilities.insert(
+        "sqlite.read".to_string(),
+        CapabilityMeta {
+            summary: "read".to_string(),
+            description: "read".to_string(),
+            server: "sqlite".to_string(),
+            tool: "read".to_string(),
+            tags: vec![],
+            input_schema: serde_json::Value::Null,
+            examples: vec![],
+        },
+    );
+    capabilities.insert(
+        "sqlite.delete".to_string(),
+        CapabilityMeta {
+            summary: "delete".to_string(),
+            description: "delete".to_string(),
+            server: "sqlite".to_string(),
+            tool: "delete".to_string(),
+            tags: vec![],
+            input_schema: serde_json::Value::Null,
+            examples: vec![],
+        },
+    );
+
+    // Profile with deny rule on sqlite.delete
+    let mut profile_policy = crate::daemon::Policy::default();
+    profile_policy.deny.push("sqlite.delete".to_string());
+
+    let prof_ctx = crate::context::ProfileContext::scoped_with_policy(
+        "readonly",
+        vec!["sqlite".to_string()],
+        Some(profile_policy),
+    );
+
+    let state = AppState::builder().capabilities(capabilities).build();
+
+    // 1. Catalog listing with profile policy
+    let res = crate::http_v1::catalog::handle_list_capabilities(
+        State(state.clone()),
+        axum::extract::Extension(None),
+        Some(axum::extract::Extension(prof_ctx.clone())),
+        HeaderMap::new(),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let val: Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(val["total_unfiltered"], 2);
+    assert_eq!(val["hidden_by_policy"], 1);
+    assert_eq!(val["capabilities"].as_array().unwrap().len(), 1);
+    assert_eq!(val["capabilities"][0]["id"], "sqlite.read");
+
+    // 2. Call denied capability under profile policy
+    let exec_res = crate::http_v1::execute::handle_call_capability(
+        State(state),
+        axum::extract::Extension(None),
+        Some(axum::extract::Extension(prof_ctx)),
+        HeaderMap::new(),
+        Json(CallCapabilityRequest {
+            capability_id: "sqlite.delete".to_string(),
+            args: json!({}),
+            request_id: None,
+            context: None,
+            idempotency_key: None,
+            input_responses: None,
+            request_state: None,
+            async_task: false,
+        }),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(exec_res.status(), StatusCode::FORBIDDEN);
+    let exec_bytes = to_bytes(exec_res.into_body(), usize::MAX).await.unwrap();
+    let exec_val: Value = serde_json::from_slice(&exec_bytes).unwrap();
+    assert_eq!(exec_val["error"]["code"], "POLICY_DENIED");
 }

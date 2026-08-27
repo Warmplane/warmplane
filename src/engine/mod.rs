@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-20
+// Rust guideline compliant 2026-08-27
 
 //! Embedded Warmplane engine interface and ControlPlaneHandle implementation (`M-CANONICAL-DOCS`).
 //!
@@ -91,12 +91,20 @@ impl ControlPlaneHandle {
         &self.state
     }
 
-    /// Resolves profile context for server scoping.
+    /// Resolves profile context for server scoping and policy enforcement.
     pub async fn resolve_profile_context(&self, profile: Option<&str>) -> ProfileContext {
         if let Some(prof_id) = profile {
             let profiles_guard = self.state.profiles.read().await;
             if let Some(prof_cfg) = profiles_guard.get(prof_id) {
-                return ProfileContext::scoped(prof_id.to_string(), prof_cfg.servers.clone());
+                let prof_policy = prof_cfg
+                    .policy
+                    .as_ref()
+                    .map(|p| crate::daemon::Policy::from_config(Some(p.clone())));
+                return ProfileContext::scoped_with_policy(
+                    prof_id.to_string(),
+                    prof_cfg.servers.clone(),
+                    prof_policy,
+                );
             }
         }
         ProfileContext::unrestricted()

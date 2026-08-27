@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-15
+// Rust guideline compliant 2026-08-27
 
 //! Capability tool execution handlers, cancellation, rate limiting, and HITL approval workflow.
 
@@ -148,7 +148,8 @@ pub async fn handle_call_capability(
             .0
             .as_ref()
             .map(|ctx| ctx.effective_policy.clone())
-            .unwrap_or_else(|| base_pol.clone());
+            .unwrap_or_else(|| base_pol.clone())
+            .merge_with_profile(prof_ctx.profile_policy.as_ref());
 
         if !pol.allows(&payload.capability_id) {
             state.operation_registry.unregister(&request_id).await;
@@ -1063,7 +1064,8 @@ pub async fn handle_batch_call_capabilities(
         .0
         .as_ref()
         .map(|ctx| ctx.effective_policy.clone())
-        .unwrap_or_else(|| base_pol.clone());
+        .unwrap_or_else(|| base_pol.clone())
+        .merge_with_profile(prof_ctx.profile_policy.as_ref());
 
     let response = crate::batch_executor::execute_batch(
         &state,

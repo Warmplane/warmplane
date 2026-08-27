@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-15
+// Rust guideline compliant 2026-08-27
 
 //! Helper utilities for HTTP headers, trace identifiers, idempotency keys, and redaction.
 
@@ -90,10 +90,17 @@ pub async fn resolve_profile_context(
 
     let profiles_guard = state.profiles.read().await;
     match profiles_guard.get(&profile_id) {
-        Some(profile_cfg) => Ok(crate::context::ProfileContext::scoped(
-            profile_id,
-            profile_cfg.servers.clone(),
-        )),
+        Some(profile_cfg) => {
+            let prof_policy = profile_cfg
+                .policy
+                .as_ref()
+                .map(|p| crate::daemon::Policy::from_config(Some(p.clone())));
+            Ok(crate::context::ProfileContext::scoped_with_policy(
+                profile_id,
+                profile_cfg.servers.clone(),
+                prof_policy,
+            ))
+        }
         None => {
             let trace_id = next_trace_id();
             let err_val = crate::http_v1::types::error_envelope(

@@ -88,7 +88,8 @@ pub async fn handle_search_capabilities(
         .0
         .as_ref()
         .map(|ctx| ctx.effective_policy.clone())
-        .unwrap_or_else(|| base_pol.clone());
+        .unwrap_or_else(|| base_pol.clone())
+        .merge_with_profile(prof_ctx.profile_policy.as_ref());
     let base_ver = state.catalog_version.read().await.clone();
     let catalog_ver =
         crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
@@ -390,14 +391,15 @@ pub async fn handle_list_capabilities(
 ) -> impl IntoResponse {
     state.total_catalog_requests.fetch_add(1, Ordering::Relaxed);
 
+    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
     let base_pol = state.policy.read().await;
     let pol = req_ext
         .0
         .as_ref()
-        .map(|ctx| &ctx.effective_policy)
-        .unwrap_or(&base_pol);
+        .map(|ctx| ctx.effective_policy.clone())
+        .unwrap_or_else(|| base_pol.clone())
+        .merge_with_profile(prof_ctx.profile_policy.as_ref());
 
-    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
     let base_ver = state.catalog_version.read().await.clone();
     let catalog_ver =
         crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
@@ -464,12 +466,14 @@ pub async fn handle_describe_capability(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
     let base_pol = state.policy.read().await;
     let pol = req_ext
         .0
         .as_ref()
-        .map(|ctx| &ctx.effective_policy)
-        .unwrap_or(&base_pol);
+        .map(|ctx| ctx.effective_policy.clone())
+        .unwrap_or_else(|| base_pol.clone())
+        .merge_with_profile(prof_ctx.profile_policy.as_ref());
 
     if !pol.allows(&id) {
         return (
@@ -481,14 +485,13 @@ pub async fn handle_describe_capability(
                 None,
                 crate::idempotency::RetryMetadata::safe("not_started"),
                 "CAPABILITY_UNAUTHORIZED",
-                format!("Access to capability '{}' is denied by role policy", id),
+                format!("Access to capability '{}' is denied by policy", id),
                 false,
             )),
         )
             .into_response();
     }
 
-    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
     let base_ver = state.catalog_version.read().await.clone();
     let catalog_ver =
         crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
@@ -553,14 +556,15 @@ pub async fn handle_list_resources(
     prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
     let base_pol = state.policy.read().await;
     let pol = req_ext
         .0
         .as_ref()
-        .map(|ctx| &ctx.effective_policy)
-        .unwrap_or(&base_pol);
+        .map(|ctx| ctx.effective_policy.clone())
+        .unwrap_or_else(|| base_pol.clone())
+        .merge_with_profile(prof_ctx.profile_policy.as_ref());
 
-    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
     let base_ver = state.catalog_version.read().await.clone();
     let catalog_ver =
         crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
@@ -624,14 +628,15 @@ pub async fn handle_list_prompts(
     prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
+    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
     let base_pol = state.policy.read().await;
     let pol = req_ext
         .0
         .as_ref()
-        .map(|ctx| &ctx.effective_policy)
-        .unwrap_or(&base_pol);
+        .map(|ctx| ctx.effective_policy.clone())
+        .unwrap_or_else(|| base_pol.clone())
+        .merge_with_profile(prof_ctx.profile_policy.as_ref());
 
-    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
     let base_ver = state.catalog_version.read().await.clone();
     let catalog_ver =
         crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
