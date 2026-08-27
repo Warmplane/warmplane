@@ -82,6 +82,29 @@ export function renderTasks(state: AppState): string {
                 const reqType = reqMeta.type || 'text';
                 const initialVal = reqMeta.default !== undefined ? JSON.stringify(reqMeta.default) : (reqMeta.value !== undefined ? JSON.stringify(reqMeta.value) : (reqMeta.sanitized_args ? JSON.stringify(reqMeta.sanitized_args, null, 2) : ''));
 
+                if (reqType === 'approval_review') {
+                  return `
+                    <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px;">
+                      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                        <label style="font-size: 11.5px; font-weight: 600; color: var(--amber-300); font-family: var(--ff-mono);">${escapeHtml(k)}</label>
+                        <span class="brand-badge" style="font-size: 9.5px; padding: 1px 5px;">APPROVAL GATED</span>
+                      </div>
+                      <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">${escapeHtml(promptText)}</div>
+                      <div style="margin-bottom: 8px;">
+                        <label style="font-size: 10.5px; color: var(--text-dim); display: block; margin-bottom: 2px;">Decision:</label>
+                        <select id="task-input-${escapeHtml(task.taskId)}-${escapeHtml(k)}-decision" class="form-input" style="font-size: 11.5px; font-family: var(--ff-mono); padding: 4px 8px;">
+                          <option value="true" selected>Approve &amp; Execute</option>
+                          <option value="false">Reject Execution</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style="font-size: 10.5px; color: var(--text-dim); display: block; margin-bottom: 2px;">Parameters (Editable):</label>
+                        <textarea id="task-input-${escapeHtml(task.taskId)}-${escapeHtml(k)}" class="form-textarea" rows="3" style="color: var(--green-400); font-family: var(--ff-mono); font-size: 11.5px;">${escapeHtml(initialVal)}</textarea>
+                      </div>
+                    </div>
+                  `;
+                }
+
                 return `
                   <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
