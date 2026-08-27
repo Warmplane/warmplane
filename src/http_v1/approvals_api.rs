@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-15
+// Rust guideline compliant 2026-08-27
 
 //! Human-in-the-Loop (HITL) approval endpoints for querying, approving, and rejecting suspended executions.
 
@@ -74,6 +74,29 @@ pub async fn handle_approve_ticket(
     {
         Ok(true) => {
             if let Some(ticket) = opt_ticket {
+                // If a matching Task exists for this approval, unblock it with input responses
+                if let Some(ref req_id) = ticket.request_id {
+                    let tasks = state.task_registry.list_tasks().await;
+                    if let Some(matching_task) = tasks
+                        .iter()
+                        .find(|t| t.request_id.as_deref() == Some(req_id.as_str()))
+                    {
+                        let mut resp_map = std::collections::BTreeMap::new();
+                        resp_map.insert(
+                            "hitl_approval".to_string(),
+                            serde_json::json!({
+                                "approved": true,
+                                "operator": payload.operator,
+                                "modified_args": payload.modified_args,
+                            }),
+                        );
+                        let _ = state
+                            .task_registry
+                            .update_task(&matching_task.task_id, resp_map)
+                            .await;
+                    }
+                }
+
                 state.audit_handle.send(crate::audit::RawAuditEvent {
                     event_type: crate::audit::AuditEventType::ApprovalGranted,
                     trace_id: format!("appr_{}", id),
@@ -131,19 +154,43 @@ pub async fn handle_reject_ticket(
     Json(payload): Json<RejectTicketRequest>,
 ) -> impl IntoResponse {
     let webhook_cfg = state.policy.read().await.webhook.clone();
+    let opt_ticket = state.approval_registry.get(&id).await;
     match state
         .approval_registry
-        .reject(&id, payload.operator, payload.reason, webhook_cfg.as_ref())
+        .reject(
+            &id,
+            payload.operator,
+            payload.reason.clone(),
+            webhook_cfg.as_ref(),
+        )
         .await
     {
-        Ok(true) => (
-            StatusCode::OK,
-            Json(json!({
-                "ok": true,
-                "message": format!("Ticket '{}' rejected successfully", id),
-            })),
-        )
-            .into_response(),
+        Ok(true) => {
+            if let Some(ticket) = opt_ticket {
+                // If a matching Task exists for this approval, cancel it
+                if let Some(ref req_id) = ticket.request_id {
+                    let tasks = state.task_registry.list_tasks().await;
+                    if let Some(matching_task) = tasks
+                        .iter()
+                        .find(|t| t.request_id.as_deref() == Some(req_id.as_str()))
+                    {
+                        let _ = state
+                            .task_registry
+                            .cancel_task(&matching_task.task_id, payload.reason)
+                            .await;
+                    }
+                }
+            }
+
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "message": format!("Ticket '{}' rejected successfully", id),
+                })),
+            )
+                .into_response()
+        }
         Ok(false) => (
             StatusCode::CONFLICT,
             Json(json!({

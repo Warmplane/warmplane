@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-24
+// Rust guideline compliant 2026-08-27
 
 //! HTTP v1 API endpoints for managing SEP-2663 Tasks (`M-CANONICAL-DOCS`).
 //!
@@ -94,16 +94,63 @@ pub async fn handle_update_task(
     Path(id): Path<String>,
     Json(payload): Json<UpdateTaskRequest>,
 ) -> impl IntoResponse {
-    match state.task_registry.update_task(&id, payload.input_responses).await {
-        Ok(true) => (
-            StatusCode::OK,
-            Json(json!({
-                "ok": true,
-                "resultType": "complete",
-                "message": format!("Task '{}' updated with input responses", id),
-            })),
-        )
-            .into_response(),
+    let task_opt = state.task_registry.get_task(&id).await;
+    let input_responses = payload.input_responses;
+
+    match state.task_registry.update_task(&id, input_responses.clone()).await {
+        Ok(true) => {
+            // If the task corresponds to an approval request (either explicitly via hitl_approval or linked request_id),
+            // cross-resolve the ApprovalRegistry so synchronous callers awaiting approval unblock immediately.
+            if let Some(task) = task_opt {
+                let req_id = task.request_id.as_deref().unwrap_or(&id);
+                if let Some(pending_appr) = state.approval_registry.get_pending_by_request_id(req_id).await {
+                    let webhook_cfg = state.policy.read().await.webhook.clone();
+                    if let Some(appr_resp) = input_responses.get("hitl_approval") {
+                        let is_approved = appr_resp.get("approved").and_then(Value::as_bool).unwrap_or(true);
+                        let mod_args = appr_resp.get("modified_args").cloned();
+                        let operator = appr_resp
+                            .get("operator")
+                            .and_then(Value::as_str)
+                            .unwrap_or("security-operator")
+                            .to_string();
+                        let reason = appr_resp.get("reason").and_then(Value::as_str).map(ToString::to_string);
+
+                        if is_approved {
+                            let _ = state
+                                .approval_registry
+                                .approve(&pending_appr.id, operator, mod_args, webhook_cfg.as_ref())
+                                .await;
+                        } else {
+                            let _ = state
+                                .approval_registry
+                                .reject(&pending_appr.id, operator, reason, webhook_cfg.as_ref())
+                                .await;
+                        }
+                    } else {
+                        // Default approval with unmodified args if general input was supplied
+                        let _ = state
+                            .approval_registry
+                            .approve(
+                                &pending_appr.id,
+                                "security-operator".to_string(),
+                                None,
+                                webhook_cfg.as_ref(),
+                            )
+                            .await;
+                    }
+                }
+            }
+
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "resultType": "complete",
+                    "message": format!("Task '{}' updated with input responses", id),
+                })),
+            )
+                .into_response()
+        }
         Ok(false) => (
             StatusCode::BAD_REQUEST,
             Json(json!({
@@ -135,16 +182,35 @@ pub async fn handle_cancel_task(
     Path(id): Path<String>,
     Json(payload): Json<CancelTaskRequest>,
 ) -> impl IntoResponse {
-    match state.task_registry.cancel_task(&id, payload.reason).await {
-        Ok(true) => (
-            StatusCode::OK,
-            Json(json!({
-                "ok": true,
-                "resultType": "complete",
-                "message": format!("Task '{}' cancelled", id),
-            })),
-        )
-            .into_response(),
+    let task_opt = state.task_registry.get_task(&id).await;
+    match state.task_registry.cancel_task(&id, payload.reason.clone()).await {
+        Ok(true) => {
+            if let Some(task) = task_opt {
+                let req_id = task.request_id.as_deref().unwrap_or(&id);
+                if let Some(pending_appr) = state.approval_registry.get_pending_by_request_id(req_id).await {
+                    let webhook_cfg = state.policy.read().await.webhook.clone();
+                    let _ = state
+                        .approval_registry
+                        .reject(
+                            &pending_appr.id,
+                            "security-operator".to_string(),
+                            payload.reason.or_else(|| Some("Task cancelled by operator".to_string())),
+                            webhook_cfg.as_ref(),
+                        )
+                        .await;
+                }
+            }
+
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "resultType": "complete",
+                    "message": format!("Task '{}' cancelled", id),
+                })),
+            )
+                .into_response()
+        }
         Ok(false) => (
             StatusCode::BAD_REQUEST,
             Json(json!({

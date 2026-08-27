@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-19
+// Rust guideline compliant 2026-08-27
 
 //! Daemon HTTP service initialization, routing, and TCP listener runtime.
 
@@ -669,6 +669,7 @@ pub async fn run_daemon(
     info!("HTTP server drained and stopped; shutting down daemon subsystems");
     let drain_timeout = std::time::Duration::from_secs(3);
     let _ = tokio::time::timeout(drain_timeout, app_state.shutdown()).await;
+    info!("daemon shutdown sequence finished; exiting");
 
     Ok(())
 }

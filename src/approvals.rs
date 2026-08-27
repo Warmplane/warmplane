@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-14
+// Rust guideline compliant 2026-08-27
 
 //! Human-in-the-Loop (HITL) Approval Engine and Registry.
 //!
@@ -403,6 +403,17 @@ impl ApprovalRegistry {
     pub async fn get(&self, id: &str) -> Option<PendingApproval> {
         let pending_guard = self.pending.read().await;
         pending_guard.get(id).cloned()
+    }
+
+    /// Finds an active pending approval ticket matching a given request ID.
+    pub async fn get_pending_by_request_id(&self, request_id: &str) -> Option<PendingApproval> {
+        let pending_guard = self.pending.read().await;
+        pending_guard
+            .values()
+            .find(|a| {
+                a.status == ApprovalStatus::Pending && a.request_id.as_deref() == Some(request_id)
+            })
+            .cloned()
     }
 }
 

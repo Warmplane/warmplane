@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-15
+// Rust guideline compliant 2026-08-27
 
 //! Comprehensive unit and integration test suite for HTTP v1 facade API handlers.
 
@@ -1519,4 +1519,101 @@ async fn test_ui_config_profiles_crud() {
     }
     let loaded_after = crate::config::load_or_default_config(&config_path).unwrap();
     assert!(!loaded_after.profiles.contains_key("dev"));
+}
+
+#[tokio::test]
+async fn test_task_update_bridges_to_approval_resolution() {
+    let state = AppState::builder().build();
+
+    // 1. Create a pending approval ticket
+    let (appr_id, _rx) = state
+        .approval_registry
+        .create_approval(crate::approvals::CreateApprovalRequest {
+            capability_id: "sqlite.list_tables".to_string(),
+            server_id: "sqlite".to_string(),
+            args: json!({}),
+            sanitized_args: json!({}),
+            request_id: Some("req-test-bridge-1".to_string()),
+            context: None,
+            timeout_secs: 60,
+            webhook: None,
+        })
+        .await;
+
+    // 2. Create matching Task with the same request_id
+    let mut input_requests = std::collections::BTreeMap::new();
+    input_requests.insert(
+        "hitl_approval".to_string(),
+        json!({
+            "type": "approval_review",
+            "capability_id": "sqlite.list_tables",
+            "server_id": "sqlite",
+            "sanitized_args": {},
+            "timeout_secs": 60,
+        }),
+    );
+
+    let (task_record, _task_rx) = state
+        .task_registry
+        .create_task(crate::tasks::CreateTaskParams {
+            capability_id: "sqlite.list_tables".to_string(),
+            server_id: "sqlite".to_string(),
+            args: json!({}),
+            request_id: Some("req-test-bridge-1".to_string()),
+            context: None,
+            idempotency_key: None,
+            initial_status: crate::tasks::TaskStatus::InputRequired,
+            status_message: Some("Awaiting approval".to_string()),
+            input_requests: Some(input_requests),
+            ttl_ms: Some(60_000),
+            poll_interval_ms: Some(1000),
+        })
+        .await;
+
+    // Verify both are pending
+    let ticket_before = state.approval_registry.get(&appr_id).await.unwrap();
+    assert_eq!(
+        ticket_before.status,
+        crate::approvals::ApprovalStatus::Pending
+    );
+
+    // 3. Submit Task update via handle_update_task
+    let mut responses = std::collections::BTreeMap::new();
+    responses.insert(
+        "hitl_approval".to_string(),
+        json!({
+            "approved": true,
+            "operator": "test-admin",
+            "modified_args": { "table": "users" }
+        }),
+    );
+
+    let update_res = crate::http_v1::tasks_api::handle_update_task(
+        State(state.clone()),
+        Path(task_record.task_id.clone()),
+        Json(crate::http_v1::tasks_api::UpdateTaskRequest {
+            input_responses: responses,
+        }),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(update_res.status(), StatusCode::OK);
+
+    // 4. Verify ApprovalRegistry ticket is now Approved with modified args
+    let ticket_after = state.approval_registry.get(&appr_id).await.unwrap();
+    match ticket_after.status {
+        crate::approvals::ApprovalStatus::Approved {
+            operator,
+            modified_args,
+            ..
+        } => {
+            assert_eq!(operator, "test-admin");
+            assert_eq!(modified_args, Some(json!({ "table": "users" })));
+        }
+        _ => panic!(
+            "Expected ticket to be approved, found {:?}",
+            ticket_after.status
+        ),
+    }
 }
