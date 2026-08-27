@@ -6,7 +6,7 @@
 
 > **The Local control plane that keeps MCP sessions warm with compact capability/resource/prompt facades.**
 > 
-> v0.25.2 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.26.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
@@ -286,7 +286,13 @@ warmplane mcp-server
 
 ## Changelog
 
-### v0.25.2 — MCPB Bundle Packaging & Official MCP Registry Pipeline
+### v0.26.0 — Constellation Boundaries, 100% Agent Import Parity & ETag Re-Population
+- **Constellation Server Boundaries & Dynamic Visibility**: Visual profile constellation boundaries across Server Hub and Policy tabs (`✔ IN CONSTELLATION`, `🚫 EXCLUDED FROM PROFILE`), implicit governance policy deny rules (`<server>.*`), and 1-click profile server membership toggles.
+- **100% Agent Import & 1-Click Integration Parity**: Full ecosystem auto-discovery and dialect-aware parsing (`StandardMcpServers`, OpenCode `mcp`, Zed `context_servers`) across Claude Desktop, OpenCode, Claude Code CLI, Cursor, Zed, Windsurf, and Roo Code / Cline.
+- **Dynamic Catalog ETag Fingerprinting**: Immediate ETag cache invalidation and catalog re-population in the Web UI and MCP Playground when profile server constellations or policy rules change.
+- **Responsive Layout & Scrollbar Stabilization**: Zero viewport layout shift across desktop and mobile screens.
+
+### v0.25.2 — Official MCP Registry Metadata & MCPB Packaging Format
 - **MCPB Distribution Format (`packaging/mcpb/`, `.github/workflows/release-artifacts.yml`):** Added automated build and packaging of platform-specific Model Context Protocol Bundles (`.mcpb`) containing standalone binaries, bootstrap configurations, and standardized manifests (`manifest_version: "0.3"`).
 - **Official MCP Registry Metadata (`server.json`):** Release workflows now automatically generate canonical registry metadata adhering to the official `server.schema.json` specification (`io.github.warmplane/warmplane`) with multi-arch SHA-256 package digests.
 - **Homebrew Tap (`Warmplane/homebrew-tap`):** Configured official tap distribution with prebuilt macOS and Linux formula (`brew tap warmplane/tap && brew install warmplane`).
