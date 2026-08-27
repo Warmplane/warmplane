@@ -3,15 +3,23 @@ import { api } from '../api';
 
 export function renderPolicy(): string {
   const state = store.getState();
-  const policy = state.config.policy || {};
+  const activeProfName = state.activeProfile;
+  const activeProfile = activeProfName ? state.config.profiles?.[activeProfName] : undefined;
+
+  // If a profile is active in UI, view & edit that profile's policy; otherwise global daemon policy
+  const isProfileScope = !!activeProfile;
+  const basePolicy = state.config.policy || {};
+  const profPolicy = activeProfile?.policy;
+  
+  // Use active profile's policy if profile is selected, else global
+  const policy = isProfileScope ? (profPolicy || {}) : basePolicy;
   const allow = policy.allow || [];
   const deny = policy.deny || [];
   const redact = policy.redact_keys || policy.redactKeys || [];
-
   const requireApproval = policy.require_approval || policy.requireApproval || [];
 
   const allowHtml = allow.length === 0 ? `
-    <div style="color: var(--text-dim); font-size: 12px;">No allow list (all non-denied operations permitted)</div>
+    <div style="color: var(--text-dim); font-size: 12px;">${isProfileScope ? 'No profile allow list (inherits global rules)' : 'No allow list (all non-denied operations permitted)'}</div>
   ` : allow.map((a, i) => `
     <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface); padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
       <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--green-400);">✔ ${escapeHtml(a)}</span>
@@ -20,7 +28,7 @@ export function renderPolicy(): string {
   `).join('');
 
   const denyHtml = deny.length === 0 ? `
-    <div style="color: var(--text-dim); font-size: 12px;">No deny rules configured</div>
+    <div style="color: var(--text-dim); font-size: 12px;">${isProfileScope ? 'No profile deny rules configured' : 'No deny rules configured'}</div>
   ` : deny.map((d, i) => `
     <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface); padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
       <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--red-400);">✖ ${escapeHtml(d)}</span>
@@ -29,7 +37,7 @@ export function renderPolicy(): string {
   `).join('');
 
   const approvalHtml = requireApproval.length === 0 ? `
-    <div style="color: var(--text-dim); font-size: 12px;">No human-in-the-loop approval rules configured</div>
+    <div style="color: var(--text-dim); font-size: 12px;">${isProfileScope ? 'No profile human-in-the-loop triggers configured' : 'No human-in-the-loop approval rules configured'}</div>
   ` : requireApproval.map((ap, i) => `
     <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface); padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
       <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--amber-400);">🛡️ ${escapeHtml(ap)}</span>
@@ -38,7 +46,7 @@ export function renderPolicy(): string {
   `).join('');
 
   const redactHtml = redact.length === 0 ? `
-    <div style="color: var(--text-dim); font-size: 12px;">No key redaction patterns configured</div>
+    <div style="color: var(--text-dim); font-size: 12px;">${isProfileScope ? 'No profile key redaction patterns configured' : 'No key redaction patterns configured'}</div>
   ` : redact.map((r, i) => `
     <span class="brand-badge" style="color: var(--amber-300); padding: 5px 10px; font-size: 11px; display: inline-flex; align-items: center; gap: 6px;">
       ${escapeHtml(r)}
@@ -46,11 +54,29 @@ export function renderPolicy(): string {
     </span>
   `).join('');
 
-  return `
-    <!-- Sub-header -->
-    <div style="margin-bottom: 16px; font-size: 12px; color: var(--text-dim);">
-      Wildcard capability access control, human-in-the-loop triggers, and sensitive key masking.
+  const scopeBannerHtml = isProfileScope ? `
+    <div class="bento-card" style="margin-bottom: 16px; background: rgba(245, 158, 11, 0.05); border: 1px solid rgba(245, 158, 11, 0.3); display: flex; justify-content: space-between; align-items: center;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 18px;">🛡️</span>
+        <div>
+          <div style="font-size: 13px; font-weight: 700; color: var(--amber-400);">
+            Viewing &amp; Editing Policy for Profile Constellation: <code style="font-size: 13px; color: var(--text-main);">${escapeHtml(activeProfName!)}</code>
+          </div>
+          <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px;">
+            Rules defined here apply specifically when requests target this profile. Deny and HITL rules are strictly additive with global rules.
+          </div>
+        </div>
+      </div>
+      <button class="btn btn-ghost" style="font-size: 11px; padding: 4px 10px;" onclick="window.app.setActiveProfile(null)">Switch to Global Policy</button>
     </div>
+  ` : `
+    <div style="margin-bottom: 16px; font-size: 12px; color: var(--text-dim);">
+      Global security policy rules governing wildcard access control, human-in-the-loop triggers, and sensitive key masking. (Select an active profile in the top bar to edit per-profile rules).
+    </div>
+  `;
+
+  return `
+    ${scopeBannerHtml}
 
     <div class="bento-grid">
       <!-- Allow Rules -->
