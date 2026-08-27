@@ -1181,8 +1181,8 @@ class WarmplaneApp {
   }
 
   // Policy Actions
-  async submitPolicyRule(type: 'allow' | 'deny' | 'redact') {
-    const inputId = type === 'allow' ? 'policy-new-allow' : type === 'deny' ? 'policy-new-deny' : 'policy-new-redact';
+  async submitPolicyRule(type: 'allow' | 'deny' | 'redact' | 'requireApproval') {
+    const inputId = type === 'allow' ? 'policy-new-allow' : type === 'deny' ? 'policy-new-deny' : type === 'redact' ? 'policy-new-redact' : 'policy-new-requireApproval';
     const inputEl = document.getElementById(inputId) as HTMLInputElement | null;
     if (!inputEl) return;
     const val = inputEl.value.trim();
@@ -1191,7 +1191,7 @@ class WarmplaneApp {
     inputEl.value = '';
   }
 
-  async addPolicyRule(type: 'allow' | 'deny' | 'redact', val: string) {
+  async addPolicyRule(type: 'allow' | 'deny' | 'redact' | 'requireApproval', val: string) {
     const trimmed = (val || '').trim();
     if (!trimmed) return;
     const state = store.getState();
@@ -1199,30 +1199,50 @@ class WarmplaneApp {
     const allow = [...(current.allow || [])];
     const deny = [...(current.deny || [])];
     const redact = [...(current.redact_keys || current.redactKeys || [])];
+    const requireApproval = [...(current.require_approval || current.requireApproval || [])];
 
     if (type === 'allow' && !allow.includes(trimmed)) allow.push(trimmed);
     if (type === 'deny' && !deny.includes(trimmed)) deny.push(trimmed);
     if (type === 'redact' && !redact.includes(trimmed)) redact.push(trimmed);
+    if (type === 'requireApproval' && !requireApproval.includes(trimmed)) requireApproval.push(trimmed);
 
-    const res = await api.savePolicy({ allow, deny, redact_keys: redact, redactKeys: redact });
+    const res = await api.savePolicy({
+      ...current,
+      allow,
+      deny,
+      redact_keys: redact,
+      redactKeys: redact,
+      require_approval: requireApproval,
+      requireApproval,
+    });
     if (!res.ok) {
       alert(`Failed to save policy rule: ${res.error || 'Unknown error'}`);
     }
     await this.refreshData();
   }
 
-  async removePolicyRule(type: 'allow' | 'deny' | 'redact', index: number) {
+  async removePolicyRule(type: 'allow' | 'deny' | 'redact' | 'requireApproval', index: number) {
     const state = store.getState();
     const current = state.config.policy || {};
     const allow = [...(current.allow || [])];
     const deny = [...(current.deny || [])];
     const redact = [...(current.redact_keys || current.redactKeys || [])];
+    const requireApproval = [...(current.require_approval || current.requireApproval || [])];
 
     if (type === 'allow') allow.splice(index, 1);
     if (type === 'deny') deny.splice(index, 1);
     if (type === 'redact') redact.splice(index, 1);
+    if (type === 'requireApproval') requireApproval.splice(index, 1);
 
-    const res = await api.savePolicy({ allow, deny, redact_keys: redact, redactKeys: redact });
+    const res = await api.savePolicy({
+      ...current,
+      allow,
+      deny,
+      redact_keys: redact,
+      redactKeys: redact,
+      require_approval: requireApproval,
+      requireApproval,
+    });
     if (!res.ok) {
       alert(`Failed to update policy: ${res.error || 'Unknown error'}`);
     }
