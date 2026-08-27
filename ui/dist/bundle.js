@@ -80,7 +80,7 @@ class Z{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
       </div>
 
       ${!j?`
-        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-subtle);">
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 10px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-subtle);">
           ${G}
         </div>
       `:""}
@@ -200,7 +200,7 @@ class Z{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatus
         <button class="btn btn-ghost" style="padding: 3px 8px; font-size: 11px;" onclick="window.app.refreshClients()">⟳ Scan IDEs</button>
       </div>
 
-      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px;">
+      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;">
         ${t.map((s)=>{let{is_attached:a,config_exists:o,app_installed:l}=s,d='<span class="brand-badge" style="color: var(--text-dim); border-color: rgba(255, 255, 255, 0.1);">Not Found</span>';if(a){let u=s.attached_profile?` · Profile: ${s.attached_profile}`:"";d=`<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ Connected${_(u)}</span>`}else if(o)d='<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.08);">○ Ready to Connect</span>';else if(l)d='<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">○ App Installed</span>';let p=e.activeProfile,g=r.map((u)=>`
       <option value="${_(u)}" ${p===u||s.attached_profile===u?"selected":""}>Profile: ${_(u)}</option>
     `).join(""),v=a?`<button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11px; color: var(--red-400); border-color: rgba(248, 113, 113, 0.3);" onclick="window.app.detachClient('${_(s.id)}')">Disconnect</button>`:`<button class="btn btn-primary" style="padding: 4px 10px; font-size: 11px;" onclick="window.app.attachClient('${_(s.id)}')">⚡ Connect</button>`;return`

@@ -173,7 +173,7 @@ function renderClientIntegrations(): string {
         <button class="btn btn-ghost" style="padding: 3px 8px; font-size: 11px;" onclick="window.app.refreshClients()">⟳ Scan IDEs</button>
       </div>
 
-      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px;">
+      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;">
         ${clientCards}
       </div>
     </div>

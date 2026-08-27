@@ -179,7 +179,7 @@ export function renderOverview(): string {
       </div>
 
       ${!isCollapsed ? `
-        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-subtle);">
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 10px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-subtle);">
           ${miniClientPills}
         </div>
       ` : ''}
