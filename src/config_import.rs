@@ -1,17 +1,18 @@
-// Rust guideline compliant 2026-08-14
+// Rust guideline compliant 2026-08-27
 
-//! Configuration import utilities from external MCP ecosystems (Claude Desktop, Cursor, Zed).
+//! Configuration import utilities from external MCP ecosystems (Claude Desktop, OpenCode, Claude Code, Cursor, Zed, Windsurf, Roo Code / Cline).
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::{collections::HashMap, path::PathBuf};
 
+use crate::client_sync::{get_supported_clients, resolve_client_config_path, ClientDialect};
 use crate::config::{load_or_default_config, save_config, ServerConfig};
 
 /// Discovered configuration source from the host system.
 #[derive(Debug, Clone)]
 pub struct DiscoveredSource {
-    /// Ecosystem source name (e.g. "Claude Desktop", "Cursor").
+    /// Ecosystem source name (e.g. "Claude Desktop", "OpenCode", "Cursor").
     pub name: String,
     /// Absolute or expanded file path.
     pub path: PathBuf,
@@ -21,61 +22,34 @@ pub struct DiscoveredSource {
     pub servers: HashMap<String, ServerConfig>,
 }
 
-/// Discovers known MCP configuration files on the local system.
+/// Discovers known MCP configuration files on the local system across all supported agent ecosystems.
 ///
 /// # Returns
 /// A vector of discovered configuration sources that exist and contain valid servers.
 pub fn discover_sources() -> Vec<DiscoveredSource> {
     let mut sources = Vec::new();
-    let home = std::env::var("HOME").ok().map(PathBuf::from);
 
-    if let Some(ref home_dir) = home {
-        // Claude Desktop on macOS
-        let claude_mac =
-            home_dir.join("Library/Application Support/Claude/claude_desktop_config.json");
-        if claude_mac.exists() {
-            if let Ok(src) = parse_standard_mcp_source("Claude Desktop (macOS)", claude_mac) {
-                if src.server_count > 0 {
-                    sources.push(src);
-                }
-            }
-        }
-
-        // Claude Desktop on Linux
-        let claude_linux = home_dir.join(".config/Claude/claude_desktop_config.json");
-        if claude_linux.exists() {
-            if let Ok(src) = parse_standard_mcp_source("Claude Desktop (Linux)", claude_linux) {
-                if src.server_count > 0 {
-                    sources.push(src);
-                }
-            }
-        }
-
-        // Cursor Global
-        let cursor_global = home_dir.join(".cursor/mcp.json");
-        if cursor_global.exists() {
-            if let Ok(src) = parse_standard_mcp_source("Cursor (Global)", cursor_global) {
-                if src.server_count > 0 {
-                    sources.push(src);
-                }
-            }
-        }
-
-        // Zed Editor
-        let zed_settings = home_dir.join(".config/zed/settings.json");
-        if zed_settings.exists() {
-            if let Ok(src) = parse_standard_mcp_source("Zed Editor", zed_settings) {
-                if src.server_count > 0 {
-                    sources.push(src);
+    // Iterate through all supported 1-click client adapters
+    for client in get_supported_clients() {
+        if let Some(path) = resolve_client_config_path(&client.id) {
+            if path.exists() {
+                if let Ok(src) = parse_client_dialect_source(&client.name, path, client.dialect) {
+                    if src.server_count > 0 {
+                        sources.push(src);
+                    }
                 }
             }
         }
     }
 
-    // Cursor Local Workspace
+    // Cursor Local Workspace (.cursor/mcp.json)
     let cursor_local = PathBuf::from(".cursor/mcp.json");
     if cursor_local.exists() {
-        if let Ok(src) = parse_standard_mcp_source("Cursor (Workspace)", cursor_local) {
+        if let Ok(src) = parse_client_dialect_source(
+            "Cursor (Workspace)",
+            cursor_local,
+            ClientDialect::StandardMcpServers,
+        ) {
             if src.server_count > 0 {
                 sources.push(src);
             }
@@ -85,18 +59,23 @@ pub fn discover_sources() -> Vec<DiscoveredSource> {
     sources
 }
 
-/// Parses standard `mcpServers` object from JSON file.
+/// Parses an MCP configuration file according to a specific client dialect.
 ///
 /// # Arguments
 /// * `name` - Source name.
 /// * `path` - File path.
+/// * `dialect` - Target configuration dialect (`StandardMcpServers`, `OpenCodeMcp`, `ZedContextServers`).
 ///
 /// # Returns
 /// DiscoveredSource containing parsed servers.
 ///
 /// # Errors
-/// Returns an error if file cannot be read or JSON parsing fails.
-pub fn parse_standard_mcp_source(name: &str, path: PathBuf) -> Result<DiscoveredSource> {
+/// Returns an error if file reading or JSON parsing fails.
+pub fn parse_client_dialect_source(
+    name: &str,
+    path: PathBuf,
+    dialect: ClientDialect,
+) -> Result<DiscoveredSource> {
     let content = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
     let val: Value = serde_json::from_str(&content)
@@ -104,11 +83,142 @@ pub fn parse_standard_mcp_source(name: &str, path: PathBuf) -> Result<Discovered
 
     let mut servers = HashMap::new();
 
-    // Standard Claude/Cursor structure has top-level "mcpServers" key
-    if let Some(mcp_servers_val) = val.get("mcpServers").and_then(Value::as_object) {
-        for (server_name, server_obj) in mcp_servers_val {
-            if let Ok(server_cfg) = serde_json::from_value::<ServerConfig>(server_obj.clone()) {
-                servers.insert(server_name.clone(), server_cfg);
+    match dialect {
+        ClientDialect::StandardMcpServers => {
+            if let Some(mcp_servers_val) = val.get("mcpServers").and_then(Value::as_object) {
+                for (s_name, s_obj) in mcp_servers_val {
+                    if s_name == "warmplane" {
+                        continue;
+                    }
+                    if let Ok(server_cfg) = serde_json::from_value::<ServerConfig>(s_obj.clone()) {
+                        servers.insert(s_name.clone(), server_cfg);
+                    }
+                }
+            }
+        }
+        ClientDialect::OpenCodeMcp => {
+            if let Some(mcp_val) = val.get("mcp").and_then(Value::as_object) {
+                for (s_name, s_obj) in mcp_val {
+                    if s_name == "warmplane" {
+                        continue;
+                    }
+                    if let Some(cmd) = s_obj.get("command").and_then(Value::as_str) {
+                        let args = s_obj
+                            .get("args")
+                            .and_then(Value::as_array)
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(String::from))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let env = s_obj
+                            .get("env")
+                            .and_then(Value::as_object)
+                            .map(|obj| {
+                                obj.iter()
+                                    .filter_map(|(k, v)| {
+                                        v.as_str().map(|s| (k.clone(), s.to_string()))
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+
+                        servers.insert(
+                            s_name.clone(),
+                            ServerConfig {
+                                command: Some(cmd.to_string()),
+                                args,
+                                env,
+                                url: None,
+                                protocol_version: None,
+                                allow_stateless: None,
+                                headers: HashMap::new(),
+                                auth: None,
+                                resilience: None,
+                            },
+                        );
+                    } else if let Some(url) = s_obj.get("url").and_then(Value::as_str) {
+                        servers.insert(
+                            s_name.clone(),
+                            ServerConfig {
+                                command: None,
+                                args: vec![],
+                                env: HashMap::new(),
+                                url: Some(url.to_string()),
+                                protocol_version: None,
+                                allow_stateless: None,
+                                headers: HashMap::new(),
+                                auth: None,
+                                resilience: None,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        ClientDialect::ZedContextServers => {
+            if let Some(ctx_val) = val.get("context_servers").and_then(Value::as_object) {
+                for (s_name, s_obj) in ctx_val {
+                    if s_name == "warmplane" {
+                        continue;
+                    }
+                    if let Some(cmd_obj) = s_obj.get("command").and_then(Value::as_object) {
+                        let path_str = cmd_obj.get("path").and_then(Value::as_str);
+                        if let Some(p) = path_str {
+                            let args = cmd_obj
+                                .get("args")
+                                .and_then(Value::as_array)
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|v| v.as_str().map(String::from))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            let env = cmd_obj
+                                .get("env")
+                                .and_then(Value::as_object)
+                                .map(|obj| {
+                                    obj.iter()
+                                        .filter_map(|(k, v)| {
+                                            v.as_str().map(|s| (k.clone(), s.to_string()))
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+
+                            servers.insert(
+                                s_name.clone(),
+                                ServerConfig {
+                                    command: Some(p.to_string()),
+                                    args,
+                                    env,
+                                    url: None,
+                                    protocol_version: None,
+                                    allow_stateless: None,
+                                    headers: HashMap::new(),
+                                    auth: None,
+                                    resilience: None,
+                                },
+                            );
+                        }
+                    } else if let Some(url) = s_obj.get("url").and_then(Value::as_str) {
+                        servers.insert(
+                            s_name.clone(),
+                            ServerConfig {
+                                command: None,
+                                args: vec![],
+                                env: HashMap::new(),
+                                url: Some(url.to_string()),
+                                protocol_version: None,
+                                allow_stateless: None,
+                                headers: HashMap::new(),
+                                auth: None,
+                                resilience: None,
+                            },
+                        );
+                    }
+                }
             }
         }
     }
@@ -120,6 +230,40 @@ pub fn parse_standard_mcp_source(name: &str, path: PathBuf) -> Result<Discovered
         server_count,
         servers,
     })
+}
+
+/// Parses standard `mcpServers` or auto-detected MCP server configurations from any JSON file.
+///
+/// # Arguments
+/// * `name` - Source name.
+/// * `path` - File path.
+///
+/// # Returns
+/// DiscoveredSource containing parsed servers.
+///
+/// # Errors
+/// Returns an error if file reading or JSON parsing fails.
+pub fn parse_standard_mcp_source(name: &str, path: PathBuf) -> Result<DiscoveredSource> {
+    if let Ok(src) =
+        parse_client_dialect_source(name, path.clone(), ClientDialect::StandardMcpServers)
+    {
+        if src.server_count > 0 {
+            return Ok(src);
+        }
+    }
+    if let Ok(src) = parse_client_dialect_source(name, path.clone(), ClientDialect::OpenCodeMcp) {
+        if src.server_count > 0 {
+            return Ok(src);
+        }
+    }
+    if let Ok(src) =
+        parse_client_dialect_source(name, path.clone(), ClientDialect::ZedContextServers)
+    {
+        if src.server_count > 0 {
+            return Ok(src);
+        }
+    }
+    parse_client_dialect_source(name, path, ClientDialect::StandardMcpServers)
 }
 
 /// Imports servers from a map into the Warmplane target configuration file.
@@ -174,6 +318,10 @@ mod tests {
                     "env": {
                         "GITHUB_PERSONAL_ACCESS_TOKEN": "token123"
                     }
+                },
+                "warmplane": {
+                    "command": "warmplane",
+                    "args": ["stdio"]
                 }
             }
         }"#;
@@ -188,6 +336,7 @@ mod tests {
         assert_eq!(source.server_count, 2);
         assert!(source.servers.contains_key("filesystem"));
         assert!(source.servers.contains_key("github"));
+        assert!(!source.servers.contains_key("warmplane")); // Ensures warmplane self-entry is ignored
 
         let target_cfg_path = temp_dir.join("mcp_servers.json");
         let (imported, skipped) =
@@ -199,6 +348,70 @@ mod tests {
 
         let reloaded = load_or_default_config(target_cfg_path.to_str().unwrap()).unwrap();
         assert_eq!(reloaded.mcp_servers.len(), 2);
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn parse_opencode_format() {
+        let json_str = r#"{
+            "mcp": {
+                "sqlite": {
+                    "type": "local",
+                    "command": "uvx",
+                    "args": ["mcp-server-sqlite", "--db-path", "app.db"],
+                    "enabled": true
+                },
+                "warmplane": {
+                    "type": "local",
+                    "command": "warmplane",
+                    "args": ["stdio"]
+                }
+            }
+        }"#;
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "warmplane_opencode_import_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let path = temp_dir.join("opencode.json");
+        std::fs::write(&path, json_str).unwrap();
+
+        let source =
+            parse_client_dialect_source("OpenCode", path, ClientDialect::OpenCodeMcp).unwrap();
+        assert_eq!(source.server_count, 1);
+        assert!(source.servers.contains_key("sqlite"));
+        assert_eq!(source.servers["sqlite"].command.as_deref(), Some("uvx"));
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn parse_zed_format() {
+        let json_str = r#"{
+            "context_servers": {
+                "memory": {
+                    "command": {
+                        "path": "npx",
+                        "args": ["-y", "@modelcontextprotocol/server-memory"]
+                    }
+                }
+            }
+        }"#;
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("warmplane_zed_import_test_{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let path = temp_dir.join("settings.json");
+        std::fs::write(&path, json_str).unwrap();
+
+        let source =
+            parse_client_dialect_source("Zed Editor", path, ClientDialect::ZedContextServers)
+                .unwrap();
+        assert_eq!(source.server_count, 1);
+        assert!(source.servers.contains_key("memory"));
+        assert_eq!(source.servers["memory"].command.as_deref(), Some("npx"));
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }
