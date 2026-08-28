@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-18
+// Rust guideline compliant 2026-08-28
 
 //! Upstream process supervisor and self-healing actor manager (`M-CANONICAL-DOCS`).
 
@@ -419,6 +419,7 @@ pub async fn spawn_supervised_stdio_server(
     let mut cmd = Command::new(command);
     cmd.args(&srv_cfg.args);
     cmd.envs(&resolved_env);
+    cmd.stderr(std::process::Stdio::inherit());
     cmd.kill_on_drop(true);
 
     let transport = TokioChildProcess::new(cmd);
@@ -576,6 +577,7 @@ pub async fn spawn_supervised_stdio_server(
                     let mut cmd = Command::new(&command_owned);
                     cmd.args(&args_owned);
                     cmd.envs(&resolved_restart_env);
+                    cmd.stderr(std::process::Stdio::inherit());
                     cmd.kill_on_drop(true);
 
                     if let Ok(transport) = TokioChildProcess::new(cmd) {
