@@ -1761,3 +1761,71 @@ async fn test_per_profile_policy_filtering_and_execution() {
     let exec_val: Value = serde_json::from_slice(&exec_bytes).unwrap();
     assert_eq!(exec_val["error"]["code"], "POLICY_DENIED");
 }
+
+#[tokio::test]
+async fn test_handle_delete_server_cascades_profiles_and_aliases() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("mcp_servers.json");
+
+    let initial_config = json!({
+        "mcpServers": {
+            "sqlite": {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-sqlite"]
+            },
+            "memory": {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-memory"]
+            }
+        },
+        "profiles": {
+            "coding": {
+                "servers": ["sqlite", "memory"],
+                "description": "Coding profile"
+            }
+        },
+        "capabilityAliases": {
+            "sql_query": "sqlite.query",
+            "mem_write": "memory.write"
+        }
+    });
+
+    std::fs::write(
+        &config_path,
+        serde_json::to_string_pretty(&initial_config).unwrap(),
+    )
+    .unwrap();
+
+    let state = AppState::builder()
+        .config_path(config_path.to_string_lossy().to_string())
+        .build();
+
+    // Delete the sqlite server
+    let res = crate::http_v1::config_api::handle_delete_server(
+        State(state.clone()),
+        Path("sqlite".to_string()),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Read back config from disk to verify cascade
+    let saved_config: Value =
+        serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+
+    // Verify sqlite is removed from mcpServers
+    assert!(saved_config["mcpServers"].get("sqlite").is_none());
+    assert!(saved_config["mcpServers"].get("memory").is_some());
+
+    // Verify sqlite is cascade scrubbed from coding profile servers list
+    let coding_servers = saved_config["profiles"]["coding"]["servers"]
+        .as_array()
+        .unwrap();
+    assert_eq!(coding_servers.len(), 1);
+    assert_eq!(coding_servers[0], "memory");
+
+    // Verify sqlite-qualified alias was scrubbed, memory alias remains
+    assert!(saved_config["capabilityAliases"].get("sql_query").is_none());
+    assert!(saved_config["capabilityAliases"].get("mem_write").is_some());
+}

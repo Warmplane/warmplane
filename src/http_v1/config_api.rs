@@ -139,12 +139,36 @@ pub async fn handle_delete_server(
             .into_response();
     }
 
+    // Cascade scrub server from all profile constellations
+    for profile in config.profiles.values_mut() {
+        profile.servers.retain(|s| s != &id);
+    }
+
+    // Cascade scrub server from alias targets if server-qualified
+    config
+        .capability_aliases
+        .retain(|_, target| !target.starts_with(&format!("{}.", id)));
+    config
+        .resource_aliases
+        .retain(|_, target| !target.starts_with(&format!("{}.", id)));
+    config
+        .prompt_aliases
+        .retain(|_, target| !target.starts_with(&format!("{}.", id)));
+
     if let Err(e) = crate::config::save_config(&state.config_path, &config) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "ok": false, "error": e.to_string() })),
         )
             .into_response();
+    }
+
+    // Sync in-memory profiles state
+    {
+        let mut prof_guard = state.profiles.write().await;
+        for (prof_name, prof_cfg) in &config.profiles {
+            prof_guard.insert(prof_name.clone(), prof_cfg.clone());
+        }
     }
 
     // Hot-unmount server from runtime

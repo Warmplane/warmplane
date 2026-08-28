@@ -107,7 +107,7 @@ export function renderServers(): string {
               <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px; color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);" onclick="window.app.restartServer('${escapeHtml(k)}')">⚡ Restart</button>
               <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openServerDiagnosticsModal('${escapeHtml(k)}')">🔍 Diagnostics</button>
               <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openEditServerModal('${escapeHtml(k)}')">✏️ Edit</button>
-              <button class="btn btn-danger" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.deleteServer('${escapeHtml(k)}')">Remove</button>
+              <button class="btn btn-danger" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.deleteServer('${escapeHtml(k)}')">${isProfileActive ? 'Delete Globally' : 'Remove'}</button>
             </div>
           </div>
           ${errorBannerHtml}
