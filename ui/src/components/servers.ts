@@ -161,65 +161,113 @@ function renderClientIntegrations(): string {
   const clients = state.clients || [];
   const profiles = Object.keys(state.config.profiles || {});
   const isCollapsed = state.clientsCollapsed;
+  const currentCategory = state.clientFilterCategory || 'all';
+  const searchQuery = (state.clientSearchQuery || '').toLowerCase().trim();
 
   if (clients.length === 0) {
     return '';
   }
 
   const attachedCount = clients.filter(c => c.is_attached).length;
+  const detectedCount = clients.filter(c => c.config_exists && !c.is_attached).length;
+  const idesCount = clients.filter(c => c.category.toLowerCase().includes('ide') || c.category.toLowerCase().includes('extension')).length;
+  const agentsCount = clients.filter(c => c.category.toLowerCase().includes('agent') || c.category.toLowerCase().includes('cli') || c.category.toLowerCase().includes('platform')).length;
 
-  const clientCards = clients.map(c => {
-    const isAttached = c.is_attached;
-    const isDetected = c.config_exists;
-    const isInstalled = c.app_installed;
-
-    let badge = `<span class="brand-badge" style="color: var(--text-dim); border-color: rgba(255, 255, 255, 0.1);">Not Found</span>`;
-    if (isAttached) {
-      const profText = c.attached_profile ? ` · Profile: ${c.attached_profile}` : '';
-      badge = `<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ Connected${escapeHtml(profText)}</span>`;
-    } else if (isDetected) {
-      badge = `<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.08);">○ Ready to Connect</span>`;
-    } else if (isInstalled) {
-      badge = `<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">○ App Installed</span>`;
+  // Filter clients
+  const filteredClients = clients.filter(c => {
+    // Search query filter
+    if (searchQuery) {
+      const matchName = c.name.toLowerCase().includes(searchQuery);
+      const matchId = c.id.toLowerCase().includes(searchQuery);
+      const matchCat = c.category.toLowerCase().includes(searchQuery);
+      const matchPath = c.config_path.toLowerCase().includes(searchQuery);
+      if (!matchName && !matchId && !matchCat && !matchPath) return false;
     }
 
-    const activeProfile = state.activeProfile;
-    const profileOptions = profiles.map(p => `
-      <option value="${escapeHtml(p)}" ${activeProfile === p || c.attached_profile === p ? 'selected' : ''}>Profile: ${escapeHtml(p)}</option>
-    `).join('');
+    // Category tab filter
+    if (currentCategory === 'connected') return c.is_attached;
+    if (currentCategory === 'ready') return c.config_exists || c.app_installed;
+    if (currentCategory === 'ides') return c.category.toLowerCase().includes('ide') || c.category.toLowerCase().includes('extension');
+    if (currentCategory === 'agents') return c.category.toLowerCase().includes('agent') || c.category.toLowerCase().includes('cli') || c.category.toLowerCase().includes('platform');
+    return true;
+  });
 
-    const actionBtn = isAttached
-      ? `<button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11px; color: var(--red-400); border-color: rgba(248, 113, 113, 0.3);" onclick="window.app.detachClient('${escapeHtml(c.id)}')">Disconnect</button>`
-      : `<button class="btn btn-primary" style="padding: 4px 10px; font-size: 11px;" onclick="window.app.attachClient('${escapeHtml(c.id)}')">⚡ Connect</button>`;
-
+  const categoryPills = [
+    { id: 'all', label: `All Ecosystems (${clients.length})` },
+    { id: 'ready', label: `Ready / Installed (${detectedCount + attachedCount})` },
+    { id: 'connected', label: `⚡ Connected (${attachedCount})` },
+    { id: 'ides', label: `IDEs & Editors (${idesCount})` },
+    { id: 'agents', label: `Agents & CLIs (${agentsCount})` },
+  ].map(tab => {
+    const isActive = currentCategory === tab.id;
+    const activeStyle = isActive
+      ? 'background: var(--amber-400); color: #000; font-weight: 700; border-color: var(--amber-400);'
+      : 'background: var(--surface); color: var(--text-muted); border-color: var(--border);';
     return `
-      <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; display: flex; flex-direction: column; justify-content: space-between; gap: 8px;">
-        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-          <div>
-            <div style="font-weight: 700; font-size: 13.5px; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
-              <span>${escapeHtml(c.name)}</span>
-            </div>
-            <div style="font-size: 10.5px; color: var(--text-dim); margin-top: 2px;">${escapeHtml(c.category)}</div>
-          </div>
-          ${badge}
-        </div>
-        
-        <div style="font-family: var(--ff-mono); font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(c.config_path)}">
-          ${escapeHtml(c.config_path)}
-        </div>
-
-        <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--border-subtle);">
-          ${profiles.length > 0 && !isAttached ? `
-            <select id="client-prof-${escapeHtml(c.id)}" class="form-input" style="font-size: 10.5px; padding: 2px 6px; height: 26px; width: 130px;">
-              <option value="">All Tools (Default)</option>
-              ${profileOptions}
-            </select>
-          ` : `<div style="font-size: 10.5px; color: var(--text-dim);">${c.other_servers_count > 0 ? `${c.other_servers_count} other tools` : 'Single tool facade'}</div>`}
-          ${actionBtn}
-        </div>
-      </div>
+      <button class="btn btn-ghost" style="padding: 3px 10px; font-size: 11px; border-radius: 100px; ${activeStyle}" onclick="window.app.setClientCategoryFilter('${escapeHtml(tab.id)}')">
+        ${escapeHtml(tab.label)}
+      </button>
     `;
   }).join('');
+
+  const clientRows = filteredClients.length === 0
+    ? `<div style="padding: 24px; text-align: center; color: var(--text-dim); font-size: 12px;">No AI clients match the filter "${escapeHtml(searchQuery || currentCategory)}".</div>`
+    : filteredClients.map(c => {
+        const isAttached = c.is_attached;
+        const isDetected = c.config_exists;
+        const isInstalled = c.app_installed;
+
+        let statusBadge = `<span class="brand-badge" style="color: var(--text-dim); border-color: rgba(255, 255, 255, 0.1);">Not Found</span>`;
+        if (isAttached) {
+          const profText = c.attached_profile ? ` · ${c.attached_profile}` : '';
+          statusBadge = `<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ Connected${escapeHtml(profText)}</span>`;
+        } else if (isDetected) {
+          statusBadge = `<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.08);">○ Ready</span>`;
+        } else if (isInstalled) {
+          statusBadge = `<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">○ Installed</span>`;
+        }
+
+        const activeProfile = state.activeProfile;
+        const profileOptions = profiles.map(p => `
+          <option value="${escapeHtml(p)}" ${activeProfile === p || c.attached_profile === p ? 'selected' : ''}>Profile: ${escapeHtml(p)}</option>
+        `).join('');
+
+        const actionBtn = isAttached
+          ? `<button class="btn btn-ghost" style="padding: 3px 10px; font-size: 11px; color: var(--red-400); border-color: rgba(248, 113, 113, 0.3);" onclick="window.app.detachClient('${escapeHtml(c.id)}')">Disconnect</button>`
+          : `<button class="btn btn-primary" style="padding: 3px 10px; font-size: 11px;" onclick="window.app.attachClient('${escapeHtml(c.id)}')">⚡ Connect</button>`;
+
+        return `
+          <div style="display: grid; grid-template-columns: 200px 130px 1fr 140px 100px; align-items: center; gap: 12px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); transition: background 0.15s;" onmouseover="this.style.background='var(--surface-hover)'" onmouseout="this.style.background='var(--surface)'">
+            <div>
+              <div style="font-weight: 700; font-size: 13px; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
+                <span>${escapeHtml(c.name)}</span>
+              </div>
+              <div style="font-size: 10.5px; color: var(--text-dim);">${escapeHtml(c.category)}</div>
+            </div>
+
+            <div>
+              ${statusBadge}
+            </div>
+
+            <div style="font-family: var(--ff-mono); font-size: 10.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(c.config_path)}">
+              ${escapeHtml(c.config_path)}
+            </div>
+
+            <div>
+              ${profiles.length > 0 && !isAttached ? `
+                <select id="client-prof-${escapeHtml(c.id)}" class="form-input" style="font-size: 10.5px; padding: 2px 6px; height: 26px; width: 100%;">
+                  <option value="">All Tools (Default)</option>
+                  ${profileOptions}
+                </select>
+              ` : `<span style="font-size: 11px; color: var(--text-dim);">${c.other_servers_count > 0 ? `${c.other_servers_count} other tools` : 'Single facade'}</span>`}
+            </div>
+
+            <div style="text-align: right;">
+              ${actionBtn}
+            </div>
+          </div>
+        `;
+      }).join('');
 
   return `
     <div class="bento-card" style="margin-top: 28px; padding: 14px 18px; border-color: rgba(245, 158, 11, 0.2); background: rgba(18, 24, 38, 0.4);">
@@ -227,21 +275,39 @@ function renderClientIntegrations(): string {
         <div>
           <div style="font-size: 14px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 8px;">
             <span>⚡ 1-Click AI Client Integrations</span>
-            <span class="brand-badge" style="color: var(--amber-400); border-color: rgba(245, 158, 11, 0.3);">${attachedCount > 0 ? `${attachedCount} Connected` : 'Auto-Sync'}</span>
+            <span class="brand-badge" style="color: var(--amber-400); border-color: rgba(245, 158, 11, 0.3);">${attachedCount > 0 ? `${attachedCount} Connected` : `${clients.length} Ecosystems Supported`}</span>
           </div>
           <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
-            Attach Warmplane's unified facade to desktop IDEs and agents without editing JSON files.
+            Attach Warmplane's unified facade to desktop IDEs, CLI assistants, and autonomous agent platforms without editing JSON/TOML files.
           </div>
         </div>
         <div style="display: flex; align-items: center; gap: 8px;">
-          <button class="btn btn-ghost" style="padding: 3px 8px; font-size: 11px;" onclick="event.stopPropagation(); window.app.refreshClients()">⟳ Scan IDEs</button>
+          <button class="btn btn-ghost" style="padding: 3px 8px; font-size: 11px;" onclick="event.stopPropagation(); window.app.refreshClients()">⟳ Scan Ecosystems</button>
           <span style="font-size: 12px; color: var(--text-dim);">${isCollapsed ? '▼ Show' : '▲ Hide'}</span>
         </div>
       </div>
 
       ${!isCollapsed ? `
-        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-subtle);">
-          ${clientCards}
+        <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-subtle);">
+          <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px;">
+            <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+              ${categoryPills}
+            </div>
+            <div style="position: relative;">
+              <input type="text" class="form-input" style="font-size: 11px; padding: 4px 10px; width: 180px; height: 26px; border-radius: 100px;" placeholder="🔍 Search clients..." value="${escapeHtml(state.clientSearchQuery || '')}" oninput="window.app.setClientSearchQuery(this.value)">
+            </div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 6px;">
+            <div style="display: grid; grid-template-columns: 200px 130px 1fr 140px 100px; gap: 12px; padding: 4px 12px; font-family: var(--ff-mono); font-size: 10px; color: var(--text-dim); font-weight: 700; text-transform: uppercase;">
+              <span>Application</span>
+              <span>Status</span>
+              <span>Configuration Path</span>
+              <span>Constellation Scope</span>
+              <span style="text-align: right;">Action</span>
+            </div>
+            ${clientRows}
+          </div>
         </div>
       ` : ''}
     </div>

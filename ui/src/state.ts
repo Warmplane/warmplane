@@ -36,6 +36,8 @@ export interface AppState {
   serverStatuses: Record<string, { transport: string; protocol_version: string; status: string; error?: string }>;
   circuitBreakers: CircuitBreakerSnapshot[];
   clients: ClientAppStatus[];
+  clientFilterCategory: string;
+  clientSearchQuery: string;
   secrets: SecretItem[];
   clientsCollapsed: boolean;
   capabilities: CapabilityItem[];
@@ -88,6 +90,8 @@ class Store {
     serverStatuses: {},
     circuitBreakers: [],
     clients: [],
+    clientFilterCategory: 'all',
+    clientSearchQuery: '',
     secrets: [],
     clientsCollapsed: false,
     capabilities: [],

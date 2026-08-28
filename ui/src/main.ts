@@ -2041,6 +2041,14 @@ class WarmplaneApp {
     }
   }
 
+  setClientCategoryFilter(category: string) {
+    store.setState({ clientFilterCategory: category });
+  }
+
+  setClientSearchQuery(query: string) {
+    store.setState({ clientSearchQuery: query });
+  }
+
   async attachClient(clientId: string, explicitProfile?: string) {
     let profile = explicitProfile;
     if (!profile) {
