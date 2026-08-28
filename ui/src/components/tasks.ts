@@ -205,11 +205,12 @@ export function renderTasks(state: AppState): string {
           ${createdStr}
         </td>
         <td style="padding: 10px 14px; text-align: right;">
-          ${t.status === 'input_required' || t.status === 'working' ? `
-            <button class="btn btn-danger" style="padding: 2px 8px; font-size: 10.5px;" onclick="window.app.promptCancelTask('${escapeHtml(t.taskId)}')">Cancel</button>
-          ` : `
-            <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10.5px;" onclick="window.app.inspectTaskDetails('${escapeHtml(t.taskId)}')">Inspect</button>
-          `}
+          <div style="display: inline-flex; gap: 6px; align-items: center;">
+            <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10.5px;" onclick="window.app.openTaskInspectorModal('${escapeHtml(t.taskId)}')">🔍 Inspect</button>
+            ${t.status === 'input_required' || t.status === 'working' ? `
+              <button class="btn btn-danger" style="padding: 2px 8px; font-size: 10.5px;" onclick="window.app.promptCancelTask('${escapeHtml(t.taskId)}')">Cancel</button>
+            ` : ''}
+          </div>
         </td>
       </tr>
     `;

@@ -564,14 +564,164 @@ class WarmplaneApp {
     }
   }
 
-  async inspectTaskDetails(taskId: string) {
+  async openTaskInspectorModal(taskId: string) {
+    this.closeModals();
+    const modal = document.getElementById('modal-task-inspector');
+    if (!modal) return;
+
+    const titleEl = document.getElementById('modal-task-title');
+    const bodyEl = document.getElementById('modal-task-body');
+    const footerEl = document.getElementById('modal-task-footer');
+
+    if (titleEl) titleEl.textContent = `Task Inspector: ${taskId}`;
+    if (bodyEl) {
+      bodyEl.innerHTML = `
+        <div style="padding: 30px; text-align: center; color: var(--text-dim); font-family: var(--ff-mono); font-size: 12px;">
+          ⏳ Fetching task execution record...
+        </div>
+      `;
+    }
+    modal.classList.add('active');
+
     try {
       const res = await api.getTask(taskId);
-      if (res.ok && res.task) {
-        alert(`Task [${res.task.taskId}]\nStatus: ${res.task.status}\nProgress: ${Math.round((res.task.progress || 0) * 100)}%\nPayload: ${JSON.stringify(res.task.result || res.task.error || res.task.inputRequests || {}, null, 2)}`);
+      if (!res.ok || !res.task) {
+        if (bodyEl) {
+          bodyEl.innerHTML = `
+            <div style="background: rgba(248, 113, 113, 0.12); border: 1px solid rgba(248, 113, 113, 0.3); border-radius: var(--radius-sm); padding: 16px; color: var(--red-400);">
+              <div style="font-weight: 700; margin-bottom: 6px;">Failed to load task snapshot</div>
+              <div style="font-family: var(--ff-mono); font-size: 11.5px;">${escapeHtml(res.error?.message || 'Task not found in runtime registry')}</div>
+            </div>
+          `;
+        }
+        return;
+      }
+
+      const t = res.task;
+      const progressPercent = t.progress !== undefined ? Math.round(t.progress * 100) : (t.status === 'completed' ? 100 : t.status === 'working' ? 50 : 0);
+      const now = Math.floor(Date.now() / 1000);
+      const ttlLeft = t.expiresAtEpochSecs ? Math.max(0, t.expiresAtEpochSecs - now) : (t.ttlSeconds || 300);
+      const isEnded = t.status === 'completed' || t.status === 'cancelled' || t.status === 'failed';
+
+      const statusColor = 
+        t.status === 'completed' ? 'var(--green-400)' :
+        t.status === 'working' ? 'var(--cyan-400)' :
+        t.status === 'input_required' ? 'var(--amber-300)' :
+        t.status === 'cancelled' ? 'var(--text-muted)' : 'var(--red-400)';
+
+      const statusBg = 
+        t.status === 'completed' ? 'rgba(52, 211, 153, 0.15)' :
+        t.status === 'working' ? 'rgba(56, 189, 248, 0.15)' :
+        t.status === 'input_required' ? 'rgba(245, 158, 11, 0.18)' :
+        t.status === 'cancelled' ? 'rgba(148, 163, 184, 0.15)' : 'rgba(248, 113, 113, 0.15)';
+
+      const hasError = !!t.error;
+      const hasResult = t.result !== undefined && t.result !== null;
+      const hasInputReqs = t.inputRequests && Object.keys(t.inputRequests).length > 0;
+
+      if (bodyEl) {
+        bodyEl.innerHTML = `
+          <!-- Status Banner & Top Metrics -->
+          <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 14px;">
+            <div>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="brand-badge" style="background: ${statusBg}; color: ${statusColor}; border-color: ${statusColor}; font-size: 11px;">
+                  ${escapeHtml(t.status.toUpperCase())}
+                </span>
+                <span style="font-family: var(--ff-mono); font-size: 13px; font-weight: 700; color: var(--text-main);">
+                  ${escapeHtml(t.capabilityId || 'Tool Execution')}
+                </span>
+                ${t.serverId ? `<span style="font-size: 11px; color: var(--text-dim);">via <code style="color: var(--cyan-400);">${escapeHtml(t.serverId)}</code></span>` : ''}
+              </div>
+              <div style="font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim); margin-top: 4px;">
+                Task ID: <span style="color: var(--text-muted);">${escapeHtml(t.taskId)}</span>
+              </div>
+            </div>
+            <div style="text-align: right; font-family: var(--ff-mono); font-size: 11px;">
+              <div style="color: var(--text-dim);">Created: <span style="color: var(--text-muted);">${t.createdAtEpochSecs ? new Date(t.createdAtEpochSecs * 1000).toLocaleString() : '—'}</span></div>
+              ${!isEnded ? `<div style="color: var(--amber-400); margin-top: 2px;">TTL: ${ttlLeft}s remaining</div>` : ''}
+            </div>
+          </div>
+
+          <!-- Progress Bar -->
+          <div style="margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; font-family: var(--ff-mono); font-size: 11px;">
+              <span style="color: var(--text-muted); text-transform: uppercase; font-weight: 600;">Execution Progress</span>
+              <span style="color: ${statusColor}; font-weight: 700;">${progressPercent}% ${t.total ? `(step ${Math.round((t.progress || 0) * t.total)} of ${t.total})` : ''}</span>
+            </div>
+            <div style="height: 8px; background: var(--surface-card); border-radius: 4px; overflow: hidden; border: 1px solid var(--border);">
+              <div style="height: 100%; width: ${progressPercent}%; background: ${statusColor}; transition: width 0.3s;"></div>
+            </div>
+          </div>
+
+          <!-- Caller Context Envelope -->
+          ${t.context ? `
+            <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; font-family: var(--ff-mono); font-size: 11px; display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 14px; color: var(--text-muted);">
+              ${t.context.actor_id ? `<div><span style="color: var(--text-dim);">Actor:</span> <span style="color: var(--cyan-400);">${escapeHtml(t.context.actor_id)}</span></div>` : ''}
+              ${t.context.operation_id ? `<div><span style="color: var(--text-dim);">Operation:</span> <span style="color: var(--text-main);">${escapeHtml(t.context.operation_id)}</span></div>` : ''}
+              ${t.context.grant_id ? `<div><span style="color: var(--text-dim);">Grant:</span> <span style="color: var(--text-main);">${escapeHtml(t.context.grant_id)}</span></div>` : ''}
+            </div>
+          ` : ''}
+
+          <!-- Diagnostic / Error Message -->
+          ${hasError ? `
+            <div style="background: rgba(248, 113, 113, 0.1); border: 1px solid rgba(248, 113, 113, 0.3); border-radius: var(--radius-sm); padding: 12px; margin-bottom: 14px;">
+              <div style="font-size: 11px; font-weight: 700; color: var(--red-400); text-transform: uppercase; margin-bottom: 6px;">
+                ⚠️ Failure / Cancellation Trace
+              </div>
+              <pre style="font-family: var(--ff-mono); font-size: 11.5px; color: var(--red-300); white-space: pre-wrap; word-break: break-word; margin: 0;">${escapeHtml(typeof t.error === 'string' ? t.error : JSON.stringify(t.error, null, 2))}</pre>
+            </div>
+          ` : ''}
+
+          <!-- Input Requests (if awaiting input) -->
+          ${hasInputReqs ? `
+            <div style="margin-bottom: 14px;">
+              <div style="font-size: 11px; font-weight: 700; color: var(--amber-400); text-transform: uppercase; margin-bottom: 6px;">
+                ⚡ Pending Input Requests (MRTR / HITL)
+              </div>
+              <pre style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; font-family: var(--ff-mono); font-size: 11.5px; color: var(--amber-300); white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow-y: auto; margin: 0;">${escapeHtml(JSON.stringify(t.inputRequests, null, 2))}</pre>
+            </div>
+          ` : ''}
+
+          <!-- Result Payload -->
+          <div style="margin-bottom: 8px;">
+            <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px;">
+              ${hasResult ? '📦 Output Result Payload' : 'State Details'}
+            </div>
+            <pre style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; font-family: var(--ff-mono); font-size: 11.5px; color: var(--text-main); white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto; margin: 0;">${escapeHtml(hasResult ? JSON.stringify(t.result, null, 2) : (t.status === 'working' ? 'Task execution is currently in-flight in background worker pool.' : 'No output payload recorded.'))}</pre>
+          </div>
+        `;
+      }
+
+      if (footerEl) {
+        footerEl.innerHTML = `
+          <div>
+            ${!isEnded ? `
+              <button class="btn btn-danger" style="font-size: 11.5px;" onclick="window.app.promptCancelTask('${escapeHtml(t.taskId)}'); window.app.closeModals();">
+                ⛔ Cancel Task
+              </button>
+            ` : `
+              <span style="font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim);">Task is terminal (${escapeHtml(t.status)})</span>
+            `}
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn btn-ghost" style="font-size: 11.5px;" onclick="navigator.clipboard.writeText('${escapeHtml(t.taskId)}'); alert('Task ID copied to clipboard');">
+              📋 Copy Task ID
+            </button>
+            <button class="btn btn-ghost" style="font-size: 11.5px;" onclick="window.app.closeModals()">
+              Close
+            </button>
+          </div>
+        `;
       }
     } catch (e: any) {
-      alert(`Failed to fetch task: ${e.message}`);
+      if (bodyEl) {
+        bodyEl.innerHTML = `
+          <div style="color: var(--red-400); font-family: var(--ff-mono); font-size: 11.5px;">
+            Failed to inspect task: ${escapeHtml(e.message)}
+          </div>
+        `;
+      }
     }
   }
 
