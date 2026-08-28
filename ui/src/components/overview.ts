@@ -111,7 +111,27 @@ export function renderOverview(): string {
   const profiles = Object.keys(state.config.profiles || {});
   const activeProfile = state.activeProfile;
 
-  const miniClientPills = clients.map(c => {
+  const currentCategory = state.clientFilterCategory || 'all';
+  const searchQuery = (state.clientSearchQuery || '').toLowerCase().trim();
+
+  // Filter clients
+  const filteredClients = clients.filter(c => {
+    if (searchQuery) {
+      const matchName = c.name.toLowerCase().includes(searchQuery);
+      const matchId = c.id.toLowerCase().includes(searchQuery);
+      const matchCat = c.category.toLowerCase().includes(searchQuery);
+      if (!matchName && !matchId && !matchCat) return false;
+    }
+    if (currentCategory === 'connected') return c.is_attached;
+    if (currentCategory === 'ready') return c.config_exists || c.app_installed;
+    if (currentCategory === 'ides') return c.category.toLowerCase().includes('ide') || c.category.toLowerCase().includes('extension');
+    if (currentCategory === 'agents') return c.category.toLowerCase().includes('agent') || c.category.toLowerCase().includes('cli') || c.category.toLowerCase().includes('platform');
+    return true;
+  });
+
+  const miniClientPills = filteredClients.length === 0
+    ? `<div style="padding: 16px; text-align: center; color: var(--text-dim); font-size: 11.5px; grid-column: 1 / -1;">No AI clients match current filter.</div>`
+    : filteredClients.map(c => {
     const isAttached = c.is_attached;
     const isDetected = c.config_exists;
     const isInstalled = c.app_installed;
@@ -163,6 +183,17 @@ export function renderOverview(): string {
     `;
   }).join('');
 
+  const categoryTabs = [
+    { id: 'all', label: 'All' },
+    { id: 'ready', label: 'Ready / Installed' },
+    { id: 'connected', label: 'Connected' },
+    { id: 'ides', label: 'IDEs' },
+    { id: 'agents', label: 'Agents & CLIs' },
+  ].map(t => {
+    const isAct = currentCategory === t.id;
+    return `<button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10.5px; border-radius: 100px; ${isAct ? 'background: var(--amber-400); color: #000; font-weight: 700;' : 'background: var(--surface); color: var(--text-muted);'}" onclick="event.stopPropagation(); window.app.setClientCategoryFilter('${t.id}')">${t.label}</button>`;
+  }).join('');
+
   const clientsSectionHtml = `
     <div class="bento-card" style="margin-top: 18px; padding: 12px 16px; border-color: rgba(245, 158, 11, 0.25); background: rgba(18, 24, 38, 0.4);">
       <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;" onclick="window.app.toggleClientsCollapse()">
@@ -179,8 +210,16 @@ export function renderOverview(): string {
       </div>
 
       ${!isCollapsed ? `
-        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 10px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-subtle);">
-          ${miniClientPills}
+        <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border-subtle);">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px;">
+            <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+              ${categoryTabs}
+            </div>
+            <input type="text" class="form-input" style="font-size: 10.5px; padding: 2px 8px; width: 140px; height: 22px; border-radius: 100px;" placeholder="🔍 Search..." value="${escapeHtml(state.clientSearchQuery || '')}" onclick="event.stopPropagation();" oninput="window.app.setClientSearchQuery(this.value)">
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 8px;">
+            ${miniClientPills}
+          </div>
         </div>
       ` : ''}
     </div>

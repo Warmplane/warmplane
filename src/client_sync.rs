@@ -150,6 +150,66 @@ pub fn get_supported_clients() -> Vec<ClientAppDef> {
             category: "VS Code Extension".to_string(),
             dialect: ClientDialect::StandardMcpServers,
         },
+        ClientAppDef {
+            id: "antigravity".to_string(),
+            name: "Google Antigravity (AGY)".to_string(),
+            category: "IDE / Agent".to_string(),
+            dialect: ClientDialect::StandardMcpServers,
+        },
+        ClientAppDef {
+            id: "codex".to_string(),
+            name: "OpenAI Codex CLI".to_string(),
+            category: "CLI Agent".to_string(),
+            dialect: ClientDialect::StandardMcpServers,
+        },
+        ClientAppDef {
+            id: "gemini-cli".to_string(),
+            name: "Gemini CLI".to_string(),
+            category: "CLI Tool".to_string(),
+            dialect: ClientDialect::StandardMcpServers,
+        },
+        ClientAppDef {
+            id: "continue".to_string(),
+            name: "Continue.dev".to_string(),
+            category: "IDE Extension".to_string(),
+            dialect: ClientDialect::StandardMcpServers,
+        },
+        ClientAppDef {
+            id: "vscode".to_string(),
+            name: "VS Code Copilot MCP".to_string(),
+            category: "IDE".to_string(),
+            dialect: ClientDialect::StandardMcpServers,
+        },
+        ClientAppDef {
+            id: "goose".to_string(),
+            name: "Goose (Block)".to_string(),
+            category: "Desktop / CLI Agent".to_string(),
+            dialect: ClientDialect::StandardMcpServers,
+        },
+        ClientAppDef {
+            id: "librechat".to_string(),
+            name: "LibreChat".to_string(),
+            category: "Agent Platform".to_string(),
+            dialect: ClientDialect::StandardMcpServers,
+        },
+        ClientAppDef {
+            id: "deepseek".to_string(),
+            name: "DeepSeek Harness".to_string(),
+            category: "Agent Framework".to_string(),
+            dialect: ClientDialect::StandardMcpServers,
+        },
+        ClientAppDef {
+            id: "cody".to_string(),
+            name: "Sourcegraph Cody".to_string(),
+            category: "IDE Extension".to_string(),
+            dialect: ClientDialect::StandardMcpServers,
+        },
+        ClientAppDef {
+            id: "devin".to_string(),
+            name: "Devin CLI".to_string(),
+            category: "Autonomous Agent".to_string(),
+            dialect: ClientDialect::StandardMcpServers,
+        },
     ]
 }
 
@@ -249,6 +309,90 @@ pub fn resolve_client_config_path(client_id: &str) -> Option<PathBuf> {
             }
             if let Some(ref h) = home {
                 return Some(h.join(".cline/data/settings/cline_mcp_settings.json"));
+            }
+            None
+        }
+        "antigravity" => {
+            if let Some(ref h) = home {
+                let p = h.join(".gemini/config/mcp_config.json");
+                if p.exists() {
+                    return Some(p);
+                }
+                return Some(h.join(".gemini/config/mcp_config.json"));
+            }
+            None
+        }
+        "codex" => {
+            if let Some(ref h) = home {
+                return Some(h.join(".codex/mcp_servers.json"));
+            }
+            None
+        }
+        "gemini-cli" => {
+            #[cfg(target_os = "windows")]
+            if let Some(ref up) = userprofile {
+                return Some(up.join(".gemini/settings.json"));
+            }
+            if let Some(ref h) = home {
+                return Some(h.join(".gemini/settings.json"));
+            }
+            None
+        }
+        "continue" => {
+            if let Some(ref h) = home {
+                return Some(h.join(".continue/config.json"));
+            }
+            None
+        }
+        "vscode" => {
+            #[cfg(target_os = "windows")]
+            if let Some(ref ad) = appdata {
+                return Some(
+                    ad.join("Code/User/globalStorage/github.copilot-chat/mcp-config.json"),
+                );
+            }
+            #[cfg(target_os = "macos")]
+            if let Some(ref h) = home {
+                return Some(h.join("Library/Application Support/Code/User/globalStorage/github.copilot-chat/mcp-config.json"));
+            }
+            if let Some(ref h) = home {
+                return Some(
+                    h.join(".config/Code/User/globalStorage/github.copilot-chat/mcp-config.json"),
+                );
+            }
+            None
+        }
+        "goose" => {
+            #[cfg(target_os = "windows")]
+            if let Some(ref ad) = appdata {
+                return Some(ad.join("Block/goose/config/config.json"));
+            }
+            if let Some(ref h) = home {
+                return Some(h.join(".config/goose/config.json"));
+            }
+            None
+        }
+        "librechat" => {
+            if let Some(ref h) = home {
+                return Some(h.join(".config/librechat/librechat.json"));
+            }
+            None
+        }
+        "deepseek" => {
+            if let Some(ref h) = home {
+                return Some(h.join(".deepseek/mcp.json"));
+            }
+            None
+        }
+        "cody" => {
+            if let Some(ref h) = home {
+                return Some(h.join(".sourcegraph/cody.json"));
+            }
+            None
+        }
+        "devin" => {
+            if let Some(ref h) = home {
+                return Some(h.join(".devin/mcp.json"));
             }
             None
         }

@@ -5,7 +5,7 @@ use warmplane::client_sync::get_supported_clients;
 #[test]
 fn test_get_supported_clients() {
     let clients = get_supported_clients();
-    assert_eq!(clients.len(), 7);
+    assert_eq!(clients.len(), 17);
     let ids: Vec<_> = clients.iter().map(|c| c.id.as_str()).collect();
     assert!(ids.contains(&"claude-desktop"));
     assert!(ids.contains(&"opencode"));
@@ -14,6 +14,16 @@ fn test_get_supported_clients() {
     assert!(ids.contains(&"zed"));
     assert!(ids.contains(&"windsurf"));
     assert!(ids.contains(&"cline"));
+    assert!(ids.contains(&"antigravity"));
+    assert!(ids.contains(&"codex"));
+    assert!(ids.contains(&"gemini-cli"));
+    assert!(ids.contains(&"continue"));
+    assert!(ids.contains(&"vscode"));
+    assert!(ids.contains(&"goose"));
+    assert!(ids.contains(&"librechat"));
+    assert!(ids.contains(&"deepseek"));
+    assert!(ids.contains(&"cody"));
+    assert!(ids.contains(&"devin"));
 }
 
 #[test]
