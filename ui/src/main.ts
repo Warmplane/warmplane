@@ -1502,9 +1502,23 @@ class WarmplaneApp {
 
   // Server Actions
   async deleteServer(name: string) {
-    if (!confirm(`Are you sure you want to remove server '${name}' from config?`)) return;
-    await api.deleteServer(name);
-    await this.refreshData();
+    const activeProf = store.getState().activeProfile;
+    const confirmMsg = activeProf
+      ? `Permanently delete server '${name}' globally from warmplane configuration? (This will also unbind it from profile '${activeProf}')`
+      : `Are you sure you want to permanently remove server '${name}' from configuration?`;
+
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      const res = await api.deleteServer(name);
+      if (res.ok) {
+        await this.refreshData();
+      } else {
+        alert(`Failed to remove server '${name}': ${res.error || 'Unknown error'}`);
+      }
+    } catch (e: any) {
+      alert(`Error removing server '${name}': ${e.message}`);
+    }
   }
 
   async restartServer(name: string) {
