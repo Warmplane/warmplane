@@ -638,7 +638,7 @@ class WarmplaneApp {
               </div>
             </div>
             <div style="text-align: right; font-family: var(--ff-mono); font-size: 11px;">
-              <div style="color: var(--text-dim);">Created: <span style="color: var(--text-muted);">${t.createdAtEpochSecs ? new Date(t.createdAtEpochSecs * 1000).toLocaleString() : '—'}</span></div>
+              <div style="color: var(--text-dim);">Created: <span style="color: var(--text-muted);">${t.createdAtEpochSecs ? new Date(t.createdAtEpochSecs * 1000).toLocaleString() : (t.createdAt ? new Date(t.createdAt).toLocaleString() : '—')}</span></div>
               ${!isEnded ? `<div style="color: var(--amber-400); margin-top: 2px;">TTL: ${ttlLeft}s remaining</div>` : ''}
             </div>
           </div>

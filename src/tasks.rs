@@ -93,10 +93,18 @@ pub struct TaskResponse {
     pub status: TaskStatus,
     #[serde(rename = "statusMessage", skip_serializing_if = "Option::is_none")]
     pub status_message: Option<String>,
+    #[serde(rename = "capabilityId", skip_serializing_if = "Option::is_none")]
+    pub capability_id: Option<String>,
+    #[serde(rename = "serverId", skip_serializing_if = "Option::is_none")]
+    pub server_id: Option<String>,
     #[serde(rename = "createdAt")]
     pub created_at: String,
     #[serde(rename = "lastUpdatedAt")]
     pub last_updated_at: String,
+    #[serde(rename = "createdAtEpochSecs")]
+    pub created_at_epoch_secs: u64,
+    #[serde(rename = "expiresAtEpochSecs", skip_serializing_if = "Option::is_none")]
+    pub expires_at_epoch_secs: Option<u64>,
     #[serde(rename = "ttlMs", skip_serializing_if = "Option::is_none")]
     pub ttl_ms: Option<u64>,
     #[serde(rename = "pollIntervalMs", skip_serializing_if = "Option::is_none")]
@@ -111,12 +119,20 @@ pub struct TaskResponse {
 
 impl From<&TaskRecord> for TaskResponse {
     fn from(record: &TaskRecord) -> Self {
+        let expires_at_epoch_secs = record
+            .ttl_ms
+            .map(|ms| record.created_at_epoch_secs + (ms / 1000));
+
         Self {
             task_id: record.task_id.clone(),
             status: record.status.clone(),
             status_message: record.status_message.clone(),
+            capability_id: Some(record.capability_id.clone()),
+            server_id: Some(record.server_id.clone()),
             created_at: record.created_at.clone(),
             last_updated_at: record.last_updated_at.clone(),
+            created_at_epoch_secs: record.created_at_epoch_secs,
+            expires_at_epoch_secs,
             ttl_ms: record.ttl_ms,
             poll_interval_ms: record.poll_interval_ms,
             input_requests: if record.status == TaskStatus::InputRequired

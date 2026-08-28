@@ -157,11 +157,16 @@ export interface SecretItem {
 export interface TaskItem {
   taskId: string;
   status: 'working' | 'input_required' | 'completed' | 'cancelled' | 'failed' | string;
+  statusMessage?: string;
   progress?: number;
   total?: number;
   result?: any;
   error?: any;
   ttlSeconds?: number;
+  ttlMs?: number;
+  pollIntervalMs?: number;
+  createdAt?: string;
+  lastUpdatedAt?: string;
   createdAtEpochSecs?: number;
   expiresAtEpochSecs?: number;
   inputRequests?: Record<string, any>;

@@ -33,7 +33,13 @@ export function renderTasks(state: AppState): string {
     const inputKeys = Object.keys(inputReqs);
     const hasInputReqs = inputKeys.length > 0;
     const now = Math.floor(Date.now() / 1000);
-    const ttlLeft = task.expiresAtEpochSecs ? Math.max(0, task.expiresAtEpochSecs - now) : (task.ttlSeconds || 300);
+    const ttlLeft = task.expiresAtEpochSecs 
+      ? Math.max(0, task.expiresAtEpochSecs - now) 
+      : (task.ttlMs ? Math.max(0, Math.floor(task.ttlMs / 1000)) : (task.ttlSeconds || 300));
+
+    const createdDisplay = task.createdAtEpochSecs 
+      ? new Date(task.createdAtEpochSecs * 1000).toLocaleTimeString() 
+      : (task.createdAt ? new Date(task.createdAt).toLocaleTimeString() : '—');
 
     return `
       <div class="bento-card" style="border: 1px solid rgba(245, 158, 11, 0.35); background: var(--surface-card); margin-bottom: 14px; padding: 18px;">
@@ -54,7 +60,7 @@ export function renderTasks(state: AppState): string {
           </div>
 
           <div style="text-align: right; font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim);">
-            ${task.createdAtEpochSecs ? `<div>Created: <span style="color: var(--text-muted);">${new Date(task.createdAtEpochSecs * 1000).toLocaleTimeString()}</span></div>` : ''}
+            <div>Created: <span style="color: var(--text-muted);">${createdDisplay}</span></div>
             <div style="color: var(--amber-400); margin-top: 2px;">TTL Remaining: ${ttlLeft}s</div>
           </div>
         </div>
@@ -178,7 +184,9 @@ export function renderTasks(state: AppState): string {
       'background: rgba(248, 113, 113, 0.12); color: var(--red-400); border-color: rgba(248, 113, 113, 0.3);';
 
     const progressPercent = t.progress !== undefined ? Math.round(t.progress * 100) : (t.status === 'completed' ? 100 : t.status === 'working' ? 50 : 0);
-    const createdStr = t.createdAtEpochSecs ? new Date(t.createdAtEpochSecs * 1000).toLocaleTimeString() : '—';
+    const createdStr = t.createdAtEpochSecs 
+      ? new Date(t.createdAtEpochSecs * 1000).toLocaleTimeString() 
+      : (t.createdAt ? new Date(t.createdAt).toLocaleTimeString() : '—');
 
     return `
       <tr style="border-bottom: 1px solid rgba(255,255,255,0.03); transition: background 0.15s;" onmouseover="this.style.background='var(--surface-hover)'" onmouseout="this.style.background='transparent'">
