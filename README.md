@@ -6,7 +6,7 @@
 
 > **The Local control plane that keeps MCP sessions warm with compact capability/resource/prompt facades.**
 > 
-> v0.26.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.26.1 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 ---
 
@@ -310,6 +310,11 @@ warmplane mcp-server
 ---
 
 ## Changelog
+
+### v0.26.1 — MCP Stdio Stream Isolation & Logging Fix
+- **MCP Stdio Stream Isolation (`src/telemetry.rs`):** Configured `tracing_subscriber::fmt::layer()` to write to `stderr` (`.with_writer(std::io::stderr)`). Prevents runtime structured JSON logs and span diagnostics from polluting `stdout`.
+- **Upstream Process Stderr Inheritance (`src/supervisor.rs`):** Upstream stdio child processes now explicitly inherit Warmplane's standard error (`cmd.stderr(std::process::Stdio::inherit())`). Prevents upstream startup banners (e.g. Memory and Filesystem server banners) from leaking into stdio JSON-RPC sessions.
+- **Client Protocol Reliability:** Resolves JSON-RPC initialization failure (`invalid message version tag ""; expected "2.0"`) when running Warmplane in stdio server mode (`warmplane mcp-server`) with AI agents and IDEs.
 
 ### v0.26.0 — 1-Click AI Client Sync, Native Secrets Vault, ChatOps & Profile Governance
 - **1-Click AI Client Injector & Ecosystem Sync (`src/client_sync.rs`):** Zero-configuration bidirectional MCP adapter engine. Detects, injects, and detaches Warmplane proxy configurations with profile binding across Claude Desktop (macOS, Linux, Windows), OpenCode, Claude Code CLI (`CLAUDE_CONFIG_DIR`), Cursor (Global & Workspace), Zed Editor (`context_servers`), Windsurf, and Roo Code / Cline.
