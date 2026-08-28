@@ -6,7 +6,28 @@
 
 > **The Local control plane that keeps MCP sessions warm with compact capability/resource/prompt facades.**
 > 
-> v0.26.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.26.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+
+---
+
+## 🤖 Give Your AI Agent Warmplane Expertise
+
+Warmplane includes an official **Agent Skill** (`.skills/warmplane/`) adhering to the open [`agentskills.io`](https://agentskills.io) standard. Point your coding agent (Claude Code, Google Antigravity, Cursor, OpenCode, Codex) directly to this repository to teach it all MCP facade commands, progressive discovery, secrets vault, and diagnostics:
+
+```bash
+# Install Warmplane Skill into Claude Code
+claude skill install Warmplane/warmplane
+
+# Or copy into your workspace / global agent skills folder
+mkdir -p .agents/skills/warmplane && cp -r .skills/warmplane/* .agents/skills/warmplane/
+```
+
+Browse the skill package:
+- 📖 [`.skills/warmplane/SKILL.md`](.skills/warmplane/SKILL.md) — Core prompt trigger & standard workflows (~450 tokens)
+- 🔌 [`references/mcp_stdio_usage.md`](.skills/warmplane/references/mcp_stdio_usage.md) — 1-Click client config (17 IDEs) & built-in MCP tools
+- ⚙️ [`references/configuration_schema.md`](.skills/warmplane/references/configuration_schema.md) — Canonical `mcp_servers.json` schema & dynamic secrets
+- 🛠️ [`references/cli_cheatsheet.md`](.skills/warmplane/references/cli_cheatsheet.md) — Terminal commands for daemon, sync, and vault
+- 🚑 [`references/error_resolution.md`](.skills/warmplane/references/error_resolution.md) — Circuit breakers, policy denials, and recovery playbook
 
 
 Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
