@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-13
+// Rust guideline compliant 2026-08-28
 
 use anyhow::Result;
 use opentelemetry::{global, trace::TracerProvider as _, KeyValue};
@@ -31,6 +31,7 @@ pub fn init() -> Result<TelemetryGuard> {
         .unwrap_or_else(|_| EnvFilter::new("info,warmplane=debug"));
 
     let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stderr)
         .json()
         .with_current_span(true)
         .with_span_list(true)
