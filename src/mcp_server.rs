@@ -521,40 +521,41 @@ impl ServerHandler for FacadeMcpServer {
                 let tool_name = request.name.as_ref();
                 let mut target_id = None;
 
-                if let Ok(config) = crate::config::load_or_default_config(&self.state.config_path) {
-                    if let Some(alias_target) = config.capability_aliases.get(tool_name) {
-                        target_id = Some(alias_target.target().to_string());
-                    } else {
-                        // Check if tool_name matches a sanitized passthrough alias name
-                        for (alias_k, alias_target) in &config.capability_aliases {
-                            if alias_target.is_passthrough() {
-                                let sanitized: String = alias_k
-                                    .chars()
-                                    .map(|c| {
-                                        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                                            c
-                                        } else {
-                                            '_'
-                                        }
-                                    })
-                                    .take(64)
-                                    .collect();
-                                if sanitized == tool_name {
-                                    target_id = Some(alias_target.target().to_string());
-                                    break;
+                let caps_guard = self.state.capabilities.read().await;
+
+                // 1. Direct match on registered capability
+                if caps_guard.contains_key(tool_name) {
+                    target_id = Some(tool_name.to_string());
+                } else if let Ok(config) =
+                    crate::config::load_or_default_config(&self.state.config_path)
+                {
+                    // 2. Check alias definitions (exact alias name or sanitized alias name)
+                    for (alias_k, alias_target) in &config.capability_aliases {
+                        let sanitized: String = alias_k
+                            .chars()
+                            .map(|c| {
+                                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                                    c
+                                } else {
+                                    '_'
                                 }
+                            })
+                            .take(64)
+                            .collect();
+
+                        if alias_k == tool_name || sanitized == tool_name {
+                            // If alias_k itself was registered as the capability ID, use it;
+                            // otherwise resolve to the upstream target ID.
+                            if caps_guard.contains_key(alias_k) {
+                                target_id = Some(alias_k.clone());
+                            } else {
+                                target_id = Some(alias_target.target().to_string());
                             }
+                            break;
                         }
                     }
                 }
-
-                // If not in aliases, check if it's a registered canonical capability ID
-                if target_id.is_none() {
-                    let caps_guard = self.state.capabilities.read().await;
-                    if caps_guard.contains_key(tool_name) {
-                        target_id = Some(tool_name.to_string());
-                    }
-                }
+                drop(caps_guard);
 
                 if let Some(target) = target_id {
                     self.call_capability_value(
