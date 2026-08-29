@@ -54,6 +54,7 @@ interface CapabilityEntry {
   summary: string;
   server: string;
   tags: string[];
+  signature?: string;
   mode?: string;
 }
 
@@ -72,6 +73,7 @@ interface SearchResult {
   summary: string;
   server: string;
   tags: string[];
+  signature?: string;
   score: number;
   match_types: string[];
 }

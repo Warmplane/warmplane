@@ -130,9 +130,9 @@ The configuration file (default: `mcp_servers.json`) controls upstream server co
 | :--- | :--- | :---: | :--- | :--- |
 | `port` | Number | No | `9090` | TCP listening port for the HTTP daemon. |
 | `toolTimeoutMs` | Number | No | `15000` | Upstream operation timeout in milliseconds. |
-| `capabilityAliases` | Object | No | `{}` | Map of upstream tool identifiers (`<server>.<tool>`) to canonical public capability IDs. |
-| `resourceAliases` | Object | No | `{}` | Map of upstream resource URIs to canonical public resource IDs. |
-| `promptAliases` | Object | No | `{}` | Map of upstream prompt names to canonical public prompt IDs. |
+| `capabilityAliases` | Object | No | `{}` | Map of public alias names to canonical upstream tool targets (`<server>.<tool>`) or detailed objects with custom `summary` and `description` overrides. |
+| `resourceAliases` | Object | No | `{}` | Map of public alias names to canonical upstream resource URIs or detailed objects with custom `summary` and `description` overrides. |
+| `promptAliases` | Object | No | `{}` | Map of public alias names to canonical upstream prompt names or detailed objects with custom `summary` and `description` overrides. |
 | `policy` | Object | No | `null` | Access control rules, approval workflows, and data redaction settings. |
 | `audit` | Object | No | `null` | Cryptographic WORM audit logging and SIEM exporter settings. |
 | `profiles` | Object | No | `{}` | Named server constellations for task-specific catalog partitioning. |
@@ -441,7 +441,43 @@ The `profiles` block defines named server constellations. Profiles allow a singl
 
 ---
 
-### 4.7 Native OS Keychain Vault and Dynamic Secrets
+### 4.7 Facade Aliases and Compact Tool Signatures
+
+Warmplane provides bidirectional alias mapping to shorten verbose upstream names, prune prompt token footprints, and clarify tool descriptions for LLMs.
+
+#### Polymorphic Alias Definitions
+
+Aliases can be configured as simple target strings or detailed objects with custom `summary` and `description` overrides:
+
+```json
+{
+  "capabilityAliases": {
+    "git.commit": "github.create_commit",
+    "semble.search": {
+      "target": "semble-rs.search",
+      "summary": "Search codebase using semantic or BM25 ranking. Pass absolute file path in repo.",
+      "description": "Custom instruction override guiding the LLM to provide required parameters correctly."
+    }
+  },
+  "resourceAliases": {
+    "docs.architecture": "file:///docs/architecture.md"
+  },
+  "promptAliases": {
+    "code.review": "review_pull_request"
+  }
+}
+```
+
+#### Compact Tool Signatures
+
+Warmplane derives deterministic, compact LLM-friendly call signatures for all registered tools based on their JSON Schema:
+- Distinguishes required parameters from optional parameters: `semble.search(query, [mode], [repo], [top_k])`
+- Tools without parameters display as `tool_name()`
+- Signatures are surfaced in `CapabilitySummary` across the Web UI, MCP `capabilities_list`, and catalog search endpoints.
+
+---
+
+### 4.8 Native OS Keychain Vault and Dynamic Secrets
 
 Warmplane provides secure credential storage and dynamic environment variable expansion through OS keychain integration (`keychain://`), 1Password CLI (`op://`), and process environment fallbacks (`env://`).
 
@@ -465,7 +501,7 @@ Warmplane provides secure credential storage and dynamic environment variable ex
 
 ---
 
-### 4.8 Actionable ChatOps and Webhook Integrations
+### 4.9 Actionable ChatOps and Webhook Integrations
 
 Warmplane integrates with enterprise chat platforms for interactive Human-in-the-Loop approval workflows.
 
@@ -481,7 +517,7 @@ Every outgoing webhook includes an HMAC-SHA256 signature in the `X-Signature-SHA
 
 ---
 
-### 4.9 MCP HTTP/SSE Server Configuration (`mcpHttpServer`)
+### 4.10 MCP HTTP/SSE Server Configuration (`mcpHttpServer`)
 
 The optional `mcpHttpServer` block exposes the Warmplane facade as a **Streamable HTTP/SSE MCP server** that remote MCP clients (Claude Desktop via network, Cursor, CI pipelines) can connect to over TCP.
 
@@ -744,7 +780,7 @@ Run single-shot CLI commands for administration, configuration management, appro
 | `config init` | Scaffolds a clean `mcp_servers.json` configuration file. | `warmplane config init` |
 | `config show` | Pretty-prints the merged configuration file. | `warmplane config show` |
 | `config import` | Discovers and imports servers from Claude Desktop, OpenCode, Claude Code, Cursor, Zed, Windsurf, or Cline. | `warmplane config import` |
-| `config alias set` | Registers a capability/tool, resource, or prompt alias. | `warmplane config alias set tool git-commit github.create_commit` |
+| `config alias set` | Registers a capability/tool, resource, or prompt alias (supports optional `--summary` and `--description`). | `warmplane config alias set tool git-commit github.create_commit --summary "Create git commit"` |
 | `config alias remove` | Removes an alias mapping. | `warmplane config alias remove tool git-commit` |
 | `config alias list` | Lists all active capability, resource, and prompt aliases. | `warmplane config alias list` |
 | `config policy allow` | Adds capability patterns to the policy allow list. | `warmplane config policy allow "github.*" "fetch.*"` |

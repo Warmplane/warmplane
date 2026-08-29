@@ -10,15 +10,57 @@
     "toolTimeoutMs": { "type": "integer", "minimum": 1 },
     "capabilityAliases": {
       "type": "object",
-      "additionalProperties": { "type": "string" }
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "required": ["target"],
+            "properties": {
+              "target": { "type": "string" },
+              "summary": { "type": "string" },
+              "description": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
     },
     "resourceAliases": {
       "type": "object",
-      "additionalProperties": { "type": "string" }
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "required": ["target"],
+            "properties": {
+              "target": { "type": "string" },
+              "summary": { "type": "string" },
+              "description": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
     },
     "promptAliases": {
       "type": "object",
-      "additionalProperties": { "type": "string" }
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "required": ["target"],
+            "properties": {
+              "target": { "type": "string" },
+              "summary": { "type": "string" },
+              "description": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
     },
     "policy": {
       "type": "object",

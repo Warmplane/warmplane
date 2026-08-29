@@ -61,3 +61,13 @@ Run these commands to verify your work before pushing or creating a PR (matching
 * **Review:** Check for `RUSTSEC` advisories before adding new dependencies.
 * **Interop:** Implement `AsRef`, `From`, and `Into` traits to make APIs flexible (`M-IMPL-ASREF`).
 
+## 📋 Documentation & Skill Synchronization Checklist
+
+Before finalizing changes or opening PRs, verify the following:
+
+1. **Warmplane Skill:** Keep `/Users/origo/.gemini/config/skills/warmplane/SKILL.md` accurate and up to date when changing capabilities, CLI flags, APIs, or configuration semantics.
+2. **User Guide:** Update [docs/USER-GUIDE.md](file:///Users/origo/src/warmplane/docs/USER-GUIDE.md) whenever user-facing behaviors, CLI subcommands, UI components, or configuration options change.
+3. **Integrator Guides:** Ensure [docs/RUST_INTEGRATORS_GUIDE.md](file:///Users/origo/src/warmplane/docs/RUST_INTEGRATORS_GUIDE.md) and [docs/TYPESCRIPT_INTEGRATORS_GUIDE.md](file:///Users/origo/src/warmplane/docs/TYPESCRIPT_INTEGRATORS_GUIDE.md) accurately reflect current crate APIs, TypeScript types, endpoints, and code examples.
+4. **Whitepaper & Architecture:** Update [docs/WHITEPAPER.md](file:///Users/origo/src/warmplane/docs/WHITEPAPER.md) if protocol extensions, architectural boundaries, or core threat models change.
+
+
