@@ -284,6 +284,7 @@ warmplane mcp-server
 
 | Capability | Version | Description |
 |---|---|---|
+| **Custom Alias Descriptions & Signatures** | v0.27.0 | Polymorphic docstring overrides (`AliasTarget`), compact LLM signatures, and bidirectional alias resolution |
 | **1-Click AI Client Injector & Sync** | v0.26.0 | Bidirectional MCP adapter engine for Claude Desktop, OpenCode, Claude Code, Cursor, Zed, Windsurf, Cline |
 | **Native OS Keychain Vault** | v0.26.0 | Secure OS Keychain storage and dynamic secret URI resolution (`keychain://`, `op://`, `env://`) |
 | **Actionable ChatOps Webhooks** | v0.26.0 | Bidirectional Slack, Discord, and Microsoft Teams approval cards with HMAC-SHA256 signatures |
