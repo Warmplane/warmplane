@@ -35,7 +35,13 @@
       }
     }
   },
-  "capabilityAliases": { "query": "sqlite.query" },
+  "capabilityAliases": {
+    "query": "sqlite.query",
+    "search": {
+      "target": "semble-rs.search",
+      "summary": "Search codebase with semantic or BM25 ranking. Pass absolute repo path."
+    }
+  },
   "policy": { "requireApproval": ["*.drop*"], "redactKeys": ["secret", "key"] },
   "chatops": {
     "webhooks": [{ "platform": "slack", "url": "https://hooks.slack.com/...", "signingSecret": "keychain://SLACK_SECRET" }]

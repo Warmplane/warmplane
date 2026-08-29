@@ -10,7 +10,7 @@
 - Restart upstream: `warmplane server restart <server-id>`
 
 ## 3. Client Sync (17 Ecosystems)
-- List / Scan: `warmplane client list`
+- Scan: `warmplane client scan`
 - Attach: `warmplane client attach <client-id> [--profile <name>]`
 - Detach: `warmplane client detach <client-id>`
 
