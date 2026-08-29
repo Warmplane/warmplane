@@ -53,15 +53,16 @@ const TOOL_TASK_CANCEL: &str = "task_cancel";
 
 static TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
+/// Internal MCP facade server handler implementation.
 #[derive(Clone)]
-pub(crate) struct FacadeMcpServer {
+pub struct FacadeMcpServer {
     state: AppState,
     profile: Option<String>,
 }
 
 impl FacadeMcpServer {
     /// Creates a new `FacadeMcpServer` bound to the given state and optional profile.
-    pub(crate) fn new(state: AppState, profile: Option<String>) -> Self {
+    pub fn new(state: AppState, profile: Option<String>) -> Self {
         Self { state, profile }
     }
 }
@@ -86,7 +87,53 @@ impl ServerHandler for FacadeMcpServer {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> std::result::Result<ListToolsResult, McpError> {
-        let tools = facade_tools();
+        let mut tools = facade_tools();
+        let prof_ctx = self.profile_context().await;
+        let caps_guard = self.state.capabilities.read().await;
+
+        if let Ok(config) = crate::config::load_or_default_config(&self.state.config_path) {
+            for (alias_name, alias_target) in &config.capability_aliases {
+                if alias_target.is_passthrough() {
+                    let target_id = alias_target.target();
+                    let cap_meta_opt = caps_guard
+                        .get(target_id)
+                        .or_else(|| caps_guard.get(alias_name));
+
+                    let is_allowed = if let Some(cap_meta) = cap_meta_opt {
+                        prof_ctx.is_server_allowed(&cap_meta.server)
+                    } else {
+                        true
+                    };
+
+                    if is_allowed {
+                        let default_desc = format!("Passthrough tool for '{}'", target_id);
+                        let description = alias_target
+                            .summary()
+                            .or_else(|| alias_target.description())
+                            .unwrap_or_else(|| {
+                                cap_meta_opt
+                                    .map(|m| m.summary.as_str())
+                                    .unwrap_or(&default_desc)
+                            });
+                        let input_schema = cap_meta_opt
+                            .map(|m| schema_object(m.input_schema.clone()))
+                            .unwrap_or_else(|| {
+                                schema_object(json!({
+                                    "type": "object",
+                                    "additionalProperties": true
+                                }))
+                            });
+
+                        tools.push(Tool::new(
+                            alias_name.clone(),
+                            description.to_string(),
+                            input_schema,
+                        ));
+                    }
+                }
+            }
+        }
+
         Ok(ListToolsResult::with_all_items(tools))
     }
 
@@ -453,10 +500,39 @@ impl ServerHandler for FacadeMcpServer {
                 }
             }
             _ => {
-                return Err(McpError::invalid_params(
-                    format!("Unknown tool '{}'.", request.name),
-                    None,
-                ));
+                let tool_name = request.name.as_ref();
+                let mut target_id = None;
+
+                if let Ok(config) = crate::config::load_or_default_config(&self.state.config_path) {
+                    if let Some(alias_target) = config.capability_aliases.get(tool_name) {
+                        target_id = Some(alias_target.target().to_string());
+                    }
+                }
+
+                // If not in aliases, check if it's a registered canonical capability ID
+                if target_id.is_none() {
+                    let caps_guard = self.state.capabilities.read().await;
+                    if caps_guard.contains_key(tool_name) {
+                        target_id = Some(tool_name.to_string());
+                    }
+                }
+
+                if let Some(target) = target_id {
+                    self.call_capability_value(
+                        target,
+                        serde_json::Value::Object(args),
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                } else {
+                    return Err(McpError::invalid_params(
+                        format!("Unknown tool '{}'.", request.name),
+                        None,
+                    ));
+                }
             }
         };
 

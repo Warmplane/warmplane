@@ -58,6 +58,13 @@ interface CapabilityEntry {
   mode?: string;
 }
 
+/** Search engine runtime info and feature status. */
+interface SearchEngineInfo {
+  semantic_enabled: boolean;
+  vector_backend?: string;
+  rrf_k: number;
+}
+
 /** Catalog listing response body. */
 interface CatalogResponse {
   version: string;
@@ -65,6 +72,7 @@ interface CatalogResponse {
   capabilities: CapabilityEntry[];
   ttl_ms?: number;
   cache_scope?: string;
+  search_engine?: SearchEngineInfo;
 }
 
 /** Search result entry with relevance score. */

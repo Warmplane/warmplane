@@ -125,6 +125,14 @@ pub struct CapabilityEntry {
     pub mode: Option<String>,
 }
 
+/// Search engine runtime info and feature status.
+#[derive(Debug, Deserialize)]
+pub struct SearchEngineInfo {
+    pub semantic_enabled: bool,
+    pub vector_backend: Option<String>,
+    pub rrf_k: f64,
+}
+
 /// Catalog listing response body.
 #[derive(Debug, Deserialize)]
 pub struct CatalogResponse {
@@ -133,6 +141,7 @@ pub struct CatalogResponse {
     pub capabilities: Vec<CapabilityEntry>,
     pub ttl_ms: Option<u64>,
     pub cache_scope: Option<String>,
+    pub search_engine: Option<SearchEngineInfo>,
 }
 
 /// Search result entry with relevance score.

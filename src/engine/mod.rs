@@ -154,6 +154,7 @@ impl ControlPlaneHandle {
         Ok(CapabilitiesListResponse {
             version: "v1".to_string(),
             capabilities,
+            search_engine: Some(self.state.search_engine.info()),
         })
     }
 

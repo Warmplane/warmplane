@@ -104,6 +104,18 @@ impl SearchFilterBuilder {
     }
 }
 
+/// Runtime metadata and feature status for the search engine.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SearchEngineInfo {
+    /// Whether dense semantic vector search is enabled and active.
+    pub semantic_enabled: bool,
+    /// Vector embedding backend implementation name if enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_backend: Option<String>,
+    /// Reciprocal Rank Fusion smoothing constant k.
+    pub rrf_k: f32,
+}
+
 /// Hybrid search engine combining lexical and vector scores with reciprocal rank fusion (RRF).
 pub struct HybridSearchEngine {
     vector_index: Option<VectorSearchIndex>,
@@ -123,6 +135,22 @@ impl HybridSearchEngine {
     pub fn new() -> Self {
         let vector_index = VectorSearchIndex::new().ok();
         Self { vector_index }
+    }
+
+    /// Returns runtime search engine metadata and feature status.
+    pub fn info(&self) -> SearchEngineInfo {
+        let semantic_enabled = self.vector_index.is_some() && cfg!(feature = "semantic-search");
+        let vector_backend = if semantic_enabled {
+            Some("fastembed-onnx".to_string())
+        } else {
+            None
+        };
+
+        SearchEngineInfo {
+            semantic_enabled,
+            vector_backend,
+            rrf_k: 60.0,
+        }
     }
 
     /// Performs hybrid reciprocal rank fusion search over capabilities.

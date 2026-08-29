@@ -596,9 +596,9 @@ warmplane mcp-server --config mcp_servers.json
 }
 ```
 
-#### Exposed Synthetic MCP Tools
+#### Exposed Synthetic & Passthrough MCP Tools
 
-Warmplane exposes lightweight synthetic tools to keep LLM context token usage minimal:
+Warmplane exposes lightweight synthetic facade tools by default to keep LLM context token usage minimal:
 
 - `capabilities_list`: List compact capability index.
 - `capability_search`: Search capabilities using hybrid lexical BM25 and semantic vector matching with tag/mode filters.
@@ -611,6 +611,29 @@ Warmplane exposes lightweight synthetic tools to keep LLM context token usage mi
 - `prompt_get`: Render upstream prompt templates.
 - `completion_complete`: Request argument autocompletions for prompts or resources.
 - `subscriptions_listen`: Query or subscribe to catalog mutation change feeds.
+- `task_get`, `task_update`, `task_cancel`: Inspect and manage SEP-2663 tasks.
+
+##### Native Tool Passthrough via Aliases
+
+For frequently used tools, you can promote any capability alias into a **top-level native MCP tool** exported directly in `tools/list` with its native input schema, bypassing the nested `capability_call` argument envelope while still retaining all Warmplane control plane benefits (idempotency, RBAC, circuit breakers, timeout supervision, and audit logging):
+
+```bash
+# Expose 'search' as a top-level native tool
+warmplane alias set tool search semble.search --passthrough --summary "Search codebase with hybrid ranking"
+```
+
+In `mcp_servers.json`:
+```json
+{
+  "capabilityAliases": {
+    "search": {
+      "target": "semble.search",
+      "summary": "Search codebase with hybrid ranking",
+      "passthrough": true
+    }
+  }
+}
+```
 
 ---
 

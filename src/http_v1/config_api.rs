@@ -452,15 +452,18 @@ pub async fn handle_update_alias(
 
     let kind_lower = payload.kind.to_lowercase();
     if let Some(target) = payload.target {
-        let alias_target = if payload.summary.is_some() || payload.description.is_some() {
-            crate::config::AliasTarget::Detailed {
-                target,
-                summary: payload.summary,
-                description: payload.description,
-            }
-        } else {
-            crate::config::AliasTarget::Simple(target)
-        };
+        let passthrough = payload.passthrough.unwrap_or(false);
+        let alias_target =
+            if payload.summary.is_some() || payload.description.is_some() || passthrough {
+                crate::config::AliasTarget::Detailed {
+                    target,
+                    summary: payload.summary,
+                    description: payload.description,
+                    passthrough,
+                }
+            } else {
+                crate::config::AliasTarget::Simple(target)
+            };
 
         match kind_lower.as_str() {
             "tool" | "capability" | "cap" => {

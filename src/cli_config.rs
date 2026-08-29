@@ -655,14 +655,16 @@ fn handle_alias_command(cmd: AliasCommands) -> Result<()> {
             target,
             summary,
             description,
+            passthrough,
             config,
         } => {
             let mut mcp_config = load_or_default_config(&config)?;
-            let alias_target = if summary.is_some() || description.is_some() {
+            let alias_target = if summary.is_some() || description.is_some() || passthrough {
                 crate::config::AliasTarget::Detailed {
                     target: target.clone(),
                     summary,
                     description,
+                    passthrough,
                 }
             } else {
                 crate::config::AliasTarget::Simple(target.clone())
@@ -692,12 +694,18 @@ fn handle_alias_command(cmd: AliasCommands) -> Result<()> {
                 }
             }
             save_config(&config, &mcp_config)?;
+            let passthrough_tag = if passthrough {
+                " [passthrough]".yellow().bold().to_string()
+            } else {
+                String::new()
+            };
             println!(
-                "{} Set {} alias '{}' -> '{}'",
+                "{} Set {} alias '{}' -> '{}{}'",
                 "✔".green().bold(),
                 kind,
                 alias.bold(),
-                target.bold()
+                target.bold(),
+                passthrough_tag
             );
         }
         AliasCommands::Remove {
@@ -739,10 +747,21 @@ fn handle_alias_command(cmd: AliasCommands) -> Result<()> {
                 println!("  (none)");
             } else {
                 for (a, t) in &mcp_config.capability_aliases {
-                    if let Some(s) = t.summary() {
-                        println!("  {} -> {} ({})", a.cyan(), t.target(), s.dimmed());
+                    let pt_badge = if t.is_passthrough() {
+                        " [passthrough]".yellow().to_string()
                     } else {
-                        println!("  {} -> {}", a.cyan(), t.target());
+                        String::new()
+                    };
+                    if let Some(s) = t.summary() {
+                        println!(
+                            "  {} -> {}{} ({})",
+                            a.cyan(),
+                            t.target(),
+                            pt_badge,
+                            s.dimmed()
+                        );
+                    } else {
+                        println!("  {} -> {}{}", a.cyan(), t.target(), pt_badge);
                     }
                 }
             }
@@ -1479,6 +1498,7 @@ mod tests {
             target: "github.create_commit".to_string(),
             summary: Some("Create a git commit".to_string()),
             description: None,
+            passthrough: true,
             config: cfg_str.clone(),
         })
         .unwrap();
@@ -1492,6 +1512,11 @@ mod tests {
             cfg.capability_aliases.get("git-commit").unwrap().summary(),
             Some("Create a git commit")
         );
+        assert!(cfg
+            .capability_aliases
+            .get("git-commit")
+            .unwrap()
+            .is_passthrough());
 
         handle_alias_command(AliasCommands::Remove {
             kind: "tool".to_string(),
