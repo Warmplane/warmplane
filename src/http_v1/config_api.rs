@@ -548,6 +548,10 @@ pub async fn handle_update_policy(
         *pol_guard = crate::daemon::Policy::from_config(Some(payload));
     }
 
+    state.notify_tools_changed();
+    state.notify_resources_changed();
+    state.notify_prompts_changed();
+
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 
@@ -605,6 +609,10 @@ pub async fn handle_upsert_profile(
         prof_guard.insert(payload.name, prof_cfg);
     }
 
+    state.notify_tools_changed();
+    state.notify_resources_changed();
+    state.notify_prompts_changed();
+
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 
@@ -639,6 +647,10 @@ pub async fn handle_delete_profile(
         let mut prof_guard = state.profiles.write().await;
         prof_guard.remove(&profile_id);
     }
+
+    state.notify_tools_changed();
+    state.notify_resources_changed();
+    state.notify_prompts_changed();
 
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
