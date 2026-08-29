@@ -17,8 +17,9 @@ use rmcp::{
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
         GetPromptRequestParams, GetPromptResponse, GetPromptResult, ListResourcesResult,
-        ListToolsResult, Prompt, ReadResourceRequestParams, ReadResourceResponse,
-        ReadResourceResult, Resource, ServerCapabilities, ServerInfo, Tool,
+        ListToolsResult, Prompt, PromptListChangedNotification, ReadResourceRequestParams,
+        ReadResourceResponse, ReadResourceResult, Resource, ResourceListChangedNotification,
+        ServerCapabilities, ServerInfo, Tool, ToolListChangedNotification,
     },
     transport::{
         stdio,
@@ -45,11 +46,11 @@ const TOOL_RESOURCES_LIST: &str = "resources_list";
 const TOOL_RESOURCE_READ: &str = "resource_read";
 const TOOL_PROMPTS_LIST: &str = "prompts_list";
 const TOOL_PROMPT_GET: &str = "prompt_get";
-const TOOL_COMPLETION_COMPLETE: &str = "completion_complete";
-const TOOL_SUBSCRIPTIONS_LISTEN: &str = "subscriptions_listen";
 const TOOL_TASK_GET: &str = "task_get";
 const TOOL_TASK_UPDATE: &str = "task_update";
 const TOOL_TASK_CANCEL: &str = "task_cancel";
+const TOOL_COMPLETION_COMPLETE: &str = "completion_complete";
+const TOOL_SUBSCRIPTIONS_LISTEN: &str = "subscriptions_listen";
 
 static TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -72,8 +73,12 @@ impl ServerHandler for FacadeMcpServer {
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder()
             .enable_tools()
+            .enable_tool_list_changed()
             .enable_resources()
+            .enable_resources_list_changed()
+            .enable_resources_subscribe()
             .enable_prompts()
+            .enable_prompts_list_changed()
             .build();
         info.instructions = Some(
             "Warmplane MCP facade server with deterministic tools/resources/prompts surfaces"
@@ -1166,8 +1171,50 @@ pub async fn run_mcp_server(
     let state = initialize_state(config, config_path).await?;
     let state_for_shutdown = state.clone();
     let shutdown_token = state.shutdown_token.clone();
-    let server = FacadeMcpServer { state, profile };
+    let server = FacadeMcpServer {
+        state: state.clone(),
+        profile,
+    };
     let running = server.serve(stdio()).await?;
+
+    // Spawn background forwarder for dynamic tool, resource, and prompt list updates
+    let peer = running.peer().clone();
+    let mut tool_rx = state.tool_list_changed_tx.subscribe();
+    let mut res_rx = state.resource_list_changed_tx.subscribe();
+    let mut prompt_rx = state.prompt_list_changed_tx.subscribe();
+    let cancel_fwd = shutdown_token.clone();
+
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = cancel_fwd.cancelled() => break,
+                res = tool_rx.recv() => {
+                    if res.is_ok() {
+                        let mut notif = ToolListChangedNotification::default();
+                        let mut meta = rmcp::model::NotificationMetaObject::default();
+                        meta.insert(
+                            "io.warmplane/discovery_hint".to_string(),
+                            serde_json::json!("Upstream tools changed. Run 'capabilities_list' to discover unpromoted capabilities, or invoke promoted native passthrough tools directly."),
+                        );
+                        notif.extensions.insert(meta);
+                        let _ = peer.send_notification(notif.into()).await;
+                    }
+                }
+                res = res_rx.recv() => {
+                    if res.is_ok() {
+                        let notif = ResourceListChangedNotification::default();
+                        let _ = peer.send_notification(notif.into()).await;
+                    }
+                }
+                res = prompt_rx.recv() => {
+                    if res.is_ok() {
+                        let notif = PromptListChangedNotification::default();
+                        let _ = peer.send_notification(notif.into()).await;
+                    }
+                }
+            }
+        }
+    });
 
     tokio::select! {
         res = running.waiting() => {

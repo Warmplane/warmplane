@@ -106,6 +106,10 @@ impl AppState {
 
             statuses_guard.insert(server_id.to_string(), status_val);
         }
+        let has_new_caps = !new_capabilities.is_empty();
+        let has_new_res = !new_resources.is_empty();
+        let has_new_prompts = !new_prompts.is_empty();
+
         {
             let mut caps_guard = self.capabilities.write().await;
             for (id, meta) in new_capabilities {
@@ -153,6 +157,16 @@ impl AppState {
                 server: server_id.to_string(),
             });
 
+        if has_new_caps {
+            self.notify_tools_changed();
+        }
+        if has_new_res {
+            self.notify_resources_changed();
+        }
+        if has_new_prompts {
+            self.notify_prompts_changed();
+        }
+
         Ok(())
     }
 
@@ -176,13 +190,37 @@ impl AppState {
             statuses_guard.remove(server_id);
         }
         self.circuit_breakers.remove(server_id).await;
-        {
-            let mut caps_guard = self.capabilities.write().await;
-            let removed_caps: Vec<String> = caps_guard
+        let removed_caps: Vec<String> = {
+            let caps_guard = self.capabilities.read().await;
+            caps_guard
                 .iter()
                 .filter(|(_, meta)| meta.server == server_id)
                 .map(|(k, _)| k.clone())
-                .collect();
+                .collect()
+        };
+        let removed_res: Vec<String> = {
+            let res_guard = self.resources.read().await;
+            res_guard
+                .iter()
+                .filter(|(_, meta)| meta.server == server_id)
+                .map(|(k, _)| k.clone())
+                .collect()
+        };
+        let removed_prompts: Vec<String> = {
+            let prompts_guard = self.prompts.read().await;
+            prompts_guard
+                .iter()
+                .filter(|(_, meta)| meta.server == server_id)
+                .map(|(k, _)| k.clone())
+                .collect()
+        };
+
+        let has_removed_caps = !removed_caps.is_empty();
+        let has_removed_res = !removed_res.is_empty();
+        let has_removed_prompts = !removed_prompts.is_empty();
+
+        {
+            let mut caps_guard = self.capabilities.write().await;
             for id in removed_caps {
                 caps_guard.remove(&id);
                 self.event_store.record("capability", &id, "removed");
@@ -190,11 +228,6 @@ impl AppState {
         }
         {
             let mut res_guard = self.resources.write().await;
-            let removed_res: Vec<String> = res_guard
-                .iter()
-                .filter(|(_, meta)| meta.server == server_id)
-                .map(|(k, _)| k.clone())
-                .collect();
             for id in removed_res {
                 res_guard.remove(&id);
                 self.event_store.record("resource", &id, "removed");
@@ -202,11 +235,6 @@ impl AppState {
         }
         {
             let mut prompts_guard = self.prompts.write().await;
-            let removed_prompts: Vec<String> = prompts_guard
-                .iter()
-                .filter(|(_, meta)| meta.server == server_id)
-                .map(|(k, _)| k.clone())
-                .collect();
             for id in removed_prompts {
                 prompts_guard.remove(&id);
                 self.event_store.record("prompt", &id, "removed");
@@ -234,6 +262,16 @@ impl AppState {
                 timestamp,
                 server: server_id.to_string(),
             });
+
+        if has_removed_caps {
+            self.notify_tools_changed();
+        }
+        if has_removed_res {
+            self.notify_resources_changed();
+        }
+        if has_removed_prompts {
+            self.notify_prompts_changed();
+        }
     }
 
     /// Performs graceful shutdown of all upstream servers and background worker queues.
@@ -317,6 +355,10 @@ impl AppState {
                 }
             }
         }
+
+        self.notify_tools_changed();
+        self.notify_resources_changed();
+        self.notify_prompts_changed();
 
         Ok(serde_json::json!({
             "ok": true,

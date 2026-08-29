@@ -45,6 +45,12 @@ pub struct AppState {
     pub operation_registry: crate::operations::OperationRegistry,
     /// Real-time broadcast channel for resource update notifications.
     pub resource_update_tx: tokio::sync::broadcast::Sender<crate::catalog::ResourceUpdateEvent>,
+    /// Real-time broadcast channel for MCP tools/list_changed notifications.
+    pub tool_list_changed_tx: tokio::sync::broadcast::Sender<()>,
+    /// Real-time broadcast channel for MCP resources/list_changed notifications.
+    pub resource_list_changed_tx: tokio::sync::broadcast::Sender<()>,
+    /// Real-time broadcast channel for MCP prompts/list_changed notifications.
+    pub prompt_list_changed_tx: tokio::sync::broadcast::Sender<()>,
     /// Path to active config file.
     pub config_path: String,
     /// Active server configurations keyed by server identifier.
@@ -89,6 +95,21 @@ impl AppState {
     /// Creates a new `AppStateBuilder` for constructing `AppState` (`M-INIT-BUILDER`).
     pub fn builder() -> AppStateBuilder {
         AppStateBuilder::default()
+    }
+
+    /// Emits a real-time notification to all active MCP sessions that the available tools list has changed.
+    pub fn notify_tools_changed(&self) {
+        let _ = self.tool_list_changed_tx.send(());
+    }
+
+    /// Emits a real-time notification to all active MCP sessions that the available resources list has changed.
+    pub fn notify_resources_changed(&self) {
+        let _ = self.resource_list_changed_tx.send(());
+    }
+
+    /// Emits a real-time notification to all active MCP sessions that the available prompts list has changed.
+    pub fn notify_prompts_changed(&self) {
+        let _ = self.prompt_list_changed_tx.send(());
     }
 }
 
@@ -382,6 +403,9 @@ impl AppStateBuilder {
             resource_update_tx: self
                 .resource_update_tx
                 .unwrap_or_else(|| tokio::sync::broadcast::channel(64).0),
+            tool_list_changed_tx: tokio::sync::broadcast::channel(64).0,
+            resource_list_changed_tx: tokio::sync::broadcast::channel(64).0,
+            prompt_list_changed_tx: tokio::sync::broadcast::channel(64).0,
             config_path: self.config_path.unwrap_or_default(),
             server_configs: self.server_configs.unwrap_or_default(),
             server_statuses: self.server_statuses.unwrap_or_default(),
