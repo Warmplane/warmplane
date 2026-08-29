@@ -90,12 +90,12 @@ flowchart TD
 *Diagram fallback:* ![Topology B: Persistent Daemon with HTTP/SSE Client Connection](assets/topology-b.png)
 
 ##### Topology C: Parallel Daemon and Stdio Processes (Shared State)
-You can run `warmplane daemon` (for the Web UI on `:9090`) and simultaneously run `warmplane mcp-server` in your IDE. Both read the same `mcp_servers.json`, share the OS Keychain vault, and persist audit logs to `.warmplane/state/`.
+You can run `warmplane daemon` (for the Web UI on `:9090`) and simultaneously run `warmplane mcp-server` in your IDE. When pointed to the same configuration file path (e.g. `--config /path/to/mcp_servers.json`), both processes share the same upstream definitions, OS Keychain vault, and persist audit records to the common `.warmplane/state/` store.
 
 #### How Configuration & Hot-Reloading Interact
-- **Shared Configuration**: Both `warmplane daemon` and `warmplane mcp-server` read `mcp_servers.json` and resolve secrets via OS Keychain (`keychain://`), 1Password (`op://`), or environment variables (`env://`).
+- **Configuration Files**: Both `warmplane daemon` and `warmplane mcp-server` accept `--config <path>` (defaulting to `mcp_servers.json` in the current working directory). When pointed to the same file, they resolve the same upstream servers, profiles, and secrets via OS Keychain (`keychain://`), 1Password (`op://`), or environment variables (`env://`).
 - **Daemon Hot-Reloading**: When modifying configuration, `warmplane reload` sends a `POST /v1/config/reload` request to the running daemon on port 9090.
-- **Stdio Server Hot-Reloading**: Running `warmplane mcp-server` processes monitor `mcp_servers.json` on disk and automatically re-reconcile aliases and servers in memory, immediately broadcasting `notifications/tools/list_changed` over the active MCP session.
+- **Stdio Server Hot-Reloading**: Running `warmplane mcp-server` processes monitor their configured config file on disk and automatically re-reconcile aliases and servers in memory, immediately broadcasting `notifications/tools/list_changed` over the active MCP session.
 
 ---
 
