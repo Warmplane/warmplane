@@ -54,6 +54,8 @@ flowchart LR
     SupervisorA <-->|"stdio / http"| UpstreamsA
 ```
 
+*Diagram fallback:* ![Topology A: Direct Stdio Integration](assets/topology-a.png)
+
 ##### Topology B: Persistent Daemon with HTTP/SSE Client Connection
 If you prefer a single long-lived daemon running 24/7 (avoiding per-client process spawns or serving multiple clients/remote hosts), start `warmplane daemon` with `mcpHttpServer` enabled. Clients connect to the daemon over Streamable HTTP/SSE (`http://127.0.0.1:9191/sse`).
 
@@ -84,6 +86,8 @@ flowchart TD
     RESTFacade <--> SupervisorB
     SupervisorB <-->|"persistent connections"| UpstreamsB
 ```
+
+*Diagram fallback:* ![Topology B: Persistent Daemon with HTTP/SSE Client Connection](assets/topology-b.png)
 
 ##### Topology C: Parallel Daemon and Stdio Processes (Shared State)
 You can run `warmplane daemon` (for the Web UI on `:9090`) and simultaneously run `warmplane mcp-server` in your IDE. Both read the same `mcp_servers.json`, share the OS Keychain vault, and persist audit logs to `.warmplane/state/`.
