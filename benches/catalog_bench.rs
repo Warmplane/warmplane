@@ -25,15 +25,13 @@ fn generate_synthetic_catalog(
         let cap_id = format!("{}_cap_{}", server, i);
         caps.insert(
             cap_id,
-            CapabilityMeta {
-                server: server.clone(),
-                tool: format!("tool_{}", i),
-                summary: format!("Summary for tool {}", i),
-                description: format!("Description for tool {}", i),
-                input_schema: json!({"type": "object"}),
-                tags: vec!["tag1".to_string(), "tag2".to_string()],
-                examples: vec![],
-            },
+            CapabilityMeta::new(
+                server.clone(),
+                format!("tool_{}", i),
+                format!("Summary for tool {}", i),
+                format!("Description for tool {}", i),
+                json!({"type": "object"}),
+            ),
         );
 
         let res_id = format!("{}_res_{}", server, i);

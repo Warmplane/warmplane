@@ -32,9 +32,9 @@ impl AppState {
         &self,
         server_id: &str,
         srv_cfg: &ServerConfig,
-        capability_aliases: &HashMap<String, String>,
-        resource_aliases: &HashMap<String, String>,
-        prompt_aliases: &HashMap<String, String>,
+        capability_aliases: &HashMap<String, crate::config::AliasTarget>,
+        resource_aliases: &HashMap<String, crate::config::AliasTarget>,
+        prompt_aliases: &HashMap<String, crate::config::AliasTarget>,
     ) -> Result<()> {
         info!(%server_id, "dynamically mounting upstream server");
 

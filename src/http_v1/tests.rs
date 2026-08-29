@@ -448,15 +448,13 @@ async fn handle_search_capabilities_returns_matched_results() {
     let mut capabilities = HashMap::new();
     capabilities.insert(
         "github.issues.search".to_string(),
-        CapabilityMeta {
-            server: "github".to_string(),
-            tool: "issues.search".to_string(),
-            summary: "Search open GitHub issues".to_string(),
-            description: "Search open GitHub issues".to_string(),
-            input_schema: json!({}),
-            tags: vec!["github".to_string(), "issues".to_string()],
-            examples: vec![],
-        },
+        CapabilityMeta::new(
+            "github",
+            "issues.search",
+            "Search open GitHub issues",
+            "Search open GitHub issues",
+            json!({}),
+        ),
     );
 
     let state = AppState::builder()
@@ -592,15 +590,13 @@ async fn test_mrtr_call_capability_round_trip() {
     let mut capabilities = HashMap::new();
     capabilities.insert(
         "test.interactive_tool".to_string(),
-        CapabilityMeta {
-            server: "interactive_srv".to_string(),
-            tool: "interactive_tool".to_string(),
-            summary: "Interactive Tool".to_string(),
-            description: "Interactive tool description".to_string(),
-            input_schema: json!({"type": "object"}),
-            tags: vec![],
-            examples: vec![],
-        },
+        CapabilityMeta::new(
+            "interactive_srv",
+            "interactive_tool",
+            "Interactive Tool",
+            "Interactive tool description",
+            json!({"type": "object"}),
+        ),
     );
 
     let (tx, mut rx) = mpsc::channel(1);
@@ -887,15 +883,13 @@ async fn test_hitl_approval_flow_and_endpoints() {
     let mut capabilities = HashMap::new();
     capabilities.insert(
         "docker.run".to_string(),
-        CapabilityMeta {
-            server: "docker_srv".to_string(),
-            tool: "run".to_string(),
-            summary: "Run docker container".to_string(),
-            description: "Run docker container".to_string(),
-            input_schema: json!({}),
-            tags: vec![],
-            examples: vec![],
-        },
+        CapabilityMeta::new(
+            "docker_srv",
+            "run",
+            "Run docker container",
+            "Run docker container",
+            json!({}),
+        ),
     );
 
     let (tx, mut rx) = mpsc::channel(1);
@@ -1042,15 +1036,13 @@ async fn test_hitl_rejection_returns_structured_envelope() {
     let mut capabilities = HashMap::new();
     capabilities.insert(
         "db.drop_table".to_string(),
-        CapabilityMeta {
-            server: "db_srv".to_string(),
-            tool: "drop_table".to_string(),
-            summary: "Drop database table".to_string(),
-            description: "Drop table".to_string(),
-            input_schema: json!({}),
-            tags: vec![],
-            examples: vec![],
-        },
+        CapabilityMeta::new(
+            "db_srv",
+            "drop_table",
+            "Drop database table",
+            "Drop table",
+            json!({}),
+        ),
     );
 
     let (tx, _rx) = mpsc::channel(1);
@@ -1131,15 +1123,13 @@ async fn test_tool_call_emits_audit_events_and_hash_chain() {
     let mut capabilities = HashMap::new();
     capabilities.insert(
         "srv.echo".to_string(),
-        CapabilityMeta {
-            server: "srv".to_string(),
-            tool: "echo".to_string(),
-            summary: "Echo test".to_string(),
-            description: "Echo test description".to_string(),
-            tags: vec![],
-            input_schema: Value::Null,
-            examples: vec![],
-        },
+        CapabilityMeta::new(
+            "srv",
+            "echo",
+            "Echo test",
+            "Echo test description",
+            Value::Null,
+        ),
     );
 
     let state = AppState::builder()
@@ -1341,15 +1331,13 @@ async fn test_circuit_breaker_fast_fail_and_recovery() {
     let mut caps = HashMap::new();
     caps.insert(
         "flaky.error".to_string(),
-        CapabilityMeta {
-            server: "flaky_srv".to_string(),
-            tool: "error".to_string(),
-            summary: "Simulated error tool".to_string(),
-            description: "Simulated error tool".to_string(),
-            input_schema: json!({}),
-            examples: vec![],
-            tags: vec![],
-        },
+        CapabilityMeta::new(
+            "flaky_srv",
+            "error",
+            "Simulated error tool",
+            "Simulated error tool",
+            json!({}),
+        ),
     );
 
     let cb_registry = crate::circuit_breaker::CircuitBreakerRegistry::default();
@@ -1630,27 +1618,17 @@ async fn test_catalog_policy_hidden_counts() {
     let mut capabilities = HashMap::new();
     capabilities.insert(
         "sqlite.query".to_string(),
-        CapabilityMeta {
-            summary: "query".to_string(),
-            description: "query".to_string(),
-            server: "sqlite".to_string(),
-            tool: "query".to_string(),
-            tags: vec![],
-            input_schema: serde_json::Value::Null,
-            examples: vec![],
-        },
+        CapabilityMeta::new("sqlite", "query", "query", "query", serde_json::Value::Null),
     );
     capabilities.insert(
         "filesystem.read".to_string(),
-        CapabilityMeta {
-            summary: "read".to_string(),
-            description: "read".to_string(),
-            server: "filesystem".to_string(),
-            tool: "read".to_string(),
-            tags: vec![],
-            input_schema: serde_json::Value::Null,
-            examples: vec![],
-        },
+        CapabilityMeta::new(
+            "filesystem",
+            "read",
+            "read",
+            "read",
+            serde_json::Value::Null,
+        ),
     );
 
     let state = AppState::builder()
@@ -1682,27 +1660,17 @@ async fn test_per_profile_policy_filtering_and_execution() {
     let mut capabilities = HashMap::new();
     capabilities.insert(
         "sqlite.read".to_string(),
-        CapabilityMeta {
-            summary: "read".to_string(),
-            description: "read".to_string(),
-            server: "sqlite".to_string(),
-            tool: "read".to_string(),
-            tags: vec![],
-            input_schema: serde_json::Value::Null,
-            examples: vec![],
-        },
+        CapabilityMeta::new("sqlite", "read", "read", "read", serde_json::Value::Null),
     );
     capabilities.insert(
         "sqlite.delete".to_string(),
-        CapabilityMeta {
-            summary: "delete".to_string(),
-            description: "delete".to_string(),
-            server: "sqlite".to_string(),
-            tool: "delete".to_string(),
-            tags: vec![],
-            input_schema: serde_json::Value::Null,
-            examples: vec![],
-        },
+        CapabilityMeta::new(
+            "sqlite",
+            "delete",
+            "delete",
+            "delete",
+            serde_json::Value::Null,
+        ),
     );
 
     // Profile with deny rule on sqlite.delete

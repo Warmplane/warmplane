@@ -14,21 +14,19 @@ fn generate_synthetic_capabilities(count: usize) -> HashMap<String, CapabilityMe
         let id = format!("{}__{}", server, tool);
         map.insert(
             id,
-            CapabilityMeta {
+            CapabilityMeta::new(
                 server,
                 tool,
-                summary: format!("Summary text for capability tool {}", i),
-                description: format!("Detailed description for capability tool {}", i),
-                input_schema: json!({
+                format!("Summary text for capability tool {}", i),
+                format!("Detailed description for capability tool {}", i),
+                json!({
                     "type": "object",
                     "properties": {
                         "param1": { "type": "string" },
                         "param2": { "type": "integer" }
                     }
                 }),
-                tags: vec!["tag_a".to_string(), "tag_b".to_string()],
-                examples: vec![],
-            },
+            ),
         );
     }
     map

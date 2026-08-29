@@ -14,6 +14,9 @@ pub struct CapabilitySearchResult {
     pub id: String,
     /// Short summary description.
     pub summary: String,
+    /// Compact LLM-friendly call signature (e.g. `tool_name(req1, [opt1])`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
     /// Server identifier providing this capability.
     pub server: String,
     /// Metadata tags associated with capability.
@@ -242,6 +245,7 @@ impl HybridSearchEngine {
                 final_results.push(CapabilitySearchResult {
                     id,
                     summary: meta.summary.clone(),
+                    signature: meta.signature.clone(),
                     server: meta.server.clone(),
                     tags: meta.tags.clone(),
                     mode,
@@ -265,15 +269,9 @@ mod tests {
         summary: &str,
         tags: Vec<&str>,
     ) -> CapabilityMeta {
-        CapabilityMeta {
-            server: server.to_string(),
-            tool: tool.to_string(),
-            summary: summary.to_string(),
-            description: summary.to_string(),
-            input_schema: serde_json::json!({}),
-            tags: tags.into_iter().map(|s| s.to_string()).collect(),
-            examples: vec![],
-        }
+        let mut meta = CapabilityMeta::new(server, tool, summary, summary, serde_json::json!({}));
+        meta.tags = tags.into_iter().map(|s| s.to_string()).collect();
+        meta
     }
 
     #[test]

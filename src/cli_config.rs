@@ -653,24 +653,36 @@ fn handle_alias_command(cmd: AliasCommands) -> Result<()> {
             kind,
             alias,
             target,
+            summary,
+            description,
             config,
         } => {
             let mut mcp_config = load_or_default_config(&config)?;
+            let alias_target = if summary.is_some() || description.is_some() {
+                crate::config::AliasTarget::Detailed {
+                    target: target.clone(),
+                    summary,
+                    description,
+                }
+            } else {
+                crate::config::AliasTarget::Simple(target.clone())
+            };
+
             match kind.to_lowercase().as_str() {
                 "tool" | "capability" | "cap" => {
                     mcp_config
                         .capability_aliases
-                        .insert(alias.clone(), target.clone());
+                        .insert(alias.clone(), alias_target);
                 }
                 "resource" | "res" => {
                     mcp_config
                         .resource_aliases
-                        .insert(alias.clone(), target.clone());
+                        .insert(alias.clone(), alias_target);
                 }
                 "prompt" => {
                     mcp_config
                         .prompt_aliases
-                        .insert(alias.clone(), target.clone());
+                        .insert(alias.clone(), alias_target);
                 }
                 _ => {
                     anyhow::bail!(
@@ -727,7 +739,11 @@ fn handle_alias_command(cmd: AliasCommands) -> Result<()> {
                 println!("  (none)");
             } else {
                 for (a, t) in &mcp_config.capability_aliases {
-                    println!("  {} -> {}", a.cyan(), t);
+                    if let Some(s) = t.summary() {
+                        println!("  {} -> {} ({})", a.cyan(), t.target(), s.dimmed());
+                    } else {
+                        println!("  {} -> {}", a.cyan(), t.target());
+                    }
                 }
             }
 
@@ -736,7 +752,11 @@ fn handle_alias_command(cmd: AliasCommands) -> Result<()> {
                 println!("  (none)");
             } else {
                 for (a, t) in &mcp_config.resource_aliases {
-                    println!("  {} -> {}", a.cyan(), t);
+                    if let Some(s) = t.summary() {
+                        println!("  {} -> {} ({})", a.cyan(), t.target(), s.dimmed());
+                    } else {
+                        println!("  {} -> {}", a.cyan(), t.target());
+                    }
                 }
             }
 
@@ -745,7 +765,11 @@ fn handle_alias_command(cmd: AliasCommands) -> Result<()> {
                 println!("  (none)");
             } else {
                 for (a, t) in &mcp_config.prompt_aliases {
-                    println!("  {} -> {}", a.cyan(), t);
+                    if let Some(s) = t.summary() {
+                        println!("  {} -> {} ({})", a.cyan(), t.target(), s.dimmed());
+                    } else {
+                        println!("  {} -> {}", a.cyan(), t.target());
+                    }
                 }
             }
         }
@@ -1453,14 +1477,20 @@ mod tests {
             kind: "tool".to_string(),
             alias: "git-commit".to_string(),
             target: "github.create_commit".to_string(),
+            summary: Some("Create a git commit".to_string()),
+            description: None,
             config: cfg_str.clone(),
         })
         .unwrap();
 
         let cfg = load_config(&cfg_str).unwrap();
         assert_eq!(
-            cfg.capability_aliases.get("git-commit").unwrap(),
+            cfg.capability_aliases.get("git-commit").unwrap().target(),
             "github.create_commit"
+        );
+        assert_eq!(
+            cfg.capability_aliases.get("git-commit").unwrap().summary(),
+            Some("Create a git commit")
         );
 
         handle_alias_command(AliasCommands::Remove {

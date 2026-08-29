@@ -789,7 +789,7 @@ select option {
   </div>
 
   <script>
-class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatuses:{},circuitBreakers:[],clients:[],clientFilterCategory:"all",clientSearchQuery:"",secrets:[],clientsCollapsed:!1,capabilities:[],capabilitiesHiddenByPolicy:0,resources:[],resourcesHiddenByPolicy:0,prompts:[],promptsHiddenByPolicy:0,catalogEvents:[],tasks:[],selectedTaskId:null,taskFilterStatus:"all",approvals:[],auditEvents:[],auditTotal:0,auditFilters:{search:"",status:"all",eventType:"all",serverId:"all",limit:25,offset:0},auditSelectedEvent:null,auditStats:null,auditVerification:null,selectedCapabilityId:null,selectedResourceId:null,selectedPromptId:null,playgroundMode:"tools",playgroundArgs:{},isExecuting:!1,playgroundAsyncTask:!1,activeRequestId:null,isBatchModalOpen:!1,batchSteps:[{id:"step_1",capability_id:"",argsJson:"{}",continue_on_error:!1},{id:"step_2",capability_id:"",argsJson:"{}",continue_on_error:!0}],activeTab:"overview",activeProfile:null,eventLogs:[],executionResult:null,resourceReadResult:null,promptGetResult:null,metrics:{totalCatalogRequests:0,totalEtagHits:0,totalToolCalls:0,totalToolDurationUs:0}};listeners=[];getState(){return this.state}setState(e){this.state={...this.state,...e},this.listeners.forEach((t)=>t(this.state))}subscribe(e){return this.listeners.push(e),()=>{this.listeners=this.listeners.filter((t)=>t!==e)}}addEventLog(e,t,o,n){let r=[{time:new Date().toLocaleTimeString(),method:e,target:t,status:o,latency:n},...this.state.eventLogs].slice(0,50);this.setState({eventLogs:r})}}var c=new ae;class oe{baseUrl;constructor(e=""){this.baseUrl=e}async getConfig(){return(await fetch(`${this.baseUrl}/v1/config`)).json()}async listCapabilities(e){let t={};if(e)t["X-Warmplane-Profile"]=e;return(await fetch(`${this.baseUrl}/v1/capabilities`,{headers:t})).json()}async listResources(e){let t={};if(e)t["X-Warmplane-Profile"]=e;return(await fetch(`${this.baseUrl}/v1/resources`,{headers:t})).json()}async readResource(e,t){let o=performance.now(),n={"Content-Type":"application/json"};if(t)n["X-Warmplane-Profile"]=t;let a=await fetch(`${this.baseUrl}/v1/resources/read`,{method:"POST",headers:n,body:JSON.stringify(e)}),r=performance.now()-o,s=await a.json();return{status:a.status,durationMs:r,data:s}}async listPrompts(e){let t={};if(e)t["X-Warmplane-Profile"]=e;return(await fetch(`${this.baseUrl}/v1/prompts`,{headers:t})).json()}async getPrompt(e,t){let o=performance.now(),n={"Content-Type":"application/json"};if(t)n["X-Warmplane-Profile"]=t;let a=await fetch(`${this.baseUrl}/v1/prompts/get`,{method:"POST",headers:n,body:JSON.stringify(e)}),r=performance.now()-o,s=await a.json();return{status:a.status,durationMs:r,data:s}}async getCatalogEvents(e){let t=e?`?after=${encodeURIComponent(e)}`:"";return(await fetch(`${this.baseUrl}/v1/catalog/events${t}`)).json()}async callCapability(e,t){let o=performance.now(),n={"Content-Type":"application/json"};if(t)n["X-Warmplane-Profile"]=t;let a=await fetch(`${this.baseUrl}/v1/tools/call`,{method:"POST",headers:n,body:JSON.stringify(e)}),r=performance.now()-o,s=await a.json();return{status:a.status,durationMs:r,data:s}}async batchCallCapabilities(e,t){let o=performance.now(),n={"Content-Type":"application/json"};if(t)n["X-Warmplane-Profile"]=t;let a=await fetch(`${this.baseUrl}/v1/tools/batch_call`,{method:"POST",headers:n,body:JSON.stringify({steps:e})}),r=performance.now()-o,s=await a.json();return{status:a.status,durationMs:r,data:s}}async cancelOperation(e){return(await fetch(`${this.baseUrl}/v1/operations/${encodeURIComponent(e)}/cancel`,{method:"POST"})).json()}async completeArgument(e){return(await fetch(`${this.baseUrl}/v1/completion/complete`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(e)})).json()}async upsertServer(e,t){return(await fetch(`${this.baseUrl}/v1/config/servers`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:e,server:t})})).json()}async deleteServer(e){return(await fetch(`${this.baseUrl}/v1/config/servers/${encodeURIComponent(e)}`,{method:"DELETE"})).json()}async restartServer(e){return(await fetch(`${this.baseUrl}/v1/config/servers/${encodeURIComponent(e)}/restart`,{method:"POST"})).json()}async upsertProfile(e,t,o,n){return(await fetch(`${this.baseUrl}/v1/config/profiles`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:e,servers:t,description:o,policy:n})})).json()}async deleteProfile(e){return(await fetch(`${this.baseUrl}/v1/config/profiles/${encodeURIComponent(e)}`,{method:"DELETE"})).json()}async getEcosystemSources(){return(await fetch(`${this.baseUrl}/v1/config/ecosystem`)).json()}async importConfig(e,t=!1){return(await fetch(`${this.baseUrl}/v1/config/import`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source_path:e,overwrite:t})})).json()}async savePolicy(e){let t={allow:e.allow||[],deny:e.deny||[],redactKeys:e.redact_keys||e.redactKeys||[],requireApproval:e.require_approval||e.requireApproval||[],approvalTimeoutSecs:e.approvalTimeoutSecs||e.approval_timeout_secs||300,webhook:e.webhook};return(await fetch(`${this.baseUrl}/v1/config/policy`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(t)})).json()}async listTasks(){return(await fetch(`${this.baseUrl}/v1/tasks`)).json()}async getTask(e){return(await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(e)}`)).json()}async updateTask(e,t){return(await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(e)}/update`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({inputResponses:t})})).json()}async cancelTask(e,t){return(await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(e)}/cancel`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({reason:t})})).json()}async listApprovals(){return(await fetch(`${this.baseUrl}/v1/approvals`)).json()}async approveTicket(e,t,o){return(await fetch(`${this.baseUrl}/v1/approvals/${encodeURIComponent(e)}/approve`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({operator:t,modified_args:o})})).json()}async rejectTicket(e,t,o){return(await fetch(`${this.baseUrl}/v1/approvals/${encodeURIComponent(e)}/reject`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({operator:t,reason:o})})).json()}async updateAlias(e,t,o){return(await fetch(`${this.baseUrl}/v1/config/alias`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({kind:e,alias:t,target:o})})).json()}async reloadConfig(){return(await fetch(`${this.baseUrl}/v1/config/reload`,{method:"POST"})).json()}async listAuditEvents(e){let t=new URLSearchParams;if(e?.actor_id)t.set("actor_id",e.actor_id);if(e?.server_id&&e.server_id!=="all")t.set("server_id",e.server_id);if(e?.capability_id)t.set("capability_id",e.capability_id);if(e?.event_type&&e.event_type!=="all")t.set("event_type",e.event_type);if(e?.status&&e.status!=="all")t.set("status",e.status);if(e?.trace_id)t.set("trace_id",e.trace_id);if(e?.request_id)t.set("request_id",e.request_id);if(e?.search)t.set("search",e.search);if(e?.limit)t.set("limit",String(e.limit));if(e?.offset!==void 0)t.set("offset",String(e.offset));let o=t.toString();return(await fetch(`${this.baseUrl}/v1/audit/events${o?`?${o}`:""}`)).json()}getAuditExportUrl(e,t="csv"){let o=new URLSearchParams;if(o.set("format",t),e?.actor_id)o.set("actor_id",e.actor_id);if(e?.server_id&&e.server_id!=="all")o.set("server_id",e.server_id);if(e?.capability_id)o.set("capability_id",e.capability_id);if(e?.event_type&&e.event_type!=="all")o.set("event_type",e.event_type);if(e?.status&&e.status!=="all")o.set("status",e.status);if(e?.trace_id)o.set("trace_id",e.trace_id);if(e?.request_id)o.set("request_id",e.request_id);if(e?.search)o.set("search",e.search);return`${this.baseUrl}/v1/audit/export?${o.toString()}`}async verifyAuditChain(){return(await fetch(`${this.baseUrl}/v1/audit/verify`)).json()}async getAuditStats(){return(await fetch(`${this.baseUrl}/v1/audit/stats`)).json()}async getClients(){return(await fetch(`${this.baseUrl}/v1/clients`)).json()}async attachClient(e,t){return(await fetch(`${this.baseUrl}/v1/clients/${encodeURIComponent(e)}/attach`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({profile:t||void 0})})).json()}async detachClient(e){return(await fetch(`${this.baseUrl}/v1/clients/${encodeURIComponent(e)}/detach`,{method:"POST",headers:{"Content-Type":"application/json"}})).json()}async testWebhook(e,t){return(await fetch(`${this.baseUrl}/v1/webhooks/test`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:e||void 0,format:t||void 0})})).json()}async getSecrets(){return(await fetch(`${this.baseUrl}/v1/secrets`)).json()}async saveSecret(e,t,o){return(await fetch(`${this.baseUrl}/v1/secrets`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:e,value:t,service:o})})).json()}async deleteSecret(e){return(await fetch(`${this.baseUrl}/v1/secrets/${encodeURIComponent(e)}`,{method:"DELETE"})).json()}}var h=new oe;function ne(){let e=c.getState(),t=e.config.mcpServers||{},o=Object.keys(t),n=o.length,a="";if(o.length===0)a=`
+class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatuses:{},circuitBreakers:[],clients:[],clientFilterCategory:"all",clientSearchQuery:"",secrets:[],clientsCollapsed:!1,capabilities:[],capabilitiesHiddenByPolicy:0,resources:[],resourcesHiddenByPolicy:0,prompts:[],promptsHiddenByPolicy:0,catalogEvents:[],tasks:[],selectedTaskId:null,taskFilterStatus:"all",approvals:[],auditEvents:[],auditTotal:0,auditFilters:{search:"",status:"all",eventType:"all",serverId:"all",limit:25,offset:0},auditSelectedEvent:null,auditStats:null,auditVerification:null,selectedCapabilityId:null,selectedResourceId:null,selectedPromptId:null,playgroundMode:"tools",playgroundArgs:{},isExecuting:!1,playgroundAsyncTask:!1,activeRequestId:null,isBatchModalOpen:!1,batchSteps:[{id:"step_1",capability_id:"",argsJson:"{}",continue_on_error:!1},{id:"step_2",capability_id:"",argsJson:"{}",continue_on_error:!0}],activeTab:"overview",activeProfile:null,eventLogs:[],executionResult:null,resourceReadResult:null,promptGetResult:null,metrics:{totalCatalogRequests:0,totalEtagHits:0,totalToolCalls:0,totalToolDurationUs:0}};listeners=[];getState(){return this.state}setState(e){this.state={...this.state,...e},this.listeners.forEach((t)=>t(this.state))}subscribe(e){return this.listeners.push(e),()=>{this.listeners=this.listeners.filter((t)=>t!==e)}}addEventLog(e,t,o,n){let r=[{time:new Date().toLocaleTimeString(),method:e,target:t,status:o,latency:n},...this.state.eventLogs].slice(0,50);this.setState({eventLogs:r})}}var c=new ae;class oe{baseUrl;constructor(e=""){this.baseUrl=e}async getConfig(){return(await fetch(`${this.baseUrl}/v1/config`)).json()}async listCapabilities(e){let t={};if(e)t["X-Warmplane-Profile"]=e;return(await fetch(`${this.baseUrl}/v1/capabilities`,{headers:t})).json()}async listResources(e){let t={};if(e)t["X-Warmplane-Profile"]=e;return(await fetch(`${this.baseUrl}/v1/resources`,{headers:t})).json()}async readResource(e,t){let o=performance.now(),n={"Content-Type":"application/json"};if(t)n["X-Warmplane-Profile"]=t;let a=await fetch(`${this.baseUrl}/v1/resources/read`,{method:"POST",headers:n,body:JSON.stringify(e)}),r=performance.now()-o,s=await a.json();return{status:a.status,durationMs:r,data:s}}async listPrompts(e){let t={};if(e)t["X-Warmplane-Profile"]=e;return(await fetch(`${this.baseUrl}/v1/prompts`,{headers:t})).json()}async getPrompt(e,t){let o=performance.now(),n={"Content-Type":"application/json"};if(t)n["X-Warmplane-Profile"]=t;let a=await fetch(`${this.baseUrl}/v1/prompts/get`,{method:"POST",headers:n,body:JSON.stringify(e)}),r=performance.now()-o,s=await a.json();return{status:a.status,durationMs:r,data:s}}async getCatalogEvents(e){let t=e?`?after=${encodeURIComponent(e)}`:"";return(await fetch(`${this.baseUrl}/v1/catalog/events${t}`)).json()}async callCapability(e,t){let o=performance.now(),n={"Content-Type":"application/json"};if(t)n["X-Warmplane-Profile"]=t;let a=await fetch(`${this.baseUrl}/v1/tools/call`,{method:"POST",headers:n,body:JSON.stringify(e)}),r=performance.now()-o,s=await a.json();return{status:a.status,durationMs:r,data:s}}async batchCallCapabilities(e,t){let o=performance.now(),n={"Content-Type":"application/json"};if(t)n["X-Warmplane-Profile"]=t;let a=await fetch(`${this.baseUrl}/v1/tools/batch_call`,{method:"POST",headers:n,body:JSON.stringify({steps:e})}),r=performance.now()-o,s=await a.json();return{status:a.status,durationMs:r,data:s}}async cancelOperation(e){return(await fetch(`${this.baseUrl}/v1/operations/${encodeURIComponent(e)}/cancel`,{method:"POST"})).json()}async completeArgument(e){return(await fetch(`${this.baseUrl}/v1/completion/complete`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(e)})).json()}async upsertServer(e,t){return(await fetch(`${this.baseUrl}/v1/config/servers`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:e,server:t})})).json()}async deleteServer(e){return(await fetch(`${this.baseUrl}/v1/config/servers/${encodeURIComponent(e)}`,{method:"DELETE"})).json()}async restartServer(e){return(await fetch(`${this.baseUrl}/v1/config/servers/${encodeURIComponent(e)}/restart`,{method:"POST"})).json()}async upsertProfile(e,t,o,n){return(await fetch(`${this.baseUrl}/v1/config/profiles`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:e,servers:t,description:o,policy:n})})).json()}async deleteProfile(e){return(await fetch(`${this.baseUrl}/v1/config/profiles/${encodeURIComponent(e)}`,{method:"DELETE"})).json()}async getEcosystemSources(){return(await fetch(`${this.baseUrl}/v1/config/ecosystem`)).json()}async importConfig(e,t=!1){return(await fetch(`${this.baseUrl}/v1/config/import`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source_path:e,overwrite:t})})).json()}async savePolicy(e){let t={allow:e.allow||[],deny:e.deny||[],redactKeys:e.redact_keys||e.redactKeys||[],requireApproval:e.require_approval||e.requireApproval||[],approvalTimeoutSecs:e.approvalTimeoutSecs||e.approval_timeout_secs||300,webhook:e.webhook};return(await fetch(`${this.baseUrl}/v1/config/policy`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(t)})).json()}async listTasks(){return(await fetch(`${this.baseUrl}/v1/tasks`)).json()}async getTask(e){return(await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(e)}`)).json()}async updateTask(e,t){return(await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(e)}/update`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({inputResponses:t})})).json()}async cancelTask(e,t){return(await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(e)}/cancel`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({reason:t})})).json()}async listApprovals(){return(await fetch(`${this.baseUrl}/v1/approvals`)).json()}async approveTicket(e,t,o){return(await fetch(`${this.baseUrl}/v1/approvals/${encodeURIComponent(e)}/approve`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({operator:t,modified_args:o})})).json()}async rejectTicket(e,t,o){return(await fetch(`${this.baseUrl}/v1/approvals/${encodeURIComponent(e)}/reject`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({operator:t,reason:o})})).json()}async updateAlias(e,t,o,n,a){return(await fetch(`${this.baseUrl}/v1/config/alias`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({kind:e,alias:t,target:o,summary:n,description:a})})).json()}async reloadConfig(){return(await fetch(`${this.baseUrl}/v1/config/reload`,{method:"POST"})).json()}async listAuditEvents(e){let t=new URLSearchParams;if(e?.actor_id)t.set("actor_id",e.actor_id);if(e?.server_id&&e.server_id!=="all")t.set("server_id",e.server_id);if(e?.capability_id)t.set("capability_id",e.capability_id);if(e?.event_type&&e.event_type!=="all")t.set("event_type",e.event_type);if(e?.status&&e.status!=="all")t.set("status",e.status);if(e?.trace_id)t.set("trace_id",e.trace_id);if(e?.request_id)t.set("request_id",e.request_id);if(e?.search)t.set("search",e.search);if(e?.limit)t.set("limit",String(e.limit));if(e?.offset!==void 0)t.set("offset",String(e.offset));let o=t.toString();return(await fetch(`${this.baseUrl}/v1/audit/events${o?`?${o}`:""}`)).json()}getAuditExportUrl(e,t="csv"){let o=new URLSearchParams;if(o.set("format",t),e?.actor_id)o.set("actor_id",e.actor_id);if(e?.server_id&&e.server_id!=="all")o.set("server_id",e.server_id);if(e?.capability_id)o.set("capability_id",e.capability_id);if(e?.event_type&&e.event_type!=="all")o.set("event_type",e.event_type);if(e?.status&&e.status!=="all")o.set("status",e.status);if(e?.trace_id)o.set("trace_id",e.trace_id);if(e?.request_id)o.set("request_id",e.request_id);if(e?.search)o.set("search",e.search);return`${this.baseUrl}/v1/audit/export?${o.toString()}`}async verifyAuditChain(){return(await fetch(`${this.baseUrl}/v1/audit/verify`)).json()}async getAuditStats(){return(await fetch(`${this.baseUrl}/v1/audit/stats`)).json()}async getClients(){return(await fetch(`${this.baseUrl}/v1/clients`)).json()}async attachClient(e,t){return(await fetch(`${this.baseUrl}/v1/clients/${encodeURIComponent(e)}/attach`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({profile:t||void 0})})).json()}async detachClient(e){return(await fetch(`${this.baseUrl}/v1/clients/${encodeURIComponent(e)}/detach`,{method:"POST",headers:{"Content-Type":"application/json"}})).json()}async testWebhook(e,t){return(await fetch(`${this.baseUrl}/v1/webhooks/test`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:e||void 0,format:t||void 0})})).json()}async getSecrets(){return(await fetch(`${this.baseUrl}/v1/secrets`)).json()}async saveSecret(e,t,o){return(await fetch(`${this.baseUrl}/v1/secrets`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:e,value:t,service:o})})).json()}async deleteSecret(e){return(await fetch(`${this.baseUrl}/v1/secrets/${encodeURIComponent(e)}`,{method:"DELETE"})).json()}}var h=new oe;function ne(){let e=c.getState(),t=e.config.mcpServers||{},o=Object.keys(t),n=o.length,a="";if(o.length===0)a=`
       <div style="grid-column: 1 / -1; padding: 32px; text-align: center; color: var(--text-dim); background: var(--surface-card); border-radius: var(--radius-md); border: 1px dashed var(--border);">
         <div style="font-size: 14px; color: var(--text-main); font-weight: 600; margin-bottom: 6px;">No Upstream MCP Servers Connected</div>
         <div style="font-size: 12px; margin-bottom: 16px;">Initialize connections by adding a server or syncing existing IDE configurations.</div>
@@ -799,7 +799,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
           <button class="btn btn-ghost" onclick="window.app.openImportModal()">Sync from IDEs</button>
         </div>
       </div>
-    `;else a=o.map((S)=>{let O=t[S],V=O.command?"stdio":"http / sse",K=O.command?`${O.command} ${(O.args||[]).join(" ")}`:O.url,q=e.serverStatuses[S]||{status:"connected",protocol_version:"2026-07-28"},G=q.status==="degraded",re=q.status==="error"||q.status==="disconnected",X=G?"var(--amber-400)":re?"var(--red-400)":"var(--green-400)";return`
+    `;else a=o.map((S)=>{let O=t[S],V=O.command?"stdio":"http / sse",K=O.command?`${O.command} ${(O.args||[]).join(" ")}`:O.url,F=e.serverStatuses[S]||{status:"connected",protocol_version:"2026-07-28"},G=F.status==="degraded",re=F.status==="error"||F.status==="disconnected",X=G?"var(--amber-400)":re?"var(--red-400)":"var(--green-400)";return`
         <div class="bento-card col-4" style="background: var(--surface); border: 1px solid var(--border);">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
             <span style="font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
@@ -812,8 +812,8 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
             ${L(K||"")}
           </div>
           <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); border-top: 1px solid var(--border); padding-top: 8px;">
-            <span>Status: <strong style="color: ${X};">${L(q.status)}</strong></span>
-            <span>Protocol: ${q.protocol_version}</span>
+            <span>Status: <strong style="color: ${X};">${L(F.status)}</strong></span>
+            <span>Protocol: ${F.protocol_version}</span>
           </div>
         </div>
       `}).join("");let r=e.eventLogs.length===0?`
@@ -832,7 +832,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
       <span style="color: var(--green-400);">${L(S.status)}</span>
       <span style="color: var(--amber-300); text-align: right;">${L(S.latency)}</span>
     </div>
-  `).join(""),s=e.metrics,i=s.totalCatalogRequests,l=s.totalEtagHits,u=i>0?`${(l/i*100).toFixed(1)}%`:"0.0%",p=i>0?`${l} of ${i} requests served via HTTP 304`:"Waiting for client requests",g=s.totalToolCalls,m=g>0?`${(s.totalToolDurationUs/g/1000).toFixed(1)}ms`:"0.0ms",d=g>0?`${g} tool executions processed`:"Local worker task queues warm",f=Object.keys(e.config.capabilityAliases||{}).length+Object.keys(e.config.resourceAliases||{}).length+Object.keys(e.config.promptAliases||{}).length,y=f>0?`${f*18}B / call`:"0B",v=f>0?`${f} active facade aliases pruning prompt size`:"Configure aliases in Studio to reduce prompt size",x=e.tasks||[],A=x.filter((S)=>S.status==="input_required").length,P=x.filter((S)=>S.status==="working"||S.status==="input_required").length,T=e.clients||[],w=T.filter((S)=>S.is_attached).length,k=T.filter((S)=>S.config_exists&&!S.is_attached).length,R=e.clientsCollapsed,z=w>0?`<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ ${w} Connected</span>`:k>0?`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.1);">○ ${k} Ready to Connect</span>`:'<span class="brand-badge" style="color: var(--text-dim);">No Apps Detected</span>',N=Object.keys(e.config.profiles||{}),D=e.activeProfile,B=e.clientFilterCategory||"all",U=(e.clientSearchQuery||"").toLowerCase().trim(),J=T.filter((S)=>{if(U){let O=S.name.toLowerCase().includes(U),V=S.id.toLowerCase().includes(U),K=S.category.toLowerCase().includes(U);if(!O&&!V&&!K)return!1}if(B==="connected")return S.is_attached;if(B==="ready")return S.config_exists||S.app_installed;if(B==="ides")return S.category.toLowerCase().includes("ide")||S.category.toLowerCase().includes("extension");if(B==="agents")return S.category.toLowerCase().includes("agent")||S.category.toLowerCase().includes("cli")||S.category.toLowerCase().includes("platform");return!0}),te=J.length===0?'<div style="padding: 16px; text-align: center; color: var(--text-dim); font-size: 11.5px; grid-column: 1 / -1;">No AI clients match current filter.</div>':J.map((S)=>{let{is_attached:O,config_exists:V,app_installed:K}=S,q="rgba(255, 255, 255, 0.2)",G="Not Found";if(O)q="var(--green-400)",G=S.attached_profile?`Connected (${S.attached_profile})`:"Connected (All Tools)";else if(V)q="var(--amber-300)",G="Ready to Attach";else if(K)q="var(--cyan-400)",G="Installed";let re=N.map((Z)=>`
+  `).join(""),s=e.metrics,i=s.totalCatalogRequests,l=s.totalEtagHits,u=i>0?`${(l/i*100).toFixed(1)}%`:"0.0%",p=i>0?`${l} of ${i} requests served via HTTP 304`:"Waiting for client requests",g=s.totalToolCalls,m=g>0?`${(s.totalToolDurationUs/g/1000).toFixed(1)}ms`:"0.0ms",d=g>0?`${g} tool executions processed`:"Local worker task queues warm",f=Object.keys(e.config.capabilityAliases||{}).length+Object.keys(e.config.resourceAliases||{}).length+Object.keys(e.config.promptAliases||{}).length,y=f>0?`${f*18}B / call`:"0B",v=f>0?`${f} active facade aliases pruning prompt size`:"Configure aliases in Studio to reduce prompt size",x=e.tasks||[],_=x.filter((S)=>S.status==="input_required").length,P=x.filter((S)=>S.status==="working"||S.status==="input_required").length,T=e.clients||[],w=T.filter((S)=>S.is_attached).length,k=T.filter((S)=>S.config_exists&&!S.is_attached).length,R=e.clientsCollapsed,z=w>0?`<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ ${w} Connected</span>`:k>0?`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.1);">○ ${k} Ready to Connect</span>`:'<span class="brand-badge" style="color: var(--text-dim);">No Apps Detected</span>',N=Object.keys(e.config.profiles||{}),D=e.activeProfile,q=e.clientFilterCategory||"all",U=(e.clientSearchQuery||"").toLowerCase().trim(),J=T.filter((S)=>{if(U){let O=S.name.toLowerCase().includes(U),V=S.id.toLowerCase().includes(U),K=S.category.toLowerCase().includes(U);if(!O&&!V&&!K)return!1}if(q==="connected")return S.is_attached;if(q==="ready")return S.config_exists||S.app_installed;if(q==="ides")return S.category.toLowerCase().includes("ide")||S.category.toLowerCase().includes("extension");if(q==="agents")return S.category.toLowerCase().includes("agent")||S.category.toLowerCase().includes("cli")||S.category.toLowerCase().includes("platform");return!0}),te=J.length===0?'<div style="padding: 16px; text-align: center; color: var(--text-dim); font-size: 11.5px; grid-column: 1 / -1;">No AI clients match current filter.</div>':J.map((S)=>{let{is_attached:O,config_exists:V,app_installed:K}=S,F="rgba(255, 255, 255, 0.2)",G="Not Found";if(O)F="var(--green-400)",G=S.attached_profile?`Connected (${S.attached_profile})`:"Connected (All Tools)";else if(V)F="var(--amber-300)",G="Ready to Attach";else if(K)F="var(--cyan-400)",G="Installed";let re=N.map((Z)=>`
       <option value="${L(Z)}" ${D===Z||S.attached_profile===Z?"selected":""}>${L(Z)}</option>
     `).join(""),X=O?`<button class="btn btn-ghost" style="padding: 2px 7px; font-size: 10px; color: var(--red-400);" onclick="event.stopPropagation(); window.app.detachClient('${L(S.id)}')">Detach</button>`:V||K?`
         <div style="display: flex; align-items: center; gap: 4px;" onclick="event.stopPropagation();">
@@ -847,7 +847,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
       `:"";return`
       <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
         <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
-          <span style="width: 7px; height: 7px; border-radius: 50%; background: ${q}; flex-shrink: 0;"></span>
+          <span style="width: 7px; height: 7px; border-radius: 50%; background: ${F}; flex-shrink: 0;"></span>
           <div style="overflow: hidden;">
             <div style="font-weight: 600; font-size: 12px; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${L(S.name)}</div>
             <div style="font-size: 10px; color: var(--text-dim);">${L(G)}</div>
@@ -855,7 +855,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
         </div>
         ${X}
       </div>
-    `}).join(""),se=[{id:"all",label:"All"},{id:"ready",label:"Ready / Installed"},{id:"connected",label:"Connected"},{id:"ides",label:"IDEs"},{id:"agents",label:"Agents & CLIs"}].map((S)=>`<button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10.5px; border-radius: 100px; ${B===S.id?"background: var(--amber-400); color: #000; font-weight: 700;":"background: var(--surface); color: var(--text-muted);"}" onclick="event.stopPropagation(); window.app.setClientCategoryFilter('${S.id}')">${S.label}</button>`).join(""),M=`
+    `}).join(""),se=[{id:"all",label:"All"},{id:"ready",label:"Ready / Installed"},{id:"connected",label:"Connected"},{id:"ides",label:"IDEs"},{id:"agents",label:"Agents & CLIs"}].map((S)=>`<button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10.5px; border-radius: 100px; ${q===S.id?"background: var(--amber-400); color: #000; font-weight: 700;":"background: var(--surface); color: var(--text-muted);"}" onclick="event.stopPropagation(); window.app.setClientCategoryFilter('${S.id}')">${S.label}</button>`).join(""),M=`
     <div class="bento-card" style="margin-top: 18px; padding: 12px 16px; border-color: rgba(245, 158, 11, 0.25); background: rgba(18, 24, 38, 0.4);">
       <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;" onclick="window.app.toggleClientsCollapse()">
         <div style="display: flex; align-items: center; gap: 10px;">
@@ -898,8 +898,8 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
       </div>
       <div class="bento-card col-3">
         <div class="stat-label">Tasks &amp; HITL State</div>
-        <div class="stat-value" style="color: ${A>0?"var(--amber-400)":"var(--green-400)"};">${A>0?`${A} Action Req`:`${P} Active`}</div>
-        <div class="stat-sub">${A>0?"Awaiting Human-in-the-Loop decision":`${x.length} total registered tasks`}</div>
+        <div class="stat-value" style="color: ${_>0?"var(--amber-400)":"var(--green-400)"};">${_>0?`${_} Action Req`:`${P} Active`}</div>
+        <div class="stat-sub">${_>0?"Awaiting Human-in-the-Loop decision":`${x.length} total registered tasks`}</div>
       </div>
       <div class="bento-card col-3">
         <div class="stat-label">Connected Upstreams</div>
@@ -946,7 +946,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
           <button class="btn btn-ghost" onclick="window.app.openImportModal()">Sync from IDEs</button>
         </div>
       </div>
-    `;else i=o.map((u)=>{let p=t[u],g=p.command?"stdio":"http / sse",m=p.command?`${p.command} ${(p.args||[]).join(" ")}`:p.url,d=e.serverStatuses[u]||{status:"connected",protocol_version:"2026-07-28"},f=!r||s.includes(u),y=W(u,p.command,p.args),v=Object.keys(p.env||{}),x=(y?.envFields||[]).filter((M)=>M.required&&!v.includes(M.key)),A=p.env?Object.entries(p.env).map(([M,S])=>{if(S.startsWith("keychain://"))return`<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">\uD83D\uDD12 ${C(M)} (Keychain)</span>`;if(S.startsWith("op://"))return`<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">\uD83D\uDD12 ${C(M)} (1Password)</span>`;if(S.startsWith("env://"))return`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3);">\uD83D\uDD12 ${C(M)} (Env)</span>`;return`<span style="color: var(--text-dim);">${C(M)}=***</span>`}):[];for(let M of x)A.push(`<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);" title="Required environment variable '${C(M.key)}' is missing">⚠️ Missing ${C(M.key)}</span>`);let P=A.length>0?A.join(" "):"None",T=(e.circuitBreakers||[]).find((M)=>M.server_id===u),w='<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.25);">Circuit: CLOSED</span>';if(T){if(T.state==="open")w=`<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);">Circuit: OPEN (${T.consecutive_failures} failures)</span>`;else if(T.state==="half_open")w=`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.1);">Circuit: HALF-OPEN (${T.consecutive_successes} probe)</span>`}let k=p.resilience||e.config.resilience,R=k?`FT: ${k.failureThreshold||3} · Cooldown: ${(k.cooldownMs||30000)/1000}s · AutoRestart: ${k.autoRestart!==!1?"ON":"OFF"}`:"Default Resilience",z=x.length>0,N=d.status==="degraded"||z,D=d.status==="error"||d.status==="disconnected",B=z?"var(--amber-400)":N?"var(--amber-400)":D?"var(--red-400)":"var(--green-400)",U=z?`Status: ${C(d.status)} (Missing Keys)`:`Status: ${C(d.status)}`,J=(N||D)&&(d.error||z)?`
+    `;else i=o.map((u)=>{let p=t[u],g=p.command?"stdio":"http / sse",m=p.command?`${p.command} ${(p.args||[]).join(" ")}`:p.url,d=e.serverStatuses[u]||{status:"connected",protocol_version:"2026-07-28"},f=!r||s.includes(u),y=W(u,p.command,p.args),v=Object.keys(p.env||{}),x=(y?.envFields||[]).filter((M)=>M.required&&!v.includes(M.key)),_=p.env?Object.entries(p.env).map(([M,S])=>{if(S.startsWith("keychain://"))return`<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">\uD83D\uDD12 ${C(M)} (Keychain)</span>`;if(S.startsWith("op://"))return`<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">\uD83D\uDD12 ${C(M)} (1Password)</span>`;if(S.startsWith("env://"))return`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3);">\uD83D\uDD12 ${C(M)} (Env)</span>`;return`<span style="color: var(--text-dim);">${C(M)}=***</span>`}):[];for(let M of x)_.push(`<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);" title="Required environment variable '${C(M.key)}' is missing">⚠️ Missing ${C(M.key)}</span>`);let P=_.length>0?_.join(" "):"None",T=(e.circuitBreakers||[]).find((M)=>M.server_id===u),w='<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.25);">Circuit: CLOSED</span>';if(T){if(T.state==="open")w=`<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);">Circuit: OPEN (${T.consecutive_failures} failures)</span>`;else if(T.state==="half_open")w=`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.1);">Circuit: HALF-OPEN (${T.consecutive_successes} probe)</span>`}let k=p.resilience||e.config.resilience,R=k?`FT: ${k.failureThreshold||3} · Cooldown: ${(k.cooldownMs||30000)/1000}s · AutoRestart: ${k.autoRestart!==!1?"ON":"OFF"}`:"Default Resilience",z=x.length>0,N=d.status==="degraded"||z,D=d.status==="error"||d.status==="disconnected",q=z?"var(--amber-400)":N?"var(--amber-400)":D?"var(--red-400)":"var(--green-400)",U=z?`Status: ${C(d.status)} (Missing Keys)`:`Status: ${C(d.status)}`,J=(N||D)&&(d.error||z)?`
         <div style="background: rgba(239, 68, 68, 0.08); border-left: 3px solid var(--amber-400); border-radius: var(--radius-xs); padding: 8px 12px; margin-top: 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px;">
           <div style="font-size: 11px; color: var(--amber-300); font-family: var(--ff-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
             <span style="font-weight: 700; color: var(--amber-400);">⚠️ Diagnostics:</span> ${C(d.error||`Missing required environment variable(s): ${x.map((M)=>M.key).join(", ")}`)}
@@ -964,10 +964,10 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
           <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;">
             <div style="flex: 1; min-width: 260px;">
               <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap;">
-                <span style="width: 8px; height: 8px; border-radius: 50%; background: ${B}; display: inline-block;"></span>
+                <span style="width: 8px; height: 8px; border-radius: 50%; background: ${q}; display: inline-block;"></span>
                 <span style="font-size: 15px; font-weight: 700; color: var(--text-main);">${C(u)}</span>
                 <span class="brand-badge">${g}</span>
-                <span class="brand-badge" style="color: ${B}; border-color: ${z?"rgba(245, 158, 11, 0.5); background: rgba(245, 158, 11, 0.1);":"rgba(245, 158, 11, 0.3);"}">${U}</span>
+                <span class="brand-badge" style="color: ${q}; border-color: ${z?"rgba(245, 158, 11, 0.5); background: rgba(245, 158, 11, 0.1);":"rgba(245, 158, 11, 0.3);"}">${U}</span>
                 <span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">Protocol: ${d.protocol_version}</span>
                 ${w}
                 ${te}
@@ -1028,8 +1028,8 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
       <button class="btn btn-ghost" style="padding: 3px 10px; font-size: 11px; border-radius: 100px; ${a===d.id?"background: var(--amber-400); color: #000; font-weight: 700; border-color: var(--amber-400);":"background: var(--surface); color: var(--text-muted); border-color: var(--border);"}" onclick="window.app.setClientCategoryFilter('${C(d.id)}')">
         ${C(d.label)}
       </button>
-    `).join(""),m=p.length===0?`<div style="padding: 24px; text-align: center; color: var(--text-dim); font-size: 12px;">No AI clients match the filter "${C(r||a)}".</div>`:p.map((d)=>{let{is_attached:f,config_exists:y,app_installed:v}=d,x='<span class="brand-badge" style="color: var(--text-dim); border-color: rgba(255, 255, 255, 0.1);">Not Found</span>';if(f){let w=d.attached_profile?` · ${d.attached_profile}`:"";x=`<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ Connected${C(w)}</span>`}else if(y)x='<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.08);">○ Ready</span>';else if(v)x='<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">○ Installed</span>';let A=e.activeProfile,P=o.map((w)=>`
-          <option value="${C(w)}" ${A===w||d.attached_profile===w?"selected":""}>Profile: ${C(w)}</option>
+    `).join(""),m=p.length===0?`<div style="padding: 24px; text-align: center; color: var(--text-dim); font-size: 12px;">No AI clients match the filter "${C(r||a)}".</div>`:p.map((d)=>{let{is_attached:f,config_exists:y,app_installed:v}=d,x='<span class="brand-badge" style="color: var(--text-dim); border-color: rgba(255, 255, 255, 0.1);">Not Found</span>';if(f){let w=d.attached_profile?` · ${d.attached_profile}`:"";x=`<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ Connected${C(w)}</span>`}else if(y)x='<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.08);">○ Ready</span>';else if(v)x='<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">○ Installed</span>';let _=e.activeProfile,P=o.map((w)=>`
+          <option value="${C(w)}" ${_===w||d.attached_profile===w?"selected":""}>Profile: ${C(w)}</option>
         `).join(""),T=f?`<button class="btn btn-ghost" style="padding: 3px 10px; font-size: 11px; color: var(--red-400); border-color: rgba(248, 113, 113, 0.3);" onclick="window.app.detachClient('${C(d.id)}')">Disconnect</button>`:`<button class="btn btn-primary" style="padding: 3px 10px; font-size: 11px;" onclick="window.app.attachClient('${C(d.id)}')">⚡ Connect</button>`;return`
           <div style="display: grid; grid-template-columns: 200px 130px 1fr 140px 100px; align-items: center; gap: 12px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); transition: background 0.15s;" onmouseover="this.style.background='var(--surface-hover)'" onmouseout="this.style.background='var(--surface)'">
             <div>
@@ -1182,15 +1182,15 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
       `).join("");let u=n?.input_schema,p=u?.properties||{},g=Array.isArray(u?.required)?u.required:[],m=Object.entries(p),d="";if(m.length>0)d=`
       <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; align-items: center;">
         <span style="font-size: 10px; font-weight: 700; color: var(--text-dim); text-transform: uppercase;">Fields:</span>
-        ${m.map(([y,v])=>{let x=g.includes(y),A=v.type||(v.enum?"enum":"any"),P=x?"rgba(239, 68, 68, 0.15)":"rgba(148, 163, 184, 0.1)",T=x?"var(--red-400)":"var(--text-muted)",w=x?"rgba(239, 68, 68, 0.3)":"var(--border)",k=v.description?` - ${v.description}`:"";return`
+        ${m.map(([y,v])=>{let x=g.includes(y),_=v.type||(v.enum?"enum":"any"),P=x?"rgba(239, 68, 68, 0.15)":"rgba(148, 163, 184, 0.1)",T=x?"var(--red-400)":"var(--text-muted)",w=x?"rgba(239, 68, 68, 0.3)":"var(--border)",k=v.description?` - ${v.description}`:"";return`
             <button 
               type="button" 
               class="btn" 
               style="padding: 2px 7px; font-size: 10.5px; font-family: var(--ff-mono); background: ${P}; color: ${T}; border: 1px solid ${w}; border-radius: var(--radius-sm);" 
-              title="Click to insert '${y}' (${A}${k})" 
-              onclick="window.app.insertPlaygroundArgKey('${E(y)}', '${E(A)}', ${E(JSON.stringify(v.default??null))})"
+              title="Click to insert '${y}' (${_}${k})" 
+              onclick="window.app.insertPlaygroundArgKey('${E(y)}', '${E(_)}', ${E(JSON.stringify(v.default??null))})"
             >
-              + ${E(y)} <span style="font-size: 9px; opacity: 0.7;">(${A}${x?" *":""})</span>
+              + ${E(y)} <span style="font-size: 9px; opacity: 0.7;">(${_}${x?" *":""})</span>
             </button>
           `}).join("")}
       </div>
@@ -1653,7 +1653,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
         Tool calls requiring Human-in-the-Loop approval or returning asynchronous <code style="color: var(--amber-300); font-family: var(--ff-mono);">input_required</code> tasks will suspend here for operator inspection, parameter editing, and response submission.
       </div>
     </div>
-  `:n.map((d)=>{let f=d.inputRequests||{},y=Object.keys(f),v=y.length>0,x=Math.floor(Date.now()/1000),A=d.expiresAtEpochSecs?Math.max(0,d.expiresAtEpochSecs-x):d.ttlMs?Math.max(0,Math.floor(d.ttlMs/1000)):d.ttlSeconds||300,P=d.createdAtEpochSecs?new Date(d.createdAtEpochSecs*1000).toLocaleTimeString():d.createdAt?new Date(d.createdAt).toLocaleTimeString():"—";return`
+  `:n.map((d)=>{let f=d.inputRequests||{},y=Object.keys(f),v=y.length>0,x=Math.floor(Date.now()/1000),_=d.expiresAtEpochSecs?Math.max(0,d.expiresAtEpochSecs-x):d.ttlMs?Math.max(0,Math.floor(d.ttlMs/1000)):d.ttlSeconds||300,P=d.createdAtEpochSecs?new Date(d.createdAtEpochSecs*1000).toLocaleTimeString():d.createdAt?new Date(d.createdAt).toLocaleTimeString():"—";return`
       <div class="bento-card" style="border: 1px solid rgba(245, 158, 11, 0.35); background: var(--surface-card); margin-bottom: 14px; padding: 18px;">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
           <div>
@@ -1661,28 +1661,28 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
               <span class="brand-badge" style="background: rgba(245, 158, 11, 0.2); color: var(--amber-300); border-color: rgba(245, 158, 11, 0.5);">
                 INPUT REQUIRED
               </span>
-              <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--text-muted);">${_(d.taskId)}</span>
+              <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--text-muted);">${A(d.taskId)}</span>
             </div>
             <div style="margin-top: 6px; display: flex; align-items: center; gap: 8px;">
               <span style="font-size: 14.5px; font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">
-                ${_(d.capabilityId||"Tool Execution")}
+                ${A(d.capabilityId||"Tool Execution")}
               </span>
-              ${d.serverId?`<span style="font-size: 11px; color: var(--text-dim);">via <span style="color: var(--cyan-400); font-family: var(--ff-mono);">${_(d.serverId)}</span></span>`:""}
+              ${d.serverId?`<span style="font-size: 11px; color: var(--text-dim);">via <span style="color: var(--cyan-400); font-family: var(--ff-mono);">${A(d.serverId)}</span></span>`:""}
             </div>
           </div>
 
           <div style="text-align: right; font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim);">
             <div>Created: <span style="color: var(--text-muted);">${P}</span></div>
-            <div style="color: var(--amber-400); margin-top: 2px;">TTL Remaining: ${A}s</div>
+            <div style="color: var(--amber-400); margin-top: 2px;">TTL Remaining: ${_}s</div>
           </div>
         </div>
 
         <!-- Caller Context -->
         ${d.context?`
           <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; font-family: var(--ff-mono); font-size: 11px; display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 12px; color: var(--text-muted);">
-            ${d.context.actor_id?`<div><span style="color: var(--text-dim);">Actor:</span> <span style="color: var(--cyan-400);">${_(d.context.actor_id)}</span></div>`:""}
-            ${d.context.operation_id?`<div><span style="color: var(--text-dim);">Operation:</span> <span style="color: var(--text-main);">${_(d.context.operation_id)}</span></div>`:""}
-            ${d.context.grant_id?`<div><span style="color: var(--text-dim);">Grant:</span> <span style="color: var(--text-main);">${_(d.context.grant_id)}</span></div>`:""}
+            ${d.context.actor_id?`<div><span style="color: var(--text-dim);">Actor:</span> <span style="color: var(--cyan-400);">${A(d.context.actor_id)}</span></div>`:""}
+            ${d.context.operation_id?`<div><span style="color: var(--text-dim);">Operation:</span> <span style="color: var(--text-main);">${A(d.context.operation_id)}</span></div>`:""}
+            ${d.context.grant_id?`<div><span style="color: var(--text-dim);">Grant:</span> <span style="color: var(--text-main);">${A(d.context.grant_id)}</span></div>`:""}
           </div>
         `:""}
 
@@ -1697,58 +1697,58 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
               ${y.map((T)=>{let w=f[T]||{},k=typeof w==="string"?w:w.prompt||w.description||w.title||T,R=w.type||"text",z=w.default!==void 0?JSON.stringify(w.default):w.value!==void 0?JSON.stringify(w.value):w.sanitized_args?JSON.stringify(w.sanitized_args,null,2):"";if(R==="approval_review")return`
                     <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px;">
                       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                        <label style="font-size: 11.5px; font-weight: 600; color: var(--amber-300); font-family: var(--ff-mono);">${_(T)}</label>
+                        <label style="font-size: 11.5px; font-weight: 600; color: var(--amber-300); font-family: var(--ff-mono);">${A(T)}</label>
                         <span class="brand-badge" style="font-size: 9.5px; padding: 1px 5px;">APPROVAL GATED</span>
                       </div>
-                      <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">${_(k)}</div>
+                      <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">${A(k)}</div>
                       <div style="margin-bottom: 8px;">
                         <label style="font-size: 10.5px; color: var(--text-dim); display: block; margin-bottom: 2px;">Decision:</label>
-                        <select id="task-input-${_(d.taskId)}-${_(T)}-decision" class="form-input" style="font-size: 11.5px; font-family: var(--ff-mono); padding: 4px 8px;">
+                        <select id="task-input-${A(d.taskId)}-${A(T)}-decision" class="form-input" style="font-size: 11.5px; font-family: var(--ff-mono); padding: 4px 8px;">
                           <option value="true" selected>Approve &amp; Execute</option>
                           <option value="false">Reject Execution</option>
                         </select>
                       </div>
                       <div>
                         <label style="font-size: 10.5px; color: var(--text-dim); display: block; margin-bottom: 2px;">Parameters (Editable):</label>
-                        <textarea id="task-input-${_(d.taskId)}-${_(T)}" class="form-textarea" rows="3" style="color: var(--green-400); font-family: var(--ff-mono); font-size: 11.5px;">${_(z)}</textarea>
+                        <textarea id="task-input-${A(d.taskId)}-${A(T)}" class="form-textarea" rows="3" style="color: var(--green-400); font-family: var(--ff-mono); font-size: 11.5px;">${A(z)}</textarea>
                       </div>
                     </div>
                   `;return`
                   <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                      <label style="font-size: 11.5px; font-weight: 600; color: var(--amber-300); font-family: var(--ff-mono);">${_(T)}</label>
-                      <span class="brand-badge" style="font-size: 9.5px; padding: 1px 5px;">${_(R)}</span>
+                      <label style="font-size: 11.5px; font-weight: 600; color: var(--amber-300); font-family: var(--ff-mono);">${A(T)}</label>
+                      <span class="brand-badge" style="font-size: 9.5px; padding: 1px 5px;">${A(R)}</span>
                     </div>
-                    <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">${_(k)}</div>
+                    <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">${A(k)}</div>
                     ${R==="confirmation"||R==="boolean"?`
-                      <select id="task-input-${_(d.taskId)}-${_(T)}" class="form-input" style="font-size: 11.5px; font-family: var(--ff-mono); padding: 4px 8px;">
+                      <select id="task-input-${A(d.taskId)}-${A(T)}" class="form-input" style="font-size: 11.5px; font-family: var(--ff-mono); padding: 4px 8px;">
                         <option value="true" selected>true (Approve / Confirm)</option>
                         <option value="false">false (Reject / Deny)</option>
                       </select>
                     `:w.sanitized_args||R==="object"||R==="json"?`
-                      <textarea id="task-input-${_(d.taskId)}-${_(T)}" class="form-textarea" rows="3" style="color: var(--green-400); font-family: var(--ff-mono); font-size: 11.5px;">${_(z)}</textarea>
+                      <textarea id="task-input-${A(d.taskId)}-${A(T)}" class="form-textarea" rows="3" style="color: var(--green-400); font-family: var(--ff-mono); font-size: 11.5px;">${A(z)}</textarea>
                     `:`
-                      <input id="task-input-${_(d.taskId)}-${_(T)}" type="text" class="form-input" value="${_(z)}" placeholder="Enter ${_(T)} response..." style="font-size: 11.5px; font-family: var(--ff-mono);">
+                      <input id="task-input-${A(d.taskId)}-${A(T)}" type="text" class="form-input" value="${A(z)}" placeholder="Enter ${A(T)} response..." style="font-size: 11.5px; font-family: var(--ff-mono);">
                     `}
                   </div>
                 `}).join("")}
             </div>
           `:`
-            <textarea id="task-raw-input-${_(d.taskId)}" class="form-textarea" rows="3" style="color: var(--green-400); font-family: var(--ff-mono); font-size: 11.5px;">{}</textarea>
+            <textarea id="task-raw-input-${A(d.taskId)}" class="form-textarea" rows="3" style="color: var(--green-400); font-family: var(--ff-mono); font-size: 11.5px;">{}</textarea>
           `}
         </div>
 
         <!-- Action Footer -->
         <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border); padding-top: 12px;">
           <div style="display: flex; align-items: center; gap: 8px;">
-            <input id="task-operator-${_(d.taskId)}" type="text" class="form-input" placeholder="Operator ID" value="security-operator" style="width: 180px; padding: 5px 10px; font-size: 11px;">
+            <input id="task-operator-${A(d.taskId)}" type="text" class="form-input" placeholder="Operator ID" value="security-operator" style="width: 180px; padding: 5px 10px; font-size: 11px;">
           </div>
 
           <div style="display: flex; align-items: center; gap: 8px;">
-            <button class="btn btn-danger" onclick="window.app.promptCancelTask('${_(d.taskId)}')">
+            <button class="btn btn-danger" onclick="window.app.promptCancelTask('${A(d.taskId)}')">
               ✕ Cancel Task
             </button>
-            <button class="btn btn-primary" onclick="window.app.submitTaskInputResponses('${_(d.taskId)}')">
+            <button class="btn btn-primary" onclick="window.app.submitTaskInputResponses('${A(d.taskId)}')">
               ✓ Submit &amp; Resume
             </button>
           </div>
@@ -1760,13 +1760,13 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
     </div>
   `:u.map((d)=>`
     <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface); padding: 8px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); margin-bottom: 6px;">
-      <span style="font-family: var(--ff-mono); font-size: 11.5px; color: var(--amber-300); font-weight: 500;">\uD83D\uDEE1️ ${_(d)}</span>
+      <span style="font-family: var(--ff-mono); font-size: 11.5px; color: var(--amber-300); font-weight: 500;">\uD83D\uDEE1️ ${A(d)}</span>
       <span class="brand-badge" style="font-size: 9.5px; padding: 1px 5px;">GATED</span>
     </div>
   `).join(""),m=l.length===0?`
     <tr>
       <td colspan="6" style="padding: 24px; text-align: center; color: var(--text-dim); font-size: 12px;">
-        No tasks found matching filter "${_(o)}".
+        No tasks found matching filter "${A(o)}".
       </td>
     </tr>
   `:l.map((d)=>{let f=d.status==="completed"?"background: rgba(52, 211, 153, 0.12); color: var(--green-400); border-color: rgba(52, 211, 153, 0.3);":d.status==="working"?"background: rgba(56, 189, 248, 0.15); color: var(--cyan-400); border-color: rgba(56, 189, 248, 0.4);":d.status==="input_required"?"background: rgba(245, 158, 11, 0.2); color: var(--amber-300); border-color: rgba(245, 158, 11, 0.5);":d.status==="cancelled"?"background: rgba(148, 163, 184, 0.15); color: var(--text-muted); border-color: rgba(148, 163, 184, 0.3);":"background: rgba(248, 113, 113, 0.12); color: var(--red-400); border-color: rgba(248, 113, 113, 0.3);",y=d.progress!==void 0?Math.round(d.progress*100):d.status==="completed"?100:d.status==="working"?50:0,v=d.createdAtEpochSecs?new Date(d.createdAtEpochSecs*1000).toLocaleTimeString():d.createdAt?new Date(d.createdAt).toLocaleTimeString():"—";return`
@@ -1777,10 +1777,10 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
           </span>
         </td>
         <td style="padding: 10px 14px; font-family: var(--ff-mono); font-weight: 600; color: var(--text-main); font-size: 11.5px;">
-          ${_(d.capabilityId||"Tool Execution")}
+          ${A(d.capabilityId||"Tool Execution")}
         </td>
         <td style="padding: 10px 14px; font-family: var(--ff-mono); color: var(--text-dim); font-size: 11px;">
-          ${_(d.taskId)}
+          ${A(d.taskId)}
         </td>
         <td style="padding: 10px 14px; width: 140px;">
           <div style="display: flex; align-items: center; gap: 8px;">
@@ -1795,9 +1795,9 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
         </td>
         <td style="padding: 10px 14px; text-align: right;">
           <div style="display: inline-flex; gap: 6px; align-items: center;">
-            <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10.5px;" onclick="window.app.openTaskInspectorModal('${_(d.taskId)}')">\uD83D\uDD0D Inspect</button>
+            <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10.5px;" onclick="window.app.openTaskInspectorModal('${A(d.taskId)}')">\uD83D\uDD0D Inspect</button>
             ${d.status==="input_required"||d.status==="working"?`
-              <button class="btn btn-danger" style="padding: 2px 8px; font-size: 10.5px;" onclick="window.app.promptCancelTask('${_(d.taskId)}')">Cancel</button>
+              <button class="btn btn-danger" style="padding: 2px 8px; font-size: 10.5px;" onclick="window.app.promptCancelTask('${A(d.taskId)}')">Cancel</button>
             `:""}
           </div>
         </td>
@@ -1913,7 +1913,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
         </table>
       </div>
     </div>
-  `}function _(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function ce(){let e=c.getState(),t=e.auditEvents||[],o=e.auditStats||{total_events:0,by_status:{success:0,failed:0,denied:0,intercepted:0}},n=e.auditVerification,a=e.auditFilters,r=e.auditTotal??t.length,s=e.auditSelectedEvent,i=Object.keys(e.config?.mcpServers||{}),l=a.limit||25,u=a.offset||0,p=Math.floor(u/l)+1,g=Math.max(1,Math.ceil(r/l)),m=r===0?0:u+1,d=Math.min(u+l,r),f=h.getAuditExportUrl({actor_id:a.search?void 0:void 0,server_id:a.serverId!=="all"?a.serverId:void 0,event_type:a.eventType!=="all"?a.eventType:void 0,status:a.status!=="all"?a.status:void 0,search:a.search.trim()?a.search.trim():void 0},"csv"),y=h.getAuditExportUrl({server_id:a.serverId!=="all"?a.serverId:void 0,event_type:a.eventType!=="all"?a.eventType:void 0,status:a.status!=="all"?a.status:void 0,search:a.search.trim()?a.search.trim():void 0},"jsonl"),v=n?n.is_valid?`
+  `}function A(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function ce(){let e=c.getState(),t=e.auditEvents||[],o=e.auditStats||{total_events:0,by_status:{success:0,failed:0,denied:0,intercepted:0}},n=e.auditVerification,a=e.auditFilters,r=e.auditTotal??t.length,s=e.auditSelectedEvent,i=Object.keys(e.config?.mcpServers||{}),l=a.limit||25,u=a.offset||0,p=Math.floor(u/l)+1,g=Math.max(1,Math.ceil(r/l)),m=r===0?0:u+1,d=Math.min(u+l,r),f=h.getAuditExportUrl({actor_id:a.search?void 0:void 0,server_id:a.serverId!=="all"?a.serverId:void 0,event_type:a.eventType!=="all"?a.eventType:void 0,status:a.status!=="all"?a.status:void 0,search:a.search.trim()?a.search.trim():void 0},"csv"),y=h.getAuditExportUrl({server_id:a.serverId!=="all"?a.serverId:void 0,event_type:a.eventType!=="all"?a.eventType:void 0,status:a.status!=="all"?a.status:void 0,search:a.search.trim()?a.search.trim():void 0},"jsonl"),v=n?n.is_valid?`
       <div style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: var(--radius-sm); font-size: 11.5px; color: var(--green-400);">
         <span>\uD83D\uDEE1️</span>
         <span style="font-weight: 600;">Chain Verified: 100% Tamper Free (${n.total_records} events)</span>
@@ -1927,7 +1927,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
     <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.verifyAuditChain()">
       \uD83D\uDEE1️ Verify Cryptographic Hash Chain
     </button>
-  `,x=i.map((k)=>`<option value="${I(k)}" ${a.serverId===k?"selected":""}>${I(k)}</option>`).join(""),A=`
+  `,x=i.map((k)=>`<option value="${I(k)}" ${a.serverId===k?"selected":""}>${I(k)}</option>`).join(""),_=`
     <div class="bento-card" style="padding: 14px 16px; margin-bottom: 16px; background: rgba(18, 24, 38, 0.7); border: 1px solid var(--border);">
       <div style="display: grid; grid-template-columns: 2fr 1fr 1.2fr 1.2fr auto auto; gap: 10px; align-items: center;">
         <!-- Full-text search input -->
@@ -2070,7 +2070,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
         <div style="font-size: 12px; max-width: 420px; margin: 0 auto;">No audit records match your currently selected filters. Try broadening your search or resetting filters.</div>
         <button class="btn btn-ghost" style="margin-top: 14px; font-size: 11.5px;" onclick="window.app.clearAuditFilters()">Reset Filters</button>
       </div>
-    `;else T=t.map((k)=>{let R=new Date(Math.floor(k.timestamp_ns/1e6)).toLocaleString(),z='<span class="badge" style="background: rgba(34, 197, 94, 0.15); color: var(--green-400); font-weight: 600;">SUCCESS</span>';if(k.status==="denied")z='<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--red-400); font-weight: 600;">DENIED</span>';else if(k.status==="intercepted")z='<span class="badge" style="background: rgba(234, 179, 8, 0.15); color: var(--amber-300); font-weight: 600;">HITL INTERCEPT</span>';else if(k.status==="failed")z='<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--red-400); font-weight: 600;">FAILED</span>';else if(k.status==="cancelled")z='<span class="badge" style="background: rgba(148, 163, 184, 0.15); color: var(--text-muted); font-weight: 600;">CANCELLED</span>';let N=k.sanitized_args?JSON.stringify(k.sanitized_args):"-",D=k.actor_id||k.operator_id||"anonymous",B=k.server_id||"system",U=k.capability_id||k.event_type,J=k.execution_latency_us?`${(k.execution_latency_us/1000).toFixed(1)}ms`:"-";return`
+    `;else T=t.map((k)=>{let R=new Date(Math.floor(k.timestamp_ns/1e6)).toLocaleString(),z='<span class="badge" style="background: rgba(34, 197, 94, 0.15); color: var(--green-400); font-weight: 600;">SUCCESS</span>';if(k.status==="denied")z='<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--red-400); font-weight: 600;">DENIED</span>';else if(k.status==="intercepted")z='<span class="badge" style="background: rgba(234, 179, 8, 0.15); color: var(--amber-300); font-weight: 600;">HITL INTERCEPT</span>';else if(k.status==="failed")z='<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--red-400); font-weight: 600;">FAILED</span>';else if(k.status==="cancelled")z='<span class="badge" style="background: rgba(148, 163, 184, 0.15); color: var(--text-muted); font-weight: 600;">CANCELLED</span>';let N=k.sanitized_args?JSON.stringify(k.sanitized_args):"-",D=k.actor_id||k.operator_id||"anonymous",q=k.server_id||"system",U=k.capability_id||k.event_type,J=k.execution_latency_us?`${(k.execution_latency_us/1000).toFixed(1)}ms`:"-";return`
         <div class="bento-card" style="margin-bottom: 12px; padding: 16px; border: 1px solid var(--border); transition: border-color 0.15s ease;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
             <div style="display: flex; align-items: center; gap: 8px;">
@@ -2093,7 +2093,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
           
           <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; font-size: 11.5px; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: var(--radius-sm); margin-bottom: 8px;">
             <div><span style="color: var(--text-muted);">Actor:</span> <strong style="color: var(--text-main);">${I(D)}</strong></div>
-            <div><span style="color: var(--text-muted);">Server:</span> <strong style="color: var(--cyan-400);">${I(B)}</strong></div>
+            <div><span style="color: var(--text-muted);">Server:</span> <strong style="color: var(--cyan-400);">${I(q)}</strong></div>
             <div><span style="color: var(--text-muted);">Trace:</span> <code style="color: var(--cyan-400); font-size: 10.5px;">${I(k.trace_id)}</code></div>
             <div><span style="color: var(--text-muted);">Latency:</span> <span style="color: var(--amber-300);">${J}</span></div>
           </div>
@@ -2210,7 +2210,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
     </div>
 
     <!-- Search & Filter Toolbar -->
-    ${A}
+    ${_}
 
     <!-- Event Timeline List Header -->
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
@@ -2275,7 +2275,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
     <div style="margin-bottom: 16px; font-size: 12px; color: var(--text-dim);">
       Global security policy rules governing wildcard access control, human-in-the-loop triggers, and sensitive key masking. (Select an active profile in the top bar to edit per-profile rules).
     </div>
-  `,v=Object.keys(e.config.mcpServers||{}),x=o?.servers||[],A=n?v.filter((w)=>!x.includes(w)):[],P=n?`
+  `,v=Object.keys(e.config.mcpServers||{}),x=o?.servers||[],_=n?v.filter((w)=>!x.includes(w)):[],P=n?`
     <div class="bento-card" style="margin-bottom: 16px; border: 1px solid rgba(245, 158, 11, 0.2); background: rgba(0, 0, 0, 0.2);">
       <div class="stat-header" style="display: flex; justify-content: space-between; align-items: center;">
         <span class="stat-label" style="color: var(--amber-400);">Constellation Server Boundaries (Profile: ${H(t)})</span>
@@ -2297,10 +2297,10 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
 
         <div style="background: var(--surface); padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
           <div style="font-size: 11px; font-weight: 600; color: var(--amber-400); text-transform: uppercase; margin-bottom: 6px;">
-            \uD83D\uDEAB Excluded Servers (${A.length}) · Implicitly Denied
+            \uD83D\uDEAB Excluded Servers (${_.length}) · Implicitly Denied
           </div>
           <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
-            ${A.length>0?A.map((w)=>`
+            ${_.length>0?_.map((w)=>`
               <span class="brand-badge" style="color: var(--text-muted); border-color: rgba(245, 158, 11, 0.2); background: rgba(245, 158, 11, 0.04); display: inline-flex; align-items: center; gap: 4px;">
                 ${H(w)}
                 <button style="background: none; border: none; color: var(--amber-400); font-size: 10px; cursor: pointer; padding: 0 2px;" title="Include in profile" onclick="window.app.toggleServerInProfile('${H(t)}', '${H(w)}', true)">+</button>
@@ -2310,13 +2310,13 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
         </div>
       </div>
     </div>
-  `:"",T=n&&A.length>0?`
+  `:"",T=n&&_.length>0?`
     <div style="border-top: 1px dashed var(--border); padding-top: 8px; margin-top: 8px;">
       <div style="font-size: 10.5px; color: var(--text-dim); text-transform: uppercase; font-weight: 600; margin-bottom: 6px;">
-        Implicit Boundary Denials (${A.length})
+        Implicit Boundary Denials (${_.length})
       </div>
       <div style="display: flex; flex-direction: column; gap: 4px;">
-        ${A.map((w)=>`
+        ${_.map((w)=>`
           <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(245, 158, 11, 0.03); padding: 5px 8px; border-radius: var(--radius-xs); border: 1px dashed rgba(245, 158, 11, 0.2);">
             <span style="font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim);">✖ ${H(w)}.*</span>
             <span style="font-size: 9.5px; color: var(--amber-400); font-family: var(--ff-mono);">server excluded</span>
@@ -2445,39 +2445,48 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
     </div>
   `}function H(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function ue(){let e=c.getState(),t=e.config,o=Object.entries(t.capabilityAliases||{}),n=Object.entries(t.resourceAliases||{}),a=Object.entries(t.promptAliases||{}),r="";if(o.length===0&&n.length===0&&a.length===0)r=`
       <div style="padding: 24px; text-align: center; color: var(--text-dim);">
-        No facade aliases configured in ${F(e.configPath)}. Add short names to prune token payload sizes.
+        No facade aliases configured in ${B(e.configPath)}. Add short names or custom descriptions to prune token payload sizes.
       </div>
-    `;else{for(let[s,i]of o)r+=`
+    `;else{for(let[s,i]of o){let l=typeof i==="string"?i:i.target,u=typeof i==="object"&&i.summary?i.summary:"",p=u?`<div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">\uD83D\uDCAC ${B(u)}</div>`:"";r+=`
         <div class="feed-row" style="grid-template-columns: 90px 180px 1fr 80px;">
           <span style="color: var(--cyan-400);">Tool</span>
-          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${F(s)}</span>
-          <span style="color: var(--text-dim); font-family: var(--ff-mono);">${F(i)}</span>
+          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${B(s)}</span>
+          <div>
+            <span style="color: var(--text-muted); font-family: var(--ff-mono);">${B(l)}</span>
+            ${p}
+          </div>
           <div style="text-align: right;">
-            <button class="btn btn-ghost" style="padding: 2px 6px; color: var(--red-400);" onclick="window.app.deleteAlias('tool', '${F(s)}')">✕</button>
+            <button class="btn btn-ghost" style="padding: 2px 6px; color: var(--red-400);" onclick="window.app.deleteAlias('tool', '${B(s)}')">✕</button>
           </div>
         </div>
-      `;for(let[s,i]of n)r+=`
+      `}for(let[s,i]of n){let l=typeof i==="string"?i:i.target,u=typeof i==="object"&&i.summary?i.summary:"",p=u?`<div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">\uD83D\uDCAC ${B(u)}</div>`:"";r+=`
         <div class="feed-row" style="grid-template-columns: 90px 180px 1fr 80px;">
           <span style="color: var(--green-400);">Resource</span>
-          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${F(s)}</span>
-          <span style="color: var(--text-dim); font-family: var(--ff-mono);">${F(i)}</span>
+          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${B(s)}</span>
+          <div>
+            <span style="color: var(--text-muted); font-family: var(--ff-mono);">${B(l)}</span>
+            ${p}
+          </div>
           <div style="text-align: right;">
-            <button class="btn btn-ghost" style="padding: 2px 6px; color: var(--red-400);" onclick="window.app.deleteAlias('resource', '${F(s)}')">✕</button>
+            <button class="btn btn-ghost" style="padding: 2px 6px; color: var(--red-400);" onclick="window.app.deleteAlias('resource', '${B(s)}')">✕</button>
           </div>
         </div>
-      `;for(let[s,i]of a)r+=`
+      `}for(let[s,i]of a){let l=typeof i==="string"?i:i.target,u=typeof i==="object"&&i.summary?i.summary:"",p=u?`<div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">\uD83D\uDCAC ${B(u)}</div>`:"";r+=`
         <div class="feed-row" style="grid-template-columns: 90px 180px 1fr 80px;">
           <span style="color: var(--amber-300);">Prompt</span>
-          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${F(s)}</span>
-          <span style="color: var(--text-dim); font-family: var(--ff-mono);">${F(i)}</span>
+          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${B(s)}</span>
+          <div>
+            <span style="color: var(--text-muted); font-family: var(--ff-mono);">${B(l)}</span>
+            ${p}
+          </div>
           <div style="text-align: right;">
-            <button class="btn btn-ghost" style="padding: 2px 6px; color: var(--red-400);" onclick="window.app.deleteAlias('prompt', '${F(s)}')">✕</button>
+            <button class="btn btn-ghost" style="padding: 2px 6px; color: var(--red-400);" onclick="window.app.deleteAlias('prompt', '${B(s)}')">✕</button>
           </div>
         </div>
-      `}return`
+      `}}return`
     <!-- Sub-header -->
     <div style="margin-bottom: 16px; font-size: 12px; color: var(--text-dim);">
-      Shorten capability IDs to prune prompt tokens and create stable public interfaces.
+      Shorten capability IDs and supply custom descriptions to prune prompt tokens and improve agent ergonomics.
     </div>
 
     <!-- Quick Add Form -->
@@ -2485,7 +2494,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
       <div class="stat-header" style="margin-bottom: 12px;">
         <span class="stat-label">Create New Alias</span>
       </div>
-      <div style="display: grid; grid-template-columns: 140px 1fr 1fr 100px; gap: 10px; align-items: center; position: relative;">
+      <div style="display: grid; grid-template-columns: 140px 1fr 1fr 100px; gap: 10px; align-items: center; position: relative; margin-bottom: 8px;">
         <select class="form-input" id="alias-kind">
           <option value="tool">Tool / Capability</option>
           <option value="resource">Resource</option>
@@ -2498,6 +2507,9 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
         </div>
         <button class="btn btn-primary" onclick="window.app.createAlias()">+ Save</button>
       </div>
+      <div style="display: grid; grid-template-columns: 1fr; gap: 10px;">
+        <input type="text" class="form-input" id="alias-summary" placeholder="Optional custom description / prompt instruction (e.g. Always pass absolute path in repo)" onkeydown="if(event.key==='Enter') window.app.createAlias()" style="font-size: 12px;">
+      </div>
     </div>
 
     <!-- Aliases Table -->
@@ -2505,12 +2517,12 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
       <div style="display: grid; grid-template-columns: 90px 180px 1fr 80px; padding: 10px 14px; background: var(--surface-hover); border-bottom: 1px solid var(--border); color: var(--text-muted); font-weight: 600;">
         <span>TYPE</span>
         <span>PUBLIC ALIAS</span>
-        <span>CANONICAL TARGET</span>
+        <span>CANONICAL TARGET & SUMMARY</span>
         <span style="text-align: right;">ACTION</span>
       </div>
       ${r}
     </div>
-  `}function F(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function ge(){let e=c.getState(),t=e.config,o=t.profiles||{},n=Object.entries(o),a=t.mcpServers||{},r=e.activeProfile,s="";if(n.length===0)s=`
+  `}function B(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function ge(){let e=c.getState(),t=e.config,o=t.profiles||{},n=Object.entries(o),a=t.mcpServers||{},r=e.activeProfile,s="";if(n.length===0)s=`
       <div style="padding: 40px; text-align: center; color: var(--text-dim); background: var(--surface-card); border-radius: var(--radius-md); border: 1px dashed var(--border);">
         <div style="font-size: 15px; color: var(--text-main); font-weight: 600; margin-bottom: 8px;">No Profiles Configured</div>
         <p style="font-size: 12px; margin-bottom: 20px; max-width: 480px; margin-left: auto; margin-right: auto;">
@@ -2818,7 +2830,7 @@ Reference: ${s.uri}`),e)e.value="";if(t)t.value="";await this.refreshData()}else
                 `:""}
               </div>
             </div>
-          `}).join(""),A=(g?.envFields||[]).map((T)=>T.key),P=Object.entries(m).filter(([T])=>!A.includes(T)).map(([T,w])=>`
+          `}).join(""),_=(g?.envFields||[]).map((T)=>T.key),P=Object.entries(m).filter(([T])=>!_.includes(T)).map(([T,w])=>`
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: var(--surface); border-radius: var(--radius-xs); margin-bottom: 6px; font-size: 11.5px;">
               <span style="font-family: var(--ff-mono); font-weight: 700; color: var(--text-main);">${b(T)}</span>
               <span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3);">Custom Configured</span>
@@ -2958,7 +2970,7 @@ Reference: ${s.uri}`),e)e.value="";if(t)t.value="";await this.refreshData()}else
             </div>
           </div>
         </details>
-      `}}async submitTemplateServer(){if(!this.selectedTemplate)return;let e=this.selectedTemplate,t=document.getElementById("cfg-srv-id")?.value.trim(),o=document.getElementById("cfg-srv-args")?.value.trim();if(!t){alert("Server identifier is required");return}if((c.getState().config.mcpServers||{})[t]){if(!confirm(`Server '${t}' already exists. Do you want to overwrite its configuration?`))return}let r=o?o.split(/\s+/).filter(Boolean):[],s={},i=document.querySelectorAll(".tmpl-env-input");for(let f of Array.from(i)){let y=f.getAttribute("data-key"),v=f.value.trim(),x=e.envFields.find((A)=>A.key===y);if(x?.required&&!v){alert(`Required field '${x.label}' is missing.`);return}if(y&&v)s[y]=v}let l={command:e.command,args:r};if(Object.keys(s).length>0)l.env=s;let u=document.getElementById("cfg-srv-ft")?.value.trim(),p=document.getElementById("cfg-srv-cd")?.value.trim(),g=document.getElementById("cfg-srv-autorestart")?.value,m=document.getElementById("cfg-srv-maxrestarts")?.value.trim();if(u||p||g||m)l.resilience={failureThreshold:u?Number(u):3,cooldownMs:p?Number(p):30000,autoRestart:g!=="false",maxRestarts:m?Number(m):5};let d=await h.upsertServer(t,l);if(d.ok)this.closeModals(),await this.refreshData();else alert(`Failed to save server: ${d.error}`)}async openImportModal(){this.closeModals();let e=document.getElementById("modal-import");if(e)e.classList.add("active");let t=document.getElementById("modal-eco-list");if(!t)return;t.innerHTML='<div style="color: var(--text-dim); padding: 12px; text-align: center;">Scanning IDE configs...</div>';try{let o=await h.getEcosystemSources();if(o.sources&&o.sources.length>0)t.innerHTML=o.sources.map((n)=>`
+      `}}async submitTemplateServer(){if(!this.selectedTemplate)return;let e=this.selectedTemplate,t=document.getElementById("cfg-srv-id")?.value.trim(),o=document.getElementById("cfg-srv-args")?.value.trim();if(!t){alert("Server identifier is required");return}if((c.getState().config.mcpServers||{})[t]){if(!confirm(`Server '${t}' already exists. Do you want to overwrite its configuration?`))return}let r=o?o.split(/\s+/).filter(Boolean):[],s={},i=document.querySelectorAll(".tmpl-env-input");for(let f of Array.from(i)){let y=f.getAttribute("data-key"),v=f.value.trim(),x=e.envFields.find((_)=>_.key===y);if(x?.required&&!v){alert(`Required field '${x.label}' is missing.`);return}if(y&&v)s[y]=v}let l={command:e.command,args:r};if(Object.keys(s).length>0)l.env=s;let u=document.getElementById("cfg-srv-ft")?.value.trim(),p=document.getElementById("cfg-srv-cd")?.value.trim(),g=document.getElementById("cfg-srv-autorestart")?.value,m=document.getElementById("cfg-srv-maxrestarts")?.value.trim();if(u||p||g||m)l.resilience={failureThreshold:u?Number(u):3,cooldownMs:p?Number(p):30000,autoRestart:g!=="false",maxRestarts:m?Number(m):5};let d=await h.upsertServer(t,l);if(d.ok)this.closeModals(),await this.refreshData();else alert(`Failed to save server: ${d.error}`)}async openImportModal(){this.closeModals();let e=document.getElementById("modal-import");if(e)e.classList.add("active");let t=document.getElementById("modal-eco-list");if(!t)return;t.innerHTML='<div style="color: var(--text-dim); padding: 12px; text-align: center;">Scanning IDE configs...</div>';try{let o=await h.getEcosystemSources();if(o.sources&&o.sources.length>0)t.innerHTML=o.sources.map((n)=>`
           <label style="display: flex; align-items: center; gap: 10px; background: var(--surface); padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border); cursor: pointer;">
             <input type="checkbox" class="eco-checkbox" value="${n.path}" checked>
             <div>
@@ -2977,7 +2989,7 @@ Reference: ${s.uri}`),e)e.value="";if(t)t.value="";await this.refreshData()}else
         </div>
         <span style="font-size: 10px; color: var(--cyan-400);">${b(r.server||"local")}</span>
       </div>
-    `).join(""),t.style.display="block"}selectAliasSuggestion(e){let t=document.getElementById("alias-target");if(t)t.value=e;this.hideAliasDropdown()}hideAliasDropdown(){let e=document.getElementById("alias-suggestions-dropdown");if(e)e.style.display="none"}async createAlias(){let e=document.getElementById("alias-kind")?.value,t=document.getElementById("alias-name")?.value.trim(),o=document.getElementById("alias-target")?.value.trim();if(!t||!o){alert("Please provide both alias name and canonical target");return}await h.updateAlias(e,t,o),await this.refreshData()}async deleteAlias(e,t){await h.updateAlias(e,t,void 0),await this.refreshData()}async reloadFromDisk(){try{let e=await h.reloadConfig();if(e.ok){let t="Hot-reload completed successfully!";if(e.mounted&&e.mounted.length>0)t+=`
+    `).join(""),t.style.display="block"}selectAliasSuggestion(e){let t=document.getElementById("alias-target");if(t)t.value=e;this.hideAliasDropdown()}hideAliasDropdown(){let e=document.getElementById("alias-suggestions-dropdown");if(e)e.style.display="none"}async createAlias(){let e=document.getElementById("alias-kind")?.value,t=document.getElementById("alias-name")?.value.trim(),o=document.getElementById("alias-target")?.value.trim(),n=document.getElementById("alias-summary")?.value.trim()||void 0;if(!t||!o){alert("Please provide both alias name and canonical target");return}await h.updateAlias(e,t,o,n),await this.refreshData()}async deleteAlias(e,t){await h.updateAlias(e,t,void 0),await this.refreshData()}async reloadFromDisk(){try{let e=await h.reloadConfig();if(e.ok){let t="Hot-reload completed successfully!";if(e.mounted&&e.mounted.length>0)t+=`
 Mounted: ${e.mounted.join(", ")}`;if(e.unmounted&&e.unmounted.length>0)t+=`
 Unmounted: ${e.unmounted.join(", ")}`;if(e.warnings&&e.warnings.length>0)t+=`
 Warnings:

@@ -548,6 +548,12 @@ pub enum AliasCommands {
         alias: String,
         /// Target canonical identifier or URI
         target: String,
+        /// Optional custom summary override
+        #[arg(long)]
+        summary: Option<String>,
+        /// Optional custom detailed description override
+        #[arg(long)]
+        description: Option<String>,
         /// Path to Warmplane configuration file
         #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
         config: String,

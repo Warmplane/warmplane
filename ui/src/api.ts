@@ -330,11 +330,17 @@ export interface ProfileConfig {
   policy?: PolicyConfig;
 }
 
+export type AliasTargetType = string | {
+  target: string;
+  summary?: string;
+  description?: string;
+};
+
 export interface McpConfig {
   mcpServers?: Record<string, McpServerConfig>;
-  capabilityAliases?: Record<string, string>;
-  resourceAliases?: Record<string, string>;
-  promptAliases?: Record<string, string>;
+  capabilityAliases?: Record<string, AliasTargetType>;
+  resourceAliases?: Record<string, AliasTargetType>;
+  promptAliases?: Record<string, AliasTargetType>;
   policy?: PolicyConfig;
   rbac?: RbacConfig;
   profiles?: Record<string, ProfileConfig>;
@@ -363,6 +369,7 @@ export interface CapabilityItem {
   server: string;
   summary: string;
   description: string;
+  signature?: string;
   mode?: string;
   tags?: string[];
   input_schema?: Record<string, any>;
@@ -630,11 +637,11 @@ export class WarmplaneClient {
     return res.json();
   }
 
-  async updateAlias(kind: string, alias: string, target?: string): Promise<{ ok: boolean; error?: string }> {
+  async updateAlias(kind: string, alias: string, target?: string, summary?: string, description?: string): Promise<{ ok: boolean; error?: string }> {
     const res = await fetch(`${this.baseUrl}/v1/config/alias`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind, alias, target })
+      body: JSON.stringify({ kind, alias, target, summary, description })
     });
     return res.json();
   }

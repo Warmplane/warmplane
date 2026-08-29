@@ -70,27 +70,23 @@ async fn test_profile_http_filtering_and_etag_caching() {
         let mut caps = state.capabilities.write().await;
         caps.insert(
             "a.tool".to_string(),
-            CapabilityMeta {
-                server: "server_a".to_string(),
-                tool: "tool_1".to_string(),
-                summary: "Tool from server A".to_string(),
-                description: "Description A".to_string(),
-                input_schema: json!({"type": "object"}),
-                tags: vec!["alpha".to_string()],
-                examples: vec![],
-            },
+            CapabilityMeta::new(
+                "server_a",
+                "tool_1",
+                "Tool from server A",
+                "Description A",
+                json!({"type": "object"}),
+            ),
         );
         caps.insert(
             "b.tool".to_string(),
-            CapabilityMeta {
-                server: "server_b".to_string(),
-                tool: "tool_2".to_string(),
-                summary: "Tool from server B".to_string(),
-                description: "Description B".to_string(),
-                input_schema: json!({"type": "object"}),
-                tags: vec!["beta".to_string()],
-                examples: vec![],
-            },
+            CapabilityMeta::new(
+                "server_b",
+                "tool_2",
+                "Tool from server B",
+                "Description B",
+                json!({"type": "object"}),
+            ),
         );
     }
     {

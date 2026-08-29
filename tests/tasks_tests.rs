@@ -27,20 +27,18 @@ async fn test_tasks_lifecycle_and_hitl_integration() {
     let mut capabilities = HashMap::new();
     capabilities.insert(
         "payments.charge".to_string(),
-        CapabilityMeta {
-            server: "stripe".to_string(),
-            tool: "charge".to_string(),
-            summary: "Charge payment card".to_string(),
-            description: "Mutating payment operation".to_string(),
-            input_schema: json!({
+        CapabilityMeta::new(
+            "stripe",
+            "charge",
+            "Charge payment card",
+            "Mutating payment operation",
+            json!({
                 "type": "object",
                 "properties": {
                     "amount": {"type": "integer"}
                 }
             }),
-            tags: vec![],
-            examples: vec![],
-        },
+        ),
     );
 
     let (tx, mut rx) = mpsc::channel(1);

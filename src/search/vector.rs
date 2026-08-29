@@ -175,15 +175,13 @@ mod tests {
         let index = VectorSearchIndex::new().expect("Failed to initialize FastEmbed ONNX model");
         let caps = vec![(
             "github.issues.search".to_string(),
-            crate::daemon::CapabilityMeta {
-                server: "github".to_string(),
-                tool: "issues.search".to_string(),
-                summary: "Search open GitHub issues".to_string(),
-                description: "Search open GitHub issues".to_string(),
-                input_schema: serde_json::json!({}),
-                tags: vec!["github".to_string()],
-                examples: vec![],
-            },
+            crate::daemon::CapabilityMeta::new(
+                "github",
+                "issues.search",
+                "Search open GitHub issues",
+                "Search open GitHub issues",
+                serde_json::json!({}),
+            ),
         )];
 
         let results = index.search("find git bugs", &caps);

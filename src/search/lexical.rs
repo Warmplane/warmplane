@@ -140,15 +140,9 @@ mod tests {
         summary: &str,
         tags: Vec<&str>,
     ) -> CapabilityMeta {
-        CapabilityMeta {
-            server: server.to_string(),
-            tool: tool.to_string(),
-            summary: summary.to_string(),
-            description: summary.to_string(),
-            input_schema: serde_json::json!({}),
-            tags: tags.into_iter().map(|s| s.to_string()).collect(),
-            examples: vec![],
-        }
+        let mut meta = CapabilityMeta::new(server, tool, summary, summary, serde_json::json!({}));
+        meta.tags = tags.into_iter().map(|s| s.to_string()).collect();
+        meta
     }
 
     #[test]

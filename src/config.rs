@@ -26,27 +26,27 @@ pub struct McpConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub tool_timeout_ms: Option<u64>,
-    /// Capability alias mapping (alias -> canonical capability ID).
+    /// Capability alias mapping (alias -> canonical capability ID or detailed config).
     #[serde(
         default,
         rename = "capabilityAliases",
         skip_serializing_if = "HashMap::is_empty"
     )]
-    pub capability_aliases: HashMap<String, String>,
-    /// Resource alias mapping (alias -> canonical resource URI).
+    pub capability_aliases: HashMap<String, AliasTarget>,
+    /// Resource alias mapping (alias -> canonical resource URI or detailed config).
     #[serde(
         default,
         rename = "resourceAliases",
         skip_serializing_if = "HashMap::is_empty"
     )]
-    pub resource_aliases: HashMap<String, String>,
-    /// Prompt alias mapping (alias -> canonical prompt name).
+    pub resource_aliases: HashMap<String, AliasTarget>,
+    /// Prompt alias mapping (alias -> canonical prompt name or detailed config).
     #[serde(
         default,
         rename = "promptAliases",
         skip_serializing_if = "HashMap::is_empty"
     )]
-    pub prompt_aliases: HashMap<String, String>,
+    pub prompt_aliases: HashMap<String, AliasTarget>,
     /// Optional security policy configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<PolicyConfig>,
@@ -153,6 +153,66 @@ impl Default for McpHttpServerConfig {
             allowed_hosts: Vec::new(),
             allowed_origins: Vec::new(),
         }
+    }
+}
+
+/// Target mapping configuration for an alias.
+///
+/// Supports either a simple canonical target string (e.g. `"semble-rs.search"`)
+/// or a detailed configuration object with custom docstrings and summaries.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[serde(untagged)]
+pub enum AliasTarget {
+    /// Simple canonical target name (e.g. `"semble-rs.search"`).
+    Simple(String),
+    /// Detailed configuration with custom summary and description overrides.
+    Detailed {
+        /// Canonical target identifier.
+        target: String,
+        /// Optional custom short summary override.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+        /// Optional custom detailed description override.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+}
+
+impl AliasTarget {
+    /// Returns the canonical target identifier.
+    pub fn target(&self) -> &str {
+        match self {
+            Self::Simple(t) => t.as_str(),
+            Self::Detailed { target, .. } => target.as_str(),
+        }
+    }
+
+    /// Returns optional custom summary override.
+    pub fn summary(&self) -> Option<&str> {
+        match self {
+            Self::Simple(_) => None,
+            Self::Detailed { summary, .. } => summary.as_deref(),
+        }
+    }
+
+    /// Returns optional custom description override.
+    pub fn description(&self) -> Option<&str> {
+        match self {
+            Self::Simple(_) => None,
+            Self::Detailed { description, .. } => description.as_deref(),
+        }
+    }
+}
+
+impl From<&str> for AliasTarget {
+    fn from(s: &str) -> Self {
+        Self::Simple(s.to_string())
+    }
+}
+
+impl From<String> for AliasTarget {
+    fn from(s: String) -> Self {
+        Self::Simple(s)
     }
 }
 
@@ -1101,5 +1161,37 @@ mod tests {
         assert!(err
             .to_string()
             .contains("references unknown server 'srv_c'"));
+    }
+
+    #[test]
+    fn test_alias_target_serialization() {
+        let json_str = r#"{
+            "capabilityAliases": {
+                "short.tool": "server.original_tool",
+                "custom.search": {
+                    "target": "server.search",
+                    "summary": "Custom short summary",
+                    "description": "Custom detailed description"
+                }
+            }
+        }"#;
+
+        let cfg: McpConfig = serde_json::from_str(json_str).unwrap();
+        assert_eq!(cfg.capability_aliases.len(), 2);
+
+        let simple = cfg.capability_aliases.get("short.tool").unwrap();
+        assert_eq!(simple.target(), "server.original_tool");
+        assert_eq!(simple.summary(), None);
+        assert_eq!(simple.description(), None);
+
+        let detailed = cfg.capability_aliases.get("custom.search").unwrap();
+        assert_eq!(detailed.target(), "server.search");
+        assert_eq!(detailed.summary(), Some("Custom short summary"));
+        assert_eq!(detailed.description(), Some("Custom detailed description"));
+
+        // Roundtrip serialization
+        let serialized = serde_json::to_string(&cfg).unwrap();
+        let deserialized: McpConfig = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(cfg, deserialized);
     }
 }

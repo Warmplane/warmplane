@@ -12,40 +12,61 @@ export function renderAliases(): string {
   if (capAliases.length === 0 && resAliases.length === 0 && promptAliases.length === 0) {
     rowsHtml = `
       <div style="padding: 24px; text-align: center; color: var(--text-dim);">
-        No facade aliases configured in ${escapeHtml(state.configPath)}. Add short names to prune token payload sizes.
+        No facade aliases configured in ${escapeHtml(state.configPath)}. Add short names or custom descriptions to prune token payload sizes.
       </div>
     `;
   } else {
-    for (const [alias, target] of capAliases) {
+    for (const [alias, targetVal] of capAliases) {
+      const targetStr = typeof targetVal === 'string' ? targetVal : targetVal.target;
+      const summaryStr = typeof targetVal === 'object' && targetVal.summary ? targetVal.summary : '';
+      const descBadge = summaryStr ? `<div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">💬 ${escapeHtml(summaryStr)}</div>` : '';
+
       rowsHtml += `
         <div class="feed-row" style="grid-template-columns: 90px 180px 1fr 80px;">
           <span style="color: var(--cyan-400);">Tool</span>
           <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${escapeHtml(alias)}</span>
-          <span style="color: var(--text-dim); font-family: var(--ff-mono);">${escapeHtml(target)}</span>
+          <div>
+            <span style="color: var(--text-muted); font-family: var(--ff-mono);">${escapeHtml(targetStr)}</span>
+            ${descBadge}
+          </div>
           <div style="text-align: right;">
             <button class="btn btn-ghost" style="padding: 2px 6px; color: var(--red-400);" onclick="window.app.deleteAlias('tool', '${escapeHtml(alias)}')">✕</button>
           </div>
         </div>
       `;
     }
-    for (const [alias, target] of resAliases) {
+    for (const [alias, targetVal] of resAliases) {
+      const targetStr = typeof targetVal === 'string' ? targetVal : targetVal.target;
+      const summaryStr = typeof targetVal === 'object' && targetVal.summary ? targetVal.summary : '';
+      const descBadge = summaryStr ? `<div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">💬 ${escapeHtml(summaryStr)}</div>` : '';
+
       rowsHtml += `
         <div class="feed-row" style="grid-template-columns: 90px 180px 1fr 80px;">
           <span style="color: var(--green-400);">Resource</span>
           <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${escapeHtml(alias)}</span>
-          <span style="color: var(--text-dim); font-family: var(--ff-mono);">${escapeHtml(target)}</span>
+          <div>
+            <span style="color: var(--text-muted); font-family: var(--ff-mono);">${escapeHtml(targetStr)}</span>
+            ${descBadge}
+          </div>
           <div style="text-align: right;">
             <button class="btn btn-ghost" style="padding: 2px 6px; color: var(--red-400);" onclick="window.app.deleteAlias('resource', '${escapeHtml(alias)}')">✕</button>
           </div>
         </div>
       `;
     }
-    for (const [alias, target] of promptAliases) {
+    for (const [alias, targetVal] of promptAliases) {
+      const targetStr = typeof targetVal === 'string' ? targetVal : targetVal.target;
+      const summaryStr = typeof targetVal === 'object' && targetVal.summary ? targetVal.summary : '';
+      const descBadge = summaryStr ? `<div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">💬 ${escapeHtml(summaryStr)}</div>` : '';
+
       rowsHtml += `
         <div class="feed-row" style="grid-template-columns: 90px 180px 1fr 80px;">
           <span style="color: var(--amber-300);">Prompt</span>
           <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${escapeHtml(alias)}</span>
-          <span style="color: var(--text-dim); font-family: var(--ff-mono);">${escapeHtml(target)}</span>
+          <div>
+            <span style="color: var(--text-muted); font-family: var(--ff-mono);">${escapeHtml(targetStr)}</span>
+            ${descBadge}
+          </div>
           <div style="text-align: right;">
             <button class="btn btn-ghost" style="padding: 2px 6px; color: var(--red-400);" onclick="window.app.deleteAlias('prompt', '${escapeHtml(alias)}')">✕</button>
           </div>
@@ -57,7 +78,7 @@ export function renderAliases(): string {
   return `
     <!-- Sub-header -->
     <div style="margin-bottom: 16px; font-size: 12px; color: var(--text-dim);">
-      Shorten capability IDs to prune prompt tokens and create stable public interfaces.
+      Shorten capability IDs and supply custom descriptions to prune prompt tokens and improve agent ergonomics.
     </div>
 
     <!-- Quick Add Form -->
@@ -65,7 +86,7 @@ export function renderAliases(): string {
       <div class="stat-header" style="margin-bottom: 12px;">
         <span class="stat-label">Create New Alias</span>
       </div>
-      <div style="display: grid; grid-template-columns: 140px 1fr 1fr 100px; gap: 10px; align-items: center; position: relative;">
+      <div style="display: grid; grid-template-columns: 140px 1fr 1fr 100px; gap: 10px; align-items: center; position: relative; margin-bottom: 8px;">
         <select class="form-input" id="alias-kind">
           <option value="tool">Tool / Capability</option>
           <option value="resource">Resource</option>
@@ -78,6 +99,9 @@ export function renderAliases(): string {
         </div>
         <button class="btn btn-primary" onclick="window.app.createAlias()">+ Save</button>
       </div>
+      <div style="display: grid; grid-template-columns: 1fr; gap: 10px;">
+        <input type="text" class="form-input" id="alias-summary" placeholder="Optional custom description / prompt instruction (e.g. Always pass absolute path in repo)" onkeydown="if(event.key==='Enter') window.app.createAlias()" style="font-size: 12px;">
+      </div>
     </div>
 
     <!-- Aliases Table -->
@@ -85,7 +109,7 @@ export function renderAliases(): string {
       <div style="display: grid; grid-template-columns: 90px 180px 1fr 80px; padding: 10px 14px; background: var(--surface-hover); border-bottom: 1px solid var(--border); color: var(--text-muted); font-weight: 600;">
         <span>TYPE</span>
         <span>PUBLIC ALIAS</span>
-        <span>CANONICAL TARGET</span>
+        <span>CANONICAL TARGET & SUMMARY</span>
         <span style="text-align: right;">ACTION</span>
       </div>
       ${rowsHtml}
