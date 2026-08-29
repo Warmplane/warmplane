@@ -66,14 +66,19 @@ export function renderServers(): string {
       const res = s.resilience || state.config.resilience;
       const resDetails = res ? `FT: ${res.failureThreshold || 3} · Cooldown: ${(res.cooldownMs || 30000) / 1000}s · AutoRestart: ${res.autoRestart !== false ? 'ON' : 'OFF'}` : 'Default Resilience';
 
-      const isDegraded = statusInfo.status === 'degraded';
+      const hasMissingKeys = missingRequiredEnv.length > 0;
+      const isDegraded = statusInfo.status === 'degraded' || hasMissingKeys;
       const isError = statusInfo.status === 'error' || statusInfo.status === 'disconnected';
-      const statusColor = isDegraded ? 'var(--amber-400)' : isError ? 'var(--red-400)' : 'var(--green-400)';
+      const statusColor = hasMissingKeys ? 'var(--amber-400)' : isDegraded ? 'var(--amber-400)' : isError ? 'var(--red-400)' : 'var(--green-400)';
 
-      const errorBannerHtml = (isDegraded || isError) && statusInfo.error ? `
+      const statusBadgeText = hasMissingKeys 
+        ? `Status: ${escapeHtml(statusInfo.status)} (Missing Keys)` 
+        : `Status: ${escapeHtml(statusInfo.status)}`;
+
+      const errorBannerHtml = (isDegraded || isError) && (statusInfo.error || hasMissingKeys) ? `
         <div style="background: rgba(239, 68, 68, 0.08); border-left: 3px solid var(--amber-400); border-radius: var(--radius-xs); padding: 8px 12px; margin-top: 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px;">
           <div style="font-size: 11px; color: var(--amber-300); font-family: var(--ff-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-            <span style="font-weight: 700; color: var(--amber-400);">⚠️ Diagnostics:</span> ${escapeHtml(statusInfo.error)}
+            <span style="font-weight: 700; color: var(--amber-400);">⚠️ Diagnostics:</span> ${escapeHtml(statusInfo.error || `Missing required environment variable(s): ${missingRequiredEnv.map(m => m.key).join(', ')}`)}
           </div>
           <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10.5px; color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3);" onclick="window.app.openServerDiagnosticsModal('${escapeHtml(k)}')">Details</button>
         </div>
@@ -103,7 +108,7 @@ export function renderServers(): string {
                 <span style="width: 8px; height: 8px; border-radius: 50%; background: ${statusColor}; display: inline-block;"></span>
                 <span style="font-size: 15px; font-weight: 700; color: var(--text-main);">${escapeHtml(k)}</span>
                 <span class="brand-badge">${transport}</span>
-                <span class="brand-badge" style="color: ${statusColor}; border-color: rgba(245, 158, 11, 0.3);">Status: ${escapeHtml(statusInfo.status)}</span>
+                <span class="brand-badge" style="color: ${statusColor}; border-color: ${hasMissingKeys ? 'rgba(245, 158, 11, 0.5); background: rgba(245, 158, 11, 0.1);' : 'rgba(245, 158, 11, 0.3);'}">${statusBadgeText}</span>
                 <span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">Protocol: ${statusInfo.protocol_version}</span>
                 ${cbBadge}
                 ${profileBoundaryBadge}
