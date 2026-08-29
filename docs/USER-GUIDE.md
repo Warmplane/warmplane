@@ -622,7 +622,6 @@ For frequently used tools, you can promote any capability alias into a **top-lev
 warmplane alias set tool search semble.search --passthrough --summary "Search codebase with hybrid ranking"
 ```
 
-In `mcp_servers.json`:
 ```json
 {
   "capabilityAliases": {
@@ -634,6 +633,14 @@ In `mcp_servers.json`:
   }
 }
 ```
+
+##### Real-Time `list_changed` Notifications & Agent Discovery Hints
+
+Warmplane advertises `listChanged: true` across `tools`, `resources`, and `prompts` capabilities during MCP `initialize`.
+
+When upstream servers are mounted or unmounted, or when aliases (and passthrough flags) are updated at runtime via CLI, Web UI, HTTP API, or config file reload:
+- Warmplane immediately broadcasts JSON-RPC `notifications/tools/list_changed`, `notifications/resources/list_changed`, or `notifications/prompts/list_changed` across all connected MCP sessions.
+- In `notifications/tools/list_changed`, Warmplane includes a standard SEP-1319 `_meta` discovery payload (`io.warmplane/discovery_hint`) hinting to receiving agents that `capabilities_list` can be called to discover newly mounted backend tools if they are not promoted as top-level passthrough aliases.
 
 ---
 

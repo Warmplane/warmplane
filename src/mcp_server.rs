@@ -17,8 +17,9 @@ use rmcp::{
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
         GetPromptRequestParams, GetPromptResponse, GetPromptResult, ListResourcesResult,
-        ListToolsResult, Prompt, ReadResourceRequestParams, ReadResourceResponse,
-        ReadResourceResult, Resource, ServerCapabilities, ServerInfo, Tool,
+        ListToolsResult, Prompt, PromptListChangedNotification, ReadResourceRequestParams,
+        ReadResourceResponse, ReadResourceResult, Resource, ResourceListChangedNotification,
+        ServerCapabilities, ServerInfo, Tool, ToolListChangedNotification,
     },
     transport::{
         stdio,
@@ -45,11 +46,11 @@ const TOOL_RESOURCES_LIST: &str = "resources_list";
 const TOOL_RESOURCE_READ: &str = "resource_read";
 const TOOL_PROMPTS_LIST: &str = "prompts_list";
 const TOOL_PROMPT_GET: &str = "prompt_get";
-const TOOL_COMPLETION_COMPLETE: &str = "completion_complete";
-const TOOL_SUBSCRIPTIONS_LISTEN: &str = "subscriptions_listen";
 const TOOL_TASK_GET: &str = "task_get";
 const TOOL_TASK_UPDATE: &str = "task_update";
 const TOOL_TASK_CANCEL: &str = "task_cancel";
+const TOOL_COMPLETION_COMPLETE: &str = "completion_complete";
+const TOOL_SUBSCRIPTIONS_LISTEN: &str = "subscriptions_listen";
 
 static TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -72,8 +73,12 @@ impl ServerHandler for FacadeMcpServer {
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder()
             .enable_tools()
+            .enable_tool_list_changed()
             .enable_resources()
+            .enable_resources_list_changed()
+            .enable_resources_subscribe()
             .enable_prompts()
+            .enable_prompts_list_changed()
             .build();
         info.instructions = Some(
             "Warmplane MCP facade server with deterministic tools/resources/prompts surfaces"
@@ -516,40 +521,41 @@ impl ServerHandler for FacadeMcpServer {
                 let tool_name = request.name.as_ref();
                 let mut target_id = None;
 
-                if let Ok(config) = crate::config::load_or_default_config(&self.state.config_path) {
-                    if let Some(alias_target) = config.capability_aliases.get(tool_name) {
-                        target_id = Some(alias_target.target().to_string());
-                    } else {
-                        // Check if tool_name matches a sanitized passthrough alias name
-                        for (alias_k, alias_target) in &config.capability_aliases {
-                            if alias_target.is_passthrough() {
-                                let sanitized: String = alias_k
-                                    .chars()
-                                    .map(|c| {
-                                        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                                            c
-                                        } else {
-                                            '_'
-                                        }
-                                    })
-                                    .take(64)
-                                    .collect();
-                                if sanitized == tool_name {
-                                    target_id = Some(alias_target.target().to_string());
-                                    break;
+                let caps_guard = self.state.capabilities.read().await;
+
+                // 1. Direct match on registered capability
+                if caps_guard.contains_key(tool_name) {
+                    target_id = Some(tool_name.to_string());
+                } else if let Ok(config) =
+                    crate::config::load_or_default_config(&self.state.config_path)
+                {
+                    // 2. Check alias definitions (exact alias name or sanitized alias name)
+                    for (alias_k, alias_target) in &config.capability_aliases {
+                        let sanitized: String = alias_k
+                            .chars()
+                            .map(|c| {
+                                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                                    c
+                                } else {
+                                    '_'
                                 }
+                            })
+                            .take(64)
+                            .collect();
+
+                        if alias_k == tool_name || sanitized == tool_name {
+                            // If alias_k itself was registered as the capability ID, use it;
+                            // otherwise resolve to the upstream target ID.
+                            if caps_guard.contains_key(alias_k) {
+                                target_id = Some(alias_k.clone());
+                            } else {
+                                target_id = Some(alias_target.target().to_string());
                             }
+                            break;
                         }
                     }
                 }
-
-                // If not in aliases, check if it's a registered canonical capability ID
-                if target_id.is_none() {
-                    let caps_guard = self.state.capabilities.read().await;
-                    if caps_guard.contains_key(tool_name) {
-                        target_id = Some(tool_name.to_string());
-                    }
-                }
+                drop(caps_guard);
 
                 if let Some(target) = target_id {
                     self.call_capability_value(
@@ -1166,8 +1172,50 @@ pub async fn run_mcp_server(
     let state = initialize_state(config, config_path).await?;
     let state_for_shutdown = state.clone();
     let shutdown_token = state.shutdown_token.clone();
-    let server = FacadeMcpServer { state, profile };
+    let server = FacadeMcpServer {
+        state: state.clone(),
+        profile,
+    };
     let running = server.serve(stdio()).await?;
+
+    // Spawn background forwarder for dynamic tool, resource, and prompt list updates
+    let peer = running.peer().clone();
+    let mut tool_rx = state.tool_list_changed_tx.subscribe();
+    let mut res_rx = state.resource_list_changed_tx.subscribe();
+    let mut prompt_rx = state.prompt_list_changed_tx.subscribe();
+    let cancel_fwd = shutdown_token.clone();
+
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = cancel_fwd.cancelled() => break,
+                res = tool_rx.recv() => {
+                    if res.is_ok() {
+                        let mut notif = ToolListChangedNotification::default();
+                        let mut meta = rmcp::model::NotificationMetaObject::default();
+                        meta.insert(
+                            "io.warmplane/discovery_hint".to_string(),
+                            serde_json::json!("Upstream tools changed. Run 'capabilities_list' to discover unpromoted capabilities, or invoke promoted native passthrough tools directly."),
+                        );
+                        notif.extensions.insert(meta);
+                        let _ = peer.send_notification(notif.into()).await;
+                    }
+                }
+                res = res_rx.recv() => {
+                    if res.is_ok() {
+                        let notif = ResourceListChangedNotification::default();
+                        let _ = peer.send_notification(notif.into()).await;
+                    }
+                }
+                res = prompt_rx.recv() => {
+                    if res.is_ok() {
+                        let notif = PromptListChangedNotification::default();
+                        let _ = peer.send_notification(notif.into()).await;
+                    }
+                }
+            }
+        }
+    });
 
     tokio::select! {
         res = running.waiting() => {
