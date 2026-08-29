@@ -512,6 +512,7 @@ pub async fn handle_describe_capability(
             tool,
             summary: _,
             description,
+            signature: _,
             input_schema,
             tags: _,
             examples,

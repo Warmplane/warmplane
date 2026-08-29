@@ -52,18 +52,9 @@ fn generate_synthetic_capabilities(count: usize) -> HashMap<String, CapabilityMe
             "required": ["id"]
         });
 
-        map.insert(
-            id,
-            CapabilityMeta {
-                server,
-                tool,
-                summary,
-                description,
-                input_schema,
-                tags,
-                examples: vec![],
-            },
-        );
+        let mut meta = CapabilityMeta::new(server, tool, summary, description, input_schema);
+        meta.tags = tags;
+        map.insert(id, meta);
     }
     map
 }

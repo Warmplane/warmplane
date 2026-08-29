@@ -144,6 +144,7 @@ impl ControlPlaneHandle {
                 summary: meta.summary.clone(),
                 server: meta.server.clone(),
                 tool: meta.tool.clone(),
+                signature: meta.signature.clone(),
                 tags: meta.tags.clone(),
             })
             .collect::<Vec<_>>();

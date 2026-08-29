@@ -174,15 +174,13 @@ async fn test_embedded_task_management_lifecycle() {
         let mut caps = cp.state().capabilities.write().await;
         caps.insert(
             "offline_srv/delete_record".to_string(),
-            CapabilityMeta {
-                server: "offline_srv".to_string(),
-                tool: "delete_record".to_string(),
-                summary: "Delete record".to_string(),
-                description: "Mutating tool requiring review".to_string(),
-                input_schema: json!({"type": "object"}),
-                tags: vec![],
-                examples: vec![],
-            },
+            CapabilityMeta::new(
+                "offline_srv",
+                "delete_record",
+                "Delete record",
+                "Mutating tool requiring review",
+                json!({"type": "object"}),
+            ),
         );
     }
 
@@ -315,27 +313,23 @@ async fn test_embedded_async_task_hitl_and_completion_lifecycle() {
         let mut caps = cp.state().capabilities.write().await;
         caps.insert(
             "mock_srv/sensitive_action".to_string(),
-            CapabilityMeta {
-                server: "mock_srv".to_string(),
-                tool: "sensitive_action".to_string(),
-                summary: "Sensitive Action".to_string(),
-                description: "Requires approval".to_string(),
-                input_schema: json!({"type": "object"}),
-                tags: vec![],
-                examples: vec![],
-            },
+            CapabilityMeta::new(
+                "mock_srv",
+                "sensitive_action",
+                "Sensitive Action",
+                "Requires approval",
+                json!({"type": "object"}),
+            ),
         );
         caps.insert(
             "mock_srv/fast_action".to_string(),
-            CapabilityMeta {
-                server: "mock_srv".to_string(),
-                tool: "fast_action".to_string(),
-                summary: "Fast Action".to_string(),
-                description: "Direct async execution".to_string(),
-                input_schema: json!({"type": "object"}),
-                tags: vec![],
-                examples: vec![],
-            },
+            CapabilityMeta::new(
+                "mock_srv",
+                "fast_action",
+                "Fast Action",
+                "Direct async execution",
+                json!({"type": "object"}),
+            ),
         );
     }
 

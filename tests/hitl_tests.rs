@@ -30,15 +30,13 @@ async fn test_hitl_end_to_end_wildcard_matching_and_approval() {
     let mut capabilities = HashMap::new();
     capabilities.insert(
         "kubernetes.delete_pod".to_string(),
-        CapabilityMeta {
-            server: "k8s".to_string(),
-            tool: "delete_pod".to_string(),
-            summary: "Delete K8s pod".to_string(),
-            description: "Delete K8s pod".to_string(),
-            input_schema: json!({}),
-            tags: vec![],
-            examples: vec![],
-        },
+        CapabilityMeta::new(
+            "k8s",
+            "delete_pod",
+            "Delete K8s pod",
+            "Delete K8s pod",
+            json!({}),
+        ),
     );
 
     let (tx, mut rx) = mpsc::channel(1);

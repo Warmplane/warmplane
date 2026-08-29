@@ -2394,13 +2394,14 @@ class WarmplaneApp {
     const kind = (document.getElementById('alias-kind') as HTMLSelectElement)?.value;
     const name = (document.getElementById('alias-name') as HTMLInputElement)?.value.trim();
     const target = (document.getElementById('alias-target') as HTMLInputElement)?.value.trim();
+    const summary = (document.getElementById('alias-summary') as HTMLInputElement)?.value.trim() || undefined;
 
     if (!name || !target) {
       alert('Please provide both alias name and canonical target');
       return;
     }
 
-    await api.updateAlias(kind, name, target);
+    await api.updateAlias(kind, name, target, summary);
     await this.refreshData();
   }
 

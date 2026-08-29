@@ -1237,27 +1237,23 @@ mod tests {
         let mut caps = HashMap::new();
         caps.insert(
             "db.query".to_string(),
-            CapabilityMeta {
-                server: "sqlite".to_string(),
-                tool: "read_query".to_string(),
-                summary: "Execute read-only SQL queries".to_string(),
-                description: "Run SQL SELECT queries against SQLite database".to_string(),
-                input_schema: serde_json::json!({"type": "object"}),
-                tags: vec!["database".to_string(), "sql".to_string()],
-                examples: vec![],
-            },
+            CapabilityMeta::new(
+                "sqlite",
+                "read_query",
+                "Execute read-only SQL queries",
+                "Run SQL SELECT queries against SQLite database",
+                serde_json::json!({"type": "object"}),
+            ),
         );
         caps.insert(
             "fs.read".to_string(),
-            CapabilityMeta {
-                server: "fs".to_string(),
-                tool: "read_file".to_string(),
-                summary: "Read file contents from filesystem".to_string(),
-                description: "Read utf-8 contents of a file".to_string(),
-                input_schema: serde_json::json!({"type": "object"}),
-                tags: vec!["filesystem".to_string()],
-                examples: vec![],
-            },
+            CapabilityMeta::new(
+                "fs",
+                "read_file",
+                "Read file contents from filesystem",
+                "Read utf-8 contents of a file",
+                serde_json::json!({"type": "object"}),
+            ),
         );
 
         let state = AppState::builder()
@@ -1290,27 +1286,23 @@ mod tests {
         let mut caps = HashMap::new();
         caps.insert(
             "db.query".to_string(),
-            CapabilityMeta {
-                server: "sqlite".to_string(),
-                tool: "read_query".to_string(),
-                summary: "Execute read-only SQL queries".to_string(),
-                description: "Run SQL SELECT queries".to_string(),
-                input_schema: serde_json::json!({"type": "object"}),
-                tags: vec![],
-                examples: vec![],
-            },
+            CapabilityMeta::new(
+                "sqlite",
+                "read_query",
+                "Execute read-only SQL queries",
+                "Run SQL SELECT queries",
+                serde_json::json!({"type": "object"}),
+            ),
         );
         caps.insert(
             "fs.read".to_string(),
-            CapabilityMeta {
-                server: "fs".to_string(),
-                tool: "read_file".to_string(),
-                summary: "Read file contents".to_string(),
-                description: "Read utf-8 contents".to_string(),
-                input_schema: serde_json::json!({"type": "object"}),
-                tags: vec![],
-                examples: vec![],
-            },
+            CapabilityMeta::new(
+                "fs",
+                "read_file",
+                "Read file contents",
+                "Read utf-8 contents",
+                serde_json::json!({"type": "object"}),
+            ),
         );
 
         let mut profiles = HashMap::new();

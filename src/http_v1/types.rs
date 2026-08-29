@@ -208,6 +208,12 @@ pub struct UpdateAliasRequest {
     pub alias: String,
     /// Canonical target identifier (or `None` to delete alias).
     pub target: Option<String>,
+    /// Optional custom summary override.
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// Optional custom detailed description override.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// Request body for creating or updating a server profile constellation.

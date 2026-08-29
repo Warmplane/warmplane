@@ -147,13 +147,13 @@ pub async fn handle_delete_server(
     // Cascade scrub server from alias targets if server-qualified
     config
         .capability_aliases
-        .retain(|_, target| !target.starts_with(&format!("{}.", id)));
+        .retain(|_, target| !target.target().starts_with(&format!("{}.", id)));
     config
         .resource_aliases
-        .retain(|_, target| !target.starts_with(&format!("{}.", id)));
+        .retain(|_, target| !target.target().starts_with(&format!("{}.", id)));
     config
         .prompt_aliases
-        .retain(|_, target| !target.starts_with(&format!("{}.", id)));
+        .retain(|_, target| !target.target().starts_with(&format!("{}.", id)));
 
     if let Err(e) = crate::config::save_config(&state.config_path, &config) {
         return (
@@ -452,19 +452,31 @@ pub async fn handle_update_alias(
 
     let kind_lower = payload.kind.to_lowercase();
     if let Some(target) = payload.target {
+        let alias_target = if payload.summary.is_some() || payload.description.is_some() {
+            crate::config::AliasTarget::Detailed {
+                target,
+                summary: payload.summary,
+                description: payload.description,
+            }
+        } else {
+            crate::config::AliasTarget::Simple(target)
+        };
+
         match kind_lower.as_str() {
             "tool" | "capability" | "cap" => {
                 config
                     .capability_aliases
-                    .insert(payload.alias.clone(), target);
+                    .insert(payload.alias.clone(), alias_target);
             }
             "resource" | "res" => {
                 config
                     .resource_aliases
-                    .insert(payload.alias.clone(), target);
+                    .insert(payload.alias.clone(), alias_target);
             }
             "prompt" => {
-                config.prompt_aliases.insert(payload.alias.clone(), target);
+                config
+                    .prompt_aliases
+                    .insert(payload.alias.clone(), alias_target);
             }
             _ => {
                 return (
@@ -495,6 +507,9 @@ pub async fn handle_update_alias(
         )
             .into_response();
     }
+
+    // Immediately reload config in memory so catalog reflects alias changes live
+    let _ = state.reload_from_disk().await;
 
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }

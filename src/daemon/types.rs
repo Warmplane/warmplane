@@ -69,12 +69,43 @@ pub struct CapabilityMeta {
     pub summary: String,
     /// Detailed description.
     pub description: String,
+    /// Compact LLM-friendly call signature (e.g. `tool_name(req1, [opt1])`).
+    pub signature: Option<String>,
     /// JSON schema for tool arguments.
     pub input_schema: Value,
     /// Metadata tags.
     pub tags: Vec<String>,
     /// Usage examples.
     pub examples: Vec<Value>,
+}
+
+impl CapabilityMeta {
+    /// Creates a new `CapabilityMeta` with default empty examples and tags derived from server.
+    pub fn new(
+        server: impl Into<String>,
+        tool: impl Into<String>,
+        summary: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: Value,
+    ) -> Self {
+        let s = server.into();
+        Self {
+            tags: vec![s.clone()],
+            server: s,
+            tool: tool.into(),
+            summary: summary.into(),
+            description: description.into(),
+            signature: None,
+            input_schema,
+            examples: Vec::new(),
+        }
+    }
+
+    /// Sets the optional signature.
+    pub fn with_signature(mut self, signature: impl Into<String>) -> Self {
+        self.signature = Some(signature.into());
+        self
+    }
 }
 
 /// Metadata describing a registered resource.

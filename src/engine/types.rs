@@ -119,6 +119,9 @@ pub struct CapabilitySummary {
     pub server: String,
     /// Underlying tool name on upstream server.
     pub tool: String,
+    /// Compact LLM-friendly call signature (e.g. `tool_name(req1, [opt1])`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
     /// Discovery tags.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,

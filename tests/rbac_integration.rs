@@ -94,39 +94,33 @@ fn create_test_rbac_state() -> AppState {
     let mut capabilities = HashMap::new();
     capabilities.insert(
         "db.query".to_string(),
-        CapabilityMeta {
-            server: "db_srv".to_string(),
-            tool: "query".to_string(),
-            summary: "Execute read SQL query".to_string(),
-            description: "Read SQL query".to_string(),
-            input_schema: json!({}),
-            tags: vec!["db".to_string(), "sql".to_string()],
-            examples: vec![],
-        },
+        CapabilityMeta::new(
+            "db_srv",
+            "query",
+            "Execute read SQL query",
+            "Read SQL query",
+            json!({}),
+        ),
     );
     capabilities.insert(
         "docker.run".to_string(),
-        CapabilityMeta {
-            server: "docker_srv".to_string(),
-            tool: "run".to_string(),
-            summary: "Run docker container".to_string(),
-            description: "Run container".to_string(),
-            input_schema: json!({}),
-            tags: vec!["docker".to_string()],
-            examples: vec![],
-        },
+        CapabilityMeta::new(
+            "docker_srv",
+            "run",
+            "Run docker container",
+            "Run container",
+            json!({}),
+        ),
     );
     capabilities.insert(
         "fs.delete_file".to_string(),
-        CapabilityMeta {
-            server: "fs_srv".to_string(),
-            tool: "delete_file".to_string(),
-            summary: "Delete a file from disk".to_string(),
-            description: "Delete file".to_string(),
-            input_schema: json!({}),
-            tags: vec!["fs".to_string()],
-            examples: vec![],
-        },
+        CapabilityMeta::new(
+            "fs_srv",
+            "delete_file",
+            "Delete a file from disk",
+            "Delete file",
+            json!({}),
+        ),
     );
 
     let mut resources = HashMap::new();
