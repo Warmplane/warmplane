@@ -124,8 +124,21 @@ impl ServerHandler for FacadeMcpServer {
                                 }))
                             });
 
+                        // Standard MCP tool names MUST match ^[a-zA-Z0-9_-]{1,64}$
+                        let sanitized_name: String = alias_name
+                            .chars()
+                            .map(|c| {
+                                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                                    c
+                                } else {
+                                    '_'
+                                }
+                            })
+                            .take(64)
+                            .collect();
+
                         tools.push(Tool::new(
-                            alias_name.clone(),
+                            sanitized_name,
                             description.to_string(),
                             input_schema,
                         ));
@@ -506,6 +519,27 @@ impl ServerHandler for FacadeMcpServer {
                 if let Ok(config) = crate::config::load_or_default_config(&self.state.config_path) {
                     if let Some(alias_target) = config.capability_aliases.get(tool_name) {
                         target_id = Some(alias_target.target().to_string());
+                    } else {
+                        // Check if tool_name matches a sanitized passthrough alias name
+                        for (alias_k, alias_target) in &config.capability_aliases {
+                            if alias_target.is_passthrough() {
+                                let sanitized: String = alias_k
+                                    .chars()
+                                    .map(|c| {
+                                        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                                            c
+                                        } else {
+                                            '_'
+                                        }
+                                    })
+                                    .take(64)
+                                    .collect();
+                                if sanitized == tool_name {
+                                    target_id = Some(alias_target.target().to_string());
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
 

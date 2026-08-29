@@ -2453,6 +2453,12 @@ class WarmplaneApp {
       return;
     }
 
+    if (kind === 'tool' && passthrough && !/^[a-zA-Z0-9_-]{1,64}$/.test(name)) {
+      const sanitized = name.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 64);
+      const proceed = confirm(`MCP tool names must match ^[a-zA-Z0-9_-]{1,64}$.\n\n'${name}' will be exported to MCP clients as '${sanitized}'.\n\nDo you want to proceed?`);
+      if (!proceed) return;
+    }
+
     await api.updateAlias(kind, name, target, summary, undefined, passthrough);
     this.resetAliasForm();
     await this.refreshData();

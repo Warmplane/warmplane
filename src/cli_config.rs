@@ -672,6 +672,29 @@ fn handle_alias_command(cmd: AliasCommands) -> Result<()> {
 
             match kind.to_lowercase().as_str() {
                 "tool" | "capability" | "cap" => {
+                    if passthrough {
+                        let has_invalid_chars = alias
+                            .chars()
+                            .any(|c| !c.is_ascii_alphanumeric() && c != '_' && c != '-');
+                        if has_invalid_chars {
+                            let sanitized: String = alias
+                                .chars()
+                                .map(|c| {
+                                    if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                                        c
+                                    } else {
+                                        '_'
+                                    }
+                                })
+                                .take(64)
+                                .collect();
+                            println!(
+                                "{} Note: MCP specification requires tool names to match ^[a-zA-Z0-9_-]{{1,64}}$. In tools/list this will be exposed as '{}'.",
+                                "ℹ".cyan().bold(),
+                                sanitized.yellow().bold()
+                            );
+                        }
+                    }
                     mcp_config
                         .capability_aliases
                         .insert(alias.clone(), alias_target);
