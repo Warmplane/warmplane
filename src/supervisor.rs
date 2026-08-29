@@ -150,8 +150,15 @@ macro_rules! discover_supervisor_items {
                         if let Some(tool_name) = tool.get("name").and_then(|n| n.as_str()) {
                             let source_id = format!("{}.{}", $server_id, tool_name);
                             let capability_id = $capability_aliases
-                                .get(&source_id)
-                                .cloned()
+                                .iter()
+                                .find_map(|(alias, target)| {
+                                    if target == &source_id {
+                                        Some(alias.clone())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .or_else(|| $capability_aliases.get(&source_id).cloned())
                                 .unwrap_or(source_id);
 
                             let summary = tool
@@ -214,8 +221,15 @@ macro_rules! discover_supervisor_items {
 
                         let source_id = format!("{}.{}", $server_id, uri);
                         let resource_id = $resource_aliases
-                            .get(&source_id)
-                            .cloned()
+                            .iter()
+                            .find_map(|(alias, target)| {
+                                if target == &source_id {
+                                    Some(alias.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .or_else(|| $resource_aliases.get(&source_id).cloned())
                             .unwrap_or(source_id);
 
                         new_resources.push((
@@ -250,8 +264,15 @@ macro_rules! discover_supervisor_items {
 
                         let source_id = format!("{}.{}", $server_id, name);
                         let prompt_id = $prompt_aliases
-                            .get(&source_id)
-                            .cloned()
+                            .iter()
+                            .find_map(|(alias, target)| {
+                                if target == &source_id {
+                                    Some(alias.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .or_else(|| $prompt_aliases.get(&source_id).cloned())
                             .unwrap_or(source_id);
 
                         let title = prompt
