@@ -161,11 +161,11 @@ Warmplane consists of five major components:
    - **Native OS Keychain Vault**: Secure OS-level credential storage with dynamic runtime URI resolution (`keychain://`, `op://`, `env://`).
    - **Actionable ChatOps**: Bidirectional webhook approval cards for Slack (Block Kit), Discord (Embeds), and Microsoft Teams (Adaptive Cards) signed with HMAC-SHA256.
 
-7. **Access Modes & Profiles**
-   - Embedded Control Deck Web UI (`/ui` and `/`).
-   - HTTP `/v1` facade (exposing capabilities, hybrid search, tool execution, batch calls, catalog events, approvals, WORM audit verification/export, operation cancellation, SSE resource updates, argument completion, sampling, resources, and prompts).
-   - CLI facade (`warmplane server`, `config`, `client`, `secret`, `approvals`, `search-capabilities`, `list-catalog-events`, `cancel-operation`).
-   - MCP stdio server mode exposing lightweight synthetic tools (`capability_search`, `capabilities_batch_call`, `subscriptions_listen`, `completion_complete`, etc.) and native resources/prompts methods.
+7. **Access Modes & Execution Topologies**
+   - **MCP Stdio Server Mode (`mcp-server`)**: Self-contained child process spawned directly by desktop AI clients communicating over standard I/O (no daemon dependency).
+   - **HTTP REST & Control Deck Daemon (`daemon`)**: Long-lived background daemon hosting the interactive web interface (`/ui`), REST API (`/v1/...`), and telemetry pipelines.
+   - **Streamable HTTP/SSE MCP Mode (`mcp-http-server` / daemon co-host)**: Remote/network MCP transport enabling single-process 24/7 daemon multiplexing for network-connected AI clients.
+   - **In-Process Embedded Rust Engine (`EmbeddedWarmplane`)**: Direct Rust library interface eliminating IPC and serialization overhead.
    - **Named Server Constellations (Profiles)**: Dynamic per-request (`X-Warmplane-Profile` / `?profile=`) or stdio-scoped (`--profile`) subset partitioning of upstream MCP servers with independent ETag caching (`-p:<profile_id>:<hash>`).
 
 ### 3.2 Named Server Constellations ("Profiles") and Per-Profile Governance

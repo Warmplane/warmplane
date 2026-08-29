@@ -1,6 +1,9 @@
-# Native MCP Stdio Usage Reference
+# Native MCP Client Integration Reference
 
-## 1. Client Configurations
+> **Note on Process Execution**: When configuring `warmplane mcp-server` via `command`, your client launches Warmplane directly as an independent child process over standard I/O (`stdin`/`stdout`). You do **not** need `warmplane daemon` running in the background.
+> Alternatively, if you run `warmplane daemon` 24/7 with `mcpHttpServer` enabled, you can connect your client to the daemon's Streamable HTTP/SSE endpoint (`http://127.0.0.1:9191/sse`).
+
+## 1. Client Configurations (Stdio Child Process)
 
 Configure Warmplane in your client configuration file:
 

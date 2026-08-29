@@ -18,8 +18,9 @@ Warmplane aggregates multiple upstream MCP servers behind a single runtime. It k
 - See [Setup Reference](./references/setup_and_installation.md) for verification and build flags.
 
 ## 2. Operational Model
-- **Tier 1 (Native MCP Stdio - Primary Mode)**: You connect to `warmplane` as a single MCP server over stdio. Tools appear namespaced as `<server>.<tool>` with zero startup delay. See [MCP Stdio Reference](./references/mcp_stdio_usage.md).
-- **Tier 2 (REST & CLI - Orchestration)**: Use for progressive tool discovery, health checks, hot-reloading (`warmplane reload`), secrets vault, and Human-in-the-Loop (HITL) gates. See [REST API Reference](./references/http_rest_api.md) and [CLI Cheatsheet](./references/cli_cheatsheet.md).
+- **Tier 1 (Native MCP Stdio - Primary Mode)**: You connect to `warmplane` as a single MCP server over stdio. The client spawns `warmplane mcp-server` as a child process (no background daemon needed). Tools appear namespaced as `<server>.<tool>` or top-level passthrough aliases with zero startup delay. See [MCP Stdio Reference](./references/mcp_stdio_usage.md).
+- **Tier 2 (HTTP Daemon & Web UI - Centralized Mode)**: Start `warmplane daemon` to host the Web UI, REST endpoints, and optional Streamable HTTP/SSE facade (`http://127.0.0.1:9191/sse`) for multi-client connections.
+- **Tier 3 (REST & CLI - Orchestration)**: Use for progressive tool discovery, health checks, hot-reloading (`warmplane reload`), secrets vault, and Human-in-the-Loop (HITL) gates. See [REST API Reference](./references/http_rest_api.md) and [CLI Cheatsheet](./references/cli_cheatsheet.md).
 
 ## 3. Workflows
 
