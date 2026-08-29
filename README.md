@@ -6,7 +6,7 @@
 
 > **The local control plane that keeps Model Context Protocol (MCP) sessions warm with compact capability facades, policy governance, and deterministic execution.**
 > 
-> v0.27.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.28.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 ---
 
@@ -194,6 +194,7 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 
 | Capability | Since | Description |
 |---|---|---|
+| **Real-Time MCP `list_changed` & Passthrough Tools** | v0.28.0 | Real-time tool/resource/prompt list change notifications, SEP-1319 `_meta` discovery hints, top-level native tool passthrough, and WORM mutation audit logging |
 | **Custom Alias Descriptions & Signatures** | v0.27.0 | Polymorphic docstring overrides (`AliasTarget`), compact LLM signatures (`tool(req, [opt])`), bidirectional alias resolution |
 | **1-Click AI Client Injector & Sync** | v0.26.0 | Bidirectional MCP adapter engine for Claude Desktop, OpenCode, Claude Code, Cursor, Zed, Windsurf, Cline |
 | **Native OS Keychain Vault** | v0.26.0 | Secure OS Keychain storage and dynamic secret URI resolution (`keychain://`, `op://`, `env://`) |
@@ -221,6 +222,13 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 ---
 
 ## Changelog
+
+### v0.28.0 — Real-Time MCP `list_changed` Notifications, SEP-1319 Discovery Hints & Passthrough Tools
+- **Real-Time MCP `list_changed` Notifications (`src/mcp_server.rs`, `src/daemon/state.rs`):** Advertised `listChanged: true` across `tools`, `resources`, and `prompts` capabilities (`enable_tool_list_changed`, `enable_resources_list_changed`, `enable_resources_subscribe`, `enable_prompts_list_changed`). Active MCP stdio sessions receive real-time JSON-RPC notifications whenever upstream servers mount/unmount or config/aliases mutate.
+- **SEP-1319 Metadata Discovery Hints (`src/mcp_server.rs`):** Injected `io.warmplane/discovery_hint` metadata payload into `notifications/tools/list_changed` advising agents to run `capabilities_list` to discover backend capabilities without incurring constant token costs on tool schemas.
+- **Top-Level Native Tool Passthrough (`src/config.rs`, `src/mcp_server.rs`, `src/cli_config.rs`):** Promoted capability aliases (`passthrough: true`) into native top-level tools exported directly in `tools/list` with strict MCP name sanitization (`^[a-zA-Z0-9_-]{1,64}$`) and direct dispatch resolution.
+- **WORM Audit Trail on Dynamic Mutations (`src/daemon/lifecycle.rs`, `src/http_v1/config_api.rs`):** Added tamper-evident SHA-256 hash-chained `AuditEventType::ConfigMutation` audit records across server mounts/unmounts, alias mutations, security policy updates, and profile configuration changes.
+- **Interactive Alias Management UI (`ui/src/components/aliases.ts`, `ui/src/main.ts`):** Added click-to-edit alias rows, passthrough toggle pill badges, and input sanitization directly in the Control Deck web UI.
 
 ### v0.27.0 — Custom Alias Descriptions, Compact LLM Tool Signatures & Task Inspector
 - **Custom Alias Descriptions & Docstring Overrides (`src/config.rs`, `src/supervisor.rs`):** Upgraded alias configuration model to support polymorphic definitions (`AliasTarget`). Aliases can be simple target strings (`"alias": "server.tool"`) or detailed objects (`"alias": { "target": "server.tool", "summary": "...", "description": "..." }`), enabling platform engineers and developers to repair or improve poorly-described upstream tools for zero-shot LLM ergonomics without upstream source changes.
