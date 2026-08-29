@@ -152,6 +152,9 @@ pub struct CapabilitiesListResponse {
     pub version: String,
     /// List of registered capability summaries.
     pub capabilities: Vec<CapabilitySummary>,
+    /// Search engine runtime info and feature status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_engine: Option<crate::search::SearchEngineInfo>,
 }
 
 /// Response payload for capability search.

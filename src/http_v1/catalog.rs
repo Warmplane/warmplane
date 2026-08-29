@@ -453,6 +453,7 @@ pub async fn handle_list_capabilities(
             "capabilities": capabilities,
             "total_unfiltered": total_unfiltered,
             "hidden_by_policy": hidden_by_policy,
+            "search_engine": state.search_engine.info(),
         })),
     )
         .into_response()

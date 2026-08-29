@@ -2390,23 +2390,83 @@ class WarmplaneApp {
     if (dropdown) dropdown.style.display = 'none';
   }
 
+  startEditAlias(kind: string, name: string, target: string, summary: string = '', passthrough: boolean = false) {
+    const kindSelect = document.getElementById('alias-kind') as HTMLSelectElement;
+    const nameInput = document.getElementById('alias-name') as HTMLInputElement;
+    const targetInput = document.getElementById('alias-target') as HTMLInputElement;
+    const summaryInput = document.getElementById('alias-summary') as HTMLInputElement;
+    const ptCheckbox = document.getElementById('alias-passthrough') as HTMLInputElement;
+    const ptContainer = document.getElementById('alias-passthrough-container');
+    const titleEl = document.getElementById('alias-form-title');
+    const saveBtn = document.getElementById('alias-save-btn');
+    const cancelBtn = document.getElementById('alias-cancel-btn');
+
+    if (kindSelect) kindSelect.value = kind;
+    if (nameInput) nameInput.value = name;
+    if (targetInput) targetInput.value = target;
+    if (summaryInput) summaryInput.value = summary;
+    if (ptCheckbox) ptCheckbox.checked = passthrough;
+    if (ptContainer) ptContainer.style.display = kind === 'tool' ? 'flex' : 'none';
+
+    if (titleEl) {
+      titleEl.innerHTML = `✏️ EDIT ALIAS: <span style="color: var(--amber-400); font-family: var(--ff-mono);">${name}</span>`;
+    }
+    if (saveBtn) saveBtn.textContent = '✓ Update';
+    if (cancelBtn) cancelBtn.style.display = 'inline-block';
+
+    nameInput?.focus();
+    nameInput?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  resetAliasForm() {
+    const kindSelect = document.getElementById('alias-kind') as HTMLSelectElement;
+    const nameInput = document.getElementById('alias-name') as HTMLInputElement;
+    const targetInput = document.getElementById('alias-target') as HTMLInputElement;
+    const summaryInput = document.getElementById('alias-summary') as HTMLInputElement;
+    const ptCheckbox = document.getElementById('alias-passthrough') as HTMLInputElement;
+    const ptContainer = document.getElementById('alias-passthrough-container');
+    const titleEl = document.getElementById('alias-form-title');
+    const saveBtn = document.getElementById('alias-save-btn');
+    const cancelBtn = document.getElementById('alias-cancel-btn');
+
+    if (kindSelect) kindSelect.value = 'tool';
+    if (nameInput) nameInput.value = '';
+    if (targetInput) targetInput.value = '';
+    if (summaryInput) summaryInput.value = '';
+    if (ptCheckbox) ptCheckbox.checked = false;
+    if (ptContainer) ptContainer.style.display = 'flex';
+
+    if (titleEl) titleEl.textContent = 'Create New Alias';
+    if (saveBtn) saveBtn.textContent = '+ Save';
+    if (cancelBtn) cancelBtn.style.display = 'none';
+  }
+
   async createAlias() {
     const kind = (document.getElementById('alias-kind') as HTMLSelectElement)?.value;
     const name = (document.getElementById('alias-name') as HTMLInputElement)?.value.trim();
     const target = (document.getElementById('alias-target') as HTMLInputElement)?.value.trim();
     const summary = (document.getElementById('alias-summary') as HTMLInputElement)?.value.trim() || undefined;
+    const passthrough = (document.getElementById('alias-passthrough') as HTMLInputElement)?.checked || false;
 
     if (!name || !target) {
       alert('Please provide both alias name and canonical target');
       return;
     }
 
-    await api.updateAlias(kind, name, target, summary);
+    if (kind === 'tool' && passthrough && !/^[a-zA-Z0-9_-]{1,64}$/.test(name)) {
+      const sanitized = name.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 64);
+      const proceed = confirm(`MCP tool names must match ^[a-zA-Z0-9_-]{1,64}$.\n\n'${name}' will be exported to MCP clients as '${sanitized}'.\n\nDo you want to proceed?`);
+      if (!proceed) return;
+    }
+
+    await api.updateAlias(kind, name, target, summary, undefined, passthrough);
+    this.resetAliasForm();
     await this.refreshData();
   }
 
   async deleteAlias(kind: string, name: string) {
     await api.updateAlias(kind, name, undefined);
+    this.resetAliasForm();
     await this.refreshData();
   }
 

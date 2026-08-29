@@ -554,6 +554,9 @@ pub enum AliasCommands {
         /// Optional custom detailed description override
         #[arg(long)]
         description: Option<String>,
+        /// Expose this alias directly as a top-level native tool in tools/list
+        #[arg(long)]
+        passthrough: bool,
         /// Path to Warmplane configuration file
         #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
         config: String,

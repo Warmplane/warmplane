@@ -175,6 +175,9 @@ pub enum AliasTarget {
         /// Optional custom detailed description override.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+        /// Expose this alias directly as a top-level native tool in tools/list
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        passthrough: bool,
     },
 }
 
@@ -200,6 +203,14 @@ impl AliasTarget {
         match self {
             Self::Simple(_) => None,
             Self::Detailed { description, .. } => description.as_deref(),
+        }
+    }
+
+    /// Returns whether this alias is exposed directly as a native passthrough tool.
+    pub fn is_passthrough(&self) -> bool {
+        match self {
+            Self::Simple(_) => false,
+            Self::Detailed { passthrough, .. } => *passthrough,
         }
     }
 }

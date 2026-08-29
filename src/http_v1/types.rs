@@ -214,6 +214,9 @@ pub struct UpdateAliasRequest {
     /// Optional custom detailed description override.
     #[serde(default)]
     pub description: Option<String>,
+    /// Whether to expose this alias directly as a native tool in tools/list.
+    #[serde(default)]
+    pub passthrough: Option<bool>,
 }
 
 /// Request body for creating or updating a server profile constellation.
