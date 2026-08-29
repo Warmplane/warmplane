@@ -21,19 +21,19 @@ export function renderAliases(): string {
       const summaryStr = typeof targetVal === 'object' && targetVal.summary ? targetVal.summary : '';
       const isPassthrough = typeof targetVal === 'object' && !!targetVal.passthrough;
       const ptBadge = isPassthrough
-        ? `<span class="brand-badge" style="color: var(--amber-400); border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.1); margin-left: 6px; font-size: 10px; padding: 1px 6px;">⚡ passthrough</span>`
+        ? `<span class="brand-badge" style="color: var(--amber-400); border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.12); margin-left: 8px; font-size: 10px; padding: 1px 7px; flex-shrink: 0; white-space: nowrap; display: inline-flex; align-items: center; gap: 3px;">⚡ passthrough</span>`
         : '';
       const descBadge = summaryStr ? `<div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">💬 ${escapeHtml(summaryStr)}</div>` : '';
 
       rowsHtml += `
-        <div class="feed-row" style="grid-template-columns: 90px 180px 1fr 80px; cursor: pointer; transition: background 0.15s;" onclick="window.app.startEditAlias('tool', '${escapeHtml(alias)}', '${escapeHtml(targetStr)}', '${escapeHtml(summaryStr)}', ${isPassthrough})" title="Click to edit alias">
+        <div class="feed-row" style="grid-template-columns: 80px 240px 1fr 70px; cursor: pointer; transition: background 0.15s;" onclick="window.app.startEditAlias('tool', '${escapeHtml(alias)}', '${escapeHtml(targetStr)}', '${escapeHtml(summaryStr)}', ${isPassthrough})" title="Click to edit alias">
           <span style="color: var(--cyan-400);">Tool</span>
-          <div style="display: flex; align-items: center;">
-            <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${escapeHtml(alias)}</span>
+          <div style="display: flex; align-items: center; min-width: 0;">
+            <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(alias)}</span>
             ${ptBadge}
           </div>
           <div>
-            <span style="color: var(--text-muted); font-family: var(--ff-mono);">${escapeHtml(targetStr)}</span>
+            <span style="color: var(--text-muted); font-family: var(--ff-mono); word-break: break-all;">${escapeHtml(targetStr)}</span>
             ${descBadge}
           </div>
           <div style="text-align: right;" onclick="event.stopPropagation()">
@@ -48,11 +48,11 @@ export function renderAliases(): string {
       const descBadge = summaryStr ? `<div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">💬 ${escapeHtml(summaryStr)}</div>` : '';
 
       rowsHtml += `
-        <div class="feed-row" style="grid-template-columns: 90px 180px 1fr 80px; cursor: pointer; transition: background 0.15s;" onclick="window.app.startEditAlias('resource', '${escapeHtml(alias)}', '${escapeHtml(targetStr)}', '${escapeHtml(summaryStr)}', false)" title="Click to edit alias">
+        <div class="feed-row" style="grid-template-columns: 80px 240px 1fr 70px; cursor: pointer; transition: background 0.15s;" onclick="window.app.startEditAlias('resource', '${escapeHtml(alias)}', '${escapeHtml(targetStr)}', '${escapeHtml(summaryStr)}', false)" title="Click to edit alias">
           <span style="color: var(--green-400);">Resource</span>
-          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${escapeHtml(alias)}</span>
+          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(alias)}</span>
           <div>
-            <span style="color: var(--text-muted); font-family: var(--ff-mono);">${escapeHtml(targetStr)}</span>
+            <span style="color: var(--text-muted); font-family: var(--ff-mono); word-break: break-all;">${escapeHtml(targetStr)}</span>
             ${descBadge}
           </div>
           <div style="text-align: right;" onclick="event.stopPropagation()">
@@ -67,11 +67,11 @@ export function renderAliases(): string {
       const descBadge = summaryStr ? `<div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">💬 ${escapeHtml(summaryStr)}</div>` : '';
 
       rowsHtml += `
-        <div class="feed-row" style="grid-template-columns: 90px 180px 1fr 80px; cursor: pointer; transition: background 0.15s;" onclick="window.app.startEditAlias('prompt', '${escapeHtml(alias)}', '${escapeHtml(targetStr)}', '${escapeHtml(summaryStr)}', false)" title="Click to edit alias">
+        <div class="feed-row" style="grid-template-columns: 80px 240px 1fr 70px; cursor: pointer; transition: background 0.15s;" onclick="window.app.startEditAlias('prompt', '${escapeHtml(alias)}', '${escapeHtml(targetStr)}', '${escapeHtml(summaryStr)}', false)" title="Click to edit alias">
           <span style="color: var(--amber-300);">Prompt</span>
-          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${escapeHtml(alias)}</span>
+          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(alias)}</span>
           <div>
-            <span style="color: var(--text-muted); font-family: var(--ff-mono);">${escapeHtml(targetStr)}</span>
+            <span style="color: var(--text-muted); font-family: var(--ff-mono); word-break: break-all;">${escapeHtml(targetStr)}</span>
             ${descBadge}
           </div>
           <div style="text-align: right;" onclick="event.stopPropagation()">
@@ -118,7 +118,7 @@ export function renderAliases(): string {
 
     <!-- Aliases Table -->
     <div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; font-family: var(--ff-mono); font-size: 12px;">
-      <div style="display: grid; grid-template-columns: 90px 180px 1fr 80px; padding: 10px 14px; background: var(--surface-hover); border-bottom: 1px solid var(--border); color: var(--text-muted); font-weight: 600;">
+      <div style="display: grid; grid-template-columns: 80px 240px 1fr 70px; padding: 10px 14px; background: var(--surface-hover); border-bottom: 1px solid var(--border); color: var(--text-muted); font-weight: 600;">
         <span>TYPE</span>
         <span>PUBLIC ALIAS</span>
         <span>CANONICAL TARGET & SUMMARY</span>

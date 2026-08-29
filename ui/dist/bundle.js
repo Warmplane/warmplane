@@ -1656,15 +1656,15 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
       <div style="padding: 24px; text-align: center; color: var(--text-dim);">
         No facade aliases configured in ${P(e.configPath)}. Add short names or custom descriptions to prune token payload sizes.
       </div>
-    `;else{for(let[s,i]of o){let l=typeof i==="string"?i:i.target,u=typeof i==="object"&&i.summary?i.summary:"",p=typeof i==="object"&&!!i.passthrough,g=p?'<span class="brand-badge" style="color: var(--amber-400); border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.1); margin-left: 6px; font-size: 10px; padding: 1px 6px;">⚡ passthrough</span>':"",v=u?`<div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">\uD83D\uDCAC ${P(u)}</div>`:"";r+=`
-        <div class="feed-row" style="grid-template-columns: 90px 180px 1fr 80px; cursor: pointer; transition: background 0.15s;" onclick="window.app.startEditAlias('tool', '${P(s)}', '${P(l)}', '${P(u)}', ${p})" title="Click to edit alias">
+    `;else{for(let[s,i]of o){let l=typeof i==="string"?i:i.target,u=typeof i==="object"&&i.summary?i.summary:"",p=typeof i==="object"&&!!i.passthrough,g=p?'<span class="brand-badge" style="color: var(--amber-400); border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.12); margin-left: 8px; font-size: 10px; padding: 1px 7px; flex-shrink: 0; white-space: nowrap; display: inline-flex; align-items: center; gap: 3px;">⚡ passthrough</span>':"",v=u?`<div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">\uD83D\uDCAC ${P(u)}</div>`:"";r+=`
+        <div class="feed-row" style="grid-template-columns: 80px 240px 1fr 70px; cursor: pointer; transition: background 0.15s;" onclick="window.app.startEditAlias('tool', '${P(s)}', '${P(l)}', '${P(u)}', ${p})" title="Click to edit alias">
           <span style="color: var(--cyan-400);">Tool</span>
-          <div style="display: flex; align-items: center;">
-            <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${P(s)}</span>
+          <div style="display: flex; align-items: center; min-width: 0;">
+            <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${P(s)}</span>
             ${g}
           </div>
           <div>
-            <span style="color: var(--text-muted); font-family: var(--ff-mono);">${P(l)}</span>
+            <span style="color: var(--text-muted); font-family: var(--ff-mono); word-break: break-all;">${P(l)}</span>
             ${v}
           </div>
           <div style="text-align: right;" onclick="event.stopPropagation()">
@@ -1672,11 +1672,11 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
           </div>
         </div>
       `}for(let[s,i]of n){let l=typeof i==="string"?i:i.target,u=typeof i==="object"&&i.summary?i.summary:"",p=u?`<div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">\uD83D\uDCAC ${P(u)}</div>`:"";r+=`
-        <div class="feed-row" style="grid-template-columns: 90px 180px 1fr 80px; cursor: pointer; transition: background 0.15s;" onclick="window.app.startEditAlias('resource', '${P(s)}', '${P(l)}', '${P(u)}', false)" title="Click to edit alias">
+        <div class="feed-row" style="grid-template-columns: 80px 240px 1fr 70px; cursor: pointer; transition: background 0.15s;" onclick="window.app.startEditAlias('resource', '${P(s)}', '${P(l)}', '${P(u)}', false)" title="Click to edit alias">
           <span style="color: var(--green-400);">Resource</span>
-          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${P(s)}</span>
+          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${P(s)}</span>
           <div>
-            <span style="color: var(--text-muted); font-family: var(--ff-mono);">${P(l)}</span>
+            <span style="color: var(--text-muted); font-family: var(--ff-mono); word-break: break-all;">${P(l)}</span>
             ${p}
           </div>
           <div style="text-align: right;" onclick="event.stopPropagation()">
@@ -1684,11 +1684,11 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
           </div>
         </div>
       `}for(let[s,i]of a){let l=typeof i==="string"?i:i.target,u=typeof i==="object"&&i.summary?i.summary:"",p=u?`<div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">\uD83D\uDCAC ${P(u)}</div>`:"";r+=`
-        <div class="feed-row" style="grid-template-columns: 90px 180px 1fr 80px; cursor: pointer; transition: background 0.15s;" onclick="window.app.startEditAlias('prompt', '${P(s)}', '${P(l)}', '${P(u)}', false)" title="Click to edit alias">
+        <div class="feed-row" style="grid-template-columns: 80px 240px 1fr 70px; cursor: pointer; transition: background 0.15s;" onclick="window.app.startEditAlias('prompt', '${P(s)}', '${P(l)}', '${P(u)}', false)" title="Click to edit alias">
           <span style="color: var(--amber-300);">Prompt</span>
-          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">${P(s)}</span>
+          <span style="font-weight: 700; color: var(--text-main); font-family: var(--ff-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${P(s)}</span>
           <div>
-            <span style="color: var(--text-muted); font-family: var(--ff-mono);">${P(l)}</span>
+            <span style="color: var(--text-muted); font-family: var(--ff-mono); word-break: break-all;">${P(l)}</span>
             ${p}
           </div>
           <div style="text-align: right;" onclick="event.stopPropagation()">
@@ -1731,7 +1731,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
 
     <!-- Aliases Table -->
     <div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; font-family: var(--ff-mono); font-size: 12px;">
-      <div style="display: grid; grid-template-columns: 90px 180px 1fr 80px; padding: 10px 14px; background: var(--surface-hover); border-bottom: 1px solid var(--border); color: var(--text-muted); font-weight: 600;">
+      <div style="display: grid; grid-template-columns: 80px 240px 1fr 70px; padding: 10px 14px; background: var(--surface-hover); border-bottom: 1px solid var(--border); color: var(--text-muted); font-weight: 600;">
         <span>TYPE</span>
         <span>PUBLIC ALIAS</span>
         <span>CANONICAL TARGET & SUMMARY</span>
