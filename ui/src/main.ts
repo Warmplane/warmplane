@@ -10,7 +10,7 @@ import { renderPolicy } from './components/policy';
 import { renderAliases } from './components/aliases';
 import { renderProfiles } from './components/profiles';
 import { renderSecrets } from './components/secrets';
-import { SERVER_TEMPLATES, ServerTemplate } from './templates';
+import { SERVER_TEMPLATES, ServerTemplate, findTemplateForServer } from './templates';
 
 class WarmplaneApp {
   private activeTemplateCategory: string = 'all';
@@ -420,17 +420,55 @@ class WarmplaneApp {
     }
   }
 
-  async deleteVaultSecret(key: string) {
-    if (!confirm(`Are you sure you want to remove secret '${key}' from OS Keychain?`)) return;
+  async deleteVaultSecret(key: string, serverName?: string) {
+    const confirmMsg = serverName 
+      ? `Are you sure you want to remove secret '${key}' from OS Keychain and server '${serverName}'?`
+      : `Are you sure you want to remove secret '${key}' from OS Keychain?`;
+    if (!confirm(confirmMsg)) return;
+
     try {
       const res = await api.deleteSecret(key);
-      if (res.ok) {
+      if (res.ok || res.error?.includes('not found')) {
+        // If associated with a server, remove from server env
+        if (serverName) {
+          const state = store.getState();
+          const servers = state.config.mcpServers || {};
+          const srv = servers[serverName];
+          if (srv && srv.env && srv.env[key]) {
+            const updatedEnv = { ...srv.env };
+            delete updatedEnv[key];
+            const updatedSrv = { ...srv, env: updatedEnv };
+            await api.upsertServer(serverName, updatedSrv);
+          }
+        }
         await this.refreshData();
       } else {
         alert(`Failed to delete secret: ${res.error}`);
       }
     } catch (e: any) {
       alert(`Error deleting secret: ${e.message}`);
+    }
+  }
+
+  async removeSecretFromConfig(serverName: string, envKey: string) {
+    if (!confirm(`Remove environment variable '${envKey}' from '${serverName}' configuration?`)) return;
+    try {
+      const state = store.getState();
+      const servers = state.config.mcpServers || {};
+      const srv = servers[serverName];
+      if (srv && srv.env && srv.env[envKey]) {
+        const updatedEnv = { ...srv.env };
+        delete updatedEnv[envKey];
+        const updatedSrv = { ...srv, env: updatedEnv };
+        const upsertRes = await api.upsertServer(serverName, updatedSrv);
+        if (upsertRes.ok) {
+          await this.refreshData();
+        } else {
+          alert(`Failed to update server config: ${upsertRes.error}`);
+        }
+      }
+    } catch (e: any) {
+      alert(`Error removing secret from config: ${e.message}`);
     }
   }
 
@@ -455,7 +493,7 @@ class WarmplaneApp {
         const upsertRes = await api.upsertServer(serverName, updatedSrv);
         if (upsertRes.ok) {
           await this.refreshData();
-          alert(`Successfully migrated ${serverName}.${envKey} to OS Keychain!`);
+          alert(`Successfully configured ${serverName}.${envKey} in OS Keychain!`);
         } else {
           alert(`Failed to update server config: ${upsertRes.error}`);
         }
@@ -1703,11 +1741,69 @@ class WarmplaneApp {
       const statusColor = isDegraded ? 'var(--amber-400)' : statusInfo?.status === 'connected' ? 'var(--green-400)' : 'var(--red-400)';
       const errorMsg = statusInfo?.error || 'No active crash or error reported. Server is healthy.';
 
+      const template = findTemplateForServer(name, serverCfg?.command, serverCfg?.args);
+      const configuredEnv = serverCfg?.env || {};
+      const configuredEnvKeys = Object.keys(configuredEnv);
+      const requiredFields = (template?.envFields || []).filter(f => f.required);
+      const missingRequired = requiredFields.filter(f => !configuredEnvKeys.includes(f.key));
+
+      let envSectionHtml = '';
+      if (template || configuredEnvKeys.length > 0) {
+        const envItemsHtml = (template?.envFields || []).map(f => {
+          const val = configuredEnv[f.key];
+          const isSet = val !== undefined;
+          let statusBadge = `<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3);">Configured</span>`;
+          if (!isSet && f.required) {
+            statusBadge = `<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);">Required / Missing</span>`;
+          } else if (!isSet) {
+            statusBadge = `<span class="brand-badge" style="color: var(--text-dim); border-color: var(--border);">Optional / Not Set</span>`;
+          }
+
+          return `
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: var(--surface); border-radius: var(--radius-xs); margin-bottom: 6px; font-size: 11.5px;">
+              <div>
+                <span style="font-family: var(--ff-mono); font-weight: 700; color: ${!isSet && f.required ? 'var(--amber-300)' : 'var(--text-main)'};">${escapeHtml(f.key)}</span>
+                ${f.label ? `<span style="font-size: 10.5px; color: var(--text-dim); margin-left: 6px;">(${escapeHtml(f.label)})</span>` : ''}
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                ${statusBadge}
+                ${!isSet ? `
+                  <button class="btn btn-primary" style="padding: 2px 8px; font-size: 10.5px;" onclick="window.app.quickVaultEnv('${escapeHtml(name)}', '${escapeHtml(f.key)}')">➕ Configure in Keychain</button>
+                ` : ''}
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        // Also list any custom env vars not in template
+        const templateKeys = (template?.envFields || []).map(f => f.key);
+        const extraEnvHtml = Object.entries(configuredEnv)
+          .filter(([k]) => !templateKeys.includes(k))
+          .map(([k, v]) => `
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: var(--surface); border-radius: var(--radius-xs); margin-bottom: 6px; font-size: 11.5px;">
+              <span style="font-family: var(--ff-mono); font-weight: 700; color: var(--text-main);">${escapeHtml(k)}</span>
+              <span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3);">Custom Configured</span>
+            </div>
+          `).join('');
+
+        envSectionHtml = `
+          <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; margin-bottom: 14px;">
+            <div style="font-size: 11px; font-weight: 700; color: ${missingRequired.length > 0 ? 'var(--amber-400)' : 'var(--text-main)'}; text-transform: uppercase; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+              <span>🔑 Environment Variables &amp; Secrets</span>
+              ${missingRequired.length > 0 ? `<span style="color: var(--red-400); font-size: 10.5px;">⚠️ ${missingRequired.length} required key(s) missing</span>` : ''}
+            </div>
+            ${envItemsHtml}
+            ${extraEnvHtml}
+          </div>
+        `;
+      }
+
       bodyEl.innerHTML = `
         <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 16px;">
           <span style="width: 10px; height: 10px; border-radius: 50%; background: ${statusColor};"></span>
           <span style="font-weight: 700; font-size: 14px; color: var(--text-main);">Current Status: <span style="color: ${statusColor}; text-transform: uppercase;">${escapeHtml(statusInfo?.status || 'unknown')}</span></span>
           <span class="brand-badge" style="color: var(--cyan-400);">Protocol: ${escapeHtml(statusInfo?.protocol_version || '2026-07-28')}</span>
+          ${missingRequired.length > 0 ? `<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);">⚠️ Missing Required Keys</span>` : ''}
         </div>
 
         <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; margin-bottom: 14px;">
@@ -1716,6 +1812,8 @@ class WarmplaneApp {
           </div>
           <pre style="font-family: var(--ff-mono); font-size: 11.5px; color: ${isDegraded ? 'var(--red-300)' : 'var(--text-dim)'}; white-space: pre-wrap; word-break: break-word; margin: 0;">${escapeHtml(errorMsg)}</pre>
         </div>
+
+        ${envSectionHtml}
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;">
           <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px;">

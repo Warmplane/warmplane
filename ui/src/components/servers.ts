@@ -1,5 +1,6 @@
 import { store } from '../state';
 import { api } from '../api';
+import { findTemplateForServer } from '../templates';
 
 export function renderServers(): string {
   const state = store.getState();
@@ -33,12 +34,24 @@ export function renderServers(): string {
       const statusInfo = state.serverStatuses[k] || { status: 'connected', protocol_version: '2026-07-28' };
       const isIncludedInProfile = !isProfileActive || includedServers.includes(k);
 
-      const envBadges = s.env ? Object.entries(s.env).map(([k, v]) => {
-        if (v.startsWith('keychain://')) return `<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">🔒 ${escapeHtml(k)} (Keychain)</span>`;
-        if (v.startsWith('op://')) return `<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">🔒 ${escapeHtml(k)} (1Password)</span>`;
-        if (v.startsWith('env://')) return `<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3);">🔒 ${escapeHtml(k)} (Env)</span>`;
-        return `<span style="color: var(--text-dim);">${escapeHtml(k)}=***</span>`;
-      }).join(' ') : 'None';
+      const template = findTemplateForServer(k, s.command, s.args);
+      const configuredEnvKeys = Object.keys(s.env || {});
+      const missingRequiredEnv = (template?.envFields || []).filter(
+        f => f.required && !configuredEnvKeys.includes(f.key)
+      );
+
+      const envBadgesList = s.env ? Object.entries(s.env).map(([envK, v]) => {
+        if (v.startsWith('keychain://')) return `<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">🔒 ${escapeHtml(envK)} (Keychain)</span>`;
+        if (v.startsWith('op://')) return `<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">🔒 ${escapeHtml(envK)} (1Password)</span>`;
+        if (v.startsWith('env://')) return `<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3);">🔒 ${escapeHtml(envK)} (Env)</span>`;
+        return `<span style="color: var(--text-dim);">${escapeHtml(envK)}=***</span>`;
+      }) : [];
+
+      for (const m of missingRequiredEnv) {
+        envBadgesList.push(`<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);" title="Required environment variable '${escapeHtml(m.key)}' is missing">⚠️ Missing ${escapeHtml(m.key)}</span>`);
+      }
+
+      const envBadges = envBadgesList.length > 0 ? envBadgesList.join(' ') : 'None';
 
       const cb = (state.circuitBreakers || []).find(c => c.server_id === k);
       let cbBadge = `<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.25);">Circuit: CLOSED</span>`;
@@ -53,14 +66,19 @@ export function renderServers(): string {
       const res = s.resilience || state.config.resilience;
       const resDetails = res ? `FT: ${res.failureThreshold || 3} · Cooldown: ${(res.cooldownMs || 30000) / 1000}s · AutoRestart: ${res.autoRestart !== false ? 'ON' : 'OFF'}` : 'Default Resilience';
 
-      const isDegraded = statusInfo.status === 'degraded';
+      const hasMissingKeys = missingRequiredEnv.length > 0;
+      const isDegraded = statusInfo.status === 'degraded' || hasMissingKeys;
       const isError = statusInfo.status === 'error' || statusInfo.status === 'disconnected';
-      const statusColor = isDegraded ? 'var(--amber-400)' : isError ? 'var(--red-400)' : 'var(--green-400)';
+      const statusColor = hasMissingKeys ? 'var(--amber-400)' : isDegraded ? 'var(--amber-400)' : isError ? 'var(--red-400)' : 'var(--green-400)';
 
-      const errorBannerHtml = (isDegraded || isError) && statusInfo.error ? `
+      const statusBadgeText = hasMissingKeys 
+        ? `Status: ${escapeHtml(statusInfo.status)} (Missing Keys)` 
+        : `Status: ${escapeHtml(statusInfo.status)}`;
+
+      const errorBannerHtml = (isDegraded || isError) && (statusInfo.error || hasMissingKeys) ? `
         <div style="background: rgba(239, 68, 68, 0.08); border-left: 3px solid var(--amber-400); border-radius: var(--radius-xs); padding: 8px 12px; margin-top: 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px;">
           <div style="font-size: 11px; color: var(--amber-300); font-family: var(--ff-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-            <span style="font-weight: 700; color: var(--amber-400);">⚠️ Diagnostics:</span> ${escapeHtml(statusInfo.error)}
+            <span style="font-weight: 700; color: var(--amber-400);">⚠️ Diagnostics:</span> ${escapeHtml(statusInfo.error || `Missing required environment variable(s): ${missingRequiredEnv.map(m => m.key).join(', ')}`)}
           </div>
           <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10.5px; color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3);" onclick="window.app.openServerDiagnosticsModal('${escapeHtml(k)}')">Details</button>
         </div>
@@ -90,7 +108,7 @@ export function renderServers(): string {
                 <span style="width: 8px; height: 8px; border-radius: 50%; background: ${statusColor}; display: inline-block;"></span>
                 <span style="font-size: 15px; font-weight: 700; color: var(--text-main);">${escapeHtml(k)}</span>
                 <span class="brand-badge">${transport}</span>
-                <span class="brand-badge" style="color: ${statusColor}; border-color: rgba(245, 158, 11, 0.3);">Status: ${escapeHtml(statusInfo.status)}</span>
+                <span class="brand-badge" style="color: ${statusColor}; border-color: ${hasMissingKeys ? 'rgba(245, 158, 11, 0.5); background: rgba(245, 158, 11, 0.1);' : 'rgba(245, 158, 11, 0.3);'}">${statusBadgeText}</span>
                 <span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">Protocol: ${statusInfo.protocol_version}</span>
                 ${cbBadge}
                 ${profileBoundaryBadge}

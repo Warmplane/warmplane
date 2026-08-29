@@ -658,11 +658,18 @@ pub async fn handle_list_secrets(State(state): State<AppState>) -> impl IntoResp
                 "Plaintext (Unsecured)"
             };
 
+            let exists = if is_vault {
+                crate::vault::resolve_secret_value(v).is_ok()
+            } else {
+                true
+            };
+
             secrets.push(json!({
                 "server": srv_name,
                 "key": k,
                 "uri": v,
                 "is_vault": is_vault,
+                "exists": exists,
                 "backend": backend,
                 "display": crate::vault::redact_secret_for_display(v),
             }));
