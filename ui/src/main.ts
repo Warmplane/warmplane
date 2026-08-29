@@ -420,17 +420,55 @@ class WarmplaneApp {
     }
   }
 
-  async deleteVaultSecret(key: string) {
-    if (!confirm(`Are you sure you want to remove secret '${key}' from OS Keychain?`)) return;
+  async deleteVaultSecret(key: string, serverName?: string) {
+    const confirmMsg = serverName 
+      ? `Are you sure you want to remove secret '${key}' from OS Keychain and server '${serverName}'?`
+      : `Are you sure you want to remove secret '${key}' from OS Keychain?`;
+    if (!confirm(confirmMsg)) return;
+
     try {
       const res = await api.deleteSecret(key);
-      if (res.ok) {
+      if (res.ok || res.error?.includes('not found')) {
+        // If associated with a server, remove from server env
+        if (serverName) {
+          const state = store.getState();
+          const servers = state.config.mcpServers || {};
+          const srv = servers[serverName];
+          if (srv && srv.env && srv.env[key]) {
+            const updatedEnv = { ...srv.env };
+            delete updatedEnv[key];
+            const updatedSrv = { ...srv, env: updatedEnv };
+            await api.upsertServer(serverName, updatedSrv);
+          }
+        }
         await this.refreshData();
       } else {
         alert(`Failed to delete secret: ${res.error}`);
       }
     } catch (e: any) {
       alert(`Error deleting secret: ${e.message}`);
+    }
+  }
+
+  async removeSecretFromConfig(serverName: string, envKey: string) {
+    if (!confirm(`Remove environment variable '${envKey}' from '${serverName}' configuration?`)) return;
+    try {
+      const state = store.getState();
+      const servers = state.config.mcpServers || {};
+      const srv = servers[serverName];
+      if (srv && srv.env && srv.env[envKey]) {
+        const updatedEnv = { ...srv.env };
+        delete updatedEnv[envKey];
+        const updatedSrv = { ...srv, env: updatedEnv };
+        const upsertRes = await api.upsertServer(serverName, updatedSrv);
+        if (upsertRes.ok) {
+          await this.refreshData();
+        } else {
+          alert(`Failed to update server config: ${upsertRes.error}`);
+        }
+      }
+    } catch (e: any) {
+      alert(`Error removing secret from config: ${e.message}`);
     }
   }
 
@@ -455,7 +493,7 @@ class WarmplaneApp {
         const upsertRes = await api.upsertServer(serverName, updatedSrv);
         if (upsertRes.ok) {
           await this.refreshData();
-          alert(`Successfully migrated ${serverName}.${envKey} to OS Keychain!`);
+          alert(`Successfully configured ${serverName}.${envKey} in OS Keychain!`);
         } else {
           alert(`Failed to update server config: ${upsertRes.error}`);
         }

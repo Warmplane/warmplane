@@ -14,21 +14,28 @@ export function renderSecrets(): string {
     </div>
   ` : secrets.map(s => {
     let badge = `<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);">Plaintext (Unsecured)</span>`;
-    if (s.is_vault) {
+    const isMissing = s.is_vault && s.exists === false;
+
+    if (isMissing) {
+      badge = `<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.1);">⚠️ Missing from ${escapeHtml(s.backend)}</span>`;
+    } else if (s.is_vault) {
       badge = `<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">🔒 ${escapeHtml(s.backend)}</span>`;
     }
 
     return `
       <div style="display: grid; grid-template-columns: 140px 180px 1fr 180px auto; padding: 10px 16px; border-bottom: 1px solid var(--border-subtle); align-items: center; font-size: 12px;">
         <span style="font-weight: 700; color: var(--text-main);">${escapeHtml(s.server)}</span>
-        <span style="font-family: var(--ff-mono); color: var(--amber-300);">${escapeHtml(s.key)}</span>
-        <span style="font-family: var(--ff-mono); font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(s.display)}</span>
+        <span style="font-family: var(--ff-mono); color: ${isMissing ? 'var(--amber-300)' : 'var(--amber-300)'};">${escapeHtml(s.key)}</span>
+        <span style="font-family: var(--ff-mono); font-size: 11px; color: ${isMissing ? 'var(--red-400)' : 'var(--text-muted)'}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(s.display)}</span>
         <div>${badge}</div>
         <div style="display: flex; gap: 6px; justify-content: flex-end;">
-          ${!s.is_vault ? `
+          ${isMissing ? `
+            <button class="btn btn-primary" style="padding: 2px 8px; font-size: 11px;" onclick="window.app.quickVaultEnv('${escapeHtml(s.server)}', '${escapeHtml(s.key)}')">➕ Re-add Key</button>
+            <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 11px; color: var(--red-400);" onclick="window.app.removeSecretFromConfig('${escapeHtml(s.server)}', '${escapeHtml(s.key)}')">Remove from Config</button>
+          ` : !s.is_vault ? `
             <button class="btn btn-primary" style="padding: 2px 8px; font-size: 11px;" onclick="window.app.quickVaultEnv('${escapeHtml(s.server)}', '${escapeHtml(s.key)}')">🔒 Move to Keychain</button>
           ` : `
-            <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 11px; color: var(--red-400);" onclick="window.app.deleteVaultSecret('${escapeHtml(s.key)}')">Delete Key</button>
+            <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 11px; color: var(--red-400);" onclick="window.app.deleteVaultSecret('${escapeHtml(s.key)}', '${escapeHtml(s.server)}')">Delete Key</button>
           `}
         </div>
       </div>

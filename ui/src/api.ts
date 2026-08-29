@@ -150,6 +150,7 @@ export interface SecretItem {
   key: string;
   uri: string;
   is_vault: boolean;
+  exists?: boolean;
   backend: string;
   display: string;
 }
