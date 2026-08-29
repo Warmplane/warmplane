@@ -4,287 +4,196 @@
 
 **Security controls:** [![WORM + HMAC audit](https://img.shields.io/badge/WORM%20%2B%20HMAC-audit-4c1.svg)](docs/OBSERVABILITY.md) [![HITL + policy](https://img.shields.io/badge/HITL%20%2B%20policy-controls-4c1.svg)](docs/ENTERPRISE_FEATURES.md) [![OAuth2 + PKCE](https://img.shields.io/badge/OAuth2%20%2B%20PKCE-protected-4c1.svg)](docs/research/MCP_AUTHORIZATION.md) [![Secret redaction](https://img.shields.io/badge/secret-redaction-4c1.svg)](docs/ENTERPRISE_FEATURES.md) [![SIEM + OTLP](https://img.shields.io/badge/SIEM%20%2B%20OTLP-observable-4c1.svg)](docs/OBSERVABILITY.md)
 
-> **The Local control plane that keeps MCP sessions warm with compact capability/resource/prompt facades.**
+> **The local control plane that keeps Model Context Protocol (MCP) sessions warm with compact capability facades, policy governance, and deterministic execution.**
 > 
 > v0.27.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 ---
 
-## 🤖 Give Your AI Agent Warmplane Expertise
+## ⚡ What is Warmplane?
 
-Warmplane includes an official **Agent Skill** (`.skills/warmplane/`) adhering to the open [`agentskills.io`](https://agentskills.io) standard. Point your coding agent (Claude Code, Google Antigravity, Cursor, OpenCode, Codex) directly to this repository to teach it all MCP facade commands, progressive discovery, secrets vault, and diagnostics:
+Warmplane is a local control plane and reverse proxy for AI tool calling. It maintains persistent, warm connections to multiple upstream MCP servers and multiplexes them behind a single, governed interface.
 
-```bash
-# Install Warmplane Skill into Claude Code
-claude skill install Warmplane/warmplane
+### The Problems Warmplane Solves
 
-# Or copy into your workspace / global agent skills folder
-mkdir -p .agents/skills/warmplane && cp -r .skills/warmplane/* .agents/skills/warmplane/
-```
-
-Browse the skill package:
-- 📖 [`.skills/warmplane/SKILL.md`](.skills/warmplane/SKILL.md) — Core prompt trigger & standard workflows (~450 tokens)
-- 🔌 [`references/mcp_stdio_usage.md`](.skills/warmplane/references/mcp_stdio_usage.md) — 1-Click client config (17 IDEs) & built-in MCP tools
-- ⚙️ [`references/configuration_schema.md`](.skills/warmplane/references/configuration_schema.md) — Canonical `mcp_servers.json` schema & dynamic secrets
-- 🛠️ [`references/cli_cheatsheet.md`](.skills/warmplane/references/cli_cheatsheet.md) — Terminal commands for daemon, sync, and vault
-- 🚑 [`references/error_resolution.md`](.skills/warmplane/references/error_resolution.md) — Circuit breakers, policy denials, and recovery playbook
-
-
-Warmplane runs multiple upstream MCP servers behind one local process, keeps those sessions persistent, and exposes a compact, policy-aware surface for tools, resources, and prompts — accessible via HTTP, CLI, and MCP-native clients.
+1. **Context Window Token Bloat**: Sending massive JSON schemas for dozens of tools on every turn wastes tens of thousands of prompt tokens. Warmplane provides a compact catalog index (cutting payload size by 58–96%), on-demand schema discovery, and SHA-256 ETag caching.
+2. **Duplicate Invocations & Retries**: When network hiccups occur, naive agents retry blind mutations. Warmplane provides crash-resilient, exactly-once idempotency deduplication (`idk_<sha256>`) and explicit retry classifications (`safe`, `idempotent`, `unsafe`).
+3. **Ungoverned Execution & Security**: Connecting agents directly to live infrastructure risks unauthorized operations. Warmplane enforces multi-tenant RBAC, per-profile server constellations, secret redaction, and Human-in-the-Loop (HITL) approval gates.
+4. **Cascading Hangs & Flakiness**: Slow or crashed upstream processes freeze agent loops. Warmplane monitors health with sub-microsecond circuit breakers and self-healing process supervision.
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
-**1. Install**
+### 1. Installation
 
-Using Homebrew (macOS & Linux):
-
+**Homebrew (macOS & Linux):**
 ```bash
 brew tap warmplane/tap
 brew install warmplane
 ```
 
-Or via Cargo:
-
+**Cargo (crates.io):**
 ```bash
 cargo install warmplane
 
-# Optional: with local ONNX vector embeddings (FastEmbed)
+# Optional: with local ONNX vector search (FastEmbed)
 cargo install warmplane --features semantic-search
 ```
 
-Or from source:
-
+**Build from Source:**
 ```bash
 git clone https://github.com/Warmplane/warmplane.git
 cd warmplane
 cargo install --path . --features semantic-search
 ```
 
-**2. Configure Upstream Servers**
+### 2. Configure Upstream Servers
 
-Manage servers interactively or import from existing tools:
+Add servers interactively or import from existing AI tools:
 
 ```bash
 # Interactive setup wizard
 warmplane server add
 
-# Or add non-interactively
+# Or non-interactively
 warmplane server add filesystem --command npx --arg "-y" --arg "@modelcontextprotocol/server-filesystem" --arg "/tmp"
 warmplane server add context7 --url "https://mcp.context7.ai/sse" --bearer-env "CONTEXT7_API_KEY"
 
-# Or import directly from Claude Desktop / Cursor
+# Or 1-click import from Claude Desktop, Cursor, OpenCode, Zed
 warmplane config import
 ```
 
-Or manually create `mcp_servers.json`:
+Or configure `mcp_servers.json`:
 
 ```json
 {
   "port": 9090,
   "toolTimeoutMs": 15000,
-  "capabilityAliases": { "sqlite.read_query": "db.query" },
-  "resourceAliases":  { "filesystem.file:///tmp/readme.txt": "fs.readme" },
-  "promptAliases":    { "github.code_review": "prompt.code-review" },
+  "capabilityAliases": {
+    "db.query": "sqlite.read_query",
+    "search": {
+      "target": "semble-rs.search",
+      "summary": "Search codebase using semantic or BM25 ranking. Pass absolute repo path."
+    }
+  },
   "policy": {
-    "allow": ["db.*", "fs.*", "prompt.*"],
-    "deny":  ["fs.secret"],
-    "redactKeys": ["token", "api_key", "password"]
+    "allow": ["db.*", "fs.*", "search"],
+    "deny": ["fs.delete*"],
+    "requireApproval": ["db.mutation*"],
+    "redactKeys": ["token", "password", "api_key"]
   },
   "profiles": {
     "coding": {
       "servers": ["filesystem", "sqlite"],
-      "description": "Local coding and data inspection tools"
+      "description": "Local engineering and exploration tools"
     }
   },
   "mcpServers": {
-    "sqlite":     { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-sqlite", "./test.db"] },
+    "sqlite": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-sqlite", "./test.db"] },
     "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"] }
   }
 }
 ```
 
-**3. Validate, then start**
+### 3. Start Warmplane
 
 ```bash
-warmplane server list
-warmplane validate-config --config mcp_servers.json
-warmplane daemon --config mcp_servers.json
-```
-
----
-
-## Run Modes
-
-All three modes share the same backend state, aliases, policy checks, and timeout behaviour.
-
-### HTTP Daemon
-
-```bash
-warmplane daemon --config mcp_servers.json
-# Serves /v1/... on the configured port (default 9090)
-```
-
-Key endpoints:
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/v1/capabilities` | Compact capability index |
-| `POST` | `/v1/capabilities/search` | Hybrid lexical + semantic search |
-| `POST` | `/v1/tools/call` | Normalized execution envelope (supports idempotency keys, `_jsonpath`, `_limit_lines`, `_truncate_bytes`) |
-| `POST` | `/v1/tools/batch_call` | Chained multi-step execution with `$step.field` reference interpolation |
-| `GET` | `/v1/idempotency/records` | List cached idempotency execution records and replay counts |
-| `GET` | `/v1/idempotency/records/:key` | Inspect single cached idempotency record |
-| `GET` | `/v1/resources` | Resource index |
-| `POST` | `/v1/resources/read` | Read resource |
-| `GET` | `/v1/prompts` | Prompt index |
-| `POST` | `/v1/prompts/get` | Render prompt |
-| `GET` | `/v1/catalog/events` | Catalog change event feed |
-| `POST` | `/v1/operations/:id/cancel` | Cancel an in-flight operation |
-
-### MCP Server (stdio)
-
-```bash
-warmplane mcp-server --config mcp_servers.json
-```
-
-Point any MCP-native client at this process. It exposes lightweight facade tools (`capabilities_list`, `capability_search`, `capability_describe`, `capability_call`, `capabilities_batch_call`, `resource_read`, `prompt_get`, …) alongside native `resources/*` and `prompts/*` methods.
-
-Claude Desktop / Cursor config:
-
-```json
-{
-  "mcpServers": {
-    "warmplane": {
-      "command": "warmplane",
-      "args": ["mcp-server", "--config", "mcp_servers.json"]
-    }
-  }
-}
-```
-
-### MCP Server (HTTP/SSE)
-
-Exposes the same facade over Streamable HTTP/SSE so remote clients — CI pipelines, multi-host agent clusters, or remote desktop clients — can connect without a local process:
-
-```bash
-# Local-only (default, no auth required)
-warmplane mcp-http-server --config mcp_servers.json
-
-# Network-accessible (requires authToken in config)
-warmplane mcp-http-server --config mcp_servers.json --bind 0.0.0.0 --port 9191
-
-# Profile-restricted
-warmplane mcp-http-server --config mcp_servers.json --profile coding
-```
-
-Connect from any MCP HTTP client:
-
-```json
-{
-  "mcpServers": {
-    "warmplane": {
-      "url": "http://localhost:9191/mcp"
-    }
-  }
-}
-```
-
-Alternatively, add an `mcpHttpServer` block to `mcp_servers.json` and the **daemon will co-host both servers** in one process:
-
-```json
-{
-  "mcpHttpServer": { "port": 9191 },
-  "mcpServers": { ... }
-}
-```
-
-See [§4.7 of the User Guide](docs/USER-GUIDE.md#47-mcp-httparse-server-configuration-mcphttpserver) for the full config reference.
-
-### CLI Configuration & Operations
-
-```bash
-# Interactive server setup wizard
-warmplane server add
-
-# Import settings from Claude Desktop or Cursor
-warmplane config import
-
-# Hot-reload in-memory workers from mcp_servers.json without restarting
-warmplane reload
-
-# Inspect & test servers
-warmplane server list
-warmplane server test github
-
-# Ecosystem config import (Claude Desktop, Cursor, Zed)
-warmplane config import
-
-# Aliases and Policies
-warmplane config alias set tool git-commit github.create_commit
-warmplane config policy allow "github.*" "fetch.*"
-
-# Capability and Execution CLI (supports --profile <name>)
-warmplane list-capabilities --profile coding
-warmplane search-capabilities "triage logs" --limit 5 --profile coding
-warmplane describe-capability db.query --profile coding
-
-warmplane call-capability db.query \
-  --params '{"query":"SELECT 1"}' \
-  --request-id req-101 --actor-id user-7 \
-  --idempotency-key op-20-run-1 \
-  --profile coding
-
-warmplane read-resource fs.readme --profile coding
-warmplane get-prompt prompt.code-review --arguments '{"code":"fn main() {}"}' --profile coding
-
-warmplane list-catalog-events --after evt_3
-warmplane cancel-operation req-101
-```
-
----
-
-## Performance Highlights
-
-Warmplane is engineered with pure Rust zero-cost abstractions, keeping agent loops snappy:
-
-- **50.4 ns** ETag Cache Validation (`If-None-Match` $\rightarrow$ `304 Not Modified`)
-- **159.8 ns** Idempotent Cache-Hit Deduplication
-- **1.58 µs** SHA-256 Incremental Catalog Version Hashing ($N=10$)
-- **15.9 µs** Filtered Hybrid Capability Search ($N=50$)
-- **372.1 µs** In-Memory Zero-Allocation Lexical Tag Search across 1,000 Tools
-
-👉 See the complete benchmarks and profiling methodology in [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
-
----
-
-## Feature Overview
-
-| Feature | Since | Summary |
-|---------|-------|---------|
-| **SEP-2663 Tasks Extension & Unified HITL** | v0.24.0 | Official `io.modelcontextprotocol/tasks` support with atomic state machine, asynchronous long-running tool execution (`202 Accepted` + `resultType: "task"`), cooperative cancellation (`POST /v1/tasks/:id/cancel`), TTL expiry management, and unified Human-in-the-Loop (HITL) suspension & argument resolution |
-| **Exactly-Once Idempotency & Replay Ledger** | v0.23.0 | Deterministic auto-key derivation (`idk_<sha256>`), `X-Warmplane-Deduplicated: true` header caching, replay count tracking, WORM audit trail linking (`idempotency_key`, `is_replay`), and `/v1/idempotency/records` inspection APIs |
-| **Embedded Rust Library Engine** | v0.23.0 | Direct in-process library interface (`EmbeddedWarmplane`, `ControlPlaneHandle`) with strongly typed response envelopes (`Envelope<T>`), direct tool/resource/prompt execution, and graceful cancellation on caller's Tokio runtime |
-| **MCP HTTP/SSE Server Mode** | v0.22.0 | Streamable HTTP/SSE MCP server (`mcp-http-server`) for remote network clients; daemon co-hosting via `mcpHttpServer` config block; profile restriction, auth enforcement on non-loopback bind, graceful shared-state shutdown |
-| **Signal Handling & Graceful Teardown** | v0.21.0 | Immediate signal cancellation (`CancellationToken`), instant SSE stream termination, clean stdio child orphan protection (`kill_on_drop`), and bounded drain safety timeouts |
-**3. Run & Connect**
-
-```bash
-# Start HTTP daemon & Web Control Deck on http://127.0.0.1:9090
+# Start background daemon & Web Control Deck on http://127.0.0.1:9090
 warmplane daemon
 
-# Expose warmplane as a standard stdio MCP facade to Claude Desktop or Cursor
+# Or expose Warmplane as a stdio MCP server for Claude Desktop or Cursor
 warmplane mcp-server
 ```
 
 ---
 
-## Core Capabilities
+## 🔌 Client Interfaces
 
-| Capability | Version | Description |
+Warmplane exposes three primary access models sharing the same unified core state, policy gates, and telemetry:
+
+### 1. Native MCP Stdio Proxy (`warmplane mcp-server`)
+Point any MCP-native desktop client (Claude Desktop, Cursor, Zed, Windsurf) directly to Warmplane:
+```json
+{
+  "mcpServers": {
+    "warmplane": {
+      "command": "warmplane",
+      "args": ["mcp-server", "--config", "mcp_servers.json", "--profile", "coding"]
+    }
+  }
+}
+```
+
+### 2. HTTP REST Control Plane (`warmplane daemon`)
+Full-featured HTTP JSON API for gateways, web apps, and backend services:
+- `GET /v1/capabilities`: Compact capability catalog index
+- `POST /v1/capabilities/search`: Hybrid lexical + semantic capability search
+- `POST /v1/tools/call`: Normalized execution envelope with context distillation (`_jsonpath`, `_limit_lines`) and idempotency keys
+- `POST /v1/tools/batch_call`: Chained multi-step execution with `$step.field` parameter interpolation
+- `GET /v1/tasks` & `POST /v1/tasks/:id/update`: SEP-2663 async task lifecycle & HITL review
+- `GET /ui`: Embedded standalone Web Control Deck
+
+### 3. In-Process Embedded Engine (`EmbeddedWarmplane`)
+Direct in-process Rust library for zero-overhead agent execution without HTTP child processes or network hops:
+```rust
+use warmplane::{EmbeddedWarmplane, engine::ExecutionOptions};
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let (cp, _token) = EmbeddedWarmplane::start_from_path("mcp_servers.json").await?;
+    let res = cp.call_capability(
+        "filesystem.read_file",
+        json!({ "path": "/tmp/test.txt" }),
+        ExecutionOptions::default().with_request_id("req-1"),
+    ).await;
+    println!("Output: {:?}", res.data);
+    Ok(())
+}
+```
+
+---
+
+## 🤖 Teach Your AI Agent Warmplane (Agent Skill)
+
+Warmplane includes an official **Agent Skill** (`.skills/warmplane/`) adhering to the [`agentskills.io`](https://agentskills.io) open standard. Point your coding agent (Claude Code, Google Antigravity, Cursor, OpenCode, Codex) directly to this repository:
+
+```bash
+# Install Warmplane Skill into Claude Code
+claude skill install Warmplane/warmplane
+
+# Or copy into your agent workspace
+mkdir -p .agents/skills/warmplane && cp -r .skills/warmplane/* .agents/skills/warmplane/
+```
+
+- 📖 [`.skills/warmplane/SKILL.md`](.skills/warmplane/SKILL.md) — Core prompt triggers and standard agent workflows
+- 🔌 [`references/mcp_stdio_usage.md`](.skills/warmplane/references/mcp_stdio_usage.md) — 1-Click client configs (17 IDEs) & MCP facade tools
+- ⚙️ [`references/configuration_schema.md`](.skills/warmplane/references/configuration_schema.md) — `mcp_servers.json` schema & dynamic secrets
+- 🛠️ [`references/cli_cheatsheet.md`](.skills/warmplane/references/cli_cheatsheet.md) — Terminal commands for daemon, sync, and vault
+- 🚑 [`references/error_resolution.md`](.skills/warmplane/references/error_resolution.md) — Circuit breakers, policy denials, and recovery
+
+---
+
+## 📊 Performance Highlights
+
+Warmplane is engineered in pure Rust with zero-cost abstractions:
+
+- **50.4 ns**: ETag Cache Validation (`If-None-Match` $\rightarrow$ `304 Not Modified`)
+- **159.8 ns**: Idempotent Cache-Hit Deduplication
+- **1.58 µs**: SHA-256 Incremental Catalog Version Hashing ($N=10$)
+- **15.9 µs**: Filtered Hybrid Capability Search ($N=50$)
+- **372.1 µs**: Zero-Allocation Lexical Tag Search across 1,000 Tools
+
+👉 See complete benchmarks and methodology in [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+
+---
+
+## 🛡️ Core Capabilities Matrix
+
+| Capability | Since | Description |
 |---|---|---|
-| **Custom Alias Descriptions & Signatures** | v0.27.0 | Polymorphic docstring overrides (`AliasTarget`), compact LLM signatures, and bidirectional alias resolution |
+| **Custom Alias Descriptions & Signatures** | v0.27.0 | Polymorphic docstring overrides (`AliasTarget`), compact LLM signatures (`tool(req, [opt])`), bidirectional alias resolution |
 | **1-Click AI Client Injector & Sync** | v0.26.0 | Bidirectional MCP adapter engine for Claude Desktop, OpenCode, Claude Code, Cursor, Zed, Windsurf, Cline |
 | **Native OS Keychain Vault** | v0.26.0 | Secure OS Keychain storage and dynamic secret URI resolution (`keychain://`, `op://`, `env://`) |
 | **Actionable ChatOps Webhooks** | v0.26.0 | Bidirectional Slack, Discord, and Microsoft Teams approval cards with HMAC-SHA256 signatures |
@@ -297,7 +206,7 @@ warmplane mcp-server
 | **Multi-Tenant RBAC** | v0.20.0 | Role-based token access, deterministic catalog partitioning, tenant context propagation |
 | **Client-Delegated MCP Sampling** | v0.19.0 | Reverse RPC sampling (`sampling/createMessage`) with ticket tracking & long-polling |
 | **Persistent State Subsystem** | v0.18.0 | Atomic restart-resilient disk storage (`AtomicFile<T>`) for approvals, idempotency, and OAuth2 tokens |
-| **Graceful Shutdown & Signals** | v0.18.0 | Robust `SIGINT`/`SIGTERM` handling, async worker flushes, child process orphan prevention |
+| **Signal Handling & Graceful Teardown** | v0.18.0 | Robust `SIGINT`/`SIGTERM` handling, async worker flushes, child process orphan prevention |
 | **MCP Resource & Prompt Studio** | v0.17.0 | 360° resource explorer, prompt template renderer with dynamic forms, and SSE syncing |
 | **Multi-Step Batch Pipelines** | v0.17.0 | Visual pipeline editor with reference parameter interpolation (`POST /v1/tools/batch_call`) |
 | **Enterprise Security & Auth** | v0.16.0 | Token-based middleware protection, WORM audit HMAC verification, and secret masking |
