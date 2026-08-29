@@ -320,3 +320,18 @@ export const SERVER_TEMPLATES: ServerTemplate[] = [
     envFields: []
   }
 ];
+
+export function findTemplateForServer(serverId: string, cmd?: string, args?: string[]): ServerTemplate | undefined {
+  // 1. Direct ID match
+  const direct = SERVER_TEMPLATES.find(t => t.id.toLowerCase() === serverId.toLowerCase());
+  if (direct) return direct;
+
+  // 2. Command / Args matching
+  const fullCmd = `${cmd || ''} ${(args || []).join(' ')}`.toLowerCase();
+  return SERVER_TEMPLATES.find(t => {
+    const tCmd = `${t.command} ${t.defaultArgs.join(' ')}`.toLowerCase();
+    if (fullCmd.includes(t.id.toLowerCase())) return true;
+    if (t.command && fullCmd.includes(t.command.toLowerCase()) && t.defaultArgs.some(a => fullCmd.includes(a.toLowerCase()))) return true;
+    return false;
+  });
+}

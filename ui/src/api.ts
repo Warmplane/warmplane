@@ -151,6 +151,7 @@ export interface SecretItem {
   uri: string;
   is_vault: boolean;
   exists?: boolean;
+  is_unconfigured_requirement?: boolean;
   backend: string;
   display: string;
 }

@@ -1,5 +1,6 @@
 import { store } from '../state';
 import { api } from '../api';
+import { findTemplateForServer } from '../templates';
 
 export function renderServers(): string {
   const state = store.getState();
@@ -33,12 +34,24 @@ export function renderServers(): string {
       const statusInfo = state.serverStatuses[k] || { status: 'connected', protocol_version: '2026-07-28' };
       const isIncludedInProfile = !isProfileActive || includedServers.includes(k);
 
-      const envBadges = s.env ? Object.entries(s.env).map(([k, v]) => {
-        if (v.startsWith('keychain://')) return `<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">🔒 ${escapeHtml(k)} (Keychain)</span>`;
-        if (v.startsWith('op://')) return `<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">🔒 ${escapeHtml(k)} (1Password)</span>`;
-        if (v.startsWith('env://')) return `<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3);">🔒 ${escapeHtml(k)} (Env)</span>`;
-        return `<span style="color: var(--text-dim);">${escapeHtml(k)}=***</span>`;
-      }).join(' ') : 'None';
+      const template = findTemplateForServer(k, s.command, s.args);
+      const configuredEnvKeys = Object.keys(s.env || {});
+      const missingRequiredEnv = (template?.envFields || []).filter(
+        f => f.required && !configuredEnvKeys.includes(f.key)
+      );
+
+      const envBadgesList = s.env ? Object.entries(s.env).map(([envK, v]) => {
+        if (v.startsWith('keychain://')) return `<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">🔒 ${escapeHtml(envK)} (Keychain)</span>`;
+        if (v.startsWith('op://')) return `<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">🔒 ${escapeHtml(envK)} (1Password)</span>`;
+        if (v.startsWith('env://')) return `<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3);">🔒 ${escapeHtml(envK)} (Env)</span>`;
+        return `<span style="color: var(--text-dim);">${escapeHtml(envK)}=***</span>`;
+      }) : [];
+
+      for (const m of missingRequiredEnv) {
+        envBadgesList.push(`<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);" title="Required environment variable '${escapeHtml(m.key)}' is missing">⚠️ Missing ${escapeHtml(m.key)}</span>`);
+      }
+
+      const envBadges = envBadgesList.length > 0 ? envBadgesList.join(' ') : 'None';
 
       const cb = (state.circuitBreakers || []).find(c => c.server_id === k);
       let cbBadge = `<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.25);">Circuit: CLOSED</span>`;

@@ -1,22 +1,62 @@
 import { store } from '../state';
 import { api } from '../api';
+import { findTemplateForServer } from '../templates';
 
 export function renderSecrets(): string {
   const state = store.getState();
-  const secrets = state.secrets || [];
-  const total = secrets.length;
-  const securedCount = secrets.filter(s => s.is_vault).length;
-  const unsecuredCount = total - securedCount;
+  const configuredSecrets = state.secrets || [];
+  const servers = state.config.mcpServers || {};
 
-  const rowsHtml = secrets.length === 0 ? `
+  // Discover any servers that are missing required keys defined in their template
+  const missingSecrets: Array<{
+    server: string;
+    key: string;
+    uri: string;
+    is_vault: boolean;
+    exists: boolean;
+    backend: string;
+    display: string;
+    is_unconfigured_requirement?: boolean;
+  }> = [];
+
+  for (const [srvName, srvCfg] of Object.entries(servers)) {
+    const tmpl = findTemplateForServer(srvName, srvCfg.command, srvCfg.args);
+    if (tmpl) {
+      const confKeys = Object.keys(srvCfg.env || {});
+      for (const field of tmpl.envFields) {
+        if (field.required && !confKeys.includes(field.key)) {
+          missingSecrets.push({
+            server: srvName,
+            key: field.key,
+            uri: '(Not Configured)',
+            is_vault: false,
+            exists: false,
+            backend: 'Required Variable',
+            display: `Required by ${tmpl.name} template (${field.label})`,
+            is_unconfigured_requirement: true,
+          });
+        }
+      }
+    }
+  }
+
+  const allSecrets = [...configuredSecrets, ...missingSecrets];
+  const total = allSecrets.length;
+  const securedCount = allSecrets.filter(s => s.is_vault && s.exists !== false).length;
+  const missingCount = allSecrets.filter(s => s.exists === false).length;
+  const unsecuredCount = allSecrets.filter(s => !s.is_vault && s.exists !== false).length;
+
+  const rowsHtml = allSecrets.length === 0 ? `
     <div style="padding: 32px; text-align: center; color: var(--text-dim);">
       No environment variables or secrets configured in active servers.
     </div>
-  ` : secrets.map(s => {
+  ` : allSecrets.map(s => {
     let badge = `<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);">Plaintext (Unsecured)</span>`;
-    const isMissing = s.is_vault && s.exists === false;
+    const isMissing = s.exists === false;
 
-    if (isMissing) {
+    if (s.is_unconfigured_requirement) {
+      badge = `<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);">⚠️ Not Configured (Required)</span>`;
+    } else if (isMissing) {
       badge = `<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.1);">⚠️ Missing from ${escapeHtml(s.backend)}</span>`;
     } else if (s.is_vault) {
       badge = `<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">🔒 ${escapeHtml(s.backend)}</span>`;
@@ -29,7 +69,9 @@ export function renderSecrets(): string {
         <span style="font-family: var(--ff-mono); font-size: 11px; color: ${isMissing ? 'var(--red-400)' : 'var(--text-muted)'}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(s.display)}</span>
         <div>${badge}</div>
         <div style="display: flex; gap: 6px; justify-content: flex-end;">
-          ${isMissing ? `
+          ${s.is_unconfigured_requirement ? `
+            <button class="btn btn-primary" style="padding: 2px 8px; font-size: 11px;" onclick="window.app.quickVaultEnv('${escapeHtml(s.server)}', '${escapeHtml(s.key)}')">➕ Configure in Keychain</button>
+          ` : isMissing ? `
             <button class="btn btn-primary" style="padding: 2px 8px; font-size: 11px;" onclick="window.app.quickVaultEnv('${escapeHtml(s.server)}', '${escapeHtml(s.key)}')">➕ Re-add Key</button>
             <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 11px; color: var(--red-400);" onclick="window.app.removeSecretFromConfig('${escapeHtml(s.server)}', '${escapeHtml(s.key)}')">Remove from Config</button>
           ` : !s.is_vault ? `
@@ -50,7 +92,7 @@ export function renderSecrets(): string {
     <!-- Stat Header Cards -->
     <div class="bento-grid" style="margin-bottom: 20px;">
       <div class="bento-card col-4">
-        <div class="stat-label">Total Secret References</div>
+        <div class="stat-label">Total Required &amp; Configured</div>
         <div class="stat-value" style="color: var(--cyan-400);">${total}</div>
         <div class="stat-sub">Across all configured MCP servers</div>
       </div>
@@ -60,9 +102,9 @@ export function renderSecrets(): string {
         <div class="stat-sub">Zero-disk plaintext exposure</div>
       </div>
       <div class="bento-card col-4">
-        <div class="stat-label">Plaintext Secrets</div>
-        <div class="stat-value" style="color: ${unsecuredCount > 0 ? 'var(--red-400)' : 'var(--green-400)'};">${unsecuredCount}</div>
-        <div class="stat-sub">${unsecuredCount > 0 ? 'Recommend migrating to Keychain' : 'All credentials protected'}</div>
+        <div class="stat-label">Missing or Unsecured</div>
+        <div class="stat-value" style="color: ${missingCount + unsecuredCount > 0 ? 'var(--red-400)' : 'var(--green-400)'};">${missingCount + unsecuredCount}</div>
+        <div class="stat-sub">${missingCount > 0 ? `${missingCount} missing required key(s)` : unsecuredCount > 0 ? 'Recommend migrating to Keychain' : 'All credentials protected'}</div>
       </div>
     </div>
 
