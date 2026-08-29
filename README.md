@@ -17,9 +17,10 @@ Warmplane is a local control plane and reverse proxy for AI tool calling. It mai
 ### The Problems Warmplane Solves
 
 1. **Context Window Token Bloat**: Sending massive JSON schemas for dozens of tools on every turn wastes tens of thousands of prompt tokens. Warmplane provides a compact catalog index (cutting payload size by 58–96%), on-demand schema discovery, and SHA-256 ETag caching.
-2. **Duplicate Invocations & Retries**: When network hiccups occur, naive agents retry blind mutations. Warmplane provides crash-resilient, exactly-once idempotency deduplication (`idk_<sha256>`) and explicit retry classifications (`safe`, `idempotent`, `unsafe`).
-3. **Ungoverned Execution & Security**: Connecting agents directly to live infrastructure risks unauthorized operations. Warmplane enforces multi-tenant RBAC, per-profile server constellations, secret redaction, and Human-in-the-Loop (HITL) approval gates.
-4. **Cascading Hangs & Flakiness**: Slow or crashed upstream processes freeze agent loops. Warmplane monitors health with sub-microsecond circuit breakers and self-healing process supervision.
+2. **Poor Tool Descriptions & Ambiguity**: Many upstream tools have sparse, misleading, or poorly phrased docstrings that confuse LLMs. Warmplane lets you override tool summaries and descriptions via polymorphic aliases (`AliasTarget`) and generates compact parameter signatures (`tool(req, [opt])`) to optimize zero-shot agent accuracy without upstream code edits.
+3. **Duplicate Invocations & Retries**: When network hiccups occur, naive agents retry blind mutations. Warmplane provides crash-resilient, exactly-once idempotency deduplication (`idk_<sha256>`) and explicit retry classifications (`safe`, `idempotent`, `unsafe`).
+4. **Ungoverned Execution & Security**: Connecting agents directly to live infrastructure risks unauthorized operations. Warmplane enforces multi-tenant RBAC, per-profile server constellations, secret redaction, and Human-in-the-Loop (HITL) approval gates.
+5. **Cascading Hangs & Flakiness**: Slow or crashed upstream processes freeze agent loops. Warmplane monitors health with sub-microsecond circuit breakers and self-healing process supervision.
 
 ---
 
