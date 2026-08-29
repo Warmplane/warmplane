@@ -451,18 +451,18 @@ pub async fn handle_update_alias(
     };
 
     let kind_lower = payload.kind.to_lowercase();
-    if let Some(target) = payload.target {
+    if let Some(ref target) = payload.target {
         let passthrough = payload.passthrough.unwrap_or(false);
         let alias_target =
             if payload.summary.is_some() || payload.description.is_some() || passthrough {
                 crate::config::AliasTarget::Detailed {
-                    target,
-                    summary: payload.summary,
-                    description: payload.description,
+                    target: target.clone(),
+                    summary: payload.summary.clone(),
+                    description: payload.description.clone(),
                     passthrough,
                 }
             } else {
-                crate::config::AliasTarget::Simple(target)
+                crate::config::AliasTarget::Simple(target.clone())
             };
 
         match kind_lower.as_str() {
@@ -514,6 +514,34 @@ pub async fn handle_update_alias(
     // Immediately reload config in memory so catalog reflects alias changes live
     let _ = state.reload_from_disk().await;
 
+    state.audit_handle.send(crate::audit::RawAuditEvent {
+        event_type: crate::audit::AuditEventType::ConfigMutation,
+        trace_id: format!("trace-alias-{}", payload.alias),
+        request_id: None,
+        actor_id: None,
+        work_item_id: None,
+        client_ip: None,
+        server_id: None,
+        capability_id: Some(payload.alias.clone()),
+        resource_uri: None,
+        sanitized_args: Some(serde_json::json!({
+            "action": "update_alias",
+            "kind": payload.kind,
+            "alias": payload.alias,
+            "target": payload.target,
+            "passthrough": payload.passthrough,
+        })),
+        sanitized_response: Some(serde_json::json!({ "status": "updated" })),
+        execution_latency_us: None,
+        status: crate::audit::AuditEventStatus::Success,
+        error_code: None,
+        error_message: None,
+        operator_id: None,
+        approval_ticket_id: None,
+        idempotency_key: None,
+        is_replay: None,
+    });
+
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 
@@ -545,12 +573,38 @@ pub async fn handle_update_policy(
     // Immediately update in-memory active policy
     {
         let mut pol_guard = state.policy.write().await;
-        *pol_guard = crate::daemon::Policy::from_config(Some(payload));
+        *pol_guard = crate::daemon::Policy::from_config(Some(payload.clone()));
     }
 
     state.notify_tools_changed();
     state.notify_resources_changed();
     state.notify_prompts_changed();
+
+    state.audit_handle.send(crate::audit::RawAuditEvent {
+        event_type: crate::audit::AuditEventType::ConfigMutation,
+        trace_id: "trace-policy-update".to_string(),
+        request_id: None,
+        actor_id: None,
+        work_item_id: None,
+        client_ip: None,
+        server_id: None,
+        capability_id: None,
+        resource_uri: None,
+        sanitized_args: Some(serde_json::json!({
+            "action": "update_policy",
+            "allow": payload.allow,
+            "deny": payload.deny,
+        })),
+        sanitized_response: Some(serde_json::json!({ "status": "updated" })),
+        execution_latency_us: None,
+        status: crate::audit::AuditEventStatus::Success,
+        error_code: None,
+        error_message: None,
+        operator_id: None,
+        approval_ticket_id: None,
+        idempotency_key: None,
+        is_replay: None,
+    });
 
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
@@ -586,9 +640,9 @@ pub async fn handle_upsert_profile(
     }
 
     let prof_cfg = crate::config::ProfileConfig {
-        servers: payload.servers,
-        description: payload.description,
-        policy: payload.policy,
+        servers: payload.servers.clone(),
+        description: payload.description.clone(),
+        policy: payload.policy.clone(),
     };
 
     config
@@ -606,12 +660,38 @@ pub async fn handle_upsert_profile(
     // Sync in-memory active profiles state
     {
         let mut prof_guard = state.profiles.write().await;
-        prof_guard.insert(payload.name, prof_cfg);
+        prof_guard.insert(payload.name.clone(), prof_cfg);
     }
 
     state.notify_tools_changed();
     state.notify_resources_changed();
     state.notify_prompts_changed();
+
+    state.audit_handle.send(crate::audit::RawAuditEvent {
+        event_type: crate::audit::AuditEventType::ConfigMutation,
+        trace_id: format!("trace-profile-{}", payload.name),
+        request_id: None,
+        actor_id: None,
+        work_item_id: None,
+        client_ip: None,
+        server_id: None,
+        capability_id: None,
+        resource_uri: None,
+        sanitized_args: Some(serde_json::json!({
+            "action": "upsert_profile",
+            "name": payload.name,
+            "servers": payload.servers,
+        })),
+        sanitized_response: Some(serde_json::json!({ "status": "updated" })),
+        execution_latency_us: None,
+        status: crate::audit::AuditEventStatus::Success,
+        error_code: None,
+        error_message: None,
+        operator_id: None,
+        approval_ticket_id: None,
+        idempotency_key: None,
+        is_replay: None,
+    });
 
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
@@ -651,6 +731,31 @@ pub async fn handle_delete_profile(
     state.notify_tools_changed();
     state.notify_resources_changed();
     state.notify_prompts_changed();
+
+    state.audit_handle.send(crate::audit::RawAuditEvent {
+        event_type: crate::audit::AuditEventType::ConfigMutation,
+        trace_id: format!("trace-profile-delete-{}", profile_id),
+        request_id: None,
+        actor_id: None,
+        work_item_id: None,
+        client_ip: None,
+        server_id: None,
+        capability_id: None,
+        resource_uri: None,
+        sanitized_args: Some(serde_json::json!({
+            "action": "delete_profile",
+            "name": profile_id,
+        })),
+        sanitized_response: Some(serde_json::json!({ "status": "deleted" })),
+        execution_latency_us: None,
+        status: crate::audit::AuditEventStatus::Success,
+        error_code: None,
+        error_message: None,
+        operator_id: None,
+        approval_ticket_id: None,
+        idempotency_key: None,
+        is_replay: None,
+    });
 
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }

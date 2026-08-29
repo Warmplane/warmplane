@@ -106,9 +106,12 @@ impl AppState {
 
             statuses_guard.insert(server_id.to_string(), status_val);
         }
-        let has_new_caps = !new_capabilities.is_empty();
-        let has_new_res = !new_resources.is_empty();
-        let has_new_prompts = !new_prompts.is_empty();
+        let new_caps_count = new_capabilities.len();
+        let new_res_count = new_resources.len();
+        let new_prompts_count = new_prompts.len();
+        let has_new_caps = new_caps_count > 0;
+        let has_new_res = new_res_count > 0;
+        let has_new_prompts = new_prompts_count > 0;
 
         {
             let mut caps_guard = self.capabilities.write().await;
@@ -166,6 +169,33 @@ impl AppState {
         if has_new_prompts {
             self.notify_prompts_changed();
         }
+
+        self.audit_handle.send(crate::audit::RawAuditEvent {
+            event_type: crate::audit::AuditEventType::ConfigMutation,
+            trace_id: format!("trace-mount-{}", server_id),
+            request_id: None,
+            actor_id: None,
+            work_item_id: None,
+            client_ip: None,
+            server_id: Some(server_id.to_string()),
+            capability_id: None,
+            resource_uri: None,
+            sanitized_args: Some(serde_json::json!({
+                "action": "mount_server",
+                "capabilities_count": new_caps_count,
+                "resources_count": new_res_count,
+                "prompts_count": new_prompts_count,
+            })),
+            sanitized_response: Some(serde_json::json!({ "status": "mounted" })),
+            execution_latency_us: None,
+            status: crate::audit::AuditEventStatus::Success,
+            error_code: None,
+            error_message: None,
+            operator_id: None,
+            approval_ticket_id: None,
+            idempotency_key: None,
+            is_replay: None,
+        });
 
         Ok(())
     }
@@ -272,6 +302,30 @@ impl AppState {
         if has_removed_prompts {
             self.notify_prompts_changed();
         }
+
+        self.audit_handle.send(crate::audit::RawAuditEvent {
+            event_type: crate::audit::AuditEventType::ConfigMutation,
+            trace_id: format!("trace-unmount-{}", server_id),
+            request_id: None,
+            actor_id: None,
+            work_item_id: None,
+            client_ip: None,
+            server_id: Some(server_id.to_string()),
+            capability_id: None,
+            resource_uri: None,
+            sanitized_args: Some(serde_json::json!({
+                "action": "unmount_server",
+            })),
+            sanitized_response: Some(serde_json::json!({ "status": "unmounted" })),
+            execution_latency_us: None,
+            status: crate::audit::AuditEventStatus::Success,
+            error_code: None,
+            error_message: None,
+            operator_id: None,
+            approval_ticket_id: None,
+            idempotency_key: None,
+            is_replay: None,
+        });
     }
 
     /// Performs graceful shutdown of all upstream servers and background worker queues.
