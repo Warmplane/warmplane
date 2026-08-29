@@ -6,7 +6,7 @@
 
 > **The Local control plane that keeps MCP sessions warm with compact capability/resource/prompt facades.**
 > 
-> v0.26.1 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.27.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 ---
 
@@ -310,6 +310,14 @@ warmplane mcp-server
 ---
 
 ## Changelog
+
+### v0.27.0 — Custom Alias Descriptions, Compact LLM Tool Signatures & Task Inspector
+- **Custom Alias Descriptions & Docstring Overrides (`src/config.rs`, `src/supervisor.rs`):** Upgraded alias configuration model to support polymorphic definitions (`AliasTarget`). Aliases can be simple target strings (`"alias": "server.tool"`) or detailed objects (`"alias": { "target": "server.tool", "summary": "...", "description": "..." }`), enabling platform engineers and developers to repair or improve poorly-described upstream tools for zero-shot LLM ergonomics without upstream source changes.
+- **Compact LLM Tool Signatures (`src/supervisor.rs`, `src/daemon/types.rs`, `src/engine/types.rs`):** Derived deterministic, compact parameter signatures (`tool_name(req1, [opt1], [opt2])`) from JSON Schemas (accounting for required fields vs nullable/optional properties). Surfaced across MCP `capabilities_list`, catalog search, and Web UI index summaries.
+- **Bidirectional Alias Resolution (`src/supervisor.rs`):** Resolved mapping mismatch where supervisory discovery checks target equality against configured alias keys, ensuring canonical targets are promoted seamlessly to client interfaces.
+- **Rich Task Inspector Modal & Dual Controls (`ui/src/components/tasks.ts`):** Enhanced Tasks & Approvals UI with dedicated inspector modal, live state viewers, formatted JSON payload inspections, and dual inspect/cancel action controls.
+- **Server Template Missing Secret Warnings (`ui/src/components/servers.ts`, `src/vault/`):** Added live `(Missing Keys)` warning badges and status indicators across server cards and diagnostics when required template environment variables or Keychain secrets are unconfigured.
+- **Live Alias Configuration API & UI:** Added custom summary inputs to the Control Deck Aliases tab (`ui/src/components/aliases.ts`) and CLI (`warmplane config alias set --summary ...`) with automated live hot-reloading reconciliation on disk mutation.
 
 ### v0.26.1 — MCP Stdio Stream Isolation & Logging Fix
 - **MCP Stdio Stream Isolation (`src/telemetry.rs`):** Configured `tracing_subscriber::fmt::layer()` to write to `stderr` (`.with_writer(std::io::stderr)`). Prevents runtime structured JSON logs and span diagnostics from polluting `stdout`.
