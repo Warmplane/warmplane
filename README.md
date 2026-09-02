@@ -97,15 +97,31 @@ Or configure `mcp_servers.json`:
 }
 ```
 
-### 3. Start Warmplane
+### 3. Connect or Start Warmplane
 
-```bash
-# Start background daemon & Web Control Deck on http://127.0.0.1:9090
-warmplane daemon
+Choose the run-mode that matches your workflow:
 
-# Or expose Warmplane as a stdio MCP server for Claude Desktop or Cursor
-warmplane mcp-server
-```
+- **Mode 1: Direct MCP Stdio Integration (No background daemon needed)**:
+  Point your AI client (Cursor, Claude Desktop, Antigravity) to `warmplane mcp-server`. The AI client spawns Warmplane directly as a child process:
+  ```json
+  {
+    "mcpServers": {
+      "warmplane": {
+        "command": "warmplane",
+        "args": ["mcp-server", "--config", "mcp_servers.json", "--profile", "coding"]
+      }
+    }
+  }
+  ```
+
+- **Mode 2: Background Daemon & Web Control Deck**:
+  Run a central persistent daemon hosting the REST API, interactive Web UI, and audit logs:
+  ```bash
+  warmplane daemon --port 9090
+  ```
+
+- **Mode 3: Persistent Daemon with Streamable HTTP/SSE MCP Connection**:
+  If `mcpHttpServer` is configured, your AI clients can connect over HTTP/SSE (`http://127.0.0.1:9191/sse`) to a single shared daemon instance.
 
 ---
 

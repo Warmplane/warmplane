@@ -16,6 +16,89 @@ Warmplane optimizes AI agent tool execution across three core technical dimensio
 - **Payload footprint**: Reduces LLM context token usage by serving lightweight catalog indexes first and full schema details on demand.
 - **System determinism**: Standardizes request envelopes, response structures, retry classifications, and error codes across heterogeneous upstream tools.
 
+### 1.1 Understanding Run-Modes & Architecture Topologies
+
+Warmplane provides flexible execution models depending on whether you want a zero-overhead desktop integration, a central persistent background service, or a shared network cluster:
+
+| Run-Mode | Command | Host / Parent Process | Protocol & Port | Upstream Lifecycle | Primary Use Case |
+|---|---|---|---|---|---|
+| **MCP Stdio Server Mode** | `warmplane mcp-server` | Spawned as child process by AI client (Claude Desktop, Cursor, Antigravity) | Standard I/O (JSON-RPC `stdin`/`stdout`) | Kept warm inside child process while AI client is open | **Zero background daemon needed**. Direct desktop IDE integration. |
+| **HTTP Daemon Mode + Web UI** | `warmplane daemon` | Background service / systemd / terminal | HTTP REST (`:9090`) + Control Deck UI | Kept warm continuously in the background daemon process | Web management UI, REST orchestrations, ChatOps webhooks. |
+| **Daemon Co-Hosted HTTP/SSE MCP** | `warmplane daemon` (with `mcpHttpServer`) | Same background daemon process | Streamable HTTP/SSE (`:9191` or configured port) | Shared with daemon lifecycle | Single persistent 24/7 daemon serving local or remote HTTP/SSE MCP clients. |
+| **Standalone MCP HTTP/SSE Server** | `warmplane mcp-http-server` | Dedicated server process | Streamable HTTP/SSE (`:9191`) | Kept warm in server process | Headless network/remote agent clusters. |
+| **Embedded Rust Engine** | `EmbeddedWarmplane::start()` | In-process Rust application | Direct Rust structs & in-memory channels | Tied to host process lifetime | Embedded Rust agent applications (no child processes or HTTP). |
+
+#### Architecture Topologies
+
+##### Topology A: Direct Stdio Integration (No Daemon Required)
+In this mode, your AI client (e.g., Claude Desktop, Cursor, Zed) spawns `warmplane mcp-server` directly as a subprocess. Warmplane boots upstreams in the background and speaks standard JSON-RPC over standard input/output (`stdin`/`stdout`). You do **not** need `warmplane daemon` running.
+
+```mermaid
+flowchart LR
+    subgraph ClientProcess ["AI Client Process (Cursor / Claude Desktop / IDE)"]
+        Agent["AI Agent / LLM"]
+    end
+
+    subgraph StdioProcess ["warmplane mcp-server (Subprocess)"]
+        MCPFacade["MCP Stdio Facade\n(JSON-RPC stdin/stdout)"]
+        SupervisorA["Supervisor Engine"]
+    end
+
+    subgraph UpstreamsA ["Upstream MCP Servers"]
+        S1["server-1"]
+        S2["server-2"]
+    end
+
+    Agent <-->|"stdin / stdout"| MCPFacade
+    MCPFacade <--> SupervisorA
+    SupervisorA <-->|"stdio / http"| UpstreamsA
+```
+
+*Diagram fallback:* ![Topology A: Direct Stdio Integration](assets/topology-a.png)
+
+##### Topology B: Persistent Daemon with HTTP/SSE Client Connection
+If you prefer a single long-lived daemon running 24/7 (avoiding per-client process spawns or serving multiple clients/remote hosts), start `warmplane daemon` with `mcpHttpServer` enabled. Clients connect to the daemon over Streamable HTTP/SSE (`http://127.0.0.1:9191/sse`).
+
+```mermaid
+flowchart TD
+    subgraph Clients ["AI Clients & Web Users"]
+        Desktop["Claude Desktop / Cursor\n(HTTP/SSE MCP)"]
+        Browser["Operator Web Browser\n(Control Deck UI)"]
+        Script["REST API Client / cURL"]
+    end
+
+    subgraph DaemonProcess ["warmplane daemon (PID: 1234)"]
+        SSEFacade["Streamable HTTP/SSE MCP Facade (:9191)"]
+        RESTFacade["HTTP REST API & Control Deck UI (:9090)"]
+        SupervisorB["Shared Supervisor Engine"]
+    end
+
+    subgraph UpstreamsB ["Upstream MCP Servers"]
+        U1["sqlite"]
+        U2["github"]
+        U3["semble-rs"]
+    end
+
+    Desktop <-->|"HTTP / SSE"| SSEFacade
+    Browser <-->|"HTTP GET / UI"| RESTFacade
+    Script <-->|"HTTP POST / REST"| RESTFacade
+    SSEFacade <--> SupervisorB
+    RESTFacade <--> SupervisorB
+    SupervisorB <-->|"persistent connections"| UpstreamsB
+```
+
+*Diagram fallback:* ![Topology B: Persistent Daemon with HTTP/SSE Client Connection](assets/topology-b.png)
+
+##### Topology C: Parallel Daemon and Stdio Processes (Shared State)
+You can run `warmplane daemon` (for the Web UI on `:9090`) and simultaneously run `warmplane mcp-server` in your IDE. When pointed to the same configuration file path (e.g. `--config /path/to/mcp_servers.json`), both processes share the same upstream definitions, OS Keychain vault, and persist audit records to the common `.warmplane/state/` store.
+
+#### How Configuration & Hot-Reloading Interact
+- **Configuration Files**: Both `warmplane daemon` and `warmplane mcp-server` accept `--config <path>` (defaulting to `mcp_servers.json` in the current working directory). When pointed to the same file, they resolve the same upstream servers, profiles, and secrets via OS Keychain (`keychain://`), 1Password (`op://`), or environment variables (`env://`).
+- **Daemon Hot-Reloading**: When modifying configuration, `warmplane reload` sends a `POST /v1/config/reload` request to the running daemon on port 9090.
+- **Stdio Server Hot-Reloading**: Running `warmplane mcp-server` processes monitor their configured config file on disk and automatically re-reconcile aliases and servers in memory, immediately broadcasting `notifications/tools/list_changed` over the active MCP session.
+
+---
+
 ### Client Interfaces
 
 Warmplane exposes six client interfaces backed by shared core engine state:
@@ -26,7 +109,6 @@ Warmplane exposes six client interfaces backed by shared core engine state:
 4. **MCP Stdio Server Mode (`mcp-server`)**: Standard MCP stdio interface for direct integration with MCP-native AI clients (Claude Desktop, Cursor, Zed).
 5. **MCP HTTP/SSE Server Mode (`mcp-http-server`)**: Streamable HTTP/SSE MCP server for remote MCP clients connecting over a network socket (CI pipelines, multi-host agent clusters, remote desktop clients).
 6. **CLI Facade (`warmplane <command>`)**: Command-line interface for administrative scripting, server hot-reloading (`warmplane reload`), health checks, and manual debugging.
-
 
 ---
 
