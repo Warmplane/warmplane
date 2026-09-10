@@ -659,6 +659,8 @@ If `mcpHttpServer` is configured in the config file, the daemon automatically co
 
 ### 5.2 MCP Stdio Server Mode
 
+The Web UI's client connection action lets you choose between **stdio** and **HTTP**. Stdio launches `warmplane mcp-server` inside the client. HTTP writes a URL pointing at the already-running daemon's Streamable HTTP endpoint (`/mcp`); configure `mcpHttpServer` and restart the daemon first. HTTP installation never starts or edits the daemon.
+
 Run Warmplane as a stdio MCP server for native integration with desktop AI clients (Claude Desktop, Cursor, VS Code):
 
 ```bash

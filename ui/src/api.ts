@@ -143,6 +143,7 @@ export interface ClientAppStatus {
   is_attached: boolean;
   attached_profile?: string | null;
   other_servers_count: number;
+  attached_transport?: 'stdio' | 'http' | null;
 }
 
 export interface SecretItem {
@@ -348,6 +349,7 @@ export interface McpConfig {
   resilience?: ResilienceConfig;
   audit?: Record<string, any>;
   toolTimeoutMs?: number;
+  mcpHttpServer?: { port?: number; bind?: string; profile?: string };
 }
 
 export interface GetConfigResponse {
@@ -700,11 +702,11 @@ export class WarmplaneClient {
     return res.json();
   }
 
-  async attachClient(clientId: string, profile?: string): Promise<{ ok: boolean; message: string; backup_path?: string; error?: string }> {
+  async attachClient(clientId: string, profile?: string, transport: 'stdio' | 'http' = 'stdio', httpUrl?: string): Promise<{ ok: boolean; message: string; backup_path?: string; transport?: 'stdio' | 'http'; http_url?: string; error?: string }> {
     const res = await fetch(`${this.baseUrl}/v1/clients/${encodeURIComponent(clientId)}/attach`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profile: profile || undefined }),
+      body: JSON.stringify({ profile: profile || undefined, transport, http_url: httpUrl || undefined }),
     });
     return res.json();
   }
@@ -749,5 +751,3 @@ export class WarmplaneClient {
 }
 
 export const api = new WarmplaneClient();
-
-

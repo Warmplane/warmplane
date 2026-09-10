@@ -81,12 +81,18 @@ pub async fn handle_client_command(cmd: ClientCommands) -> Result<()> {
                 profile,
                 config_path: Some(config),
                 binary_path: None,
+                transport: crate::client_sync::ClientTransport::Stdio,
+                http_url: None,
             };
             let res = attach_client(&client, &options)?;
             if res.ok {
                 println!("{}", format!("✔ {}", res.message).green().bold());
                 if let Some(bak) = res.backup_path {
                     println!("  Backup saved to: {}", bak.dimmed());
+                }
+                println!("  Transport: {:?}", res.transport);
+                if let Some(url) = res.http_url {
+                    println!("  Endpoint: {}", url);
                 }
             } else {
                 eprintln!("{}", format!("✖ {}", res.message).red().bold());

@@ -16,6 +16,7 @@ class WarmplaneApp {
   private activeTemplateCategory: string = 'all';
   private activeTemplateFilter: string = '';
   private selectedTemplate: ServerTemplate | null = null;
+  private pendingClientId: string | null = null;
 
   async init() {
     const port = window.location.port ? `:${window.location.port}` : '';
@@ -2321,10 +2322,68 @@ class WarmplaneApp {
         profile = store.getState().activeProfile || undefined;
       }
     }
-    const res = await api.attachClient(clientId, profile);
+    this.openClientAttachModal(clientId, profile);
+  }
+
+  openClientAttachModal(clientId: string, profile?: string) {
+    this.closeModals();
+    this.pendingClientId = clientId;
+    const cfg = store.getState().config;
+    const httpCfg = cfg.mcpHttpServer;
+    const defaultHttpUrl = httpCfg
+      ? `http://${httpCfg.bind === '0.0.0.0' || httpCfg.bind === '::' ? '127.0.0.1' : (httpCfg.bind || '127.0.0.1')}:${httpCfg.port || 9191}/mcp`
+      : '';
+    const title = document.getElementById('modal-client-title');
+    const transport = document.getElementById('modal-client-transport') as HTMLSelectElement | null;
+    const url = document.getElementById('modal-client-url') as HTMLInputElement | null;
+    const profileSelect = document.getElementById('modal-client-profile') as HTMLSelectElement | null;
+    const profileWrap = document.getElementById('modal-client-profile-wrap');
+    if (title) title.textContent = `Connect ${clientId}`;
+    if (transport) transport.value = 'stdio';
+    if (url) url.value = defaultHttpUrl;
+    if (profileSelect) {
+      const profiles = Object.keys(cfg.profiles || {});
+      profileSelect.innerHTML = `<option value="">All Tools (Default)</option>${profiles.map(p => `<option value="${escapeHtml(p)}">Profile: ${escapeHtml(p)}</option>`).join('')}`;
+      profileSelect.value = profile || '';
+      if (profileWrap) profileWrap.style.display = profiles.length > 0 ? 'block' : 'none';
+    }
+    this.updateClientTransportForm();
+    document.getElementById('modal-client-attach')?.classList.add('active');
+  }
+
+  updateClientTransportForm() {
+    const transport = (document.getElementById('modal-client-transport') as HTMLSelectElement | null)?.value || 'stdio';
+    const http = transport === 'http';
+    const group = document.getElementById('modal-client-http-group');
+    const status = document.getElementById('modal-client-http-status');
+    const configured = !!store.getState().config.mcpHttpServer;
+    if (group) group.style.display = http ? 'block' : 'none';
+    if (status) {
+      status.textContent = configured ? 'Uses the daemon Streamable HTTP endpoint. The daemon must already be running.' : 'HTTP is unavailable until mcpHttpServer is configured and the daemon is restarted.';
+      status.style.color = configured ? 'var(--text-dim)' : 'var(--amber-300)';
+    }
+  }
+
+  async submitClientAttach() {
+    const clientId = this.pendingClientId;
+    if (!clientId) return;
+    const transport = ((document.getElementById('modal-client-transport') as HTMLSelectElement | null)?.value || 'stdio') as 'stdio' | 'http';
+    const profile = (document.getElementById('modal-client-profile') as HTMLSelectElement | null)?.value || undefined;
+    const httpUrl = (document.getElementById('modal-client-url') as HTMLInputElement | null)?.value.trim() || undefined;
+    if (transport === 'http' && !store.getState().config.mcpHttpServer && !httpUrl) {
+      alert('Configure mcpHttpServer and restart the daemon, or provide an explicit HTTP endpoint.');
+      return;
+    }
+    if (transport === 'http' && !httpUrl) {
+      alert('Enter an HTTP endpoint URL.');
+      return;
+    }
+    const res = await api.attachClient(clientId, profile, transport, httpUrl);
     if (!res.ok) {
       alert(`Failed to attach client: ${res.error || res.message || 'Unknown error'}`);
     } else {
+      this.pendingClientId = null;
+      this.closeModals();
       await this.refreshData();
     }
   }
@@ -2718,4 +2777,3 @@ function escapeHtml(str: string): string {
 const app = new WarmplaneApp();
 (window as any).app = app;
 window.addEventListener('DOMContentLoaded', () => app.init());
-
