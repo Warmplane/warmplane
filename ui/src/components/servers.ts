@@ -238,7 +238,8 @@ function renderClientIntegrations(): string {
         let statusBadge = `<span class="brand-badge" style="color: var(--text-dim); border-color: rgba(255, 255, 255, 0.1);">Not Found</span>`;
         if (isAttached) {
           const profText = c.attached_profile ? ` · ${c.attached_profile}` : '';
-          statusBadge = `<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ Connected${escapeHtml(profText)}</span>`;
+          const transportText = c.attached_transport === 'http' ? 'HTTP' : 'stdio';
+          statusBadge = `<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ Connected · ${transportText}${escapeHtml(profText)}</span>`;
         } else if (isDetected) {
           statusBadge = `<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.08);">○ Ready</span>`;
         } else if (isInstalled) {

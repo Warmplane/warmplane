@@ -263,6 +263,12 @@ pub struct AttachClientApiRequest {
     /// Custom path to Warmplane configuration file.
     #[serde(default)]
     pub config_path: Option<String>,
+    /// Connection transport (`stdio` by default or `http`).
+    #[serde(default)]
+    pub transport: crate::client_sync::ClientTransport,
+    /// Optional HTTP endpoint override.
+    #[serde(default)]
+    pub http_url: Option<String>,
 }
 
 /// Request body for storing a secret in OS Keychain.

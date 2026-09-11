@@ -20,6 +20,7 @@ Warmplane aggregates multiple upstream MCP servers behind a single runtime. It k
 ## 2. Operational Model
 - **Tier 1 (Native MCP Stdio - Primary Mode)**: You connect to `warmplane` as a single MCP server over stdio. The client spawns `warmplane mcp-server` as a child process (no background daemon needed). Tools appear namespaced as `<server>.<tool>` or top-level passthrough aliases with zero startup delay. See [MCP Stdio Reference](./references/mcp_stdio_usage.md).
 - **Tier 2 (HTTP Daemon & Web UI - Centralized Mode)**: Start `warmplane daemon` to host the Web UI, REST endpoints, and optional Streamable HTTP/SSE facade (`http://127.0.0.1:9191/sse`) for multi-client connections.
+- **1-click client connections**: The Web UI can attach clients over stdio (client-launched `warmplane mcp-server`) or HTTP (a URL to the already-running daemon's `/mcp` endpoint). HTTP requires `mcpHttpServer` to be configured and the daemon restarted; it does not launch the daemon automatically.
 - **Tier 3 (REST & CLI - Orchestration)**: Use for progressive tool discovery, health checks, hot-reloading (`warmplane reload`), secrets vault, and Human-in-the-Loop (HITL) gates. See [REST API Reference](./references/http_rest_api.md) and [CLI Cheatsheet](./references/cli_cheatsheet.md).
 
 ## 3. Workflows

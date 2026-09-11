@@ -1,5 +1,6 @@
 # Rust Integrators Guide
 
+Client integrations may use either a spawned stdio facade or the daemon's Streamable HTTP `/mcp` endpoint; the latter requires `mcpHttpServer` to be enabled in the daemon configuration.
 This guide explains two approaches to integrating Warmplane in Rust:
 1. **Embedded Rust Engine (Direct in-process)**: Directly spawn `EmbeddedWarmplane` on your own `tokio` runtime without HTTP overhead or daemon management.
 2. **HTTP REST Client (`WarmplaneClient`)**: Drive a running Warmplane daemon over its HTTP REST API.

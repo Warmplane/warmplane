@@ -10,6 +10,8 @@ This guide explains how to drive a running Warmplane daemon from TypeScript over
 - Node.js 18+ or Bun 1.0+ (both ship with native `fetch`).
 - No external dependencies required — the client uses the built-in `fetch` API.
 
+For MCP client installation, Warmplane supports a spawned stdio facade or a daemon-hosted Streamable HTTP `/mcp` facade. HTTP requires `mcpHttpServer` in the daemon configuration.
+
 Start the daemon in a separate terminal:
 
 ```bash

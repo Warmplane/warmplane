@@ -140,7 +140,8 @@ export function renderOverview(): string {
     let statusText = 'Not Found';
     if (isAttached) {
       dotColor = 'var(--green-400)';
-      statusText = c.attached_profile ? `Connected (${c.attached_profile})` : 'Connected (All Tools)';
+      const transportText = c.attached_transport === 'http' ? 'HTTP' : 'stdio';
+      statusText = c.attached_profile ? `Connected · ${transportText} (${c.attached_profile})` : `Connected · ${transportText} (All Tools)`;
     } else if (isDetected) {
       dotColor = 'var(--amber-300)';
       statusText = 'Ready to Attach';

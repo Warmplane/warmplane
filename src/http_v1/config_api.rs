@@ -384,6 +384,8 @@ pub async fn handle_attach_client(
         profile: payload.profile,
         config_path: Some(payload.config_path.unwrap_or(state.config_path.clone())),
         binary_path: None,
+        transport: payload.transport,
+        http_url: payload.http_url,
     };
 
     match crate::client_sync::attach_client(&client_id, &options) {
@@ -394,6 +396,8 @@ pub async fn handle_attach_client(
                 "client_id": res.client_id,
                 "config_path": res.config_path,
                 "backup_path": res.backup_path,
+                "transport": res.transport,
+                "http_url": res.http_url,
                 "message": res.message,
             })),
         )

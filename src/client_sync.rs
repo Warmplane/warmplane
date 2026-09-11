@@ -28,6 +28,17 @@ pub enum ClientDialect {
     OpenCodeMcp,
 }
 
+/// Transport used for the Warmplane client connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientTransport {
+    /// Launch a dedicated Warmplane process and communicate over stdio.
+    #[default]
+    Stdio,
+    /// Connect to a running Warmplane Streamable HTTP endpoint.
+    Http,
+}
+
 /// Information definition for a known AI client application.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientAppDef {
@@ -62,6 +73,8 @@ pub struct ClientAppStatus {
     pub attached_profile: Option<String>,
     /// Total count of other MCP servers configured in this client.
     pub other_servers_count: usize,
+    /// Transport used by the attached Warmplane entry, if attached.
+    pub attached_transport: Option<ClientTransport>,
 }
 
 /// Options when attaching Warmplane to a client.
@@ -73,6 +86,11 @@ pub struct AttachOptions {
     pub config_path: Option<String>,
     /// Custom binary command name or path (defaults to current exe or "warmplane").
     pub binary_path: Option<String>,
+    /// Transport to write into the client configuration.
+    #[serde(default)]
+    pub transport: ClientTransport,
+    /// HTTP endpoint override. Required only when the derived endpoint is unsuitable.
+    pub http_url: Option<String>,
 }
 
 /// Result of an attach operation.
@@ -88,6 +106,18 @@ pub struct AttachResult {
     pub ok: bool,
     /// Message summarizing result.
     pub message: String,
+    /// Transport written to the client configuration.
+    pub transport: ClientTransport,
+    /// Effective HTTP endpoint, when using HTTP transport.
+    pub http_url: Option<String>,
+}
+
+impl ClientAppDef {
+    /// Returns whether this client accepts URL-based MCP server entries.
+    pub fn supports_http(&self) -> bool {
+        // All currently supported dialects have a documented URL form.
+        true
+    }
 }
 
 /// Result of a detach operation.
@@ -413,17 +443,19 @@ pub fn detect_clients() -> Vec<ClientAppStatus> {
             app_installed,
             is_attached,
             attached_profile,
+            attached_transport,
             other_servers_count,
         ) = if let Some(ref path) = config_path_opt {
             let config_exists = path.exists();
             let parent_exists = path.parent().map(|p| p.exists()).unwrap_or(false);
             let app_installed = config_exists || parent_exists;
 
-            let (is_attached, attached_profile, other_servers_count) = if config_exists {
-                inspect_client_config(path, client.dialect)
-            } else {
-                (false, None, 0)
-            };
+            let (is_attached, attached_profile, attached_transport, other_servers_count) =
+                if config_exists {
+                    inspect_client_config(path, client.dialect)
+                } else {
+                    (false, None, None, 0)
+                };
 
             (
                 path.to_string_lossy().to_string(),
@@ -431,10 +463,11 @@ pub fn detect_clients() -> Vec<ClientAppStatus> {
                 app_installed,
                 is_attached,
                 attached_profile,
+                attached_transport,
                 other_servers_count,
             )
         } else {
-            ("Unknown".to_string(), false, false, false, None, 0)
+            ("Unknown".to_string(), false, false, false, None, None, 0)
         };
 
         statuses.push(ClientAppStatus {
@@ -446,6 +479,7 @@ pub fn detect_clients() -> Vec<ClientAppStatus> {
             app_installed,
             is_attached,
             attached_profile,
+            attached_transport,
             other_servers_count,
         });
     }
@@ -454,15 +488,18 @@ pub fn detect_clients() -> Vec<ClientAppStatus> {
 }
 
 /// Inspects a client configuration file to determine attachment status and server count.
-fn inspect_client_config(path: &Path, dialect: ClientDialect) -> (bool, Option<String>, usize) {
+fn inspect_client_config(
+    path: &Path,
+    dialect: ClientDialect,
+) -> (bool, Option<String>, Option<ClientTransport>, usize) {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
-        Err(_) => return (false, None, 0),
+        Err(_) => return (false, None, None, 0),
     };
 
     let val: Value = match serde_json::from_str(&content) {
         Ok(v) => v,
-        Err(_) => return (false, None, 0),
+        Err(_) => return (false, None, None, 0),
     };
 
     match dialect {
@@ -479,9 +516,14 @@ fn inspect_client_config(path: &Path, dialect: ClientDialect) -> (bool, Option<S
                 } else {
                     servers.len()
                 };
-                (is_attached, profile, other_count)
+                (
+                    is_attached,
+                    profile,
+                    servers.get("warmplane").map(detect_transport),
+                    other_count,
+                )
             } else {
-                (false, None, 0)
+                (false, None, None, 0)
             }
         }
         ClientDialect::ZedContextServers => {
@@ -497,9 +539,14 @@ fn inspect_client_config(path: &Path, dialect: ClientDialect) -> (bool, Option<S
                 } else {
                     servers.len()
                 };
-                (is_attached, profile, other_count)
+                (
+                    is_attached,
+                    profile,
+                    servers.get("warmplane").map(detect_transport),
+                    other_count,
+                )
             } else {
-                (false, None, 0)
+                (false, None, None, 0)
             }
         }
         ClientDialect::OpenCodeMcp => {
@@ -515,11 +562,26 @@ fn inspect_client_config(path: &Path, dialect: ClientDialect) -> (bool, Option<S
                 } else {
                     servers.len()
                 };
-                (is_attached, profile, other_count)
+                (
+                    is_attached,
+                    profile,
+                    servers.get("warmplane").map(detect_transport),
+                    other_count,
+                )
             } else {
-                (false, None, 0)
+                (false, None, None, 0)
             }
         }
+    }
+}
+
+fn detect_transport(server_val: &Value) -> ClientTransport {
+    if server_val.get("url").and_then(Value::as_str).is_some()
+        || server_val.get("type").and_then(Value::as_str) == Some("remote")
+    {
+        ClientTransport::Http
+    } else {
+        ClientTransport::Stdio
     }
 }
 
@@ -602,7 +664,42 @@ pub fn attach_client(client_id: &str, options: &AttachOptions) -> Result<AttachR
         .unwrap_or_else(|| "mcp_servers.json".to_string());
     let warmplane_config_abs = std::fs::canonicalize(&warmplane_config)
         .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or(warmplane_config);
+        .unwrap_or(warmplane_config.clone());
+
+    if options.transport == ClientTransport::Http && !client_def.supports_http() {
+        anyhow::bail!("{} does not support HTTP MCP connections", client_def.name);
+    }
+    let http_url = if options.transport == ClientTransport::Http {
+        let configured_http = crate::config::load_or_default_config(&warmplane_config)
+            .ok()
+            .and_then(|c| c.mcp_http_server);
+        if configured_http.is_none() && options.http_url.is_none() {
+            anyhow::bail!(
+                "HTTP attachment requires mcpHttpServer in the Warmplane config or an explicit URL"
+            );
+        }
+        Some(options.http_url.clone().unwrap_or_else(|| {
+            let http = configured_http;
+            let (host, port) = http
+                .map(|c| {
+                    let host = if c.bind == "0.0.0.0" || c.bind == "::" {
+                        "127.0.0.1".to_string()
+                    } else {
+                        c.bind
+                    };
+                    (host, c.port)
+                })
+                .unwrap_or_else(|| {
+                    (
+                        "127.0.0.1".to_string(),
+                        crate::config::DEFAULT_MCP_HTTP_PORT,
+                    )
+                });
+            format!("http://{}:{}/mcp", host, port)
+        }))
+    } else {
+        None
+    };
 
     // Build args
     let mut args = vec![
@@ -627,13 +724,15 @@ pub fn attach_client(client_id: &str, options: &AttachOptions) -> Result<AttachR
                 *mcp_servers = json!({});
             }
 
-            mcp_servers.as_object_mut().unwrap().insert(
-                "warmplane".to_string(),
-                json!({
-                    "command": binary,
-                    "args": args,
-                }),
-            );
+            let entry = if let Some(url) = &http_url {
+                json!({ "url": url })
+            } else {
+                json!({ "command": binary, "args": args })
+            };
+            mcp_servers
+                .as_object_mut()
+                .unwrap()
+                .insert("warmplane".to_string(), entry);
         }
         ClientDialect::ZedContextServers => {
             let context_servers = root_val
@@ -646,15 +745,15 @@ pub fn attach_client(client_id: &str, options: &AttachOptions) -> Result<AttachR
                 *context_servers = json!({});
             }
 
-            context_servers.as_object_mut().unwrap().insert(
-                "warmplane".to_string(),
-                json!({
-                    "command": {
-                        "path": binary,
-                        "args": args,
-                    }
-                }),
-            );
+            let entry = if let Some(url) = &http_url {
+                json!({ "url": url })
+            } else {
+                json!({ "command": { "path": binary, "args": args } })
+            };
+            context_servers
+                .as_object_mut()
+                .unwrap()
+                .insert("warmplane".to_string(), entry);
         }
         ClientDialect::OpenCodeMcp => {
             let mcp = root_val
@@ -667,15 +766,14 @@ pub fn attach_client(client_id: &str, options: &AttachOptions) -> Result<AttachR
                 *mcp = json!({});
             }
 
-            mcp.as_object_mut().unwrap().insert(
-                "warmplane".to_string(),
-                json!({
-                    "type": "local",
-                    "command": binary,
-                    "args": args,
-                    "enabled": true,
-                }),
-            );
+            let entry = if let Some(url) = &http_url {
+                json!({ "type": "remote", "url": url, "enabled": true })
+            } else {
+                json!({ "type": "local", "command": binary, "args": args, "enabled": true })
+            };
+            mcp.as_object_mut()
+                .unwrap()
+                .insert("warmplane".to_string(), entry);
         }
     }
 
@@ -697,6 +795,8 @@ pub fn attach_client(client_id: &str, options: &AttachOptions) -> Result<AttachR
             client_def.name,
             config_path.display()
         ),
+        transport: options.transport,
+        http_url,
     })
 }
 
@@ -797,7 +897,7 @@ mod tests {
         .unwrap();
 
         let dialect = ClientDialect::StandardMcpServers;
-        let (attached, prof, count) = inspect_client_config(&cfg_file, dialect);
+        let (attached, prof, _, count) = inspect_client_config(&cfg_file, dialect);
         assert!(!attached);
         assert_eq!(prof, None);
         assert_eq!(count, 1);
@@ -810,7 +910,7 @@ mod tests {
         });
         fs::write(&cfg_file, serde_json::to_string_pretty(&val).unwrap()).unwrap();
 
-        let (attached2, prof2, count2) = inspect_client_config(&cfg_file, dialect);
+        let (attached2, prof2, _, count2) = inspect_client_config(&cfg_file, dialect);
         assert!(attached2);
         assert_eq!(prof2.as_deref(), Some("coding"));
         assert_eq!(count2, 1);
@@ -829,7 +929,7 @@ mod tests {
         fs::write(&cfg_file, r#"{"theme": "dark"}"#).unwrap();
 
         let dialect = ClientDialect::OpenCodeMcp;
-        let (attached, _, _) = inspect_client_config(&cfg_file, dialect);
+        let (attached, _, _, _) = inspect_client_config(&cfg_file, dialect);
         assert!(!attached);
 
         let mut val: Value = serde_json::from_str(&fs::read_to_string(&cfg_file).unwrap()).unwrap();
@@ -843,7 +943,7 @@ mod tests {
         });
         fs::write(&cfg_file, serde_json::to_string_pretty(&val).unwrap()).unwrap();
 
-        let (attached2, prof2, count2) = inspect_client_config(&cfg_file, dialect);
+        let (attached2, prof2, _, count2) = inspect_client_config(&cfg_file, dialect);
         assert!(attached2);
         assert_eq!(prof2, None);
         assert_eq!(count2, 0);
