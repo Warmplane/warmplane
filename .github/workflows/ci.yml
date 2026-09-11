@@ -27,7 +27,8 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          # Keep generated ui/dist output reproducible across local builds and CI.
+          bun-version: "1.4.0"
 
       - name: Build and Typecheck Web UI
         working-directory: ui
