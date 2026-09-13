@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-27
+// Rust guideline compliant 2026-09-13
 
 //! MCP server facade interface exposing compact tools/resources/prompts endpoints.
 //!
@@ -59,12 +59,27 @@ static TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 pub struct FacadeMcpServer {
     state: AppState,
     profile: Option<String>,
+    supported_protocol_versions: Option<Vec<rmcp::model::ProtocolVersion>>,
 }
 
 impl FacadeMcpServer {
     /// Creates a new `FacadeMcpServer` bound to the given state and optional profile.
     pub fn new(state: AppState, profile: Option<String>) -> Self {
-        Self { state, profile }
+        Self {
+            state,
+            profile,
+            supported_protocol_versions: None,
+        }
+    }
+
+    /// Configures custom supported protocol versions advertised during discovery / initialize.
+    #[must_use]
+    pub fn with_supported_protocol_versions(
+        mut self,
+        versions: Vec<rmcp::model::ProtocolVersion>,
+    ) -> Self {
+        self.supported_protocol_versions = Some(versions);
+        self
     }
 }
 
@@ -85,6 +100,20 @@ impl ServerHandler for FacadeMcpServer {
                 .to_string(),
         );
         info
+    }
+
+    fn supported_protocol_versions(
+        &self,
+    ) -> std::borrow::Cow<'static, [rmcp::model::ProtocolVersion]> {
+        if let Some(ref versions) = self.supported_protocol_versions {
+            std::borrow::Cow::Owned(versions.clone())
+        } else {
+            // Default to stable session-based protocol versions up to 2025-11-25.
+            // When clients explicitly configure 2026-07-28 via config, it is honored.
+            std::borrow::Cow::Borrowed(rmcp::model::ProtocolVersion::known_up_to(
+                &rmcp::model::ProtocolVersion::V_2025_11_25,
+            ))
+        }
     }
 
     async fn list_tools(
@@ -1172,10 +1201,7 @@ pub async fn run_mcp_server(
     let state = initialize_state(config, config_path).await?;
     let state_for_shutdown = state.clone();
     let shutdown_token = state.shutdown_token.clone();
-    let server = FacadeMcpServer {
-        state: state.clone(),
-        profile,
-    };
+    let server = FacadeMcpServer::new(state.clone(), profile);
     let running = server.serve(stdio()).await?;
 
     // Spawn background forwarder for dynamic tool, resource, and prompt list updates
@@ -1267,21 +1293,24 @@ pub async fn run_mcp_http_server(
     }
 
     // Resolve bind/port: CLI overrides > mcpHttpServer config > defaults
-    let http_cfg = config.mcp_http_server.as_ref();
+    let http_cfg = config.mcp_http_server.clone();
     let bind_addr = bind_override
-        .or_else(|| http_cfg.map(|c| c.bind.clone()))
+        .or_else(|| http_cfg.as_ref().map(|c| c.bind.clone()))
         .unwrap_or_else(|| "127.0.0.1".to_string());
     let port = port_override
-        .or_else(|| http_cfg.map(|c| c.port))
+        .or_else(|| http_cfg.as_ref().map(|c| c.port))
         .unwrap_or(DEFAULT_MCP_HTTP_PORT);
     let sse_keep_alive = http_cfg
+        .as_ref()
         .and_then(|c| c.sse_keep_alive_ms)
         .map(Duration::from_millis);
-    let json_response = http_cfg.map(|c| c.json_response).unwrap_or(true);
+    let json_response = http_cfg.as_ref().map(|c| c.json_response).unwrap_or(true);
     let mut allowed_hosts: Vec<String> = http_cfg
+        .as_ref()
         .map(|c| c.allowed_hosts.clone())
         .unwrap_or_default();
     let allowed_origins: Vec<String> = http_cfg
+        .as_ref()
         .map(|c| c.allowed_origins.clone())
         .unwrap_or_default();
 
@@ -1310,6 +1339,19 @@ pub async fn run_mcp_http_server(
     mcp_server_cfg.allowed_hosts = allowed_hosts;
     mcp_server_cfg.allowed_origins = allowed_origins;
 
+    let parsed_protocol_versions: Vec<rmcp::model::ProtocolVersion> = http_cfg
+        .map(|c| c.supported_protocol_versions.clone())
+        .unwrap_or_else(crate::config::default_mcp_http_protocol_versions)
+        .iter()
+        .map(|s| match s.as_str() {
+            "2024-11-05" => rmcp::model::ProtocolVersion::V_2024_11_05,
+            "2025-03-26" => rmcp::model::ProtocolVersion::V_2025_03_26,
+            "2025-06-18" => rmcp::model::ProtocolVersion::V_2025_06_18,
+            "2025-11-25" => rmcp::model::ProtocolVersion::V_2025_11_25,
+            _ => rmcp::model::ProtocolVersion::V_2026_07_28,
+        })
+        .collect();
+
     // Build the Tower service factory — one FacadeMcpServer clone per session
     let state_for_factory = state.clone();
     let profile_for_factory = effective_profile.clone();
@@ -1317,10 +1359,9 @@ pub async fn run_mcp_http_server(
         move || {
             let s = state_for_factory.clone();
             let p = profile_for_factory.clone();
-            Ok(FacadeMcpServer {
-                state: s,
-                profile: p,
-            })
+            let server = FacadeMcpServer::new(s, p)
+                .with_supported_protocol_versions(parsed_protocol_versions.clone());
+            Ok(server)
         },
         Arc::new(LocalSessionManager::default()),
         mcp_server_cfg,
@@ -1420,10 +1461,7 @@ mod tests {
             .catalog_version("test-ver")
             .build();
 
-        let server = super::FacadeMcpServer {
-            state,
-            profile: None,
-        };
+        let server = super::FacadeMcpServer::new(state, None);
         let res = server
             .search_capabilities_value(Some("SQL database".to_string()), None, None, None, Some(5))
             .await
@@ -1480,10 +1518,7 @@ mod tests {
             .catalog_version("test-ver")
             .build();
 
-        let server_scoped = super::FacadeMcpServer {
-            state: state.clone(),
-            profile: Some("db_only".to_string()),
-        };
+        let server_scoped = super::FacadeMcpServer::new(state.clone(), Some("db_only".to_string()));
 
         let list_res = server_scoped.list_capabilities_value().await.unwrap();
         let list_arr = list_res["capabilities"].as_array().unwrap();

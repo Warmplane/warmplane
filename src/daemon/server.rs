@@ -220,7 +220,7 @@ pub async fn initialize_state(
                     "error": e.to_string()
                 }),
             );
-
+            drop(statuses_guard);
             // Also keep server config in state so circuit breakers and supervisors can manage it
             let mut configs_guard = state.server_configs.write().await;
             configs_guard.insert(server_id.to_string(), srv_cfg.clone());
@@ -620,11 +620,25 @@ pub async fn run_daemon(
         mcp_server_cfg.allowed_hosts = allowed_hosts;
         mcp_server_cfg.allowed_origins = mcp_cfg.allowed_origins.clone();
 
+        let parsed_protocol_versions: Vec<rmcp::model::ProtocolVersion> = mcp_cfg
+            .supported_protocol_versions
+            .iter()
+            .map(|s| match s.as_str() {
+                "2024-11-05" => rmcp::model::ProtocolVersion::V_2024_11_05,
+                "2025-03-26" => rmcp::model::ProtocolVersion::V_2025_03_26,
+                "2025-06-18" => rmcp::model::ProtocolVersion::V_2025_06_18,
+                "2025-11-25" => rmcp::model::ProtocolVersion::V_2025_11_25,
+                _ => rmcp::model::ProtocolVersion::V_2026_07_28,
+            })
+            .collect();
+
         let mcp_service = StreamableHttpService::new(
             move || {
                 let s = state_for_factory.clone();
                 let p = profile_for_factory.clone();
-                Ok(crate::mcp_server::FacadeMcpServer::new(s, p))
+                let server = crate::mcp_server::FacadeMcpServer::new(s, p)
+                    .with_supported_protocol_versions(parsed_protocol_versions.clone());
+                Ok(server)
             },
             Arc::new(rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default()),
             mcp_server_cfg,
