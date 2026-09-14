@@ -241,6 +241,14 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 
 ## Changelog
 
+### v0.30.0 — Security Hardening, Constant-Time Crypto, JWT Enforcement & Production Due-Diligence
+- **Constant-Time Verification & Timing Attack Hardening (`src/daemon/auth.rs`, `src/chatops/`, `src/vault.rs`):** Integrated the `subtle` crate for constant-time slice comparisons (`ConstantTimeEq`) across HTTP bearer auth tokens, Webhook HMAC signatures, and Keychain secrets to eliminate side-channel timing attack vectors.
+- **Strict JWT RBAC Claim Validation (`src/rbac/jwt.rs`):** Enforced mandatory cryptographic JWT claims (`exp`, `iat`, `sub`/`actor_id`, and `role`) with leeway validation, preventing acceptance of unsigned, expired, or malformed bearer claims.
+- **Safe Client IP Resolution (`src/http_v1/helpers.rs`, `src/daemon/server.rs`):** Validated IPv4/IPv6 syntax on forwarded headers (`X-Forwarded-For`, `X-Real-IP`) and extracted remote socket peer addresses directly via Axum `ConnectInfo<SocketAddr>`, preventing IP spoofing across WORM audit records and rate limits.
+- **Atomic State File Permission Lockdown (`src/storage.rs`):** Enforced POSIX `0o600` permissions on temporary and persistent sensitive state files (`oauth_tokens.json`, secrets) and `0o700` on the state directory.
+- **Thread-Safe Audit Hash-Chaining (`src/audit/store.rs`):** Hardened in-memory WORM audit sequence counter with atomic monotonic ordering, eliminating sequence gaps and race conditions under high concurrency.
+- **Production Due-Diligence Remediation:** Resolved all 14 comprehensive review findings (H1–H3, M1–M6, L1–L5) across input bounds, memory allocations, safe shutdown signaling, and API error envelopes.
+
 ### v0.29.0 — Configurable MCP Protocol Versions, HTTP Client Attach & Security Hardening
 - **HTTP Transport Option in 1-Click Client Installs (`src/cli.rs`, `src/client_adapter.rs`):** Added `--transport http` flag and interactive transport selection to client attaches (`warmplane client install <target> --transport http`), configuring clients directly to the daemon's streamable HTTP endpoint.
 - **Configurable MCP Protocol Versions (`src/config.rs`, `src/http_v1/mcp_transport.rs`):** Added `supportedProtocolVersions` configuration option allowing operators to customize the protocol version array advertised during MCP streamable HTTP initialization.
