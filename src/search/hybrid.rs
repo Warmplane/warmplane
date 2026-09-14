@@ -172,6 +172,9 @@ impl HybridSearchEngine {
         capabilities: &HashMap<String, CapabilityMeta>,
         policy: &Policy,
     ) -> Vec<CapabilitySearchResult> {
+        // Enforce hard ceiling on maximum search results to prevent uncontrolled allocation
+        let effective_limit = limit.clamp(1, 100);
+
         // 1. Filter capabilities by policy and user-provided deterministic criteria
         let candidates: Vec<(String, CapabilityMeta)> = capabilities
             .iter()
@@ -257,9 +260,10 @@ impl HybridSearchEngine {
         scored_items.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Truncate to limit before building detailed objects
-        scored_items.truncate(limit.min(100));
+        scored_items.truncate(effective_limit);
 
-        let mut final_results = Vec::with_capacity(scored_items.len());
+        let allocation_cap = scored_items.len().min(100);
+        let mut final_results = Vec::with_capacity(allocation_cap);
         for (id, raw_score, mut match_types) in scored_items {
             if let Some(meta) = candidate_map.get(&id) {
                 match_types.sort();
