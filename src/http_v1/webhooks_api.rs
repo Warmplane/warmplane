@@ -319,7 +319,11 @@ pub async fn handle_test_webhook(
     let trusted_target_url = match webhook_cfg.as_ref() {
         Some(cfg) if cfg.url == target_url => cfg.url.as_str(),
         Some(cfg) => {
-            if let Some(matched) = cfg.allowed_urls.iter().find(|allowed| *allowed == &target_url) {
+            if let Some(matched) = cfg
+                .allowed_urls
+                .iter()
+                .find(|allowed| *allowed == &target_url)
+            {
                 matched.as_str()
             } else {
                 return (
@@ -355,7 +359,6 @@ pub async fn handle_test_webhook(
                 .into_response();
         }
     };
-
 
     let test_data = json!({
         "id": "appr-test-101",
