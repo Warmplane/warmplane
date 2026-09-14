@@ -186,9 +186,7 @@ impl ApprovalRegistry {
     async fn sync_to_disk(&self) {
         if let Some(ref store) = self.storage {
             let guard = self.pending.read().await;
-            if let Err(e) = store.save(&*guard) {
-                error!(error = %e, path = %store.path().display(), "failed to persist approval registry state to disk");
-            }
+            store.save_logged(&*guard, "failed to persist approval registry state to disk");
         }
     }
 

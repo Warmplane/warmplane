@@ -336,24 +336,21 @@ impl CircuitBreakerRegistry {
         }
     }
 
+    async fn get_breaker(&self, server_id: &str) -> Option<Arc<CircuitBreaker>> {
+        let map = self.breakers.read().await;
+        map.get(server_id).cloned()
+    }
+
     /// Records success for server.
     pub async fn record_success(&self, server_id: &str) {
-        let cb = {
-            let map = self.breakers.read().await;
-            map.get(server_id).cloned()
-        };
-        if let Some(cb) = cb {
+        if let Some(cb) = self.get_breaker(server_id).await {
             cb.record_success().await;
         }
     }
 
     /// Resets the circuit breaker state for a server to Closed.
     pub async fn reset(&self, server_id: &str) {
-        let cb = {
-            let map = self.breakers.read().await;
-            map.get(server_id).cloned()
-        };
-        if let Some(cb) = cb {
+        if let Some(cb) = self.get_breaker(server_id).await {
             cb.reset().await;
         }
     }
@@ -366,11 +363,7 @@ impl CircuitBreakerRegistry {
 
     /// Records failure for server.
     pub async fn record_failure(&self, server_id: &str) {
-        let cb = {
-            let map = self.breakers.read().await;
-            map.get(server_id).cloned()
-        };
-        if let Some(cb) = cb {
+        if let Some(cb) = self.get_breaker(server_id).await {
             cb.record_failure().await;
         }
     }

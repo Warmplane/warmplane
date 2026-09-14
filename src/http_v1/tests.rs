@@ -283,6 +283,15 @@ async fn list_resources_returns_sorted_ids() {
     assert_eq!(entries[1]["id"], "zeta.res");
 }
 
+async fn assert_json_error(response: axum::response::Response, expected_code: &str) {
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let payload: Value = serde_json::from_slice(&bytes).expect("valid json");
+    assert_eq!(payload["error"]["code"], expected_code);
+}
+
 #[tokio::test]
 async fn read_resource_returns_not_found_code() {
     let state = AppState::builder().catalog_version("sha256:test").build();
@@ -303,12 +312,7 @@ async fn read_resource_returns_not_found_code() {
     .await
     .into_response();
 
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    let bytes = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("response body");
-    let payload: Value = serde_json::from_slice(&bytes).expect("valid json");
-    assert_eq!(payload["error"]["code"], "RESOURCE_NOT_FOUND");
+    assert_json_error(response, "RESOURCE_NOT_FOUND").await;
 }
 
 #[tokio::test]
@@ -332,12 +336,7 @@ async fn get_prompt_returns_not_found_code() {
     .await
     .into_response();
 
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    let bytes = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("response body");
-    let payload: Value = serde_json::from_slice(&bytes).expect("valid json");
-    assert_eq!(payload["error"]["code"], "PROMPT_NOT_FOUND");
+    assert_json_error(response, "PROMPT_NOT_FOUND").await;
 }
 
 #[tokio::test]

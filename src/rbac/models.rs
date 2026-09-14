@@ -82,14 +82,7 @@ pub struct JwtConfig {
 impl JwtConfig {
     /// Resolves the JWT HMAC secret from environment variable or direct string.
     pub fn resolve_secret(&self) -> Option<String> {
-        if let Some(ref env_name) = self.secret_env {
-            if let Ok(val) = std::env::var(env_name) {
-                if !val.trim().is_empty() {
-                    return Some(val);
-                }
-            }
-        }
-        self.secret.clone()
+        crate::config::resolve_env_or_direct(self.secret_env.as_deref(), self.secret.as_deref())
     }
 }
 

@@ -132,18 +132,8 @@ pub fn score_lexical(
 
 #[cfg(test)]
 mod tests {
+    use super::super::dummy_capability;
     use super::*;
-
-    fn dummy_capability(
-        server: &str,
-        tool: &str,
-        summary: &str,
-        tags: Vec<&str>,
-    ) -> CapabilityMeta {
-        let mut meta = CapabilityMeta::new(server, tool, summary, summary, serde_json::json!({}));
-        meta.tags = tags.into_iter().map(|s| s.to_string()).collect();
-        meta
-    }
 
     #[test]
     fn exact_id_returns_top_score() {

@@ -824,6 +824,10 @@ impl FacadeMcpServer {
         serde_json::to_value(env).map_err(|e| e.to_string())
     }
 
+    fn engine_handle(&self) -> crate::engine::ControlPlaneHandle {
+        crate::engine::ControlPlaneHandle::new(self.state.clone())
+    }
+
     async fn call_capability_value(
         &self,
         capability_id: String,
@@ -833,7 +837,6 @@ impl FacadeMcpServer {
         input_responses: Option<std::collections::BTreeMap<String, Value>>,
         request_state: Option<String>,
     ) -> std::result::Result<Value, String> {
-        let handle = crate::engine::ControlPlaneHandle::new(self.state.clone());
         let opts = crate::engine::ExecutionOptions {
             request_id,
             context,
@@ -844,7 +847,10 @@ impl FacadeMcpServer {
             async_task: false,
         };
 
-        let env = handle.call_capability(&capability_id, args, opts).await;
+        let env = self
+            .engine_handle()
+            .call_capability(&capability_id, args, opts)
+            .await;
         serde_json::to_value(env).map_err(|e| e.to_string())
     }
 
@@ -887,17 +893,19 @@ impl FacadeMcpServer {
         input_responses: Option<std::collections::BTreeMap<String, Value>>,
         request_state: Option<String>,
     ) -> std::result::Result<Value, String> {
-        let handle = crate::engine::ControlPlaneHandle::new(self.state.clone());
-        let opts = crate::engine::ReadResourceOptions {
+        let options = crate::engine::ReadResourceOptions {
             request_id,
             context,
             input_responses,
             request_state,
             profile: self.profile.clone(),
         };
-
-        let env = handle.read_resource(&resource_id, opts).await;
-        serde_json::to_value(env).map_err(|e| e.to_string())
+        serde_json::to_value(
+            self.engine_handle()
+                .read_resource(&resource_id, options)
+                .await,
+        )
+        .map_err(|e| e.to_string())
     }
 
     async fn list_prompts_value(&self) -> std::result::Result<Value, String> {
@@ -940,17 +948,20 @@ impl FacadeMcpServer {
         input_responses: Option<std::collections::BTreeMap<String, Value>>,
         request_state: Option<String>,
     ) -> std::result::Result<Value, String> {
-        let handle = crate::engine::ControlPlaneHandle::new(self.state.clone());
-        let opts = crate::engine::GetPromptOptions {
-            request_id,
-            context,
-            arguments,
-            input_responses,
-            request_state,
-            profile: self.profile.clone(),
-        };
-
-        let env = handle.get_prompt(&prompt_id, opts).await;
+        let handle = self.engine_handle();
+        let env = handle
+            .get_prompt(
+                &prompt_id,
+                crate::engine::GetPromptOptions {
+                    request_id,
+                    context,
+                    arguments,
+                    input_responses,
+                    request_state,
+                    profile: self.profile.clone(),
+                },
+            )
+            .await;
         serde_json::to_value(env).map_err(|e| e.to_string())
     }
 }
@@ -1163,20 +1174,9 @@ fn error_envelope(
     message: impl Into<String>,
     retryable: bool,
 ) -> Value {
-    let ctx_val = context.unwrap_or_default();
-    json!({
-        "ok": false,
-        "request_id": request_id,
-        "context": ctx_val,
-        "trace_id": trace_id,
-        "data": null,
-        "error": {
-            "code": code,
-            "message": message.into(),
-            "retryable": retryable,
-        },
-        "retry": retry,
-    })
+    crate::http_v1::types::error_envelope(
+        trace_id, request_id, context, retry, code, message, retryable,
+    )
 }
 
 /// Runs the Warmplane stdio MCP server proxy interface.

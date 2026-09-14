@@ -551,17 +551,18 @@ pub async fn handle_describe_capability(
     }
 }
 
-/// Handles HTTP GET `/v1/resources` listing all registered resources.
-pub async fn handle_list_resources(
-    State(state): State<AppState>,
-    req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
-    prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
+async fn resolve_catalog_context(
+    state: &AppState,
+    req_ext: &Option<crate::rbac::TenantContext>,
+    prof_ext: Option<&axum::extract::Extension<crate::context::ProfileContext>>,
+) -> (
+    crate::context::ProfileContext,
+    crate::daemon::Policy,
+    String,
+) {
+    let prof_ctx = prof_ext.map(|e| e.0.clone()).unwrap_or_default();
     let base_pol = state.policy.read().await;
     let pol = req_ext
-        .0
         .as_ref()
         .map(|ctx| ctx.effective_policy.clone())
         .unwrap_or_else(|| base_pol.clone())
@@ -570,8 +571,81 @@ pub async fn handle_list_resources(
     let base_ver = state.catalog_version.read().await.clone();
     let catalog_ver =
         crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
+    (prof_ctx, pol, catalog_ver)
+}
 
-    if check_if_none_match(&headers, &catalog_ver) {
+fn build_catalog_list_response(
+    catalog_ver: &str,
+    field_name: &'static str,
+    items: Vec<Value>,
+    total_unfiltered: usize,
+) -> axum::response::Response {
+    let allowed_count = items.len();
+    let hidden_by_policy = total_unfiltered.saturating_sub(allowed_count);
+
+    (
+        StatusCode::OK,
+        make_etag_header(catalog_ver),
+        Json(json!({
+            "version": "v1",
+            "catalog_version": catalog_ver,
+            "ttl_ms": 300000,
+            "cache_scope": "public",
+            field_name: items,
+            "total_unfiltered": total_unfiltered,
+            "hidden_by_policy": hidden_by_policy,
+        })),
+    )
+        .into_response()
+}
+
+fn filter_and_sort_catalog_items<T, F>(
+    items_map: &std::collections::HashMap<String, T>,
+    pol: &crate::daemon::Policy,
+    prof_ctx: &crate::context::ProfileContext,
+    server_of: impl Fn(&T) -> &str,
+    to_json: F,
+) -> (Vec<Value>, usize)
+where
+    F: Fn(&str, &T) -> Value,
+{
+    let total_unfiltered = items_map.len();
+    let mut items = items_map
+        .iter()
+        .filter(|(id, meta)| pol.allows(id) && prof_ctx.is_server_allowed(server_of(meta)))
+        .map(|(id, meta)| to_json(id, meta))
+        .collect::<Vec<_>>();
+
+    items.sort_by(|a, b| {
+        a.get("id")
+            .and_then(|v| v.as_str())
+            .cmp(&b.get("id").and_then(|v| v.as_str()))
+    });
+
+    (items, total_unfiltered)
+}
+
+struct CatalogListRequest<'a> {
+    state: &'a AppState,
+    req_ext: &'a Option<crate::rbac::TenantContext>,
+    prof_ext: Option<&'a axum::extract::Extension<crate::context::ProfileContext>>,
+    headers: &'a HeaderMap,
+}
+
+async fn list_catalog_handler<T, F>(
+    req: CatalogListRequest<'_>,
+    field_name: &'static str,
+    items_map: &std::collections::HashMap<String, T>,
+    server_of: impl Fn(&T) -> &str,
+    to_json: F,
+) -> axum::response::Response
+where
+    F: Fn(&str, &T) -> Value,
+{
+    let (prof_ctx, pol, catalog_ver) =
+        resolve_catalog_context(req.state, req.req_ext, req.prof_ext).await;
+
+    if check_if_none_match(req.headers, &catalog_ver) {
         return (
             StatusCode::NOT_MODIFIED,
             make_etag_header(&catalog_ver),
@@ -580,12 +654,32 @@ pub async fn handle_list_resources(
             .into_response();
     }
 
+    let (items, total_unfiltered) =
+        filter_and_sort_catalog_items(items_map, &pol, &prof_ctx, server_of, to_json);
+
+    build_catalog_list_response(&catalog_ver, field_name, items, total_unfiltered)
+}
+
+/// Handles HTTP GET `/v1/resources` listing all registered resources.
+pub async fn handle_list_resources(
+    State(state): State<AppState>,
+    req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
+    prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
     let res_guard = state.resources.read().await;
-    let total_unfiltered = res_guard.len();
-    let mut resources = res_guard
-        .iter()
-        .filter(|(id, meta)| pol.allows(id) && prof_ctx.is_server_allowed(&meta.server))
-        .map(|(id, meta)| {
+    let req = CatalogListRequest {
+        state: &state,
+        req_ext: &req_ext.0,
+        prof_ext: prof_ext.as_ref(),
+        headers: &headers,
+    };
+    list_catalog_handler(
+        req,
+        "resources",
+        &*res_guard,
+        |meta| &meta.server,
+        |id, meta| {
             json!({
                 "id": id,
                 "server": meta.server,
@@ -595,32 +689,9 @@ pub async fn handle_list_resources(
                 "mime_type": meta.mime_type,
                 "tags": meta.tags,
             })
-        })
-        .collect::<Vec<_>>();
-
-    resources.sort_by(|a, b| {
-        a.get("id")
-            .and_then(|v| v.as_str())
-            .cmp(&b.get("id").and_then(|v| v.as_str()))
-    });
-
-    let allowed_count = resources.len();
-    let hidden_by_policy = total_unfiltered.saturating_sub(allowed_count);
-
-    (
-        StatusCode::OK,
-        make_etag_header(&catalog_ver),
-        Json(json!({
-            "version": "v1",
-            "catalog_version": catalog_ver,
-            "ttl_ms": 300000,
-            "cache_scope": "public",
-            "resources": resources,
-            "total_unfiltered": total_unfiltered,
-            "hidden_by_policy": hidden_by_policy,
-        })),
+        },
     )
-        .into_response()
+    .await
 }
 
 /// Handles HTTP GET `/v1/prompts` listing all registered prompt templates.
@@ -630,34 +701,19 @@ pub async fn handle_list_prompts(
     prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
-    let base_pol = state.policy.read().await;
-    let pol = req_ext
-        .0
-        .as_ref()
-        .map(|ctx| ctx.effective_policy.clone())
-        .unwrap_or_else(|| base_pol.clone())
-        .merge_with_profile(prof_ctx.profile_policy.as_ref());
-
-    let base_ver = state.catalog_version.read().await.clone();
-    let catalog_ver =
-        crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
-
-    if check_if_none_match(&headers, &catalog_ver) {
-        return (
-            StatusCode::NOT_MODIFIED,
-            make_etag_header(&catalog_ver),
-            Body::empty(),
-        )
-            .into_response();
-    }
-
     let prompts_guard = state.prompts.read().await;
-    let total_unfiltered = prompts_guard.len();
-    let mut prompts = prompts_guard
-        .iter()
-        .filter(|(id, meta)| pol.allows(id) && prof_ctx.is_server_allowed(&meta.server))
-        .map(|(id, meta)| {
+    let req = CatalogListRequest {
+        state: &state,
+        req_ext: &req_ext.0,
+        prof_ext: prof_ext.as_ref(),
+        headers: &headers,
+    };
+    list_catalog_handler(
+        req,
+        "prompts",
+        &*prompts_guard,
+        |meta| &meta.server,
+        |id, meta| {
             json!({
                 "id": id,
                 "server": meta.server,
@@ -667,32 +723,9 @@ pub async fn handle_list_prompts(
                 "arguments": meta.arguments,
                 "tags": meta.tags,
             })
-        })
-        .collect::<Vec<_>>();
-
-    prompts.sort_by(|a, b| {
-        a.get("id")
-            .and_then(|v| v.as_str())
-            .cmp(&b.get("id").and_then(|v| v.as_str()))
-    });
-
-    let allowed_count = prompts.len();
-    let hidden_by_policy = total_unfiltered.saturating_sub(allowed_count);
-
-    (
-        StatusCode::OK,
-        make_etag_header(&catalog_ver),
-        Json(json!({
-            "version": "v1",
-            "catalog_version": catalog_ver,
-            "ttl_ms": 300000,
-            "cache_scope": "public",
-            "prompts": prompts,
-            "total_unfiltered": total_unfiltered,
-            "hidden_by_policy": hidden_by_policy,
-        })),
+        },
     )
-        .into_response()
+    .await
 }
 
 /// Handles HTTP POST `/v1/resources/read` reading an MCP resource content.
