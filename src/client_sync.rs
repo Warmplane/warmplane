@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-26
+// Rust guideline compliant 2026-09-13
 
 //! Bidirectional ecosystem client adapter engine for 1-click MCP injection and auto-sync.
 //!
@@ -577,6 +577,10 @@ fn inspect_client_config(
 
 fn detect_transport(server_val: &Value) -> ClientTransport {
     if server_val.get("url").and_then(Value::as_str).is_some()
+        || server_val
+            .get("serverUrl")
+            .and_then(Value::as_str)
+            .is_some()
         || server_val.get("type").and_then(Value::as_str) == Some("remote")
     {
         ClientTransport::Http
@@ -725,7 +729,11 @@ pub fn attach_client(client_id: &str, options: &AttachOptions) -> Result<AttachR
             }
 
             let entry = if let Some(url) = &http_url {
-                json!({ "url": url })
+                if client_def.id == "antigravity" {
+                    json!({ "serverUrl": url })
+                } else {
+                    json!({ "url": url })
+                }
             } else {
                 json!({ "command": binary, "args": args })
             };

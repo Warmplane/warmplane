@@ -199,6 +199,12 @@
           "items": { "type": "string" },
           "default": [],
           "description": "Browser origins (Origin header) to accept. Empty list disables origin checking."
+        },
+        "supportedProtocolVersions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"],
+          "description": "Protocol versions advertised during discovery / handshake. Defaults to session-stable versions up to 2025-11-25. Add 2026-07-28 for modern stateless clients."
         }
       },
       "additionalProperties": false

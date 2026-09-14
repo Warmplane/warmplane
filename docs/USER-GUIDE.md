@@ -616,6 +616,7 @@ When this block is present in `mcp_servers.json` the daemon automatically co-hos
 | `profile` | String | No | `null` | Optional profile name restricting the exposed capability surface. |
 | `allowedHosts` | Array | No | `[]` | Additional hostnames or `host:port` pairs accepted in the `Host` header. Loopback addresses are always permitted. |
 | `allowedOrigins` | Array | No | `[]` | Browser origins accepted in the `Origin` header (CORS). Empty list disables origin checking. |
+| `supportedProtocolVersions` | Array | No | `["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"]` | Protocol versions advertised during discovery / handshake. Defaults to session-stable versions up to `2025-11-25`. Add `"2026-07-28"` for modern stateless clients. |
 
 > **Security constraint**: Setting `bind` to a non-loopback address (`0.0.0.0`, a public hostname, etc.) without also configuring `authToken` or `rbac` is rejected as a startup validation error. This prevents accidentally exposing an unauthenticated MCP server on the network.
 

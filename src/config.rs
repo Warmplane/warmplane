@@ -128,6 +128,22 @@ pub struct McpHttpServerConfig {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub allowed_origins: Vec<String>,
+    /// Protocol versions advertised by the facade server. Defaults to session-stable versions up to 2025-11-25.
+    #[serde(
+        default = "default_mcp_http_protocol_versions",
+        rename = "supportedProtocolVersions",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub supported_protocol_versions: Vec<String>,
+}
+
+pub(crate) fn default_mcp_http_protocol_versions() -> Vec<String> {
+    vec![
+        "2024-11-05".to_string(),
+        "2025-03-26".to_string(),
+        "2025-06-18".to_string(),
+        "2025-11-25".to_string(),
+    ]
 }
 
 fn default_mcp_http_port() -> u16 {
@@ -152,6 +168,7 @@ impl Default for McpHttpServerConfig {
             profile: None,
             allowed_hosts: Vec::new(),
             allowed_origins: Vec::new(),
+            supported_protocol_versions: default_mcp_http_protocol_versions(),
         }
     }
 }

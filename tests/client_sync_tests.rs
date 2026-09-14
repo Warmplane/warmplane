@@ -177,3 +177,49 @@ fn test_claude_code_config_dir_override() {
     assert_eq!(resolved, custom_config);
     std::env::remove_var("CLAUDE_CONFIG_DIR");
 }
+
+#[test]
+fn test_antigravity_attach_uses_server_url() {
+    let dir = tempdir().unwrap();
+    let config_dir = dir.path().join(".gemini/config");
+    fs::create_dir_all(&config_dir).unwrap();
+    let config_file = config_dir.join("mcp_config.json");
+    fs::write(&config_file, r#"{"mcpServers": {}}"#).unwrap();
+
+    let old_home = std::env::var("HOME").ok();
+    std::env::set_var("HOME", dir.path().to_str().unwrap());
+
+    let opts = warmplane::client_sync::AttachOptions {
+        transport: warmplane::client_sync::ClientTransport::Http,
+        http_url: Some("http://127.0.0.1:9191/mcp".to_string()),
+        ..Default::default()
+    };
+
+    let attach_res = warmplane::client_sync::attach_client("antigravity", &opts).unwrap();
+
+    assert!(attach_res.ok);
+    let content = fs::read_to_string(&config_file).unwrap();
+    let reloaded: serde_json::Value = serde_json::from_str(&content).unwrap();
+    assert_eq!(
+        reloaded["mcpServers"]["warmplane"]["serverUrl"],
+        serde_json::json!("http://127.0.0.1:9191/mcp")
+    );
+    assert!(reloaded["mcpServers"]["warmplane"].get("url").is_none());
+
+    let clients = warmplane::client_sync::detect_clients();
+    let ag_status = clients
+        .into_iter()
+        .find(|c| c.id == "antigravity")
+        .expect("antigravity status exists");
+    assert!(ag_status.is_attached);
+    assert_eq!(
+        ag_status.attached_transport,
+        Some(warmplane::client_sync::ClientTransport::Http)
+    );
+
+    if let Some(h) = old_home {
+        std::env::set_var("HOME", h);
+    } else {
+        std::env::remove_var("HOME");
+    }
+}

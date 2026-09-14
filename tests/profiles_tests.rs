@@ -335,3 +335,102 @@ async fn test_profile_http_filtering_and_etag_caching() {
         .unwrap();
     assert_eq!(get_prompt_resp.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn test_mcp_http_server_supported_protocol_versions_configuration() {
+    use rmcp::transport::streamable_http_server::{
+        session::local::LocalSessionManager, tower::StreamableHttpServerConfig,
+        StreamableHttpService,
+    };
+    use std::sync::Arc;
+
+    let temp_config = NamedTempFile::new().unwrap();
+    let config_path = temp_config.path().to_str().unwrap().to_string();
+
+    let mut mcp_config = McpConfig::default();
+    let http_cfg = warmplane::config::McpHttpServerConfig {
+        supported_protocol_versions: vec![
+            "2024-11-05".to_string(),
+            "2025-11-25".to_string(),
+            "2026-07-28".to_string(),
+        ],
+        ..Default::default()
+    };
+    mcp_config.mcp_http_server = Some(http_cfg.clone());
+    save_config(&config_path, &mcp_config).unwrap();
+
+    let state = initialize_state(mcp_config, &config_path).await.unwrap();
+
+    let parsed_protocol_versions: Vec<rmcp::model::ProtocolVersion> = http_cfg
+        .supported_protocol_versions
+        .iter()
+        .map(|s| match s.as_str() {
+            "2024-11-05" => rmcp::model::ProtocolVersion::V_2024_11_05,
+            "2025-03-26" => rmcp::model::ProtocolVersion::V_2025_03_26,
+            "2025-06-18" => rmcp::model::ProtocolVersion::V_2025_06_18,
+            "2025-11-25" => rmcp::model::ProtocolVersion::V_2025_11_25,
+            _ => rmcp::model::ProtocolVersion::V_2026_07_28,
+        })
+        .collect();
+
+    let state_for_factory = state.clone();
+    let mcp_service = StreamableHttpService::new(
+        move || {
+            let s = state_for_factory.clone();
+            let server = warmplane::mcp_server::FacadeMcpServer::new(s, None)
+                .with_supported_protocol_versions(parsed_protocol_versions.clone());
+            Ok(server)
+        },
+        Arc::new(LocalSessionManager::default()),
+        StreamableHttpServerConfig::default(),
+    );
+
+    let mcp_router = axum::Router::new().route_service("/mcp", mcp_service);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    tokio::spawn(async move {
+        axum::serve(listener, mcp_router).await.unwrap();
+    });
+
+    let client = reqwest::Client::new();
+    let mcp_url = format!("http://127.0.0.1:{}/mcp", port);
+
+    // Probe server/discover with modern meta
+    let discover_resp = client
+        .post(&mcp_url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .header("Mcp-Method", "server/discover")
+        .header("MCP-Protocol-Version", "2026-07-28")
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "server/discover",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                }
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(discover_resp.status(), StatusCode::OK);
+    let body_text = discover_resp.text().await.unwrap();
+    let resp_json: Value = if body_text.starts_with("data:") {
+        // SSE format: extract the json line after data:
+        let json_str = body_text
+            .lines()
+            .find_map(|l| l.strip_prefix("data: "))
+            .unwrap_or(&body_text);
+        serde_json::from_str(json_str).unwrap()
+    } else {
+        serde_json::from_str(&body_text).unwrap()
+    };
+    let supported = resp_json["result"]["supportedVersions"].as_array().unwrap();
+    let versions: Vec<&str> = supported.iter().filter_map(Value::as_str).collect();
+    assert_eq!(versions, vec!["2024-11-05", "2025-11-25", "2026-07-28"]);
+}
