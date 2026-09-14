@@ -2,9 +2,52 @@
 
 //! Configuration import utilities from external MCP ecosystems (Claude Desktop, OpenCode, Claude Code, Cursor, Zed, Windsurf, Roo Code / Cline).
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde_json::Value;
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Component, Path, PathBuf},
+};
+
+/// Validates that a user-provided import path is safe from path traversal attacks.
+///
+/// # Arguments
+/// * `path` - The path to validate.
+///
+/// # Returns
+/// Canonicalized `PathBuf` if the path exists, is a regular file, and contains no directory traversal.
+///
+/// # Errors
+/// Returns an error if the path contains `..` components, does not exist, is not a regular file,
+/// or does not end with `.json`.
+pub fn validate_safe_import_path(path: &Path) -> Result<PathBuf> {
+    // 1. Disallow parent directory traversal components ("..")
+    for comp in path.components() {
+        if let Component::ParentDir = comp {
+            bail!("Path traversal disallowed: path contains '..' component");
+        }
+    }
+
+    // 2. Validate file extension is .json
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+    if ext.as_deref() != Some("json") {
+        bail!("Invalid file type: import path must have a .json extension");
+    }
+
+    // 3. Resolve canonical path to verify existence and avoid symlink escapes
+    let canonical = path
+        .canonicalize()
+        .with_context(|| format!("Import path does not exist: {}", path.display()))?;
+
+    if !canonical.is_file() {
+        bail!("Import path is not a regular file: {}", canonical.display());
+    }
+
+    Ok(canonical)
+}
 
 use crate::client_sync::{get_supported_clients, resolve_client_config_path, ClientDialect};
 use crate::config::{load_or_default_config, save_config, ServerConfig};
@@ -244,26 +287,29 @@ pub fn parse_client_dialect_source(
 /// # Errors
 /// Returns an error if file reading or JSON parsing fails.
 pub fn parse_standard_mcp_source(name: &str, path: PathBuf) -> Result<DiscoveredSource> {
+    let safe_path = validate_safe_import_path(&path)?;
     if let Ok(src) =
-        parse_client_dialect_source(name, path.clone(), ClientDialect::StandardMcpServers)
+        parse_client_dialect_source(name, safe_path.clone(), ClientDialect::StandardMcpServers)
     {
         if src.server_count > 0 {
             return Ok(src);
         }
     }
-    if let Ok(src) = parse_client_dialect_source(name, path.clone(), ClientDialect::OpenCodeMcp) {
-        if src.server_count > 0 {
-            return Ok(src);
-        }
-    }
     if let Ok(src) =
-        parse_client_dialect_source(name, path.clone(), ClientDialect::ZedContextServers)
+        parse_client_dialect_source(name, safe_path.clone(), ClientDialect::OpenCodeMcp)
     {
         if src.server_count > 0 {
             return Ok(src);
         }
     }
-    parse_client_dialect_source(name, path, ClientDialect::StandardMcpServers)
+    if let Ok(src) =
+        parse_client_dialect_source(name, safe_path.clone(), ClientDialect::ZedContextServers)
+    {
+        if src.server_count > 0 {
+            return Ok(src);
+        }
+    }
+    parse_client_dialect_source(name, safe_path, ClientDialect::StandardMcpServers)
 }
 
 /// Imports servers from a map into the Warmplane target configuration file.
@@ -412,6 +458,49 @@ mod tests {
         assert_eq!(source.server_count, 1);
         assert!(source.servers.contains_key("memory"));
         assert_eq!(source.servers["memory"].command.as_deref(), Some("npx"));
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_validate_safe_import_path_rejects_traversal() {
+        let traversal_path = PathBuf::from("../../../etc/passwd");
+        let res = validate_safe_import_path(&traversal_path);
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .to_string()
+            .contains("Path traversal disallowed"));
+    }
+
+    #[test]
+    fn test_validate_safe_import_path_rejects_non_json() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("warmplane_test_ext_{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let path = temp_dir.join("config.yaml");
+        std::fs::write(&path, "key: val").unwrap();
+
+        let res = validate_safe_import_path(&path);
+        assert!(res.is_err());
+        assert!(res
+            .unwrap_err()
+            .to_string()
+            .contains("must have a .json extension"));
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_validate_safe_import_path_accepts_valid_json_file() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("warmplane_test_valid_{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let path = temp_dir.join("mcp_servers.json");
+        std::fs::write(&path, "{}").unwrap();
+
+        let res = validate_safe_import_path(&path);
+        assert!(res.is_ok());
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }
