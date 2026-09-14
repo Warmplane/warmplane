@@ -25,7 +25,7 @@ jobs:
 
       - name: Install slop-gate
         run: |
-          SLOP_GATE_VERSION="v0.3.1"
+          SLOP_GATE_VERSION="v0.3.2"
           curl -sSLf "https://github.com/mrorigo/slop-gate/releases/download/${SLOP_GATE_VERSION}/slop-gate-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C /usr/local/bin
           slop-gate --version
 
@@ -49,7 +49,7 @@ jobs:
 
       - name: Install slop-gate
         run: |
-          SLOP_GATE_VERSION="v0.3.1"
+          SLOP_GATE_VERSION="v0.3.2"
           curl -sSLf "https://github.com/mrorigo/slop-gate/releases/download/${SLOP_GATE_VERSION}/slop-gate-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C /usr/local/bin
           slop-gate --version
 
