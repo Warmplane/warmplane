@@ -6,7 +6,7 @@
 
 > **The local control plane that keeps Model Context Protocol (MCP) sessions warm with compact capability facades, policy governance, and deterministic execution.**
 > 
-> v0.29.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.30.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 ---
 
@@ -210,6 +210,7 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 
 | Capability | Since | Description |
 |---|---|---|
+| **Due-Diligence Security Hardening & Resilience** | v0.30.0 | Constant-time bearer token comparisons, JWT `iss`/`aud`/`nbf` validation, safe client IP extraction, fsync'd audit durability, and race-free state storage |
 | **Configurable MCP Protocol Versions & HTTP Client Attach** | v0.29.0 | Configurable `supportedProtocolVersions`, HTTP transport choice for 1-click client installs, SSRF webhook allowlist, and path traversal guards |
 | **Real-Time MCP `list_changed` & Passthrough Tools** | v0.28.0 | Real-time tool/resource/prompt list change notifications, SEP-1319 `_meta` discovery hints, top-level native tool passthrough, and WORM mutation audit logging |
 | **Custom Alias Descriptions & Signatures** | v0.27.0 | Polymorphic docstring overrides (`AliasTarget`), compact LLM signatures (`tool(req, [opt])`), bidirectional alias resolution |
