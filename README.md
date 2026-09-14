@@ -6,7 +6,7 @@
 
 > **The local control plane that keeps Model Context Protocol (MCP) sessions warm with compact capability facades, policy governance, and deterministic execution.**
 > 
-> v0.28.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.29.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 ---
 
@@ -210,6 +210,7 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 
 | Capability | Since | Description |
 |---|---|---|
+| **Configurable MCP Protocol Versions & HTTP Client Attach** | v0.29.0 | Configurable `supportedProtocolVersions`, HTTP transport choice for 1-click client installs, SSRF webhook allowlist, and path traversal guards |
 | **Real-Time MCP `list_changed` & Passthrough Tools** | v0.28.0 | Real-time tool/resource/prompt list change notifications, SEP-1319 `_meta` discovery hints, top-level native tool passthrough, and WORM mutation audit logging |
 | **Custom Alias Descriptions & Signatures** | v0.27.0 | Polymorphic docstring overrides (`AliasTarget`), compact LLM signatures (`tool(req, [opt])`), bidirectional alias resolution |
 | **1-Click AI Client Injector & Sync** | v0.26.0 | Bidirectional MCP adapter engine for Claude Desktop, OpenCode, Claude Code, Cursor, Zed, Windsurf, Cline |
@@ -238,6 +239,13 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 ---
 
 ## Changelog
+
+### v0.29.0 — Configurable MCP Protocol Versions, HTTP Client Attach & Security Hardening
+- **HTTP Transport Option in 1-Click Client Installs (`src/cli.rs`, `src/client_adapter.rs`):** Added `--transport http` flag and interactive transport selection to client attaches (`warmplane client install <target> --transport http`), configuring clients directly to the daemon's streamable HTTP endpoint.
+- **Configurable MCP Protocol Versions (`src/config.rs`, `src/http_v1/mcp_transport.rs`):** Added `supportedProtocolVersions` configuration option allowing operators to customize the protocol version array advertised during MCP streamable HTTP initialization.
+- **SSRF Allowlist Protection for Webhooks (`src/config.rs`, `src/http_v1/webhooks_api.rs`):** Added `policy.webhook.allowed_urls` validation to enforce explicit URL allowlists on outbound webhook test dispatches.
+- **Path Traversal Guards on Config Imports (`src/config_import.rs`):** Added strict path containment validation (`validate_safe_import_path`) on config import operations to block relative path escapes (`../`).
+- **Bounded Search Allocation & Execution Hardening (`src/search/hybrid.rs`):** Bounded search request limit and vector allocations to prevent memory exhaustion from untrusted inputs.
 
 ### v0.28.0 — Real-Time MCP `list_changed` Notifications, SEP-1319 Discovery Hints & Passthrough Tools
 - **Real-Time MCP `list_changed` Notifications (`src/mcp_server.rs`, `src/daemon/state.rs`):** Advertised `listChanged: true` across `tools`, `resources`, and `prompts` capabilities (`enable_tool_list_changed`, `enable_resources_list_changed`, `enable_resources_subscribe`, `enable_prompts_list_changed`). Active MCP stdio sessions receive real-time JSON-RPC notifications whenever upstream servers mount/unmount or config/aliases mutate.
