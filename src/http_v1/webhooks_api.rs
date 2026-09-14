@@ -293,6 +293,47 @@ pub async fn handle_test_webhook(
         }
     };
 
+    // Parse and validate URL structure and scheme to prevent SSRF
+    let parsed_url = match reqwest::Url::parse(&target_url) {
+        Ok(u) => {
+            if u.scheme() != "http" && u.scheme() != "https" {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "ok": false, "error": "Webhook URL must use http or https scheme" })),
+                )
+                    .into_response();
+            }
+            u
+        }
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": format!("Invalid webhook URL: {}", e) })),
+            )
+                .into_response();
+        }
+    };
+
+    // Verify target_url against configured webhook URL or explicit allowedUrls allowlist
+    let is_permitted = webhook_cfg.as_ref().is_some_and(|cfg| {
+        cfg.url == target_url
+            || cfg
+                .allowed_urls
+                .iter()
+                .any(|allowed| allowed == &target_url)
+    });
+
+    if !is_permitted {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "ok": false,
+                "error": "Webhook URL is not permitted. URL must match policy.webhook.url or be present in policy.webhook.allowed_urls."
+            })),
+        )
+            .into_response();
+    }
+
     let test_data = json!({
         "id": "appr-test-101",
         "capability_id": "db.drop_database",
@@ -319,7 +360,7 @@ pub async fn handle_test_webhook(
         .build()
         .unwrap_or_default();
 
-    match client.post(&target_url).json(&formatted).send().await {
+    match client.post(parsed_url).json(&formatted).send().await {
         Ok(resp) if resp.status().is_success() => (
             StatusCode::OK,
             Json(json!({
@@ -346,5 +387,80 @@ pub async fn handle_test_webhook(
             })),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{McpConfig, PolicyConfig, WebhookConfig};
+    use axum::body::to_bytes;
+    use tempfile::NamedTempFile;
+
+    #[tokio::test]
+    async fn test_webhook_rejects_unpermitted_url() {
+        let temp = NamedTempFile::new().unwrap();
+        let config = McpConfig {
+            policy: Some(PolicyConfig {
+                webhook: Some(WebhookConfig {
+                    url: "https://hooks.slack.com/services/T00/B00/X00".to_string(),
+                    allowed_urls: vec!["https://discord.com/api/webhooks/1/2".to_string()],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        std::fs::write(temp.path(), serde_json::to_string(&config).unwrap()).unwrap();
+
+        let state = AppState::builder()
+            .config_path(temp.path().to_str().unwrap().to_string())
+            .catalog_version("test")
+            .build();
+
+        // 1. Target URL not in allowed list
+        let req = TestWebhookRequest {
+            url: Some("https://evil.internal.attacker.com/webhook".to_string()),
+            format: None,
+        };
+        let resp = handle_test_webhook(State(state.clone()), Json(req))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body_json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body_json["ok"], false);
+
+        // 2. Target URL with invalid non-http/https scheme
+        let req_invalid = TestWebhookRequest {
+            url: Some("file:///etc/passwd".to_string()),
+            format: None,
+        };
+        let resp_invalid = handle_test_webhook(State(state), Json(req_invalid))
+            .await
+            .into_response();
+        assert_eq!(resp_invalid.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_webhook_rejects_when_no_webhook_configured() {
+        let temp = NamedTempFile::new().unwrap();
+        let config = McpConfig::default();
+        std::fs::write(temp.path(), serde_json::to_string(&config).unwrap()).unwrap();
+
+        let state = AppState::builder()
+            .config_path(temp.path().to_str().unwrap().to_string())
+            .catalog_version("test")
+            .build();
+
+        let req = TestWebhookRequest {
+            url: None,
+            format: None,
+        };
+        let resp = handle_test_webhook(State(state), Json(req))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }
