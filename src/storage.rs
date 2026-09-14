@@ -138,6 +138,13 @@ where
         Ok(())
     }
 
+    /// Saves state and logs any persistence failure using the specified error message context.
+    pub fn save_logged(&self, data: &T, failure_msg: &str) {
+        if let Err(e) = self.save(data) {
+            tracing::error!(error = %e, path = %self.path.display(), "{}", failure_msg);
+        }
+    }
+
     /// Deletes the state file if it exists on disk.
     ///
     /// # Errors

@@ -8,3 +8,5 @@ docs/REPO_REVIEW.md
 ui/node_modules/
 .voidleap/
 docs/presentation*
+/.slop-gate/
+slop-gate.sarif

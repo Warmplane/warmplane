@@ -2,45 +2,18 @@
 
 //! Integration tests for passthrough tool exposure and direct invocation in Warmplane.
 
-use serde_json::{json, Value};
+use serde_json::json;
 use std::time::Duration;
 use tempfile::NamedTempFile;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncWriteExt, BufReader},
     process::Command,
     time::timeout,
 };
 
+mod common;
+use common::read_jsonrpc_until_id;
 use warmplane::config::{save_config, AliasTarget, McpConfig};
-
-async fn read_jsonrpc_until_id<R: AsyncBufReadExt + Unpin>(
-    reader: &mut R,
-    expected_id: u64,
-) -> Value {
-    let mut line = String::new();
-    loop {
-        line.clear();
-        let bytes_read = timeout(Duration::from_secs(5), reader.read_line(&mut line))
-            .await
-            .expect("timeout waiting for JSON-RPC message")
-            .expect("stdout read error");
-
-        if bytes_read == 0 {
-            panic!("stdout closed before receiving id={}", expected_id);
-        }
-
-        let trimmed = line.trim();
-        if trimmed.is_empty() || !trimmed.starts_with('{') {
-            continue;
-        }
-
-        if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
-            if val.get("id").and_then(Value::as_u64) == Some(expected_id) {
-                return val;
-            }
-        }
-    }
-}
 
 #[tokio::test]
 async fn test_mcp_passthrough_tools_listing_and_execution() {

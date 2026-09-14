@@ -412,17 +412,25 @@ pub struct WebhookConfig {
     pub allowed_urls: Vec<String>,
 }
 
+/// Resolves a secret from an environment variable name, falling back to a direct string value.
+pub(crate) fn resolve_env_or_direct(
+    env_name: Option<&str>,
+    direct: Option<&str>,
+) -> Option<String> {
+    if let Some(name) = env_name {
+        if let Ok(val) = std::env::var(name) {
+            if !val.trim().is_empty() {
+                return Some(val);
+            }
+        }
+    }
+    direct.map(ToString::to_string)
+}
+
 impl WebhookConfig {
     /// Resolves the HMAC signing secret from env var or direct value.
     pub fn resolve_secret(&self) -> Option<String> {
-        if let Some(ref env_name) = self.secret_env {
-            if let Ok(val) = std::env::var(env_name) {
-                if !val.trim().is_empty() {
-                    return Some(val);
-                }
-            }
-        }
-        self.secret.clone()
+        resolve_env_or_direct(self.secret_env.as_deref(), self.secret.as_deref())
     }
 }
 
@@ -526,14 +534,7 @@ pub struct AuditConfig {
 impl AuditConfig {
     /// Resolves the HMAC secret key from env var or direct value.
     pub fn resolve_hmac_key(&self) -> Option<String> {
-        if let Some(ref env_name) = self.hmac_key_env {
-            if let Ok(val) = std::env::var(env_name) {
-                if !val.trim().is_empty() {
-                    return Some(val);
-                }
-            }
-        }
-        self.hmac_key.clone()
+        resolve_env_or_direct(self.hmac_key_env.as_deref(), self.hmac_key.as_deref())
     }
 }
 
@@ -634,10 +635,10 @@ impl WebhookConfig {
 impl AuditConfig {
     /// Sanitizes SIEM target secrets and HMAC keys in place.
     pub fn sanitize_secrets(&mut self) {
-        if self.hmac_key.is_some() {
-            self.hmac_key = Some("********".to_string());
+        if let Some(key) = self.hmac_key.as_mut() {
+            key.replace_range(.., "********");
         }
-        if let Some(ref mut siem) = self.siem {
+        if let Some(siem) = self.siem.as_mut() {
             siem.sanitize_secrets();
         }
     }

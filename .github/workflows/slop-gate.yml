@@ -1,0 +1,73 @@
+name: Slop Gate
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+
+jobs:
+  index-main:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install slop-gate
+        run: |
+          SLOP_GATE_VERSION="v0.3.1"
+          curl -sSLf "https://github.com/mrorigo/slop-gate/releases/download/${SLOP_GATE_VERSION}/slop-gate-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C /usr/local/bin
+          slop-gate --version
+
+      - name: Build baseline index
+        run: slop-gate index --ref HEAD --output .slop-gate/index.json
+
+      - name: Save baseline cache
+        uses: actions/cache/save@v4
+        with:
+          path: .slop-gate/index.json
+          key: slop-gate-index-${{ github.sha }}
+
+  check-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install slop-gate
+        run: |
+          SLOP_GATE_VERSION="v0.3.1"
+          curl -sSLf "https://github.com/mrorigo/slop-gate/releases/download/${SLOP_GATE_VERSION}/slop-gate-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C /usr/local/bin
+          slop-gate --version
+
+      - name: Restore baseline index
+        uses: actions/cache/restore@v4
+        id: restore-index
+        with:
+          path: .slop-gate/index.json
+          key: slop-gate-index-${{ github.event.pull_request.base.sha }}
+
+      - name: Build missing baseline index
+        if: steps.restore-index.outputs.cache-hit != 'true'
+        run: slop-gate index --ref ${{ github.event.pull_request.base.sha }} --output .slop-gate/index.json
+
+      - name: Evaluate code quality gate
+        run: slop-gate check --base ${{ github.event.pull_request.base.sha }} --head HEAD --index .slop-gate/index.json --format sarif > slop-gate.sarif
+
+      - name: Upload SARIF report
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: slop-gate.sarif

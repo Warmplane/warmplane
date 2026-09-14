@@ -13,7 +13,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{oneshot, RwLock};
-use tracing::error;
 
 use crate::context::RequestContext;
 use crate::storage::AtomicFile;
@@ -222,9 +221,7 @@ impl TaskRegistry {
     async fn sync_to_disk(&self) {
         if let Some(ref store) = self.storage {
             let guard = self.tasks.read().await;
-            if let Err(e) = store.save(&*guard) {
-                error!(error = %e, path = %store.path().display(), "failed to persist task registry state to disk");
-            }
+            store.save_logged(&*guard, "failed to persist task registry state to disk");
         }
     }
 

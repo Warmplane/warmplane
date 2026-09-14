@@ -30,6 +30,73 @@ pub struct Envelope<T> {
     pub retry: RetryMetadata,
 }
 
+/// Builder for constructing structured `Envelope<T>` responses (`M-INIT-BUILDER`).
+pub struct EnvelopeBuilder<T> {
+    ok: bool,
+    trace_id: String,
+    request_id: Option<String>,
+    context: Option<RequestContext>,
+    data: Option<T>,
+    error: Option<WarmplaneError>,
+    retry: RetryMetadata,
+}
+
+impl<T> EnvelopeBuilder<T> {
+    /// Creates a new builder for a given trace ID and retry classification.
+    pub fn new(trace_id: impl Into<String>, retry: RetryMetadata) -> Self {
+        Self {
+            ok: true,
+            trace_id: trace_id.into(),
+            request_id: None,
+            context: None,
+            data: None,
+            error: None,
+            retry,
+        }
+    }
+
+    /// Attaches an optional request ID.
+    pub fn request_id(mut self, request_id: Option<String>) -> Self {
+        self.request_id = request_id;
+        self
+    }
+
+    /// Attaches an optional request context.
+    pub fn context(mut self, context: Option<RequestContext>) -> Self {
+        self.context = context;
+        self
+    }
+
+    /// Sets successful execution with given data payload.
+    pub fn success(mut self, data: T) -> Self {
+        self.ok = true;
+        self.data = Some(data);
+        self.error = None;
+        self
+    }
+
+    /// Sets failed execution with error payload.
+    pub fn error(mut self, error: WarmplaneError) -> Self {
+        self.ok = false;
+        self.data = None;
+        self.error = Some(error);
+        self
+    }
+
+    /// Builds the final `Envelope<T>`.
+    pub fn build(self) -> Envelope<T> {
+        Envelope {
+            ok: self.ok,
+            request_id: self.request_id,
+            context: self.context,
+            trace_id: self.trace_id,
+            data: self.data,
+            error: self.error,
+            retry: self.retry,
+        }
+    }
+}
+
 impl<T> Envelope<T> {
     /// Constructs a successful response envelope.
     pub fn success(
@@ -39,15 +106,10 @@ impl<T> Envelope<T> {
         data: T,
         retry: RetryMetadata,
     ) -> Self {
-        Self {
-            ok: true,
-            request_id,
-            context,
-            trace_id,
-            data: Some(data),
-            error: None,
-            retry,
-        }
+        let mut b = EnvelopeBuilder::new(trace_id, retry);
+        b.request_id = request_id;
+        b.context = context;
+        b.success(data).build()
     }
 
     /// Constructs an error response envelope.
