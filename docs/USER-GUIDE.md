@@ -355,7 +355,8 @@ The `policy` block enforces global security boundaries, human approval gates, an
   "webhook": {
     "url": "https://ops.internal/webhooks/warmplane",
     "secretEnv": "WARMPLANE_WEBHOOK_SECRET",
-    "authHeader": "Bearer ops-token-xyz"
+    "authHeader": "Bearer ops-token-xyz",
+    "allowedUrls": ["https://discord.com/api/webhooks/123/abc"]
   }
 }
 ```
@@ -368,6 +369,7 @@ The `policy` block enforces global security boundaries, human approval gates, an
 - **Default Permissiveness**: If `allow` is empty or omitted, all non-denied items are permitted.
 - **Data Redaction**: Fields matching keys in `redactKeys` are masked in logs, trace spans, and webhook payloads.
 - **Webhook HMAC Signing**: Outbound webhook requests are signed with HMAC-SHA256 in the `X-Warmplane-Signature-256` header using `secret` or `secretEnv`.
+- **SSRF Prevention & Allowlist**: Simulated test webhooks (`/v1/webhooks/test`) require HTTP/HTTPS and only send to `policy.webhook.url` or destinations explicitly listed in `policy.webhook.allowedUrls`.
 
 ---
 

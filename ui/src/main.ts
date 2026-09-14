@@ -1605,6 +1605,13 @@ class WarmplaneApp {
     const url = urlEl ? urlEl.value.trim() : undefined;
     const format = formatEl ? formatEl.value : undefined;
 
+    const state = store.getState();
+    const currentWebhookUrl = typeof state.config.policy?.webhook === 'object' ? state.config.policy.webhook?.url : undefined;
+    if (url && url !== currentWebhookUrl) {
+      // Save webhook settings first so URL is in the server's allowlist
+      await this.saveWebhookConfig();
+    }
+
     const statusEl = document.getElementById('policy-webhook-status');
     if (statusEl) {
       statusEl.textContent = 'Sending test event...';

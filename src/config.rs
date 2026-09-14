@@ -402,6 +402,14 @@ pub struct WebhookConfig {
     /// Optional custom HTTP headers map.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headers: Option<HashMap<String, String>>,
+    /// Optional allowlist of webhook URLs permitted for test dispatches.
+    #[serde(
+        default,
+        rename = "allowedUrls",
+        alias = "allowed_urls",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub allowed_urls: Vec<String>,
 }
 
 impl WebhookConfig {

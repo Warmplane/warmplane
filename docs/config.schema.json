@@ -223,6 +223,12 @@
         "headers": {
           "type": "object",
           "additionalProperties": { "type": "string" }
+        },
+        "allowedUrls": {
+          "type": "array",
+          "items": { "type": "string", "format": "uri" },
+          "default": [],
+          "description": "Optional allowlist of webhook URLs permitted for test dispatches."
         }
       },
       "additionalProperties": false
