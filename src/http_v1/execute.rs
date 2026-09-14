@@ -16,7 +16,7 @@ use tracing::info;
 use crate::{
     daemon::{AppState, ServerMsg, UpstreamCallError},
     http_v1::{
-        helpers::{next_trace_id, redact_value, resolve_idempotency_key},
+        helpers::{next_trace_id, redact_value, resolve_client_ip, resolve_idempotency_key},
         types::{error_envelope, CallCapabilityRequest},
     },
 };
@@ -47,6 +47,8 @@ pub async fn handle_call_capability(
             req_context.grant_id = Some(grant.clone());
         }
     }
+
+    let client_ip = resolve_client_ip(&headers);
 
     let explicit_key = resolve_idempotency_key(payload.idempotency_key.clone(), &headers);
     let idempotency_key = explicit_key.or_else(|| {
@@ -85,10 +87,7 @@ pub async fn handle_call_capability(
                     request_id: Some(request_id.clone()),
                     actor_id: req_context.actor_id.clone(),
                     work_item_id: req_context.work_item_id.clone(),
-                    client_ip: headers
-                        .get("x-forwarded-for")
-                        .and_then(|h| h.to_str().ok())
-                        .map(|s| s.to_string()),
+                    client_ip: client_ip.clone(),
                     server_id: None,
                     capability_id: Some(payload.capability_id.clone()),
                     resource_uri: None,
@@ -162,10 +161,7 @@ pub async fn handle_call_capability(
                 request_id: Some(request_id.clone()),
                 actor_id: req_context.actor_id.clone(),
                 work_item_id: req_context.work_item_id.clone(),
-                client_ip: headers
-                    .get("x-forwarded-for")
-                    .and_then(|h| h.to_str().ok())
-                    .map(|s| s.to_string()),
+                client_ip: client_ip.clone(),
                 server_id: None,
                 capability_id: Some(payload.capability_id.clone()),
                 resource_uri: None,
@@ -311,10 +307,7 @@ pub async fn handle_call_capability(
             request_id: Some(request_id.clone()),
             actor_id: req_context.actor_id.clone(),
             work_item_id: req_context.work_item_id.clone(),
-            client_ip: headers
-                .get("x-forwarded-for")
-                .and_then(|h| h.to_str().ok())
-                .map(|s| s.to_string()),
+            client_ip: client_ip.clone(),
             server_id: Some(server_id.clone()),
             capability_id: Some(payload.capability_id.clone()),
             resource_uri: None,
@@ -599,10 +592,7 @@ pub async fn handle_call_capability(
                     request_id: Some(request_id.clone()),
                     actor_id: req_context.actor_id.clone(),
                     work_item_id: req_context.work_item_id.clone(),
-                    client_ip: headers
-                        .get("x-forwarded-for")
-                        .and_then(|h| h.to_str().ok())
-                        .map(|s| s.to_string()),
+                    client_ip: client_ip.clone(),
                     server_id: Some(server_id.clone()),
                     capability_id: Some(payload.capability_id.clone()),
                     resource_uri: None,
@@ -648,10 +638,7 @@ pub async fn handle_call_capability(
                     request_id: Some(request_id.clone()),
                     actor_id: req_context.actor_id.clone(),
                     work_item_id: req_context.work_item_id.clone(),
-                    client_ip: headers
-                        .get("x-forwarded-for")
-                        .and_then(|h| h.to_str().ok())
-                        .map(|s| s.to_string()),
+                    client_ip: client_ip.clone(),
                     server_id: Some(server_id.clone()),
                     capability_id: Some(payload.capability_id.clone()),
                     resource_uri: None,
@@ -738,10 +725,7 @@ pub async fn handle_call_capability(
             request_id: Some(request_id.clone()),
             actor_id: req_context.actor_id.clone(),
             work_item_id: req_context.work_item_id.clone(),
-            client_ip: headers
-                .get("x-forwarded-for")
-                .and_then(|h| h.to_str().ok())
-                .map(|s| s.to_string()),
+            client_ip: client_ip.clone(),
             server_id: Some(server_id.clone()),
             capability_id: Some(payload.capability_id.clone()),
             resource_uri: None,
@@ -849,10 +833,7 @@ pub async fn handle_call_capability(
                 request_id: Some(request_id.clone()),
                 actor_id: req_context.actor_id.clone(),
                 work_item_id: req_context.work_item_id.clone(),
-                client_ip: headers
-                    .get("x-forwarded-for")
-                    .and_then(|h| h.to_str().ok())
-                    .map(|s| s.to_string()),
+                client_ip: client_ip.clone(),
                 server_id: Some(server_id.clone()),
                 capability_id: Some(payload.capability_id.clone()),
                 resource_uri: None,
@@ -903,10 +884,7 @@ pub async fn handle_call_capability(
                 request_id: Some(request_id.clone()),
                 actor_id: req_context.actor_id.clone(),
                 work_item_id: req_context.work_item_id.clone(),
-                client_ip: headers
-                    .get("x-forwarded-for")
-                    .and_then(|h| h.to_str().ok())
-                    .map(|s| s.to_string()),
+                client_ip: client_ip.clone(),
                 server_id: Some(server_id.clone()),
                 capability_id: Some(payload.capability_id.clone()),
                 resource_uri: None,
@@ -950,10 +928,7 @@ pub async fn handle_call_capability(
                 request_id: Some(request_id.clone()),
                 actor_id: req_context.actor_id.clone(),
                 work_item_id: req_context.work_item_id.clone(),
-                client_ip: headers
-                    .get("x-forwarded-for")
-                    .and_then(|h| h.to_str().ok())
-                    .map(|s| s.to_string()),
+                client_ip: client_ip.clone(),
                 server_id: Some(server_id.clone()),
                 capability_id: Some(payload.capability_id.clone()),
                 resource_uri: None,

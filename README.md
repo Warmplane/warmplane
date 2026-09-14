@@ -1,12 +1,12 @@
 # Warmplane
 [![Latest Release](https://img.shields.io/github/v/release/Warmplane/warmplane)](https://github.com/Warmplane/warmplane/releases/latest) [![crates.io](https://img.shields.io/crates/v/warmplane.svg)](https://crates.io/crates/warmplane) [![docs.rs](https://docs.rs/warmplane/badge.svg)](https://docs.rs/warmplane) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/Warmplane/warmplane)
-[![Rust Guideline Checks](https://github.com/Warmplane/warmplane/actions/workflows/ci.yml/badge.svg?branch=main&job=compliance-check)](https://github.com/Warmplane/warmplane/actions/workflows/ci.yml) [![Security Audit](https://github.com/Warmplane/warmplane/actions/workflows/ci.yml/badge.svg?branch=main&job=security-audit)](https://github.com/Warmplane/warmplane/actions/workflows/ci.yml)
+[![Rust Guideline Checks](https://github.com/Warmplane/warmplane/actions/workflows/ci.yml/badge.svg?branch=main&job=compliance-check)](https://github.com/Warmplane/warmplane/actions/workflows/ci.yml) [![Security Audit](https://github.com/Warmplane/warmplane/actions/workflows/ci.yml/badge.svg?branch=main&job=security-audit)](https://github.com/Warmplane/warmplane/actions/workflows/ci.yml) [![Slop Gate passing](https://github.com/Warmplane/warmplane/actions/workflows/slop-gate.yml/badge.svg)](https://github.com/mrorigo/slop-gate/)
 
 **Security controls:** [![WORM + HMAC audit](https://img.shields.io/badge/WORM%20%2B%20HMAC-audit-4c1.svg)](docs/OBSERVABILITY.md) [![HITL + policy](https://img.shields.io/badge/HITL%20%2B%20policy-controls-4c1.svg)](docs/ENTERPRISE_FEATURES.md) [![OAuth2 + PKCE](https://img.shields.io/badge/OAuth2%20%2B%20PKCE-protected-4c1.svg)](docs/research/MCP_AUTHORIZATION.md) [![Secret redaction](https://img.shields.io/badge/secret-redaction-4c1.svg)](docs/ENTERPRISE_FEATURES.md) [![SIEM + OTLP](https://img.shields.io/badge/SIEM%20%2B%20OTLP-observable-4c1.svg)](docs/OBSERVABILITY.md)
 
 > **The local control plane that keeps Model Context Protocol (MCP) sessions warm with compact capability facades, policy governance, and deterministic execution.**
 > 
-> v0.29.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.30.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 ---
 
@@ -210,6 +210,7 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 
 | Capability | Since | Description |
 |---|---|---|
+| **Due-Diligence Security Hardening & Resilience** | v0.30.0 | Constant-time bearer token comparisons, JWT `iss`/`aud`/`nbf` validation, safe client IP extraction, fsync'd audit durability, and race-free state storage |
 | **Configurable MCP Protocol Versions & HTTP Client Attach** | v0.29.0 | Configurable `supportedProtocolVersions`, HTTP transport choice for 1-click client installs, SSRF webhook allowlist, and path traversal guards |
 | **Real-Time MCP `list_changed` & Passthrough Tools** | v0.28.0 | Real-time tool/resource/prompt list change notifications, SEP-1319 `_meta` discovery hints, top-level native tool passthrough, and WORM mutation audit logging |
 | **Custom Alias Descriptions & Signatures** | v0.27.0 | Polymorphic docstring overrides (`AliasTarget`), compact LLM signatures (`tool(req, [opt])`), bidirectional alias resolution |

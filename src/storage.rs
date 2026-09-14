@@ -113,9 +113,10 @@ where
         let json_bytes = serde_json::to_string_pretty(data)
             .context("Failed to serialize state data to JSON format")?;
 
+        let nonce: u64 = rand::random();
         let tmp_path = self
             .path
-            .with_extension(format!("tmp.{}", std::process::id()));
+            .with_extension(format!("tmp.{}.{}", std::process::id(), nonce));
 
         fs::write(&tmp_path, format!("{}\n", json_bytes)).with_context(|| {
             format!(
@@ -123,6 +124,18 @@ where
                 tmp_path.display()
             )
         })?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let filename = self.path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+            if filename.contains("oauth")
+                || filename.contains("secret")
+                || filename.contains("token")
+            {
+                let _ = fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600));
+            }
+        }
 
         fs::rename(&tmp_path, &self.path).with_context(|| {
             // Attempt cleanup of temp file if rename fails
@@ -193,6 +206,13 @@ impl StateDirectory {
                 )
             })?;
         }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&self.base_dir, fs::Permissions::from_mode(0o700));
+        }
+
         Ok(())
     }
 

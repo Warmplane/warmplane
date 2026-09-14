@@ -368,11 +368,12 @@ mod tests {
 
     #[test]
     fn test_resolve_env_scheme() {
-        std::env::set_var("TEST_WP_SECRET_ENV", "my_secret_token_123");
-        let res = resolve_secret_value("env://TEST_WP_SECRET_ENV").unwrap();
-        assert_eq!(res, "my_secret_token_123");
+        // Read an existing ubiquitous environment variable to avoid set_var thread-safety issues
+        let res = resolve_secret_value("env://PATH");
+        assert!(res.is_ok());
+        assert!(!res.unwrap().is_empty());
 
-        let err = resolve_secret_value("env://NON_EXISTENT_VAR_XYZ_99");
+        let err = resolve_secret_value("env://NON_EXISTENT_VAR_XYZ_999999");
         assert!(err.is_err());
     }
 

@@ -202,13 +202,18 @@ impl AuditStore {
             let mut file = OpenOptions::new().create(true).append(true).open(path)?;
             let serialized = serde_json::to_string(&record)?;
             writeln!(file, "{}", serialized)?;
-            file.flush()?;
+            file.sync_data()?;
         }
 
         *latest_hash_guard = hash;
         if events_guard.len() >= MAX_IN_MEMORY_AUDIT_EVENTS {
             let excess = events_guard.len() - (MAX_IN_MEMORY_AUDIT_EVENTS - 1);
             events_guard.drain(0..excess);
+            tracing::info!(
+                evicted_count = excess,
+                capacity = MAX_IN_MEMORY_AUDIT_EVENTS,
+                "evicted oldest audit events from in-memory cache (persisted file log remains intact)"
+            );
         }
         events_guard.push(record.clone());
 
@@ -281,6 +286,11 @@ impl AuditStore {
             if events_guard.len() >= MAX_IN_MEMORY_AUDIT_EVENTS {
                 let excess = events_guard.len() - (MAX_IN_MEMORY_AUDIT_EVENTS - 1);
                 events_guard.drain(0..excess);
+                tracing::info!(
+                    evicted_count = excess,
+                    capacity = MAX_IN_MEMORY_AUDIT_EVENTS,
+                    "evicted oldest audit events from in-memory cache (persisted file log remains intact)"
+                );
             }
             events_guard.push(record.clone());
             out.push(record);
@@ -291,7 +301,7 @@ impl AuditStore {
             for line in disk_lines {
                 writeln!(file, "{}", line)?;
             }
-            file.flush()?;
+            file.sync_data()?;
         }
 
         Ok(out)
