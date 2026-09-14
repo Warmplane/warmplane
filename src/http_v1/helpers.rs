@@ -213,3 +213,26 @@ fn redact_value_internal(value: Value, lower_keys: &[String]) -> Value {
         primitive => primitive,
     }
 }
+
+/// Resolves client IP address from headers safely.
+///
+/// If `x-forwarded-for` is present, it validates the candidate IP address against IPv4/IPv6 syntax
+/// and takes the first hop (client IP). If missing or invalid, falls back to `x-real-ip` or `None`.
+pub fn resolve_client_ip(headers: &HeaderMap) -> Option<String> {
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()) {
+        if let Some(first_ip) = xff.split(',').next().map(|s| s.trim()) {
+            if !first_ip.is_empty() && first_ip.parse::<std::net::IpAddr>().is_ok() {
+                return Some(first_ip.to_string());
+            }
+        }
+    }
+
+    if let Some(real_ip) = headers.get("x-real-ip").and_then(|h| h.to_str().ok()) {
+        let trimmed = real_ip.trim();
+        if !trimmed.is_empty() && trimmed.parse::<std::net::IpAddr>().is_ok() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    None
+}

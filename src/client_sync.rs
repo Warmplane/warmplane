@@ -720,7 +720,7 @@ pub fn attach_client(client_id: &str, options: &AttachOptions) -> Result<AttachR
         ClientDialect::StandardMcpServers => {
             let mcp_servers = root_val
                 .as_object_mut()
-                .unwrap()
+                .ok_or_else(|| anyhow::anyhow!("Expected root JSON to be an object"))?
                 .entry("mcpServers")
                 .or_insert_with(|| json!({}));
 
@@ -739,13 +739,13 @@ pub fn attach_client(client_id: &str, options: &AttachOptions) -> Result<AttachR
             };
             mcp_servers
                 .as_object_mut()
-                .unwrap()
+                .ok_or_else(|| anyhow::anyhow!("Expected mcpServers entry to be an object"))?
                 .insert("warmplane".to_string(), entry);
         }
         ClientDialect::ZedContextServers => {
             let context_servers = root_val
                 .as_object_mut()
-                .unwrap()
+                .ok_or_else(|| anyhow::anyhow!("Expected root JSON to be an object"))?
                 .entry("context_servers")
                 .or_insert_with(|| json!({}));
 
@@ -760,13 +760,13 @@ pub fn attach_client(client_id: &str, options: &AttachOptions) -> Result<AttachR
             };
             context_servers
                 .as_object_mut()
-                .unwrap()
+                .ok_or_else(|| anyhow::anyhow!("Expected context_servers entry to be an object"))?
                 .insert("warmplane".to_string(), entry);
         }
         ClientDialect::OpenCodeMcp => {
             let mcp = root_val
                 .as_object_mut()
-                .unwrap()
+                .ok_or_else(|| anyhow::anyhow!("Expected root JSON to be an object"))?
                 .entry("mcp")
                 .or_insert_with(|| json!({}));
 
@@ -780,7 +780,7 @@ pub fn attach_client(client_id: &str, options: &AttachOptions) -> Result<AttachR
                 json!({ "type": "local", "command": binary, "args": args, "enabled": true })
             };
             mcp.as_object_mut()
-                .unwrap()
+                .ok_or_else(|| anyhow::anyhow!("Expected mcp entry to be an object"))?
                 .insert("warmplane".to_string(), entry);
         }
     }

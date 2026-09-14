@@ -166,15 +166,15 @@ impl CircuitBreaker {
                 }
             }
             CircuitState::HalfOpen => {
-                let in_flight = self.half_open_probes.fetch_add(1, Ordering::SeqCst);
+                let in_flight = self.half_open_probes.load(Ordering::Relaxed);
                 if in_flight > 0 {
-                    self.half_open_probes.fetch_sub(1, Ordering::SeqCst);
                     Err(CircuitOpenError {
                         server_id: self.server_id.clone(),
                         remaining_cooldown_ms: 50,
                         consecutive_failures: self.consecutive_failures.load(Ordering::Relaxed),
                     })
                 } else {
+                    self.half_open_probes.store(1, Ordering::Relaxed);
                     Ok(())
                 }
             }

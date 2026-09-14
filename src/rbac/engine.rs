@@ -16,6 +16,7 @@ pub struct RbacEngine {
     tokens: HashMap<String, TokenAssignment>,
     roles: HashMap<String, RolePolicyConfig>,
     jwt_secret: Option<String>,
+    jwt_config: Option<crate::rbac::models::JwtConfig>,
 }
 
 impl RbacEngine {
@@ -28,10 +29,12 @@ impl RbacEngine {
                 tokens: HashMap::new(),
                 roles: HashMap::new(),
                 jwt_secret: None,
+                jwt_config: None,
             };
         };
 
         let jwt_secret = cfg.jwt.as_ref().and_then(|j| j.resolve_secret());
+        let jwt_config = cfg.jwt.clone();
 
         Self {
             enabled: cfg.enabled,
@@ -39,6 +42,7 @@ impl RbacEngine {
             tokens: cfg.tokens,
             roles: cfg.roles,
             jwt_secret,
+            jwt_config,
         }
     }
 
@@ -123,19 +127,23 @@ impl RbacEngine {
             });
         };
 
-        // 1. Check static token map
-        if let Some(assignment) = self.tokens.get(token) {
-            let effective_policy = self.compute_effective_policy(&assignment.role, base_policy);
-            return Ok(TenantContext {
-                tenant_id: assignment
-                    .tenant_id
-                    .clone()
-                    .unwrap_or_else(|| "default".to_string()),
-                role: assignment.role.clone(),
-                actor_id: assignment.actor_id.clone(),
-                grant_id: Some(format!("tok_{}", &token[..token.len().min(8)])),
-                effective_policy,
-            });
+        // 1. Check static token map with constant-time equality
+        use subtle::ConstantTimeEq;
+        for (configured_token, assignment) in &self.tokens {
+            let is_match: bool = configured_token.as_bytes().ct_eq(token.as_bytes()).into();
+            if is_match {
+                let effective_policy = self.compute_effective_policy(&assignment.role, base_policy);
+                return Ok(TenantContext {
+                    tenant_id: assignment
+                        .tenant_id
+                        .clone()
+                        .unwrap_or_else(|| "default".to_string()),
+                    role: assignment.role.clone(),
+                    actor_id: assignment.actor_id.clone(),
+                    grant_id: Some(format!("tok_{}", &token[..token.len().min(8)])),
+                    effective_policy,
+                });
+            }
         }
 
         // 2. Check JWT token format (header.payload.signature)
@@ -145,7 +153,11 @@ impl RbacEngine {
             }
         }
 
-        warn!(token_prefix = %&token[..token.len().min(8)], "invalid RBAC token supplied");
+        if token.len() >= 32 {
+            warn!(token_prefix = %&token[..8], "invalid RBAC token supplied");
+        } else {
+            warn!(token_prefix = "[redacted]", "invalid RBAC token supplied");
+        }
         Err("INVALID_CREDENTIALS".to_string())
     }
 
@@ -188,13 +200,41 @@ impl RbacEngine {
             .map_err(|_| "INVALID_PAYLOAD_JSON".to_string())?;
 
         // Extract standard claims
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
         if let Some(exp) = payload_val.get("exp").and_then(|v| v.as_u64()) {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
             if now > exp {
                 return Err("JWT_EXPIRED".to_string());
+            }
+        }
+
+        if let Some(nbf) = payload_val.get("nbf").and_then(|v| v.as_u64()) {
+            if now < nbf {
+                return Err("JWT_NOT_YET_VALID".to_string());
+            }
+        }
+
+        if let Some(ref cfg) = self.jwt_config {
+            if let Some(ref expected_iss) = cfg.issuer {
+                let actual_iss = payload_val.get("iss").and_then(|v| v.as_str());
+                if actual_iss != Some(expected_iss.as_str()) {
+                    return Err("INVALID_JWT_ISSUER".to_string());
+                }
+            }
+            if let Some(ref expected_aud) = cfg.audience {
+                let aud_match = match payload_val.get("aud") {
+                    Some(serde_json::Value::String(s)) => s == expected_aud,
+                    Some(serde_json::Value::Array(arr)) => arr
+                        .iter()
+                        .any(|v| v.as_str() == Some(expected_aud.as_str())),
+                    _ => false,
+                };
+                if !aud_match {
+                    return Err("INVALID_JWT_AUDIENCE".to_string());
+                }
             }
         }
 

@@ -117,3 +117,83 @@ fn test_rbac_default_role_fallback() {
     assert_eq!(anon_ctx.role, "anonymous");
     assert_eq!(anon_ctx.tenant_id, "default");
 }
+
+#[test]
+fn test_rbac_jwt_iss_aud_nbf_validation() {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let secret = "test_secret_key_super_secure";
+    let make_jwt = |payload: serde_json::Value| -> String {
+        let header = serde_json::json!({"alg": "HS256", "typ": "JWT"});
+        let h_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap());
+        let p_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        let signing_input = format!("{}.{}", h_b64, p_b64);
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(signing_input.as_bytes());
+        let sig_b64 = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+        format!("{}.{}", signing_input, sig_b64)
+    };
+
+    let mut cfg = sample_rbac_config();
+    cfg.jwt = Some(JwtConfig {
+        issuer: Some("https://auth.warmplane.io".to_string()),
+        audience: Some("warmplane-daemon".to_string()),
+        secret: Some(secret.to_string()),
+        ..Default::default()
+    });
+
+    let engine = RbacEngine::new(Some(cfg));
+    let base_policy = Policy::default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    // 1. Valid token
+    let valid_token = make_jwt(serde_json::json!({
+        "iss": "https://auth.warmplane.io",
+        "aud": "warmplane-daemon",
+        "exp": now + 3600,
+        "nbf": now - 10,
+        "role": "admin"
+    }));
+    let ctx = engine
+        .authenticate(Some(&valid_token), &base_policy)
+        .unwrap();
+    assert_eq!(ctx.role, "admin");
+
+    // 2. Invalid issuer
+    let bad_iss_token = make_jwt(serde_json::json!({
+        "iss": "https://rogue-service.com",
+        "aud": "warmplane-daemon",
+        "exp": now + 3600,
+        "role": "admin"
+    }));
+    assert!(engine
+        .authenticate(Some(&bad_iss_token), &base_policy)
+        .is_err());
+
+    // 3. Invalid audience
+    let bad_aud_token = make_jwt(serde_json::json!({
+        "iss": "https://auth.warmplane.io",
+        "aud": "other-service",
+        "exp": now + 3600,
+        "role": "admin"
+    }));
+    assert!(engine
+        .authenticate(Some(&bad_aud_token), &base_policy)
+        .is_err());
+
+    // 4. Token not valid yet (nbf in future)
+    let nbf_token = make_jwt(serde_json::json!({
+        "iss": "https://auth.warmplane.io",
+        "aud": "warmplane-daemon",
+        "exp": now + 3600,
+        "nbf": now + 1000,
+        "role": "admin"
+    }));
+    assert!(engine.authenticate(Some(&nbf_token), &base_policy).is_err());
+}

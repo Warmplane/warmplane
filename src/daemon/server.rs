@@ -470,12 +470,18 @@ pub async fn security_guard_middleware(
                     v.strip_prefix("Bearer ")
                         .or_else(|| v.strip_prefix("bearer "))
                 })
-                .map(|t| t == expected_token)
+                .map(|t| {
+                    use subtle::ConstantTimeEq;
+                    t.as_bytes().ct_eq(expected_token.as_bytes()).into()
+                })
                 .unwrap_or(false)
                 || headers
                     .get("x-warmplane-key")
                     .and_then(|h| h.to_str().ok())
-                    .map(|t| t == expected_token)
+                    .map(|t| {
+                        use subtle::ConstantTimeEq;
+                        t.as_bytes().ct_eq(expected_token.as_bytes()).into()
+                    })
                     .unwrap_or(false);
 
             if !is_authed {

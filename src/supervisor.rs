@@ -180,18 +180,100 @@ macro_rules! discover_supervisor_items {
     ($mcp_client:expr, $server_id:expr, $capability_aliases:expr, $resource_aliases:expr, $prompt_aliases:expr) => {{
         let discovery_timeout = std::time::Duration::from_millis(3000);
         let mut new_capabilities = Vec::new();
-        if let Ok(Ok(tools)) = tokio::time::timeout(
+        match tokio::time::timeout(
             discovery_timeout,
             $mcp_client.list_tools(Default::default()),
         )
         .await
         {
-            if let Ok(tools_json) = serde_json::to_value(&tools) {
-                if let Some(tools_array) = tools_json.get("tools").and_then(|t| t.as_array()) {
-                    for tool in tools_array {
-                        if let Some(tool_name) = tool.get("name").and_then(|n| n.as_str()) {
-                            let source_id = format!("{}.{}", $server_id, tool_name);
-                            let (capability_id, alias_summary, alias_desc) = $capability_aliases
+            Ok(Ok(tools)) => {
+                if let Ok(tools_json) = serde_json::to_value(&tools) {
+                    if let Some(tools_array) = tools_json.get("tools").and_then(|t| t.as_array()) {
+                        for tool in tools_array {
+                            if let Some(tool_name) = tool.get("name").and_then(|n| n.as_str()) {
+                                let source_id = format!("{}.{}", $server_id, tool_name);
+                                let (capability_id, alias_summary, alias_desc) = $capability_aliases
+                                    .iter()
+                                    .find_map(|(alias, target_cfg)| {
+                                        if target_cfg.target() == source_id {
+                                            Some((
+                                                alias.clone(),
+                                                target_cfg.summary().map(ToString::to_string),
+                                                target_cfg.description().map(ToString::to_string),
+                                            ))
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .or_else(|| {
+                                        $capability_aliases.get(&source_id).map(|target_cfg| {
+                                            (
+                                                target_cfg.target().to_string(),
+                                                target_cfg.summary().map(ToString::to_string),
+                                                target_cfg.description().map(ToString::to_string),
+                                            )
+                                        })
+                                    })
+                                    .unwrap_or((source_id.clone(), None, None));
+
+                                let default_summary = tool
+                                    .get("description")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("No summary available")
+                                    .to_string();
+                                let summary = alias_summary.unwrap_or(default_summary);
+                                let description = alias_desc.unwrap_or_else(|| summary.clone());
+                                let input_schema = tool
+                                    .get("inputSchema")
+                                    .cloned()
+                                    .unwrap_or_else(|| json!({}));
+                                let signature =
+                                    Some(derive_tool_signature(&capability_id, &input_schema));
+
+                                new_capabilities.push((
+                                    capability_id,
+                                    CapabilityMeta {
+                                        server: $server_id.to_string(),
+                                        tool: tool_name.to_string(),
+                                        summary,
+                                        description,
+                                        signature,
+                                        input_schema,
+                                        tags: vec![$server_id.to_string()],
+                                        examples: vec![],
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Err(err)) => {
+                tracing::warn!(server_id = %$server_id, error = %err, "supervisor failed to list tools during discovery");
+            }
+            Err(_) => {
+                tracing::warn!(server_id = %$server_id, timeout_ms = 3000, "supervisor timed out listing tools during discovery");
+            }
+        }
+
+        let mut new_resources = Vec::new();
+        match tokio::time::timeout(
+            discovery_timeout,
+            $mcp_client.list_resources(Default::default()),
+        )
+        .await
+        {
+            Ok(Ok(listed_resources)) => {
+                if let Ok(resources_json) = serde_json::to_value(&listed_resources) {
+                    if let Some(resource_array) =
+                        resources_json.get("resources").and_then(|r| r.as_array())
+                    {
+                        for resource in resource_array {
+                            let Some(uri) = resource.get("uri").and_then(|v| v.as_str()) else {
+                                continue;
+                            };
+                            let source_id = format!("{}.{}", $server_id, uri);
+                            let (resource_id, alias_summary, alias_desc) = $resource_aliases
                                 .iter()
                                 .find_map(|(alias, target_cfg)| {
                                     if target_cfg.target() == source_id {
@@ -205,7 +287,7 @@ macro_rules! discover_supervisor_items {
                                     }
                                 })
                                 .or_else(|| {
-                                    $capability_aliases.get(&source_id).map(|target_cfg| {
+                                    $resource_aliases.get(&source_id).map(|target_cfg| {
                                         (
                                             target_cfg.target().to_string(),
                                             target_cfg.summary().map(ToString::to_string),
@@ -213,184 +295,126 @@ macro_rules! discover_supervisor_items {
                                         )
                                     })
                                 })
-                                .unwrap_or((source_id.clone(), None, None));
+                                .unwrap_or((source_id, None, None));
 
-                            let default_summary = tool
-                                .get("description")
+                            let default_name = resource
+                                .get("name")
                                 .and_then(|v| v.as_str())
-                                .unwrap_or("No summary available")
+                                .unwrap_or(uri)
                                 .to_string();
-                            let summary = alias_summary.unwrap_or(default_summary);
-                            let description = alias_desc.unwrap_or_else(|| summary.clone());
-                            let input_schema = tool
-                                .get("inputSchema")
-                                .cloned()
-                                .unwrap_or_else(|| json!({}));
-                            let signature =
-                                Some(derive_tool_signature(&capability_id, &input_schema));
+                            let name = alias_summary.unwrap_or(default_name);
+                            let description = alias_desc.or_else(|| {
+                                resource
+                                    .get("description")
+                                    .and_then(|v| v.as_str())
+                                    .map(ToString::to_string)
+                            });
+                            let mime_type = resource
+                                .get("mime_type")
+                                .and_then(|v| v.as_str())
+                                .map(ToString::to_string);
 
-                            new_capabilities.push((
-                                capability_id,
-                                CapabilityMeta {
+                            new_resources.push((
+                                resource_id,
+                                ResourceMeta {
                                     server: $server_id.to_string(),
-                                    tool: tool_name.to_string(),
-                                    summary,
+                                    uri: uri.to_string(),
+                                    name,
                                     description,
-                                    signature,
-                                    input_schema,
+                                    mime_type,
                                     tags: vec![$server_id.to_string()],
-                                    examples: vec![],
                                 },
                             ));
                         }
                     }
                 }
             }
-        }
-
-        let mut new_resources = Vec::new();
-        if let Ok(Ok(listed_resources)) = tokio::time::timeout(
-            discovery_timeout,
-            $mcp_client.list_resources(Default::default()),
-        )
-        .await
-        {
-            if let Ok(resources_json) = serde_json::to_value(&listed_resources) {
-                if let Some(resource_array) =
-                    resources_json.get("resources").and_then(|r| r.as_array())
-                {
-                    for resource in resource_array {
-                        let Some(uri) = resource.get("uri").and_then(|v| v.as_str()) else {
-                            continue;
-                        };
-                        let source_id = format!("{}.{}", $server_id, uri);
-                        let (resource_id, alias_summary, alias_desc) = $resource_aliases
-                            .iter()
-                            .find_map(|(alias, target_cfg)| {
-                                if target_cfg.target() == source_id {
-                                    Some((
-                                        alias.clone(),
-                                        target_cfg.summary().map(ToString::to_string),
-                                        target_cfg.description().map(ToString::to_string),
-                                    ))
-                                } else {
-                                    None
-                                }
-                            })
-                            .or_else(|| {
-                                $resource_aliases.get(&source_id).map(|target_cfg| {
-                                    (
-                                        target_cfg.target().to_string(),
-                                        target_cfg.summary().map(ToString::to_string),
-                                        target_cfg.description().map(ToString::to_string),
-                                    )
-                                })
-                            })
-                            .unwrap_or((source_id, None, None));
-
-                        let default_name = resource
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(uri)
-                            .to_string();
-                        let name = alias_summary.unwrap_or(default_name);
-                        let description = alias_desc.or_else(|| {
-                            resource
-                                .get("description")
-                                .and_then(|v| v.as_str())
-                                .map(ToString::to_string)
-                        });
-                        let mime_type = resource
-                            .get("mime_type")
-                            .and_then(|v| v.as_str())
-                            .map(ToString::to_string);
-
-                        new_resources.push((
-                            resource_id,
-                            ResourceMeta {
-                                server: $server_id.to_string(),
-                                uri: uri.to_string(),
-                                name,
-                                description,
-                                mime_type,
-                                tags: vec![$server_id.to_string()],
-                            },
-                        ));
-                    }
-                }
+            Ok(Err(err)) => {
+                tracing::warn!(server_id = %$server_id, error = %err, "supervisor failed to list resources during discovery");
+            }
+            Err(_) => {
+                tracing::warn!(server_id = %$server_id, timeout_ms = 3000, "supervisor timed out listing resources during discovery");
             }
         }
 
         let mut new_prompts = Vec::new();
-        if let Ok(Ok(listed_prompts)) = tokio::time::timeout(
+        match tokio::time::timeout(
             discovery_timeout,
             $mcp_client.list_prompts(Default::default()),
         )
         .await
         {
-            if let Ok(prompts_json) = serde_json::to_value(&listed_prompts) {
-                if let Some(prompt_array) = prompts_json.get("prompts").and_then(|p| p.as_array()) {
-                    for prompt in prompt_array {
-                        let Some(name) = prompt.get("name").and_then(|v| v.as_str()) else {
-                            continue;
-                        };
+            Ok(Ok(listed_prompts)) => {
+                if let Ok(prompts_json) = serde_json::to_value(&listed_prompts) {
+                    if let Some(prompt_array) = prompts_json.get("prompts").and_then(|p| p.as_array()) {
+                        for prompt in prompt_array {
+                            let Some(name) = prompt.get("name").and_then(|v| v.as_str()) else {
+                                continue;
+                            };
 
-                        let source_id = format!("{}.{}", $server_id, name);
-                        let (prompt_id, alias_summary, alias_desc) = $prompt_aliases
-                            .iter()
-                            .find_map(|(alias, target_cfg)| {
-                                if target_cfg.target() == source_id {
-                                    Some((
-                                        alias.clone(),
-                                        target_cfg.summary().map(ToString::to_string),
-                                        target_cfg.description().map(ToString::to_string),
-                                    ))
-                                } else {
-                                    None
-                                }
-                            })
-                            .or_else(|| {
-                                $prompt_aliases.get(&source_id).map(|target_cfg| {
-                                    (
-                                        target_cfg.target().to_string(),
-                                        target_cfg.summary().map(ToString::to_string),
-                                        target_cfg.description().map(ToString::to_string),
-                                    )
+                            let source_id = format!("{}.{}", $server_id, name);
+                            let (prompt_id, alias_summary, alias_desc) = $prompt_aliases
+                                .iter()
+                                .find_map(|(alias, target_cfg)| {
+                                    if target_cfg.target() == source_id {
+                                        Some((
+                                            alias.clone(),
+                                            target_cfg.summary().map(ToString::to_string),
+                                            target_cfg.description().map(ToString::to_string),
+                                        ))
+                                    } else {
+                                        None
+                                    }
                                 })
-                            })
-                            .unwrap_or((source_id, None, None));
+                                .or_else(|| {
+                                    $prompt_aliases.get(&source_id).map(|target_cfg| {
+                                        (
+                                            target_cfg.target().to_string(),
+                                            target_cfg.summary().map(ToString::to_string),
+                                            target_cfg.description().map(ToString::to_string),
+                                        )
+                                    })
+                                })
+                                .unwrap_or((source_id, None, None));
 
-                        let title = alias_summary.or_else(|| {
-                            prompt
-                                .get("title")
-                                .and_then(|v| v.as_str())
-                                .map(ToString::to_string)
-                        });
-                        let description = alias_desc.or_else(|| {
-                            prompt
-                                .get("description")
-                                .and_then(|v| v.as_str())
-                                .map(ToString::to_string)
-                        });
-                        let arguments = prompt
-                            .get("arguments")
-                            .and_then(|v| v.as_array())
-                            .cloned()
-                            .unwrap_or_default();
+                            let title = alias_summary.or_else(|| {
+                                prompt
+                                    .get("title")
+                                    .and_then(|v| v.as_str())
+                                    .map(ToString::to_string)
+                            });
+                            let description = alias_desc.or_else(|| {
+                                prompt
+                                    .get("description")
+                                    .and_then(|v| v.as_str())
+                                    .map(ToString::to_string)
+                            });
+                            let arguments = prompt
+                                .get("arguments")
+                                .and_then(|v| v.as_array())
+                                .cloned()
+                                .unwrap_or_default();
 
-                        new_prompts.push((
-                            prompt_id,
-                            PromptMeta {
-                                server: $server_id.to_string(),
-                                name: name.to_string(),
-                                title,
-                                description,
-                                arguments,
-                                tags: vec![$server_id.to_string()],
-                            },
-                        ));
+                            new_prompts.push((
+                                prompt_id,
+                                PromptMeta {
+                                    server: $server_id.to_string(),
+                                    name: name.to_string(),
+                                    title,
+                                    description,
+                                    arguments,
+                                    tags: vec![$server_id.to_string()],
+                                },
+                            ));
+                        }
                     }
                 }
+            }
+            Ok(Err(err)) => {
+                tracing::warn!(server_id = %$server_id, error = %err, "supervisor failed to list prompts during discovery");
+            }
+            Err(_) => {
+                tracing::warn!(server_id = %$server_id, timeout_ms = 3000, "supervisor timed out listing prompts during discovery");
             }
         }
 
@@ -698,8 +722,9 @@ pub async fn spawn_supervised_stdio_server(
                                 "supervisor successfully restarted stdio child process"
                             );
 
-                            // Actively reset circuit breaker upon successful recovery
+                            // Actively reset circuit breaker and restart counter upon successful recovery
                             state_clone.circuit_breakers.reset(&server_id_owned).await;
+                            restart_count = 0;
 
                             let (new_caps, new_res, new_prompts) = discover_supervisor_items!(
                                 &new_client,
@@ -926,8 +951,9 @@ pub async fn spawn_supervised_http_server(
                                 "supervisor successfully reconnected remote HTTP MCP server"
                             );
 
-                            // Actively reset circuit breaker upon successful recovery
+                            // Actively reset circuit breaker and restart counter upon successful recovery
                             state_clone.circuit_breakers.reset(&server_id_owned).await;
+                            restart_count = 0;
 
                             let (new_caps, new_res, new_prompts) = discover_supervisor_items!(
                                 &new_client,
@@ -986,19 +1012,24 @@ pub async fn spawn_supervised_http_server(
     Ok((initial_caps, initial_res, initial_prompts, tx))
 }
 
+/// Determines whether an error string represents an unrecoverable connection closure, transport failure,
+/// or dropped process that necessitates supervisor restart/reconnection.
 fn is_connection_closed_error(err: &str) -> bool {
     let lower = err.to_lowercase();
     lower.contains("channel closed")
         || lower.contains("broken pipe")
         || lower.contains("connection reset")
+        || lower.contains("connection abort")
         || lower.contains("transport closed")
         || lower.contains("child process exited")
+        || lower.contains("process terminated")
         || lower.contains("io error")
         || lower.contains("unexpected eof")
         || lower.contains("connection refused")
         || lower.contains("connect error")
         || lower.contains("error sending request")
         || lower.contains("stream closed")
+        || lower.contains("client disconnected")
         || lower.contains("status code: 502")
         || lower.contains("status code: 503")
         || lower.contains("status code: 504")
