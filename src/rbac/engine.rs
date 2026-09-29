@@ -140,7 +140,7 @@ impl RbacEngine {
                         .unwrap_or_else(|| "default".to_string()),
                     role: assignment.role.clone(),
                     actor_id: assignment.actor_id.clone(),
-                    grant_id: Some(format!("tok_{}", &token[..token.len().min(8)])),
+                    grant_id: Some(format!("tok_{}", byte_prefix(token, 8))),
                     effective_policy,
                 });
             }
@@ -154,7 +154,7 @@ impl RbacEngine {
         }
 
         if token.len() >= 32 {
-            warn!(token_prefix = %&token[..8], "invalid RBAC token supplied");
+            warn!(token_prefix = %byte_prefix(token, 8), "invalid RBAC token supplied");
         } else {
             warn!(token_prefix = "[redacted]", "invalid RBAC token supplied");
         }
@@ -285,6 +285,30 @@ impl RbacEngine {
             effective_policy,
         })
     }
+}
+
+/// Returns the first `max_bytes` bytes of `value` without splitting a character.
+///
+/// Credentials are attacker supplied and may hold multi-byte UTF-8. Slicing a
+/// `&str` at a fixed byte offset panics whenever that offset falls inside a
+/// character, so the cut is walked back to the nearest character boundary.
+///
+/// # Arguments
+/// * `value` - Arbitrary text to truncate.
+/// * `max_bytes` - Upper bound on the returned length in bytes.
+///
+/// # Returns
+/// A prefix of `value` no longer than `max_bytes`.
+fn byte_prefix(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+
+    let mut end = max_bytes;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
 }
 
 /// Helper function to decode URL-safe base64 strings without padding.
