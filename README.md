@@ -6,7 +6,7 @@
 
 > **The local control plane that keeps Model Context Protocol (MCP) sessions warm with compact capability facades, policy governance, and deterministic execution.**
 > 
-> v0.30.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.31.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 ---
 
@@ -209,6 +209,7 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 ## 🛡️ Core Capabilities Matrix
 
 | Capability | Since | Description |
+| **Bounded Credential Lifetimes & Task Timeout Correctness** | v0.31.0 | Mandatory JWT `exp` enforcement, UTF-8 safe credential handling, sub-second task TTL fix, and rustls 0.23.45 security bump |
 |---|---|---|
 | **Due-Diligence Security Hardening & Resilience** | v0.30.0 | Constant-time bearer token comparisons, JWT `iss`/`aud`/`nbf` validation, safe client IP extraction, fsync'd audit durability, and race-free state storage |
 | **Configurable MCP Protocol Versions & HTTP Client Attach** | v0.29.0 | Configurable `supportedProtocolVersions`, HTTP transport choice for 1-click client installs, SSRF webhook allowlist, and path traversal guards |
@@ -240,6 +241,12 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 ---
 
 ## Changelog
+
+### v0.31.0 — Bounded Credential Lifetimes, UTF-8 Safe Credential Handling & Task Timeout Correctness
+- **Mandatory JWT Expiry Enforcement (`src/rbac/engine.rs`):** The symmetric JWT verifier only checked `exp` when the claim parsed into a number, so a token with `exp` absent, `null`, or non-numeric skipped expiry validation entirely and authenticated forever. `exp` is now required, a present-but-unusable claim is treated as expired, and the expiry instant is exclusive per RFC 7519. `nbf` remains optional but is rejected when present and malformed.
+- **UTF-8 Safe Credential Prefixes (`src/rbac/engine.rs`):** `authenticate` sliced the supplied token at a fixed byte offset to build a grant id and to log a rejected credential. Any token whose eighth byte fell inside a multi-byte character panicked instead of returning `INVALID_CREDENTIALS`, letting an unauthenticated caller turn a bad key into a denial of service and making non-ASCII static keys unusable. Truncation now walks back to the nearest character boundary.
+- **Sub-Second Task TTLs No Longer Collapse to Zero (`src/tasks.rs`):** Expiry checks converted a millisecond TTL with `ttl_ms / 1000` against a whole-second creation stamp. Integer division floored any lifetime under one second to `0`, so a task requesting `ttlMs: 500` was returned already marked `Failed`. The conversion now rounds up, and `expires_at_epoch_secs` no longer equals the creation time.
+- **rustls 0.23.45 Security Bump (`Cargo.lock`):** Updated the locked `rustls` version to clear RUSTSEC-2026-0285, where TLS 1.3 handshake messages could be incorrectly accepted across encryption level boundaries. Reached transitively through `reqwest`.
 
 ### v0.30.0 — Security Hardening, Constant-Time Crypto, JWT Enforcement & Production Due-Diligence
 - **Constant-Time Verification & Timing Attack Hardening (`src/daemon/auth.rs`, `src/chatops/`, `src/vault.rs`):** Integrated the `subtle` crate for constant-time slice comparisons (`ConstantTimeEq`) across HTTP bearer auth tokens, Webhook HMAC signatures, and Keychain secrets to eliminate side-channel timing attack vectors.
