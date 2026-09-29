@@ -1204,6 +1204,11 @@ When `ok` is `false`, the envelope provides a structured error object (`error.co
 | `UPSTREAM_ERROR` | 500 | Upstream server returned a protocol error. | Inspect upstream server logs. |
 | `OPERATION_CANCELLED` | 499 | In-flight execution was cancelled by client. | Re-submit operation if cancellation was unintentional. |
 | `INTERNAL_ERROR` | 500 | Internal daemon process error. | Review Warmplane daemon logs. |
+| `JWT_EXPIRED` | 401 | JWT `exp` claim is malformed or in the past. | Issue a token with a future `exp` claim. |
+| `JWT_EXPIRATION_MISSING` | 401 | JWT carries no `exp` claim, so it has no bounded lifetime. | Issue a token that includes an `exp` claim. |
+| `JWT_INVALID_NOT_BEFORE` | 401 | JWT `nbf` claim is present but not a number. | Issue a token with a numeric `nbf` claim. |
+| `JWT_NOT_YET_VALID` | 401 | JWT `nbf` claim is in the future. | Wait until the token becomes valid or re-issue it. |
+| `INVALID_CREDENTIALS` | 401 | Token is malformed, wrongly signed, or issued for another issuer or audience. | Verify the signing secret, `iss`, and `aud` values. |
 
 ---
 
