@@ -116,11 +116,31 @@ pub struct TaskResponse {
     pub error: Option<Value>,
 }
 
+/// Converts a task lifetime in milliseconds to whole seconds, rounding up.
+///
+/// Creation times are stamped in whole seconds, so a millisecond TTL must be
+/// rounded up rather than truncated. Truncating collapses any lifetime under
+/// one second to `0`, which expires the task the instant it is created.
+/// Rounding up keeps the real lifetime within a second of the requested one
+/// and never shortens it to nothing.
+///
+/// # Arguments
+/// * `ttl_ms` - Task lifetime in milliseconds.
+///
+/// # Returns
+/// The lifetime in whole seconds. A non-zero input never returns `0`.
+fn ttl_ms_to_secs_ceil(ttl_ms: u64) -> u64 {
+    if ttl_ms == 0 {
+        return 0;
+    }
+    ttl_ms.div_ceil(1000)
+}
+
 impl From<&TaskRecord> for TaskResponse {
     fn from(record: &TaskRecord) -> Self {
         let expires_at_epoch_secs = record
             .ttl_ms
-            .map(|ms| record.created_at_epoch_secs + (ms / 1000));
+            .map(|ms| record.created_at_epoch_secs + ttl_ms_to_secs_ceil(ms));
 
         Self {
             task_id: record.task_id.clone(),
@@ -197,7 +217,7 @@ impl TaskRegistry {
         for record in loaded.values_mut() {
             if record.status == TaskStatus::Working || record.status == TaskStatus::InputRequired {
                 if let Some(ttl_ms) = record.ttl_ms {
-                    let ttl_secs = ttl_ms / 1000;
+                    let ttl_secs = ttl_ms_to_secs_ceil(ttl_ms);
                     if now_secs >= record.created_at_epoch_secs + ttl_secs {
                         record.status = TaskStatus::Failed;
                         record.status_message = Some("Task expired due to TTL timeout".to_string());
@@ -291,7 +311,7 @@ impl TaskRegistry {
                         .duration_since(UNIX_EPOCH)
                         .map(|d| d.as_secs())
                         .unwrap_or(0);
-                    let ttl_secs = ttl_ms / 1000;
+                    let ttl_secs = ttl_ms_to_secs_ceil(ttl_ms);
                     if now_secs >= record.created_at_epoch_secs + ttl_secs {
                         record.status = TaskStatus::Failed;
                         record.status_message = Some("Task expired due to TTL timeout".to_string());
