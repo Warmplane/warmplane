@@ -205,13 +205,26 @@ impl RbacEngine {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        if let Some(exp) = payload_val.get("exp").and_then(|v| v.as_u64()) {
-            if now > exp {
-                return Err("JWT_EXPIRED".to_string());
-            }
+        // The `exp` claim is mandatory. A signed token without a bounded
+        // lifetime never stops being valid, so treating a missing or malformed
+        // claim as "no expiry" turns a single leaked token into a permanent
+        // credential. A present-but-unusable claim counts as expired rather
+        // than as absent, so it cannot be used to skip validation.
+        match payload_val.get("exp") {
+            Some(serde_json::Value::Number(n)) => match n.as_u64() {
+                Some(exp) if now <= exp => {}
+                _ => return Err("JWT_EXPIRED".to_string()),
+            },
+            Some(_) => return Err("JWT_EXPIRED".to_string()),
+            None => return Err("JWT_EXPIRATION_MISSING".to_string()),
         }
 
-        if let Some(nbf) = payload_val.get("nbf").and_then(|v| v.as_u64()) {
+        // The `nbf` claim is optional, but a present-but-unusable claim must
+        // not be silently dropped.
+        if let Some(nbf_value) = payload_val.get("nbf") {
+            let Some(nbf) = nbf_value.as_u64() else {
+                return Err("JWT_INVALID_NOT_BEFORE".to_string());
+            };
             if now < nbf {
                 return Err("JWT_NOT_YET_VALID".to_string());
             }
