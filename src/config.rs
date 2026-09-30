@@ -13,6 +13,11 @@ pub const DEFAULT_CONFIG_PATH: &str = "mcp_servers.json";
 /// Default timeout in milliseconds for tool call execution.
 pub const DEFAULT_TOOL_TIMEOUT_MS: u64 = 15_000;
 
+/// Placeholder substituted for a redacted static RBAC bearer token.
+///
+/// A per-token suffix is appended so an operator still sees how many exist.
+const REDACTED_TOKEN: &str = "********";
+
 /// Root configuration container for Warmplane MCP proxy.
 #[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq)]
 pub struct McpConfig {
@@ -608,6 +613,49 @@ impl McpConfig {
         for server in self.mcp_servers.values_mut() {
             server.sanitize_secrets();
         }
+
+        // The static RBAC token map is keyed by the live bearer secret, since
+        // `RbacEngine::authenticate` compares each configured key against the
+        // inbound credential. Leaving the keys intact discloses every token
+        // in the map, including higher-privilege ones.
+        if let Some(ref mut rbac) = self.rbac {
+            rbac.sanitize_secrets();
+        }
+
+        // A profile can carry its own policy, and that policy can carry its
+        // own webhook secret and auth header.
+        for profile in self.profiles.values_mut() {
+            if let Some(ref mut policy) = profile.policy {
+                policy.sanitize_secrets();
+            }
+        }
+    }
+}
+
+impl crate::rbac::RbacConfig {
+    /// Redacts static bearer tokens while preserving their role assignments.
+    ///
+    /// Each key is replaced individually so an operator still sees how many
+    /// tokens exist and which role each one grants. Collapsing them onto a
+    /// single shared key would hide that count and would not survive a second
+    /// sanitize pass unchanged.
+    pub fn sanitize_secrets(&mut self) {
+        if self.tokens.is_empty() {
+            return;
+        }
+        let existing = std::mem::take(&mut self.tokens);
+        self.tokens = existing
+            .into_iter()
+            .enumerate()
+            .map(|(index, (token, assignment))| {
+                let key = if token == REDACTED_TOKEN {
+                    REDACTED_TOKEN.to_string()
+                } else {
+                    format!("{REDACTED_TOKEN}_{index}")
+                };
+                (key, assignment)
+            })
+            .collect();
     }
 }
 
@@ -677,6 +725,13 @@ impl ServerConfig {
             {
                 *v = "********".to_string();
             }
+        }
+        // Upstream credentials are commonly supplied through the environment.
+        // `env` is a process environment block, so every value in it is
+        // treated as a secret: there is no reliable name convention to filter
+        // on and leaking one would hand the caller a working credential.
+        for v in self.env.values_mut() {
+            *v = "********".to_string();
         }
     }
 }
