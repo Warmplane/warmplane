@@ -76,15 +76,27 @@ pub async fn handle_webhook_callback(
                     .or_else(|| headers.get("x-slack-request-timestamp"))
                     .and_then(|v| v.to_str().ok());
 
-                if let Some(sig) = sig_header {
-                    if !crate::chatops::verify_signature(&secret, body_str, sig, ts_header) {
-                        warn!("Rejecting incoming webhook callback: HMAC signature mismatch");
-                        return (
-                            StatusCode::UNAUTHORIZED,
-                            Json(json!({ "ok": false, "error": "Signature mismatch" })),
-                        )
-                            .into_response();
-                    }
+                // A configured secret is the only thing that makes this endpoint
+                // safe, because it reaches approve and reject with no bearer token of
+                // its own. Require the signature rather than verifying it when one
+                // happens to be present: omitting the header is exactly what an
+                // attacker sends.
+                let Some(sig) = sig_header else {
+                    warn!("Rejecting incoming webhook callback: signature header absent");
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({ "ok": false, "error": "Signature required" })),
+                    )
+                        .into_response();
+                };
+
+                if !crate::chatops::verify_signature(&secret, body_str, sig, ts_header) {
+                    warn!("Rejecting incoming webhook callback: HMAC signature mismatch");
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({ "ok": false, "error": "Signature mismatch" })),
+                    )
+                        .into_response();
                 }
             }
         }
