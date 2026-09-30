@@ -106,7 +106,22 @@ pub async fn handle_update_task(
                 if let Some(pending_appr) = state.approval_registry.get_pending_by_request_id(req_id).await {
                     let webhook_cfg = state.policy.read().await.webhook.clone();
                     if let Some(appr_resp) = input_responses.get("hitl_approval") {
-                        let is_approved = appr_resp.get("approved").and_then(Value::as_bool).unwrap_or(true);
+                        // Only an explicit boolean decides the ticket. A missing or
+                        // non-boolean value must not default to approval, or a caller
+                        // could turn an explicit denial such as `"false"` into one.
+                        let Some(is_approved) = appr_resp.get("approved").and_then(Value::as_bool) else {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({
+                                    "ok": false,
+                                    "error": {
+                                        "code": "INVALID_APPROVAL_DECISION",
+                                        "message": "hitl_approval.approved must be a boolean"
+                                    }
+                                })),
+                            )
+                                .into_response();
+                        };
                         let mod_args = appr_resp.get("modified_args").cloned();
                         let operator = appr_resp
                             .get("operator")
@@ -126,18 +141,10 @@ pub async fn handle_update_task(
                                 .reject(&pending_appr.id, operator, reason, webhook_cfg.as_ref())
                                 .await;
                         }
-                    } else {
-                        // Default approval with unmodified args if general input was supplied
-                        let _ = state
-                            .approval_registry
-                            .approve(
-                                &pending_appr.id,
-                                "security-operator".to_string(),
-                                None,
-                                webhook_cfg.as_ref(),
-                            )
-                            .await;
                     }
+                    // No decision was supplied. A general input response resumes the task
+                    // without approving: the ticket stays pending so a gated call cannot
+                    // execute on a request that never decided.
                 }
             }
 
