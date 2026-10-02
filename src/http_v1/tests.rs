@@ -299,6 +299,7 @@ async fn read_resource_returns_not_found_code() {
     let response = handle_read_resource(
         State(state),
         None,
+        None,
         HeaderMap::new(),
         Json(ReadResourceRequest {
             resource_id: "missing.resource".to_string(),
@@ -321,6 +322,7 @@ async fn get_prompt_returns_not_found_code() {
 
     let response = handle_get_prompt(
         State(state),
+        None,
         None,
         HeaderMap::new(),
         Json(GetPromptRequest {
@@ -419,6 +421,7 @@ async fn get_prompt_rejects_non_object_arguments() {
 
     let response = handle_get_prompt(
         State(state),
+        None,
         None,
         HeaderMap::new(),
         Json(GetPromptRequest {
@@ -555,6 +558,7 @@ async fn test_request_context_and_header_fallback_in_envelope() {
 
     let response = handle_read_resource(
         State(state),
+        None,
         None,
         headers,
         Json(ReadResourceRequest {
@@ -721,7 +725,7 @@ async fn test_mrtr_read_resource_round_trip() {
     let req: ReadResourceRequest =
         serde_json::from_value(request_json).expect("valid ReadResourceRequest JSON");
 
-    let response = handle_read_resource(State(state), None, HeaderMap::new(), Json(req))
+    let response = handle_read_resource(State(state), None, None, HeaderMap::new(), Json(req))
         .await
         .into_response();
 

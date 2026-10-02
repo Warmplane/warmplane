@@ -15,9 +15,14 @@ use std::collections::HashMap;
 use warmplane::{
     daemon::{AppState, CapabilityMeta, PromptMeta, ResourceMeta},
     http_v1::{
-        catalog::{handle_list_capabilities, handle_search_capabilities},
+        catalog::{
+            handle_get_prompt, handle_list_capabilities, handle_read_resource,
+            handle_search_capabilities,
+        },
         execute::handle_call_capability,
-        types::{CallCapabilityRequest, SearchCapabilitiesRequest},
+        types::{
+            CallCapabilityRequest, GetPromptRequest, ReadResourceRequest, SearchCapabilitiesRequest,
+        },
     },
     rbac::{JwtConfig, RbacConfig, RbacEngine, RolePolicyConfig, TokenAssignment},
 };
@@ -327,4 +332,103 @@ async fn test_rbac_execution_boundary_enforcement() {
     let payload: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(payload["ok"], false);
     assert_eq!(payload["error"]["code"], "POLICY_DENIED");
+}
+
+/// An analyst must not read a resource its role excludes, even when the base
+/// policy allows it. The read handler must honour the tenant effective policy.
+#[tokio::test]
+async fn test_rbac_read_resource_honours_tenant_policy() {
+    let state = create_test_rbac_state();
+    let base_policy = state.policy.read().await.clone();
+
+    let analyst_ctx = state
+        .rbac_engine
+        .authenticate(Some("analyst_secret_token"), &base_policy)
+        .unwrap();
+
+    // The analyst role allows db.query only, so this resource is out of scope.
+    let res = handle_read_resource(
+        State(state.clone()),
+        None::<axum::extract::Extension<warmplane::context::ProfileContext>>,
+        Some(axum::extract::Extension(analyst_ctx)),
+        HeaderMap::new(),
+        Json(ReadResourceRequest {
+            resource_id: "res.private_keys".to_string(),
+            request_id: None,
+            context: None,
+            idempotency_key: None,
+            input_responses: None,
+            request_state: None,
+        }),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(
+        res.status(),
+        StatusCode::FORBIDDEN,
+        "resources/read must apply the tenant effective policy, not the base policy"
+    );
+}
+
+/// The same rule applies to prompts, and admin still gets through.
+#[tokio::test]
+async fn test_rbac_get_prompt_honours_tenant_policy() {
+    let state = create_test_rbac_state();
+    let base_policy = state.policy.read().await.clone();
+
+    let analyst_ctx = state
+        .rbac_engine
+        .authenticate(Some("analyst_secret_token"), &base_policy)
+        .unwrap();
+    let res = handle_get_prompt(
+        State(state.clone()),
+        None::<axum::extract::Extension<warmplane::context::ProfileContext>>,
+        Some(axum::extract::Extension(analyst_ctx)),
+        HeaderMap::new(),
+        Json(GetPromptRequest {
+            prompt_id: "prompt.admin_reboot".to_string(),
+            arguments: None,
+            request_id: None,
+            context: None,
+            idempotency_key: None,
+            input_responses: None,
+            request_state: None,
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(
+        res.status(),
+        StatusCode::FORBIDDEN,
+        "prompts/get must apply the tenant effective policy, not the base policy"
+    );
+
+    // An admin role is unrestricted, so the same prompt stays reachable.
+    let admin_ctx = state
+        .rbac_engine
+        .authenticate(Some("admin_secret_token"), &base_policy)
+        .unwrap();
+    let res = handle_get_prompt(
+        State(state.clone()),
+        None::<axum::extract::Extension<warmplane::context::ProfileContext>>,
+        Some(axum::extract::Extension(admin_ctx)),
+        HeaderMap::new(),
+        Json(GetPromptRequest {
+            prompt_id: "prompt.admin_reboot".to_string(),
+            arguments: None,
+            request_id: None,
+            context: None,
+            idempotency_key: None,
+            input_responses: None,
+            request_state: None,
+        }),
+    )
+    .await
+    .into_response();
+    assert_ne!(
+        res.status(),
+        StatusCode::FORBIDDEN,
+        "an unrestricted role must not be blocked by this fix"
+    );
 }

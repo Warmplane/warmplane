@@ -732,10 +732,11 @@ pub async fn handle_list_prompts(
 pub async fn handle_read_resource(
     State(state): State<AppState>,
     prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
+    req_ext: Option<axum::extract::Extension<crate::rbac::TenantContext>>,
     headers: HeaderMap,
     Json(payload): Json<ReadResourceRequest>,
 ) -> impl IntoResponse {
-    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
+    let prof_ctx = prof_ext.as_ref().map(|e| e.0.clone()).unwrap_or_default();
     let trace_id = next_trace_id();
     let request_id =
         crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
@@ -744,7 +745,9 @@ pub async fn handle_read_resource(
     let cancel_token: tokio_util::sync::CancellationToken =
         state.operation_registry.register(&request_id).await;
 
-    if !state.policy.read().await.allows(&payload.resource_id) {
+    let (_prof, pol, _ver) =
+        resolve_catalog_context(&state, &req_ext.map(|e| e.0), prof_ext.as_ref()).await;
+    if !pol.allows(&payload.resource_id) {
         state.operation_registry.unregister(&request_id).await;
         return (
             StatusCode::FORBIDDEN,
@@ -956,10 +959,11 @@ pub async fn handle_read_resource(
 pub async fn handle_get_prompt(
     State(state): State<AppState>,
     prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
+    req_ext: Option<axum::extract::Extension<crate::rbac::TenantContext>>,
     headers: HeaderMap,
     Json(payload): Json<GetPromptRequest>,
 ) -> impl IntoResponse {
-    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
+    let prof_ctx = prof_ext.as_ref().map(|e| e.0.clone()).unwrap_or_default();
     let trace_id = next_trace_id();
     let request_id =
         crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
@@ -968,8 +972,9 @@ pub async fn handle_get_prompt(
     let cancel_token: tokio_util::sync::CancellationToken =
         state.operation_registry.register(&request_id).await;
 
-    let policy_guard = state.policy.read().await;
-    if !policy_guard.allows(&payload.prompt_id) {
+    let (_prof, pol, _ver) =
+        resolve_catalog_context(&state, &req_ext.map(|e| e.0), prof_ext.as_ref()).await;
+    if !pol.allows(&payload.prompt_id) {
         state.operation_registry.unregister(&request_id).await;
         return (
             StatusCode::FORBIDDEN,
@@ -985,8 +990,7 @@ pub async fn handle_get_prompt(
         )
             .into_response();
     }
-    let redact_keys = policy_guard.redact_keys.clone();
-    drop(policy_guard);
+    let redact_keys = pol.redact_keys.clone();
 
     let (server_id, prompt_name) = {
         let prompts_guard = state.prompts.read().await;
