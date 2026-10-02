@@ -480,7 +480,7 @@ When a circuit is `Open`, calls fast-fail instantly with HTTP 503 and error code
 #### Self-Healing Process Supervision
 When an upstream child process exits or crashes unexpectedly:
 1. The supervisor catches the transport error and schedules an exponential backoff reconnect ($\min(500 \times 2^{\text{retry}-1}, 30000)\text{ ms}$).
-2. Once re-spawned, Warmplane re-negotiates the MCP protocol handshake and rediscovers tools, resources, and prompts.
+2. Once re-spawned, Warmplane re-negotiates the MCP protocol handshake and rediscovers tools, resources, and prompts. The handshake is bounded by a 5000ms timeout; a child that never answers is abandoned and the attempt is retried, so a hung process cannot stall the supervisor.
 3. Warmplane updates in-memory registries, recomputes the SHA-256 catalog ETag digest, and broadcasts a change event over `GET /v1/resources/updates`.
 
 ---
