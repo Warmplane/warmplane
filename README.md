@@ -6,7 +6,7 @@
 
 > **The local control plane that keeps Model Context Protocol (MCP) sessions warm with compact capability facades, policy governance, and deterministic execution.**
 > 
-> v0.31.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.32.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 ---
 
@@ -210,6 +210,7 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 
 | Capability | Since | Description |
 | **Bounded Credential Lifetimes & Task Timeout Correctness** | v0.31.0 | Mandatory JWT `exp` enforcement, UTF-8 safe credential handling, sub-second task TTL fix, and rustls 0.23.45 security bump |
+| **Credential, Approval & Policy Boundary Enforcement** | v0.32.0 | Secret redaction for RBAC tokens and server env, fail-closed HITL approval, required webhook signatures, and tenant policy on resource and prompt routes |
 |---|---|---|
 | **Due-Diligence Security Hardening & Resilience** | v0.30.0 | Constant-time bearer token comparisons, JWT `iss`/`aud`/`nbf` validation, safe client IP extraction, fsync'd audit durability, and race-free state storage |
 | **Configurable MCP Protocol Versions & HTTP Client Attach** | v0.29.0 | Configurable `supportedProtocolVersions`, HTTP transport choice for 1-click client installs, SSRF webhook allowlist, and path traversal guards |
@@ -241,6 +242,12 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 ---
 
 ## Changelog
+
+### v0.32.0 — Credential, Approval & Policy Boundary Enforcement
+- **Static RBAC Tokens, Profile Secrets & Server Env Are Redacted (`src/config.rs`):** `McpConfig::sanitize_secrets` is the redaction pass applied by `GET /v1/config` and `warmplane config show`. It skipped three fields that carry live credentials. Static RBAC tokens leak worst, because that map is keyed by the secret itself, so reading the config returned every bearer token in the deployment including higher-privilege ones. Per-profile `policy.webhook` secrets and auth headers were skipped the same way, and server `env` blocks are now redacted wholesale since an environment block has no name convention to filter on.
+- **HITL Approval Can No Longer Be Self-Granted (`src/http_v1/tasks_api.rs`):** `handle_update_task` cross-resolves the approval registry, and failed open twice. A task update carrying no `hitl_approval` key auto-approved the ticket under a fabricated `"security-operator"` identity, so a tool-calling agent could approve its own gated execution; that path also emits no audit event. A non-boolean `approved` passed through `unwrap_or(true)`, so `{"approved":"false"}` as a string was treated as a grant. A decision now resolves only from an explicit boolean, and a malformed one is rejected as `400 INVALID_APPROVAL_DECISION`.
+- **Webhook Signature Is Required When a Secret Is Configured (`src/http_v1/webhooks_api.rs`):** The HMAC check was written as "verify if a signature was supplied", so a callback with no signature header skipped verification entirely and fell through to `approve` or `reject`. A ChatOps integration holds no bearer token by design, so the signature is the only credential on that route; omitting it resolved any pending ticket with no credential at all.
+- **Tenant Policy Now Applies to `resources/read` and `prompts/get` (`src/http_v1/catalog.rs`):** Both handlers authorised against the base policy and took no tenant context, unlike every sibling handler. Because `compute_effective_policy` replaces a role's allow list outright, the base policy is the broadest one available, so checking it granted whatever the role withheld. `handle_get_prompt` also sourced `redact_keys` from the base policy, ignoring a profile's redaction keys.
 
 ### v0.31.0 — Bounded Credential Lifetimes, UTF-8 Safe Credential Handling & Task Timeout Correctness
 - **Mandatory JWT Expiry Enforcement (`src/rbac/engine.rs`):** The symmetric JWT verifier only checked `exp` when the claim parsed into a number, so a token with `exp` absent, `null`, or non-numeric skipped expiry validation entirely and authenticated forever. `exp` is now required, a present-but-unusable claim is treated as expired, and the expiry instant is exclusive per RFC 7519. `nbf` remains optional but is rejected when present and malformed.
