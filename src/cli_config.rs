@@ -166,6 +166,38 @@ pub async fn handle_secret_command(cmd: crate::models::SecretCommands) -> Result
     Ok(())
 }
 
+/// Maximum byte width of the `TARGET / COMMAND` column before an ellipsis is added.
+const TARGET_MAX_BYTES: usize = 42;
+
+/// Byte width kept from `TARGET / COMMAND` values before the ellipsis is appended.
+const TARGET_PREFIX_BYTES: usize = 39;
+
+/// Truncates a server target for the `warmplane server list` table.
+///
+/// Targets come from user configuration and may hold multi-byte UTF-8. A byte
+/// length guard says nothing about where a character boundary falls, so slicing
+/// at a fixed byte offset panics whenever that offset lands inside a character.
+/// The cut is walked back to the nearest boundary, mirroring `byte_prefix` in
+/// the RBAC engine.
+///
+/// # Arguments
+/// * `value` - Command line or URL taken from configuration.
+///
+/// # Returns
+/// `value` unchanged when it fits the column, otherwise a truncated copy with
+/// an ellipsis appended.
+fn truncate_target(value: &str) -> String {
+    if value.len() <= TARGET_MAX_BYTES {
+        return value.to_string();
+    }
+
+    let mut end = TARGET_PREFIX_BYTES;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &value[..end])
+}
+
 /// Dispatches `warmplane server` subcommands.
 pub async fn handle_server_command(cmd: ServerCommands) -> Result<()> {
     match cmd {
@@ -341,17 +373,9 @@ pub async fn handle_server_command(cmd: ServerCommands) -> Result<()> {
                     let transport = if s.command.is_some() { "stdio" } else { "http" };
                     let target = if let Some(cmd) = &s.command {
                         let full = format!("{} {}", cmd, s.args.join(" "));
-                        if full.len() > 42 {
-                            format!("{}...", &full[..39])
-                        } else {
-                            full
-                        }
+                        truncate_target(&full)
                     } else if let Some(url) = &s.url {
-                        if url.len() > 42 {
-                            format!("{}...", &url[..39])
-                        } else {
-                            url.clone()
-                        }
+                        truncate_target(url)
                     } else {
                         "-".to_string()
                     };
@@ -1666,6 +1690,43 @@ mod tests {
         let state = cfg.state.unwrap();
         assert!(state.enabled);
         assert_eq!(state.dir, Some(".custom_state".to_string()));
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+    #[tokio::test]
+    async fn server_list_does_not_panic_on_multibyte_url() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("warmplane_list_utf8_test_{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let config_file = temp_dir.join("mcp_servers.json");
+        let cfg_str = config_file.to_str().unwrap().to_string();
+
+        // 36 ASCII bytes, then a 3-byte CJK glyph that straddles byte 39.
+        let url = "https://server.example.com/warmplane/例えテスト/mcp";
+        assert_eq!(url.len(), 56);
+        assert!(!url.is_char_boundary(39));
+
+        std::fs::write(
+            &config_file,
+            serde_json::json!({
+                "mcpServers": {
+                    "cjk": { "url": url },
+                    "cjk-stdio": {
+                        "command": "npx",
+                        "args": ["-y", "例えええええええええ例例例例"],
+                    },
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        handle_server_command(ServerCommands::List {
+            json: false,
+            config: cfg_str,
+        })
+        .await
+        .unwrap();
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }
