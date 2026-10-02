@@ -8,12 +8,12 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
           <button class="btn btn-ghost" onclick="window.app.openImportModal()">Sync from IDEs</button>
         </div>
       </div>
-    `;else n=a.map((S)=>{let O=t[S],W=O.command?"stdio":"http / sse",K=O.command?`${O.command} ${(O.args||[]).join(" ")}`:O.url,F=e.serverStatuses[S]||{status:"connected",protocol_version:"2026-07-28"},G=F.status==="degraded",re=F.status==="error"||F.status==="disconnected",Z=G?"var(--amber-400)":re?"var(--red-400)":"var(--green-400)";return`
+    `;else n=a.map((E)=>{let O=t[E],W=O.command?"stdio":"http / sse",K=O.command?`${O.command} ${(O.args||[]).join(" ")}`:O.url,F=e.serverStatuses[E]||{status:"connected",protocol_version:"2026-07-28"},G=F.status==="degraded",re=F.status==="error"||F.status==="disconnected",Z=G?"var(--amber-400)":re?"var(--red-400)":"var(--green-400)";return`
         <div class="bento-card col-4" style="background: var(--surface); border: 1px solid var(--border);">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
             <span style="font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
               <span style="width: 8px; height: 8px; border-radius: 50%; background: ${Z}; display: inline-block;"></span>
-              ${M(S)}
+              ${M(E)}
             </span>
             <span class="brand-badge">${W}</span>
           </div>
@@ -33,38 +33,38 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
       <span style="color: var(--green-400);">CONNECTED</span>
       <span style="color: var(--amber-300); text-align: right;">0.0ms</span>
     </div>
-  `:e.eventLogs.map((S)=>`
+  `:e.eventLogs.map((E)=>`
     <div class="feed-row" style="grid-template-columns: 80px 100px 1fr 100px 80px;">
-      <span style="color: var(--text-dim);">${M(S.time)}</span>
-      <span style="color: var(--cyan-400); font-weight: 600;">${M(S.method)}</span>
-      <span style="color: var(--text-main); font-family: var(--ff-mono);">${M(S.target)}</span>
-      <span style="color: var(--green-400);">${M(S.status)}</span>
-      <span style="color: var(--amber-300); text-align: right;">${M(S.latency)}</span>
+      <span style="color: var(--text-dim);">${M(E.time)}</span>
+      <span style="color: var(--cyan-400); font-weight: 600;">${M(E.method)}</span>
+      <span style="color: var(--text-main); font-family: var(--ff-mono);">${M(E.target)}</span>
+      <span style="color: var(--green-400);">${M(E.status)}</span>
+      <span style="color: var(--amber-300); text-align: right;">${M(E.latency)}</span>
     </div>
-  `).join(""),s=e.metrics,i=s.totalCatalogRequests,l=s.totalEtagHits,u=i>0?`${(l/i*100).toFixed(1)}%`:"0.0%",p=i>0?`${l} of ${i} requests served via HTTP 304`:"Waiting for client requests",g=s.totalToolCalls,m=g>0?`${(s.totalToolDurationUs/g/1000).toFixed(1)}ms`:"0.0ms",d=g>0?`${g} tool executions processed`:"Local worker task queues warm",y=Object.keys(e.config.capabilityAliases||{}).length+Object.keys(e.config.resourceAliases||{}).length+Object.keys(e.config.promptAliases||{}).length,b=y>0?`${y*18}B / call`:"0B",v=y>0?`${y} active facade aliases pruning prompt size`:"Configure aliases in Studio to reduce prompt size",x=e.tasks||[],A=x.filter((S)=>S.status==="input_required").length,R=x.filter((S)=>S.status==="working"||S.status==="input_required").length,T=e.clients||[],k=T.filter((S)=>S.is_attached).length,w=T.filter((S)=>S.config_exists&&!S.is_attached).length,z=e.clientsCollapsed,L=k>0?`<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ ${k} Connected</span>`:w>0?`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.1);">○ ${w} Ready to Connect</span>`:'<span class="brand-badge" style="color: var(--text-dim);">No Apps Detected</span>',N=Object.keys(e.config.profiles||{}),D=e.activeProfile,q=e.clientFilterCategory||"all",U=(e.clientSearchQuery||"").toLowerCase().trim(),V=T.filter((S)=>{if(U){let O=S.name.toLowerCase().includes(U),W=S.id.toLowerCase().includes(U),K=S.category.toLowerCase().includes(U);if(!O&&!W&&!K)return!1}if(q==="connected")return S.is_attached;if(q==="ready")return S.config_exists||S.app_installed;if(q==="ides")return S.category.toLowerCase().includes("ide")||S.category.toLowerCase().includes("extension");if(q==="agents")return S.category.toLowerCase().includes("agent")||S.category.toLowerCase().includes("cli")||S.category.toLowerCase().includes("platform");return!0}),te=V.length===0?'<div style="padding: 16px; text-align: center; color: var(--text-dim); font-size: 11.5px; grid-column: 1 / -1;">No AI clients match current filter.</div>':V.map((S)=>{let{is_attached:O,config_exists:W,app_installed:K}=S,F="rgba(255, 255, 255, 0.2)",G="Not Found";if(O){F="var(--green-400)";let J=S.attached_transport==="http"?"HTTP":"stdio";G=S.attached_profile?`Connected · ${J} (${S.attached_profile})`:`Connected · ${J} (All Tools)`}else if(W)F="var(--amber-300)",G="Ready to Attach";else if(K)F="var(--cyan-400)",G="Installed";let re=N.map((J)=>`
-      <option value="${M(J)}" ${D===J||S.attached_profile===J?"selected":""}>${M(J)}</option>
-    `).join(""),Z=O?`<button class="btn btn-ghost" style="padding: 2px 7px; font-size: 10px; color: var(--red-400);" onclick="event.stopPropagation(); window.app.detachClient('${M(S.id)}')">Detach</button>`:W||K?`
+  `).join(""),s=e.metrics,i=s.totalCatalogRequests,l=s.totalEtagHits,u=i>0?`${(l/i*100).toFixed(1)}%`:"0.0%",p=i>0?`${l} of ${i} requests served via HTTP 304`:"Waiting for client requests",g=s.totalToolCalls,m=g>0?`${(s.totalToolDurationUs/g/1000).toFixed(1)}ms`:"0.0ms",d=g>0?`${g} tool executions processed`:"Local worker task queues warm",y=Object.keys(e.config.capabilityAliases||{}).length+Object.keys(e.config.resourceAliases||{}).length+Object.keys(e.config.promptAliases||{}).length,b=y>0?`${y*18}B / call`:"0B",v=y>0?`${y} active facade aliases pruning prompt size`:"Configure aliases in Studio to reduce prompt size",x=e.tasks||[],A=x.filter((E)=>E.status==="input_required").length,R=x.filter((E)=>E.status==="working"||E.status==="input_required").length,T=e.clients||[],S=T.filter((E)=>E.is_attached).length,w=T.filter((E)=>E.config_exists&&!E.is_attached).length,z=e.clientsCollapsed,L=S>0?`<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ ${S} Connected</span>`:w>0?`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.1);">○ ${w} Ready to Connect</span>`:'<span class="brand-badge" style="color: var(--text-dim);">No Apps Detected</span>',N=Object.keys(e.config.profiles||{}),D=e.activeProfile,q=e.clientFilterCategory||"all",U=(e.clientSearchQuery||"").toLowerCase().trim(),V=T.filter((E)=>{if(U){let O=E.name.toLowerCase().includes(U),W=E.id.toLowerCase().includes(U),K=E.category.toLowerCase().includes(U);if(!O&&!W&&!K)return!1}if(q==="connected")return E.is_attached;if(q==="ready")return E.config_exists||E.app_installed;if(q==="ides")return E.category.toLowerCase().includes("ide")||E.category.toLowerCase().includes("extension");if(q==="agents")return E.category.toLowerCase().includes("agent")||E.category.toLowerCase().includes("cli")||E.category.toLowerCase().includes("platform");return!0}),te=V.length===0?'<div style="padding: 16px; text-align: center; color: var(--text-dim); font-size: 11.5px; grid-column: 1 / -1;">No AI clients match current filter.</div>':V.map((E)=>{let{is_attached:O,config_exists:W,app_installed:K}=E,F="rgba(255, 255, 255, 0.2)",G="Not Found";if(O){F="var(--green-400)";let J=E.attached_transport==="http"?"HTTP":"stdio";G=E.attached_profile?`Connected · ${J} (${E.attached_profile})`:`Connected · ${J} (All Tools)`}else if(W)F="var(--amber-300)",G="Ready to Attach";else if(K)F="var(--cyan-400)",G="Installed";let re=N.map((J)=>`
+      <option value="${M(J)}" ${D===J||E.attached_profile===J?"selected":""}>${M(J)}</option>
+    `).join(""),Z=O?`<button class="btn btn-ghost" style="padding: 2px 7px; font-size: 10px; color: var(--red-400);" onclick="event.stopPropagation(); window.app.detachClient('${M(E.id)}')">Detach</button>`:W||K?`
         <div style="display: flex; align-items: center; gap: 4px;" onclick="event.stopPropagation();">
           ${N.length>0?`
-            <select id="overview-client-prof-${M(S.id)}" class="form-input" style="font-size: 10px; padding: 1px 4px; height: 22px; width: 85px;" title="Select constellation profile">
+            <select id="overview-client-prof-${M(E.id)}" class="form-input" style="font-size: 10px; padding: 1px 4px; height: 22px; width: 85px;" title="Select constellation profile">
               <option value="" ${!D?"selected":""}>All Tools</option>
               ${re}
             </select>
           `:""}
-          <button class="btn btn-primary" style="padding: 2px 7px; font-size: 10px;" onclick="window.app.attachClient('${M(S.id)}')">⚡ Connect</button>
+          <button class="btn btn-primary" style="padding: 2px 7px; font-size: 10px;" onclick="window.app.attachClient('${M(E.id)}')">⚡ Connect</button>
         </div>
       `:"";return`
       <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
         <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
           <span style="width: 7px; height: 7px; border-radius: 50%; background: ${F}; flex-shrink: 0;"></span>
           <div style="overflow: hidden;">
-            <div style="font-weight: 600; font-size: 12px; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${M(S.name)}</div>
+            <div style="font-weight: 600; font-size: 12px; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${M(E.name)}</div>
             <div style="font-size: 10px; color: var(--text-dim);">${M(G)}</div>
           </div>
         </div>
         ${Z}
       </div>
-    `}).join(""),se=[{id:"all",label:"All"},{id:"ready",label:"Ready / Installed"},{id:"connected",label:"Connected"},{id:"ides",label:"IDEs"},{id:"agents",label:"Agents & CLIs"}].map((S)=>`<button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10.5px; border-radius: 100px; ${q===S.id?"background: var(--amber-400); color: #000; font-weight: 700;":"background: var(--surface); color: var(--text-muted);"}" onclick="event.stopPropagation(); window.app.setClientCategoryFilter('${S.id}')">${S.label}</button>`).join(""),B=`
+    `}).join(""),se=[{id:"all",label:"All"},{id:"ready",label:"Ready / Installed"},{id:"connected",label:"Connected"},{id:"ides",label:"IDEs"},{id:"agents",label:"Agents & CLIs"}].map((E)=>`<button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10.5px; border-radius: 100px; ${q===E.id?"background: var(--amber-400); color: #000; font-weight: 700;":"background: var(--surface); color: var(--text-muted);"}" onclick="event.stopPropagation(); window.app.setClientCategoryFilter('${E.id}')">${E.label}</button>`).join(""),B=`
     <div class="bento-card" style="margin-top: 18px; padding: 12px 16px; border-color: rgba(245, 158, 11, 0.25); background: rgba(18, 24, 38, 0.4);">
       <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;" onclick="window.app.toggleClientsCollapse()">
         <div style="display: flex; align-items: center; gap: 10px;">
@@ -155,7 +155,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
           <button class="btn btn-ghost" onclick="window.app.openImportModal()">Sync from IDEs</button>
         </div>
       </div>
-    `;else i=a.map((u)=>{let p=t[u],g=p.command?"stdio":"http / sse",m=p.command?`${p.command} ${(p.args||[]).join(" ")}`:p.url,d=e.serverStatuses[u]||{status:"connected",protocol_version:"2026-07-28"},y=!r||s.includes(u),b=Q(u,p.command,p.args),v=Object.keys(p.env||{}),x=(b?.envFields||[]).filter((B)=>B.required&&!v.includes(B.key)),A=p.env?Object.entries(p.env).map(([B,S])=>{if(S.startsWith("keychain://"))return`<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">\uD83D\uDD12 ${I(B)} (Keychain)</span>`;if(S.startsWith("op://"))return`<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">\uD83D\uDD12 ${I(B)} (1Password)</span>`;if(S.startsWith("env://"))return`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3);">\uD83D\uDD12 ${I(B)} (Env)</span>`;return`<span style="color: var(--text-dim);">${I(B)}=***</span>`}):[];for(let B of x)A.push(`<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);" title="Required environment variable '${I(B.key)}' is missing">⚠️ Missing ${I(B.key)}</span>`);let R=A.length>0?A.join(" "):"None",T=(e.circuitBreakers||[]).find((B)=>B.server_id===u),k='<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.25);">Circuit: CLOSED</span>';if(T){if(T.state==="open")k=`<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);">Circuit: OPEN (${T.consecutive_failures} failures)</span>`;else if(T.state==="half_open")k=`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.1);">Circuit: HALF-OPEN (${T.consecutive_successes} probe)</span>`}let w=p.resilience||e.config.resilience,z=w?`FT: ${w.failureThreshold||3} · Cooldown: ${(w.cooldownMs||30000)/1000}s · AutoRestart: ${w.autoRestart!==!1?"ON":"OFF"}`:"Default Resilience",L=x.length>0,N=d.status==="degraded"||L,D=d.status==="error"||d.status==="disconnected",q=L?"var(--amber-400)":N?"var(--amber-400)":D?"var(--red-400)":"var(--green-400)",U=L?`Status: ${I(d.status)} (Missing Keys)`:`Status: ${I(d.status)}`,V=(N||D)&&(d.error||L)?`
+    `;else i=a.map((u)=>{let p=t[u],g=p.command?"stdio":"http / sse",m=p.command?`${p.command} ${(p.args||[]).join(" ")}`:p.url,d=e.serverStatuses[u]||{status:"connected",protocol_version:"2026-07-28"},y=!r||s.includes(u),b=Q(u,p.command,p.args),v=Object.keys(p.env||{}),x=(b?.envFields||[]).filter((B)=>B.required&&!v.includes(B.key)),A=p.env?Object.entries(p.env).map(([B,E])=>{if(E.startsWith("keychain://"))return`<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">\uD83D\uDD12 ${I(B)} (Keychain)</span>`;if(E.startsWith("op://"))return`<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);">\uD83D\uDD12 ${I(B)} (1Password)</span>`;if(E.startsWith("env://"))return`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3);">\uD83D\uDD12 ${I(B)} (Env)</span>`;return`<span style="color: var(--text-dim);">${I(B)}=***</span>`}):[];for(let B of x)A.push(`<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);" title="Required environment variable '${I(B.key)}' is missing">⚠️ Missing ${I(B.key)}</span>`);let R=A.length>0?A.join(" "):"None",T=(e.circuitBreakers||[]).find((B)=>B.server_id===u),S='<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.25);">Circuit: CLOSED</span>';if(T){if(T.state==="open")S=`<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);">Circuit: OPEN (${T.consecutive_failures} failures)</span>`;else if(T.state==="half_open")S=`<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.1);">Circuit: HALF-OPEN (${T.consecutive_successes} probe)</span>`}let w=p.resilience||e.config.resilience,z=w?`FT: ${w.failureThreshold||3} · Cooldown: ${(w.cooldownMs||30000)/1000}s · AutoRestart: ${w.autoRestart!==!1?"ON":"OFF"}`:"Default Resilience",L=x.length>0,N=d.status==="degraded"||L,D=d.status==="error"||d.status==="disconnected",q=L?"var(--amber-400)":N?"var(--amber-400)":D?"var(--red-400)":"var(--green-400)",U=L?`Status: ${I(d.status)} (Missing Keys)`:`Status: ${I(d.status)}`,V=(N||D)&&(d.error||L)?`
         <div style="background: rgba(239, 68, 68, 0.08); border-left: 3px solid var(--amber-400); border-radius: var(--radius-xs); padding: 8px 12px; margin-top: 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px;">
           <div style="font-size: 11px; color: var(--amber-300); font-family: var(--ff-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
             <span style="font-weight: 700; color: var(--amber-400);">⚠️ Diagnostics:</span> ${I(d.error||`Missing required environment variable(s): ${x.map((B)=>B.key).join(", ")}`)}
@@ -178,7 +178,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
                 <span class="brand-badge">${g}</span>
                 <span class="brand-badge" style="color: ${q}; border-color: ${L?"rgba(245, 158, 11, 0.5); background: rgba(245, 158, 11, 0.1);":"rgba(245, 158, 11, 0.3);"}">${U}</span>
                 <span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">Protocol: ${d.protocol_version}</span>
-                ${k}
+                ${S}
                 ${te}
               </div>
               <div style="font-family: var(--ff-mono); font-size: 12px; color: var(--text-muted); margin-top: 4px;">
@@ -237,8 +237,8 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
       <button class="btn btn-ghost" style="padding: 3px 10px; font-size: 11px; border-radius: 100px; ${n===d.id?"background: var(--amber-400); color: #000; font-weight: 700; border-color: var(--amber-400);":"background: var(--surface); color: var(--text-muted); border-color: var(--border);"}" onclick="window.app.setClientCategoryFilter('${I(d.id)}')">
         ${I(d.label)}
       </button>
-    `).join(""),m=p.length===0?`<div style="padding: 24px; text-align: center; color: var(--text-dim); font-size: 12px;">No AI clients match the filter "${I(r||n)}".</div>`:p.map((d)=>{let{is_attached:y,config_exists:b,app_installed:v}=d,x='<span class="brand-badge" style="color: var(--text-dim); border-color: rgba(255, 255, 255, 0.1);">Not Found</span>';if(y){let k=d.attached_profile?` · ${d.attached_profile}`:"";x=`<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ Connected · ${d.attached_transport==="http"?"HTTP":"stdio"}${I(k)}</span>`}else if(b)x='<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.08);">○ Ready</span>';else if(v)x='<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">○ Installed</span>';let A=e.activeProfile,R=a.map((k)=>`
-          <option value="${I(k)}" ${A===k||d.attached_profile===k?"selected":""}>Profile: ${I(k)}</option>
+    `).join(""),m=p.length===0?`<div style="padding: 24px; text-align: center; color: var(--text-dim); font-size: 12px;">No AI clients match the filter "${I(r||n)}".</div>`:p.map((d)=>{let{is_attached:y,config_exists:b,app_installed:v}=d,x='<span class="brand-badge" style="color: var(--text-dim); border-color: rgba(255, 255, 255, 0.1);">Not Found</span>';if(y){let S=d.attached_profile?` · ${d.attached_profile}`:"";x=`<span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.1);">⚡ Connected · ${d.attached_transport==="http"?"HTTP":"stdio"}${I(S)}</span>`}else if(b)x='<span class="brand-badge" style="color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.08);">○ Ready</span>';else if(v)x='<span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">○ Installed</span>';let A=e.activeProfile,R=a.map((S)=>`
+          <option value="${I(S)}" ${A===S||d.attached_profile===S?"selected":""}>Profile: ${I(S)}</option>
         `).join(""),T=y?`<button class="btn btn-ghost" style="padding: 3px 10px; font-size: 11px; color: var(--red-400); border-color: rgba(248, 113, 113, 0.3);" onclick="window.app.detachClient('${I(d.id)}')">Disconnect</button>`:`<button class="btn btn-primary" style="padding: 3px 10px; font-size: 11px;" onclick="window.app.attachClient('${I(d.id)}')">⚡ Connect</button>`;return`
           <div style="display: grid; grid-template-columns: 200px 130px 1fr 140px 100px; align-items: center; gap: 12px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); transition: background 0.15s;" onmouseover="this.style.background='var(--surface-hover)'" onmouseout="this.style.background='var(--surface)'">
             <div>
@@ -343,19 +343,19 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
       <div style="display: flex; align-items: center; gap: 12px;">
         ${t==="tools"&&r>0?`
           <div style="font-size: 11px; color: var(--amber-300); background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.25); padding: 3px 8px; border-radius: var(--radius-sm); display: flex; align-items: center; gap: 6px;">
-            <span>\uD83D\uDEE1️ ${r} tool${r>1?"s":""} filtered ${p?`(Profile: ${E(l)})`:"by policy"}</span>
+            <span>\uD83D\uDEE1️ ${r} tool${r>1?"s":""} filtered ${p?`(Profile: ${k(l)})`:"by policy"}</span>
             <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600;">View Policy</a>
             ${p?`<a href="javascript:void(0)" onclick="window.app.switchTab('servers')" style="color: var(--cyan-400); text-decoration: underline; font-weight: 600; margin-left: 4px;">Server Hub</a>`:""}
           </div>
         `:t==="resources"&&s>0?`
           <div style="font-size: 11px; color: var(--amber-300); background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.25); padding: 3px 8px; border-radius: var(--radius-sm); display: flex; align-items: center; gap: 6px;">
-            <span>\uD83D\uDEE1️ ${s} resource${s>1?"s":""} filtered ${p?`(Profile: ${E(l)})`:"by policy"}</span>
+            <span>\uD83D\uDEE1️ ${s} resource${s>1?"s":""} filtered ${p?`(Profile: ${k(l)})`:"by policy"}</span>
             <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600;">View Policy</a>
             ${p?`<a href="javascript:void(0)" onclick="window.app.switchTab('servers')" style="color: var(--cyan-400); text-decoration: underline; font-weight: 600; margin-left: 4px;">Server Hub</a>`:""}
           </div>
         `:t==="prompts"&&i>0?`
           <div style="font-size: 11px; color: var(--amber-300); background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.25); padding: 3px 8px; border-radius: var(--radius-sm); display: flex; align-items: center; gap: 6px;">
-            <span>\uD83D\uDEE1️ ${i} prompt${i>1?"s":""} filtered ${p?`(Profile: ${E(l)})`:"by policy"}</span>
+            <span>\uD83D\uDEE1️ ${i} prompt${i>1?"s":""} filtered ${p?`(Profile: ${k(l)})`:"by policy"}</span>
             <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600;">View Policy</a>
             ${p?`<a href="javascript:void(0)" onclick="window.app.switchTab('servers')" style="color: var(--cyan-400); text-decoration: underline; font-weight: 600; margin-left: 4px;">Server Hub</a>`:""}
           </div>
@@ -381,25 +381,25 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
         No tools or capabilities discovered from connected servers.
       </div>
     `;else l=t.map((b)=>`
-        <div class="cap-item ${b.id===a?"active":""}" onclick="window.app.selectCapability('${E(b.id)}')">
+        <div class="cap-item ${b.id===a?"active":""}" onclick="window.app.selectCapability('${k(b.id)}')">
           <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${E(b.id)}</span>
-            <span style="font-size: 10px; color: var(--green-400);">${E(b.mode||"read")}</span>
+            <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${k(b.id)}</span>
+            <span style="font-size: 10px; color: var(--green-400);">${k(b.mode||"read")}</span>
           </div>
-          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">server: ${E(b.server||"local")}</div>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">server: ${k(b.server||"local")}</div>
         </div>
       `).join("");let u=o?.input_schema,p=u?.properties||{},g=Array.isArray(u?.required)?u.required:[],m=Object.entries(p),d="";if(m.length>0)d=`
       <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; align-items: center;">
         <span style="font-size: 10px; font-weight: 700; color: var(--text-dim); text-transform: uppercase;">Fields:</span>
-        ${m.map(([b,v])=>{let x=g.includes(b),A=v.type||(v.enum?"enum":"any"),R=x?"rgba(239, 68, 68, 0.15)":"rgba(148, 163, 184, 0.1)",T=x?"var(--red-400)":"var(--text-muted)",k=x?"rgba(239, 68, 68, 0.3)":"var(--border)",w=v.description?` - ${v.description}`:"";return`
+        ${m.map(([b,v])=>{let x=g.includes(b),A=v.type||(v.enum?"enum":"any"),R=x?"rgba(239, 68, 68, 0.15)":"rgba(148, 163, 184, 0.1)",T=x?"var(--red-400)":"var(--text-muted)",S=x?"rgba(239, 68, 68, 0.3)":"var(--border)",w=v.description?` - ${v.description}`:"";return`
             <button 
               type="button" 
               class="btn" 
-              style="padding: 2px 7px; font-size: 10.5px; font-family: var(--ff-mono); background: ${R}; color: ${T}; border: 1px solid ${k}; border-radius: var(--radius-sm);" 
-              title="Click to insert '${b}' (${A}${w})" 
-              onclick="window.app.insertPlaygroundArgKey('${E(b)}', '${E(A)}', ${E(JSON.stringify(v.default??null))})"
+              style="padding: 2px 7px; font-size: 10.5px; font-family: var(--ff-mono); background: ${R}; color: ${T}; border: 1px solid ${S}; border-radius: var(--radius-sm);" 
+              title="Click to insert '${k(b)}' (${k(A)}${k(w)})" 
+              onclick="window.app.insertPlaygroundArgKey('${k(b)}', '${k(A)}', ${k(JSON.stringify(v.default??null))})"
             >
-              + ${E(b)} <span style="font-size: 9px; opacity: 0.7;">(${A}${x?" *":""})</span>
+              + ${k(b)} <span style="font-size: 9px; opacity: 0.7;">(${A}${x?" *":""})</span>
             </button>
           `}).join("")}
       </div>
@@ -415,7 +415,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
         </div>
         ${r>0?`
           <div style="padding: 8px 12px; background: rgba(245, 158, 11, 0.08); border-top: 1px solid rgba(245, 158, 11, 0.2); font-size: 11px; color: var(--amber-300); display: flex; justify-content: space-between; align-items: center;">
-            <span>\uD83D\uDEE1️ ${r} tool${r>1?"s":""} filtered ${i?`(${E(s)})`:""}</span>
+            <span>\uD83D\uDEE1️ ${r} tool${r>1?"s":""} filtered ${i?`(${k(s)})`:""}</span>
             <div style="display: flex; gap: 6px;">
               <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600; font-size: 10.5px;">Policy</a>
               ${i?`<a href="javascript:void(0)" onclick="window.app.switchTab('servers')" style="color: var(--cyan-400); text-decoration: underline; font-weight: 600; font-size: 10.5px;">Servers</a>`:""}
@@ -429,10 +429,10 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
         <div style="padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
           <div>
             <div style="font-size: 15px; font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);" id="pg-selected-title">
-              ${E(o?o.id:"No Capability Selected")}
+              ${k(o?o.id:"No Capability Selected")}
             </div>
             <div style="font-size: 11.5px; color: var(--text-dim);" id="pg-selected-desc">
-              ${E(o?o.summary||o.description:"Connect servers to inspect and execute tools")}
+              ${k(o?o.summary||o.description:"Connect servers to inspect and execute tools")}
             </div>
           </div>
           
@@ -474,7 +474,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
 
             ${d}
 
-            <textarea class="form-textarea" rows="7" id="pg-args-input" oninput="window.app.updatePlaygroundArgs(this.value)">${E(y)}</textarea>
+            <textarea class="form-textarea" rows="7" id="pg-args-input" oninput="window.app.updatePlaygroundArgs(this.value)">${k(y)}</textarea>
 
             <div style="margin-top: 12px; padding: 10px; background: rgba(0,0,0,0.2); border-radius: var(--radius-sm); border: 1px solid var(--border);">
               <div style="font-size: 11px; font-weight: 700; color: var(--cyan-400); margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
@@ -521,7 +521,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
                   <label class="form-label" style="margin: 0;">Input JSON Schema</label>
                   <span style="font-size: 10px; color: var(--text-dim); font-family: var(--ff-mono);">${m.length} field${m.length===1?"":"s"} (${g.length} required)</span>
                 </div>
-                <pre style="background: var(--surface); padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); font-size: 11px; color: var(--text-muted); max-height: 140px; overflow-y: auto;">${E(JSON.stringify(o.input_schema,null,2))}</pre>
+                <pre style="background: var(--surface); padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); font-size: 11px; color: var(--text-muted); max-height: 140px; overflow-y: auto;">${k(JSON.stringify(o.input_schema,null,2))}</pre>
               </div>
             `:""}
           </div>
@@ -542,9 +542,9 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
                 <div>
                   <div style="display: flex; align-items: center; gap: 8px;">
                     <span class="brand-badge" style="background: rgba(245, 158, 11, 0.2); color: var(--amber-300); border-color: rgba(245, 158, 11, 0.5);">
-                      ${E(e.executionResult.data?.task?.status||e.executionResult.data?.status||"TASK_CREATED").toUpperCase()}
+                      ${k(e.executionResult.data?.task?.status||e.executionResult.data?.status||"TASK_CREATED").toUpperCase()}
                     </span>
-                    <span style="font-family: var(--ff-mono); font-size: 12px; font-weight: 700; color: var(--text-main);">${E(e.executionResult.data?.task?.taskId||e.executionResult.data?.taskId||"")}</span>
+                    <span style="font-family: var(--ff-mono); font-size: 12px; font-weight: 700; color: var(--text-main);">${k(e.executionResult.data?.task?.taskId||e.executionResult.data?.taskId||"")}</span>
                   </div>
                   <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">
                     Execution suspended for Human-in-the-Loop approval or async resolution.
@@ -556,7 +556,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
               </div>
             `:""}
 
-            <pre id="pg-response-json" style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: var(--amber-300); font-size: 11.5px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-word;">${e.executionResult?E(JSON.stringify(e.executionResult.data,null,2)):"// Response envelope output will be formatted here"}</pre>
+            <pre id="pg-response-json" style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: var(--amber-300); font-size: 11.5px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-word;">${e.executionResult?k(JSON.stringify(e.executionResult.data,null,2)):"// Response envelope output will be formatted here"}</pre>
           </div>
         </div>
       </div>
@@ -566,15 +566,15 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
         No resources exposed by connected MCP servers.
       </div>
     `;else s=t.map((i)=>{let l=i.id===o?"active":"",u=i.uri?i.uri.split(":")[0]:"res";return`
-        <div class="cap-item ${l}" onclick="window.app.selectResource('${E(i.id)}')">
+        <div class="cap-item ${l}" onclick="window.app.selectResource('${k(i.id)}')">
           <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${E(i.name||i.id)}</span>
-            <span class="badge" style="font-size: 9.5px; background: rgba(56, 189, 248, 0.15); color: var(--cyan-400);">${E(u)}</span>
+            <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${k(i.name||i.id)}</span>
+            <span class="badge" style="font-size: 9.5px; background: rgba(56, 189, 248, 0.15); color: var(--cyan-400);">${k(u)}</span>
           </div>
-          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${E(i.uri)}</div>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${k(i.uri)}</div>
           <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 4px;">
-            <span>server: ${E(i.server||"local")}</span>
-            <span>${E(i.mime_type||"text/plain")}</span>
+            <span>server: ${k(i.server||"local")}</span>
+            <span>${k(i.mime_type||"text/plain")}</span>
           </div>
         </div>
       `}).join("");return`
@@ -600,10 +600,10 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
         <div style="padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
           <div>
             <div style="font-size: 15px; font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">
-              ${E(n?n.name||n.id:"No Resource Selected")}
+              ${k(n?n.name||n.id:"No Resource Selected")}
             </div>
             <div style="font-size: 11.5px; color: var(--cyan-400); font-family: var(--ff-mono);">
-              ${E(n?n.uri:"Select a resource from the list to read live content")}
+              ${k(n?n.uri:"Select a resource from the list to read live content")}
             </div>
           </div>
           <button class="btn btn-primary" onclick="window.app.executeReadResource()" ${n?"":"disabled"}>
@@ -619,12 +619,12 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
               <div style="background: rgba(0,0,0,0.25); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); margin-bottom: 14px;">
                 <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px;">Resource Metadata</div>
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 11.5px;">
-                  <div><span style="color: var(--text-muted);">Server:</span> <strong style="color: var(--text-main);">${E(n.server)}</strong></div>
-                  <div><span style="color: var(--text-muted);">MIME Type:</span> <strong style="color: var(--text-main);">${E(n.mime_type||"text/plain")}</strong></div>
+                  <div><span style="color: var(--text-muted);">Server:</span> <strong style="color: var(--text-main);">${k(n.server)}</strong></div>
+                  <div><span style="color: var(--text-muted);">MIME Type:</span> <strong style="color: var(--text-main);">${k(n.mime_type||"text/plain")}</strong></div>
                 </div>
                 ${n.description?`
                   <div style="margin-top: 8px; font-size: 11.5px; color: var(--text-dim); border-top: 1px solid rgba(255,255,255,0.05); padding-top: 6px;">
-                    ${E(n.description)}
+                    ${k(n.description)}
                   </div>
                 `:""}
               </div>
@@ -659,7 +659,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
                 ${r?`HTTP ${r.status} · ${r.durationMs.toFixed(1)}ms`:"READY"}
               </span>
             </div>
-            <pre style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: var(--cyan-400); font-size: 11.5px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-word;">${r?E(JSON.stringify(r.data,null,2)):'// Click "Read Resource Content" to inspect live payload'}</pre>
+            <pre style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: var(--cyan-400); font-size: 11.5px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-word;">${r?k(JSON.stringify(r.data,null,2)):'// Click "Read Resource Content" to inspect live payload'}</pre>
           </div>
         </div>
       </div>
@@ -669,22 +669,22 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
         No prompt templates registered by connected MCP servers.
       </div>
     `;else s=t.map((l)=>{let u=l.id===o?"active":"",p=l.arguments?l.arguments.length:0;return`
-        <div class="cap-item ${u}" onclick="window.app.selectPrompt('${E(l.id)}')">
+        <div class="cap-item ${u}" onclick="window.app.selectPrompt('${k(l.id)}')">
           <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${E(l.name||l.id)}</span>
+            <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${k(l.name||l.id)}</span>
             <span class="badge" style="font-size: 9.5px; background: rgba(168, 85, 247, 0.15); color: var(--purple-400);">${p} args</span>
           </div>
-          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">${E(l.description||l.title||"Prompt template")}</div>
-          <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">server: ${E(l.server||"local")}</div>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">${k(l.description||l.title||"Prompt template")}</div>
+          <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">server: ${k(l.server||"local")}</div>
         </div>
       `}).join("");let i="";if(n&&n.arguments&&n.arguments.length>0)i=n.arguments.map((l)=>`
       <div class="form-group" style="margin-bottom: 12px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-          <label class="form-label" style="margin: 0; font-family: var(--ff-mono);">${E(l.name)}</label>
+          <label class="form-label" style="margin: 0; font-family: var(--ff-mono);">${k(l.name)}</label>
           ${l.required?'<span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--red-400); font-size: 9px;">REQUIRED</span>':'<span style="font-size: 10px; color: var(--text-dim);">optional</span>'}
         </div>
-        ${l.description?`<div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">${E(l.description)}</div>`:""}
-        <input type="text" class="form-input prompt-arg-input" data-arg-name="${E(l.name)}" placeholder="Enter ${E(l.name)}..." />
+        ${l.description?`<div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">${k(l.description)}</div>`:""}
+        <input type="text" class="form-input prompt-arg-input" data-arg-name="${k(l.name)}" placeholder="Enter ${k(l.name)}..." />
       </div>
     `).join("");else if(n)i=`
       <div style="padding: 12px; background: rgba(0,0,0,0.2); border-radius: var(--radius-sm); border: 1px solid var(--border); font-size: 11.5px; color: var(--text-dim);">
@@ -713,10 +713,10 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
         <div style="padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
           <div>
             <div style="font-size: 15px; font-weight: 700; color: var(--text-main); font-family: var(--ff-mono);">
-              ${E(n?n.name||n.id:"No Prompt Selected")}
+              ${k(n?n.name||n.id:"No Prompt Selected")}
             </div>
             <div style="font-size: 11.5px; color: var(--text-dim);">
-              ${E(n?n.description||n.title||"Bind variables and render messages":"Select a prompt from the list to test")}
+              ${k(n?n.description||n.title||"Bind variables and render messages":"Select a prompt from the list to test")}
             </div>
           </div>
           <button class="btn btn-primary" onclick="window.app.executeGetPrompt()" ${n?"":"disabled"}>
@@ -742,7 +742,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
                 ${r?`HTTP ${r.status} · ${r.durationMs.toFixed(1)}ms`:"READY"}
               </span>
             </div>
-            <pre style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: #c084fc; font-size: 11.5px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-word;">${r?E(JSON.stringify(r.data,null,2)):'// Click "Render Prompt Messages" to view resolved system/user messages'}</pre>
+            <pre style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: #c084fc; font-size: 11.5px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-word;">${r?k(JSON.stringify(r.data,null,2)):'// Click "Render Prompt Messages" to view resolved system/user messages'}</pre>
           </div>
         </div>
       </div>
@@ -764,15 +764,15 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
 
         <div style="flex: 1; overflow-y: auto; padding: 20px;">
           ${a.map((n,r)=>{let s=t.find((d)=>d.id===n.capability_id),i=s?.input_schema,l=i?.properties||{},u=Array.isArray(i?.required)?i.required:[],p=Object.entries(l),g=t.map((d)=>`
-      <option value="${E(d.id)}" ${d.id===n.capability_id?"selected":""}>
-        ${E(d.id)} (${E(d.server||"local")})
+      <option value="${k(d.id)}" ${d.id===n.capability_id?"selected":""}>
+        ${k(d.id)} (${k(d.server||"local")})
       </option>
     `).join(""),m="";if(p.length>0)m=`
         <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; margin-bottom: 6px; align-items: center;">
           <span style="font-size: 9.5px; font-weight: 700; color: var(--text-dim); text-transform: uppercase;">Parameters:</span>
           ${p.map(([d,y])=>{let b=u.includes(d),v=y.type||(y.enum?"enum":"any");return`
-              <span style="font-size: 9.5px; font-family: var(--ff-mono); padding: 1px 5px; background: ${b?"rgba(239, 68, 68, 0.15)":"rgba(148, 163, 184, 0.1)"}; color: ${b?"var(--red-400)":"var(--text-muted)"}; border: 1px solid ${b?"rgba(239, 68, 68, 0.3)":"var(--border)"}; border-radius: 3px;" title="${E(y.description||"")}">
-                ${E(d)} (${v}${b?" *":""})
+              <span style="font-size: 9.5px; font-family: var(--ff-mono); padding: 1px 5px; background: ${b?"rgba(239, 68, 68, 0.15)":"rgba(148, 163, 184, 0.1)"}; color: ${b?"var(--red-400)":"var(--text-muted)"}; border: 1px solid ${b?"rgba(239, 68, 68, 0.3)":"var(--border)"}; border-radius: 3px;" title="${k(y.description||"")}">
+                ${k(d)} (${v}${b?" *":""})
               </span>
             `}).join("")}
         </div>
@@ -781,7 +781,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
           <div style="display: flex; align-items: center; gap: 8px;">
             <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: var(--cyan-400); font-family: var(--ff-mono); font-weight: 700;">STEP ${r+1}</span>
-            <span style="font-size: 11px; font-family: var(--ff-mono); color: var(--text-dim);">id: ${E(n.id)}</span>
+            <span style="font-size: 11px; font-family: var(--ff-mono); color: var(--text-dim);">id: ${k(n.id)}</span>
           </div>
           <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 11px; color: var(--red-400);" onclick="window.app.removeBatchStep(${r})">
             ✕ Remove
@@ -826,7 +826,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
             rows="3" 
             style="font-size: 11px; font-family: var(--ff-mono);" 
             oninput="window.app.updateBatchStepArgs(${r}, this.value)"
-          >${E(n.argsJson)}</textarea>
+          >${k(n.argsJson)}</textarea>
         </div>
       </div>
     `}).join("")}
@@ -852,7 +852,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
         </div>
       </div>
     </div>
-  `}function E(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function de(e){let t=e.tasks||[],a=e.taskFilterStatus||"all",o=t.filter((d)=>d.status==="input_required"),n=t.filter((d)=>d.status==="working"),r=t.filter((d)=>d.status==="completed"),s=t.filter((d)=>d.status==="cancelled"),i=t.filter((d)=>d.status==="failed"),l=a==="all"?t:t.filter((d)=>d.status===a),u=e.config.policy?.require_approval||e.config.policy?.requireApproval||[],p=o.length===0?`
+  `}function k(e){return String(e||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}function de(e){let t=e.tasks||[],a=e.taskFilterStatus||"all",o=t.filter((d)=>d.status==="input_required"),n=t.filter((d)=>d.status==="working"),r=t.filter((d)=>d.status==="completed"),s=t.filter((d)=>d.status==="cancelled"),i=t.filter((d)=>d.status==="failed"),l=a==="all"?t:t.filter((d)=>d.status===a),u=e.config.policy?.require_approval||e.config.policy?.requireApproval||[],p=o.length===0?`
     <div style="padding: 36px 24px; text-align: center; background: var(--surface-card); border-radius: var(--radius-md); border: 1px dashed var(--border);">
       <div style="width: 44px; height: 44px; border-radius: 50%; background: rgba(52, 211, 153, 0.12); border: 1px solid rgba(52, 211, 153, 0.3); display: flex; align-items: center; justify-content: center; margin: 0 auto 12px; color: var(--green-400); font-size: 18px; font-weight: 700;">
         ✓
@@ -903,7 +903,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
 
           ${v?`
             <div style="display: flex; flex-direction: column; gap: 10px;">
-              ${b.map((T)=>{let k=y[T]||{},w=typeof k==="string"?k:k.prompt||k.description||k.title||T,z=k.type||"text",L=k.default!==void 0?JSON.stringify(k.default):k.value!==void 0?JSON.stringify(k.value):k.sanitized_args?JSON.stringify(k.sanitized_args,null,2):"";if(z==="approval_review")return`
+              ${b.map((T)=>{let S=y[T]||{},w=typeof S==="string"?S:S.prompt||S.description||S.title||T,z=S.type||"text",L=S.default!==void 0?JSON.stringify(S.default):S.value!==void 0?JSON.stringify(S.value):S.sanitized_args?JSON.stringify(S.sanitized_args,null,2):"";if(z==="approval_review")return`
                     <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px;">
                       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                         <label style="font-size: 11.5px; font-weight: 600; color: var(--amber-300); font-family: var(--ff-mono);">${C(T)}</label>
@@ -934,7 +934,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
                         <option value="true" selected>true (Approve / Confirm)</option>
                         <option value="false">false (Reject / Deny)</option>
                       </select>
-                    `:k.sanitized_args||z==="object"||z==="json"?`
+                    `:S.sanitized_args||z==="object"||z==="json"?`
                       <textarea id="task-input-${C(d.taskId)}-${C(T)}" class="form-textarea" rows="3" style="color: var(--green-400); font-family: var(--ff-mono); font-size: 11.5px;">${C(L)}</textarea>
                     `:`
                       <input id="task-input-${C(d.taskId)}-${C(T)}" type="text" class="form-input" value="${C(L)}" placeholder="Enter ${C(T)} response..." style="font-size: 11.5px; font-family: var(--ff-mono);">
@@ -1316,7 +1316,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
             <div><span style="color: var(--text-dim);">hash:</span> <span style="color: var(--green-400);">${_(w.hash.slice(0,16))}...</span></div>
           </div>
         </div>
-      `}).join("");let k="";if(s){let w=new Date(Math.floor(s.timestamp_ns/1e6)).toISOString();k=`
+      `}).join("");let S="";if(s){let w=new Date(Math.floor(s.timestamp_ns/1e6)).toISOString();S=`
       <div style="position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 24px;" onclick="if (event.target === this) window.app.selectAuditEvent(null)">
         <div class="bento-card" style="width: 100%; max-width: 720px; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden; background: #0f172a; border: 1px solid var(--border); box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
           <!-- Modal Header -->
@@ -1436,33 +1436,33 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
     ${r>0?R:""}
 
     <!-- Modal Popup for Event Inspection -->
-    ${k}
+    ${S}
   `}function _(e){if(!e)return"";return String(e).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;")}function pe(){let e=c.getState(),t=e.activeProfile,a=t?e.config.profiles?.[t]:void 0,o=!!a,n=e.config.policy||{},r=a?.policy,s=o?r||{}:n,i=s.allow||[],l=s.deny||[],u=s.redact_keys||s.redactKeys||[],p=s.require_approval||s.requireApproval||[],g=i.length===0?`
     <div style="color: var(--text-dim); font-size: 12px;">${o?"No profile allow list (inherits global rules)":"No allow list (all non-denied operations permitted)"}</div>
-  `:i.map((k,w)=>`
+  `:i.map((S,w)=>`
     <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface); padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
-      <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--green-400);">✔ ${j(k)}</span>
+      <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--green-400);">✔ ${j(S)}</span>
       <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 11px; color: var(--red-400);" onclick="window.app.removePolicyRule('allow', ${w})">✕</button>
     </div>
   `).join(""),m=l.length===0?`
     <div style="color: var(--text-dim); font-size: 12px;">${o?"No profile deny rules configured":"No deny rules configured"}</div>
-  `:l.map((k,w)=>`
+  `:l.map((S,w)=>`
     <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface); padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
-      <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--red-400);">✖ ${j(k)}</span>
+      <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--red-400);">✖ ${j(S)}</span>
       <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 11px; color: var(--red-400);" onclick="window.app.removePolicyRule('deny', ${w})">✕</button>
     </div>
   `).join(""),d=p.length===0?`
     <div style="color: var(--text-dim); font-size: 12px;">${o?"No profile human-in-the-loop triggers configured":"No human-in-the-loop approval rules configured"}</div>
-  `:p.map((k,w)=>`
+  `:p.map((S,w)=>`
     <div style="display: flex; justify-content: space-between; align-items: center; background: var(--surface); padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
-      <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--amber-400);">\uD83D\uDEE1️ ${j(k)}</span>
+      <span style="font-family: var(--ff-mono); font-size: 12px; color: var(--amber-400);">\uD83D\uDEE1️ ${j(S)}</span>
       <button class="btn btn-ghost" style="padding: 2px 6px; font-size: 11px; color: var(--red-400);" onclick="window.app.removePolicyRule('requireApproval', ${w})">✕</button>
     </div>
   `).join(""),y=u.length===0?`
     <div style="color: var(--text-dim); font-size: 12px;">${o?"No profile key redaction patterns configured":"No key redaction patterns configured"}</div>
-  `:u.map((k,w)=>`
+  `:u.map((S,w)=>`
     <span class="brand-badge" style="color: var(--amber-300); padding: 5px 10px; font-size: 11px; display: inline-flex; align-items: center; gap: 6px;">
-      ${j(k)}
+      ${j(S)}
       <span style="cursor: pointer; color: var(--red-400); font-weight: bold;" onclick="window.app.removePolicyRule('redact', ${w})">✕</span>
     </span>
   `).join(""),b=o?`
@@ -1484,7 +1484,7 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
     <div style="margin-bottom: 16px; font-size: 12px; color: var(--text-dim);">
       Global security policy rules governing wildcard access control, human-in-the-loop triggers, and sensitive key masking. (Select an active profile in the top bar to edit per-profile rules).
     </div>
-  `,v=Object.keys(e.config.mcpServers||{}),x=a?.servers||[],A=o?v.filter((k)=>!x.includes(k)):[],R=o?`
+  `,v=Object.keys(e.config.mcpServers||{}),x=a?.servers||[],A=o?v.filter((S)=>!x.includes(S)):[],R=o?`
     <div class="bento-card" style="margin-bottom: 16px; border: 1px solid rgba(245, 158, 11, 0.2); background: rgba(0, 0, 0, 0.2);">
       <div class="stat-header" style="display: flex; justify-content: space-between; align-items: center;">
         <span class="stat-label" style="color: var(--amber-400);">Constellation Server Boundaries (Profile: ${j(t)})</span>
@@ -1496,9 +1496,9 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
             ✔ Included Servers (${x.length})
           </div>
           <div style="display: flex; flex-wrap: wrap; gap: 6px;">
-            ${x.length>0?x.map((k)=>`
+            ${x.length>0?x.map((S)=>`
               <span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25); background: rgba(34, 211, 238, 0.05);">
-                ${j(k)}
+                ${j(S)}
               </span>
             `).join(""):'<span style="font-size: 11px; color: var(--text-dim);">No servers included</span>'}
           </div>
@@ -1509,10 +1509,10 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
             \uD83D\uDEAB Excluded Servers (${A.length}) · Implicitly Denied
           </div>
           <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
-            ${A.length>0?A.map((k)=>`
+            ${A.length>0?A.map((S)=>`
               <span class="brand-badge" style="color: var(--text-muted); border-color: rgba(245, 158, 11, 0.2); background: rgba(245, 158, 11, 0.04); display: inline-flex; align-items: center; gap: 4px;">
-                ${j(k)}
-                <button style="background: none; border: none; color: var(--amber-400); font-size: 10px; cursor: pointer; padding: 0 2px;" title="Include in profile" onclick="window.app.toggleServerInProfile('${j(t)}', '${j(k)}', true)">+</button>
+                ${j(S)}
+                <button style="background: none; border: none; color: var(--amber-400); font-size: 10px; cursor: pointer; padding: 0 2px;" title="Include in profile" onclick="window.app.toggleServerInProfile('${j(t)}', '${j(S)}', true)">+</button>
               </span>
             `).join(""):'<span style="font-size: 11px; color: var(--text-dim);">All servers included in constellation</span>'}
           </div>
@@ -1525,9 +1525,9 @@ class ae{state={configPath:"mcp_servers.json",config:{mcpServers:{}},serverStatu
         Implicit Boundary Denials (${A.length})
       </div>
       <div style="display: flex; flex-direction: column; gap: 4px;">
-        ${A.map((k)=>`
+        ${A.map((S)=>`
           <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(245, 158, 11, 0.03); padding: 5px 8px; border-radius: var(--radius-xs); border: 1px dashed rgba(245, 158, 11, 0.2);">
-            <span style="font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim);">✖ ${j(k)}.*</span>
+            <span style="font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim);">✖ ${j(S)}.*</span>
             <span style="font-size: 9.5px; color: var(--amber-400); font-family: var(--ff-mono);">server excluded</span>
           </div>
         `).join("")}
@@ -2047,7 +2047,7 @@ Reference: ${s.uri}`),e)e.value="";if(t)t.value="";await this.refreshData()}else
                 `:""}
               </div>
             </div>
-          `}).join(""),A=(g?.envFields||[]).map((T)=>T.key),R=Object.entries(m).filter(([T])=>!A.includes(T)).map(([T,k])=>`
+          `}).join(""),A=(g?.envFields||[]).map((T)=>T.key),R=Object.entries(m).filter(([T])=>!A.includes(T)).map(([T,S])=>`
             <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: var(--surface); border-radius: var(--radius-xs); margin-bottom: 6px; font-size: 11.5px;">
               <span style="font-family: var(--ff-mono); font-weight: 700; color: var(--text-main);">${f(T)}</span>
               <span class="brand-badge" style="color: var(--green-400); border-color: rgba(52, 211, 153, 0.3);">Custom Configured</span>
