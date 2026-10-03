@@ -195,7 +195,7 @@ function renderToolsPlayground(state: any): string {
               type="button" 
               class="btn" 
               style="padding: 2px 7px; font-size: 10.5px; font-family: var(--ff-mono); background: ${pillColor}; color: ${textColor}; border: 1px solid ${borderColor}; border-radius: var(--radius-sm);" 
-              title="Click to insert '${key}' (${typeStr}${desc})" 
+              title="Click to insert '${escapeHtml(key)}' (${escapeHtml(typeStr)}${escapeHtml(desc)})" 
               onclick="window.app.insertPlaygroundArgKey('${escapeHtml(key)}', '${escapeHtml(typeStr)}', ${escapeHtml(JSON.stringify(def.default ?? null))})"
             >
               + ${escapeHtml(key)} <span style="font-size: 9px; opacity: 0.7;">(${typeStr}${isReq ? ' *' : ''})</span>
