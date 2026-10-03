@@ -234,7 +234,34 @@ fn apply_line_limit(val: Value, max_lines: usize) -> Value {
     }
 }
 
+/// Truncates a serialized payload to a byte budget without splitting a character.
+///
+/// The budget is caller-controlled and can land inside a multi-byte character,
+/// so the offset is floored to the nearest preceding character boundary.
+///
+/// # Arguments
+/// * `text` - Payload to truncate.
+/// * `max_bytes` - Upper bound on the returned prefix in bytes.
+///
+/// # Returns
+/// A prefix of `text` no longer than `max_bytes`.
+fn byte_prefix(text: &str, max_bytes: usize) -> &str {
+    let mut end = max_bytes.min(text.len());
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 /// Truncates a payload to fit within a byte size budget.
+///
+/// # Arguments
+/// * `val` - Payload to truncate.
+/// * `budget_bytes` - Maximum number of payload bytes to retain.
+///
+/// # Returns
+/// The payload unchanged when it fits the budget, otherwise a summary object
+/// carrying the original size, the retained size, and the truncated data.
 fn apply_byte_truncation(val: Value, budget_bytes: usize) -> Value {
     let serialized = match serde_json::to_string(&val) {
         Ok(s) => s,
@@ -251,13 +278,12 @@ fn apply_byte_truncation(val: Value, budget_bytes: usize) -> Value {
             if bytes.len() <= budget_bytes {
                 return Value::String(s);
             }
-            let truncated_slice = &bytes[..budget_bytes.min(bytes.len())];
-            let safe_str = String::from_utf8_lossy(truncated_slice);
+            let prefix = byte_prefix(&s, budget_bytes);
             json!({
                 "_warmplane_truncated": true,
                 "original_bytes": bytes.len(),
-                "truncated_bytes": budget_bytes,
-                "data": format!("{}... [truncated]", safe_str)
+                "truncated_bytes": prefix.len(),
+                "data": format!("{}... [truncated]", prefix)
             })
         }
         Value::Array(arr) => {
@@ -279,12 +305,15 @@ fn apply_byte_truncation(val: Value, budget_bytes: usize) -> Value {
                 "data": result
             })
         }
-        _ => json!({
-            "_warmplane_truncated": true,
-            "original_bytes": serialized.len(),
-            "truncated_bytes": budget_bytes,
-            "data": format!("{}... [truncated]", &serialized[..budget_bytes.min(serialized.len())])
-        }),
+        _ => {
+            let prefix = byte_prefix(&serialized, budget_bytes);
+            json!({
+                "_warmplane_truncated": true,
+                "original_bytes": serialized.len(),
+                "truncated_bytes": prefix.len(),
+                "data": format!("{}... [truncated]", prefix)
+            })
+        }
     }
 }
 
@@ -348,5 +377,32 @@ mod tests {
         let truncated = apply_byte_truncation(long_str, 50);
         assert_eq!(truncated["_warmplane_truncated"], true);
         assert_eq!(truncated["original_bytes"], 500);
+    }
+
+    #[test]
+    fn apply_byte_truncation_does_not_split_a_character_in_a_structured_payload() {
+        // The budget is caller-controlled, so it can land inside a multi-byte
+        // character. "é" occupies bytes 10..12 of the serialized payload.
+        let payload = json!({ "note": "héllo wörld" });
+        let truncated = apply_byte_truncation(payload, 11);
+
+        assert_eq!(truncated["_warmplane_truncated"], true);
+        assert_eq!(truncated["original_bytes"], 24);
+        assert_eq!(truncated["truncated_bytes"], 10);
+        assert_eq!(
+            truncated["data"].as_str().unwrap(),
+            "{\"note\":\"h... [truncated]"
+        );
+    }
+
+    #[test]
+    fn apply_byte_truncation_does_not_split_a_character_in_a_string_payload() {
+        // Same hazard on the string arm: "é" occupies bytes 1..3.
+        let truncated = apply_byte_truncation(json!("héllo wörld"), 2);
+
+        assert_eq!(truncated["_warmplane_truncated"], true);
+        assert_eq!(truncated["original_bytes"], 13);
+        assert_eq!(truncated["truncated_bytes"], 1);
+        assert_eq!(truncated["data"].as_str().unwrap(), "h... [truncated]");
     }
 }
