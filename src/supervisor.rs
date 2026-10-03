@@ -715,50 +715,66 @@ pub async fn spawn_supervised_stdio_server(
                     cmd.kill_on_drop(true);
 
                     if let Ok(transport) = TokioChildProcess::new(cmd) {
-                        if let Ok(new_client) = ().serve(transport).await {
-                            info!(
-                                server_id = %server_id_owned,
-                                restart_attempt = restart_count,
-                                "supervisor successfully restarted stdio child process"
-                            );
+                        let restart_attempt = timeout(handshake_timeout, ().serve(transport)).await;
 
-                            // Actively reset circuit breaker and restart counter upon successful recovery
-                            state_clone.circuit_breakers.reset(&server_id_owned).await;
-                            restart_count = 0;
+                        match restart_attempt {
+                            Ok(Ok(new_client)) => {
+                                info!(
+                                    server_id = %server_id_owned,
+                                    restart_attempt = restart_count,
+                                    "supervisor successfully restarted stdio child process"
+                                );
 
-                            let (new_caps, new_res, new_prompts) = discover_supervisor_items!(
-                                &new_client,
-                                &server_id_owned,
-                                &cap_aliases_owned,
-                                &res_aliases_owned,
-                                &prompt_aliases_owned
-                            );
+                                // Actively reset circuit breaker and restart counter upon successful recovery
+                                state_clone.circuit_breakers.reset(&server_id_owned).await;
+                                restart_count = 0;
 
-                            reconcile_restarted_catalog(
-                                &state_clone,
-                                &server_id_owned,
-                                new_caps,
-                                new_res,
-                                new_prompts,
-                            )
-                            .await;
+                                let (new_caps, new_res, new_prompts) = discover_supervisor_items!(
+                                    &new_client,
+                                    &server_id_owned,
+                                    &cap_aliases_owned,
+                                    &res_aliases_owned,
+                                    &prompt_aliases_owned
+                                );
 
-                            {
-                                let mut statuses_guard = state_clone.server_statuses.write().await;
-                                if let Some(status_val) = statuses_guard.get_mut(&server_id_owned) {
-                                    if let Some(obj) = status_val.as_object_mut() {
-                                        obj.insert("status".to_string(), json!("connected"));
-                                        obj.remove("error");
+                                reconcile_restarted_catalog(
+                                    &state_clone,
+                                    &server_id_owned,
+                                    new_caps,
+                                    new_res,
+                                    new_prompts,
+                                )
+                                .await;
+
+                                {
+                                    let mut statuses_guard =
+                                        state_clone.server_statuses.write().await;
+                                    if let Some(status_val) =
+                                        statuses_guard.get_mut(&server_id_owned)
+                                    {
+                                        if let Some(obj) = status_val.as_object_mut() {
+                                            obj.insert("status".to_string(), json!("connected"));
+                                            obj.remove("error");
+                                        }
                                     }
                                 }
-                            }
 
-                            client_opt = Some(new_client);
-                        } else {
-                            error!(
-                                server_id = %server_id_owned,
-                                "supervisor failed to negotiate MCP handshake upon restart"
-                            );
+                                client_opt = Some(new_client);
+                            }
+                            Ok(Err(err)) => {
+                                error!(
+                                    server_id = %server_id_owned,
+                                    error = %err,
+                                    "supervisor failed to negotiate MCP handshake upon restart"
+                                );
+                            }
+                            Err(_) => {
+                                error!(
+                                    server_id = %server_id_owned,
+                                    timeout_ms = handshake_timeout.as_millis() as u64,
+                                    "supervisor stdio restart handshake timed out"
+                                );
+                            }
                         }
                     } else {
                         error!(
