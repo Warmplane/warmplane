@@ -10,3 +10,4 @@ ui/node_modules/
 docs/presentation*
 /.slop-gate/
 slop-gate.sarif
+.wt/
