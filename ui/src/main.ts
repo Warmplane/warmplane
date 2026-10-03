@@ -1,3 +1,4 @@
+import { escapeHtml } from './escape';
 import { store } from './state';
 import { api } from './api';
 import { renderOverview } from './components/overview';
@@ -2775,10 +2776,6 @@ class WarmplaneApp {
   closeModals() {
     document.querySelectorAll('.modal-backdrop').forEach(el => el.classList.remove('active'));
   }
-}
-
-function escapeHtml(str: string): string {
-  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 const app = new WarmplaneApp();

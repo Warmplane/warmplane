@@ -1,3 +1,4 @@
+import { escapeHtml } from '../escape';
 import { AppState } from '../state';
 
 export function renderApprovals(state: AppState): string {
@@ -211,10 +212,6 @@ export function renderApprovals(state: AppState): string {
       ${historyHtml}
     </div>
   `;
-}
-
-function escapeHtml(str: string): string {
-  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 
