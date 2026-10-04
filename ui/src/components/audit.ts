@@ -1,3 +1,4 @@
+import { escapeHtml } from '../escape';
 import { store } from '../state';
 import { api, AuditEventItem } from '../api';
 
@@ -406,15 +407,5 @@ export function renderAudit(): string {
     <!-- Modal Popup for Event Inspection -->
     ${modalHtml}
   `;
-}
-
-function escapeHtml(str: string): string {
-  if (!str) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
 }
 

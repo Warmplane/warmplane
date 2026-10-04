@@ -1,3 +1,4 @@
+import { escapeHtml } from '../escape';
 import { AppState } from '../state';
 import { TaskItem } from '../api';
 
@@ -336,8 +337,4 @@ export function renderTasks(state: AppState): string {
       </div>
     </div>
   `;
-}
-
-function escapeHtml(str: string): string {
-  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }

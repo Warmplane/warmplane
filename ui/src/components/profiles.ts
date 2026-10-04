@@ -1,3 +1,4 @@
+import { escapeHtml } from '../escape';
 import { store } from '../state';
 import { api } from '../api';
 
@@ -117,8 +118,4 @@ export function renderProfiles(): string {
 
     ${profilesListHtml}
   `;
-}
-
-function escapeHtml(str: string): string {
-  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
