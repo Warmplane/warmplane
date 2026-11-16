@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-18
+// Rust guideline compliant 2026-11-16
 
 //! Dynamic server mounting, unmounting, and configuration reconciliation lifecycle operations.
 
@@ -115,6 +115,9 @@ impl AppState {
 
         {
             let mut caps_guard = self.capabilities.write().await;
+            let new_ids: std::collections::HashSet<String> =
+                new_capabilities.iter().map(|(id, _)| id.clone()).collect();
+            caps_guard.retain(|id, meta| meta.server != server_id || new_ids.contains(id));
             for (id, meta) in new_capabilities {
                 info!(%server_id, capability_id = %id, "registered upstream capability");
                 caps_guard.insert(id.clone(), meta);
@@ -367,6 +370,10 @@ impl AppState {
         {
             let mut pol_guard = self.policy.write().await;
             *pol_guard = Policy::from_config(config.policy.clone());
+        }
+        {
+            let mut profiles = self.profiles.write().await;
+            *profiles = config.profiles.clone();
         }
 
         // 2. Identify active servers vs disk servers

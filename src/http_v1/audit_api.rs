@@ -1,5 +1,4 @@
-// Rust guideline compliant 2026-08-17
-
+// Rust guideline compliant 2026-11-16
 //! HTTP v1 handlers for WORM audit log querying, verification, export, and analytics.
 
 use axum::{
@@ -28,6 +27,8 @@ fn parse_event_type(et: &str) -> Option<AuditEventType> {
         "config_mutation" => Some(AuditEventType::ConfigMutation),
         "sampling_call" => Some(AuditEventType::SamplingCall),
         "resource_access" => Some(AuditEventType::ResourceAccess),
+        "emission_held" => Some(AuditEventType::EmissionHeld),
+        "emission_cancelled" => Some(AuditEventType::EmissionCancelled),
         _ => None,
     }
 }

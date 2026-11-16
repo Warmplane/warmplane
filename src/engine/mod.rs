@@ -1,5 +1,4 @@
-// Rust guideline compliant 2026-08-27
-
+// Rust guideline compliant 2026-11-16
 //! Embedded Warmplane engine interface and ControlPlaneHandle implementation (`M-CANONICAL-DOCS`).
 //!
 //! Provides direct Rust callable APIs without HTTP or transport serialization overhead:
@@ -292,6 +291,56 @@ impl ControlPlaneHandle {
         } else {
             RetryMetadata::unsafe_op
         };
+
+        if let Some(key) = idempotency_key.as_deref() {
+            if let Some(task) = self.state.task_registry.find_by_idempotency_key(key).await {
+                if task.emission.is_some() {
+                    if !self
+                        .state
+                        .hold_coordinator
+                        .can_access_task(
+                            &self.state,
+                            &task,
+                            "default",
+                            self.state.rbac_engine.default_role(),
+                            prof_ctx.profile_id.as_deref(),
+                        )
+                        .await
+                    {
+                        return Envelope::failure(
+                            trace_id,
+                            Some(req_id),
+                            Some(req_ctx),
+                            WarmplaneError::new(
+                                "POLICY_DENIED",
+                                "Held task is not accessible to this caller",
+                                false,
+                            ),
+                            retry_base("not_started"),
+                        );
+                    }
+                    return Envelope::success(
+                        trace_id,
+                        Some(req_id),
+                        Some(req_ctx),
+                        serde_json::to_value(crate::tasks::TaskResponse::from(&task))
+                            .unwrap_or_default(),
+                        retry_base(
+                            if matches!(
+                                task.status,
+                                crate::tasks::TaskStatus::Completed
+                                    | crate::tasks::TaskStatus::Failed
+                                    | crate::tasks::TaskStatus::Cancelled
+                            ) {
+                                "completed"
+                            } else {
+                                "in_progress"
+                            },
+                        ),
+                    );
+                }
+            }
+        }
 
         // Check Idempotency Store
         if let Some(ref key) = idempotency_key {
@@ -626,6 +675,80 @@ impl ControlPlaneHandle {
                                 }
                                 return;
                             }
+                        }
+                    }
+                }
+
+                if let Some(contract) = reversibility_clone.as_ref().filter(|contract| {
+                    contract.class == crate::config::ReversibilityClass::Delayable
+                }) {
+                    let global_window = handle.state.policy.read().await.hold_window_secs;
+                    let profile_window = profile_context_clone
+                        .profile_policy
+                        .as_ref()
+                        .and_then(|profile_policy| profile_policy.hold_window_secs);
+                    let hold_secs = crate::emissions::effective_hold_window_secs(
+                        contract,
+                        profile_window,
+                        global_window,
+                    )
+                    .unwrap_or(30);
+                    let emission = crate::tasks::EmissionRecord {
+                        phase: crate::tasks::EmissionPhase::PendingEmission,
+                        release_at_ms: match crate::emissions::release_deadline_ms(hold_secs) {
+                            Ok(deadline) => deadline,
+                            Err(error) => {
+                                let _ = handle
+                                    .state
+                                    .task_registry
+                                    .fail_task(
+                                        &task_id_clone,
+                                        serde_json::json!({"code": "INVALID_HOLD_WINDOW"}),
+                                        Some(error.to_string()),
+                                    )
+                                    .await;
+                                return;
+                            }
+                        },
+                        cancellable: true,
+                        tool_name: tool_name_clone.clone(),
+                        input_responses: options.input_responses.clone(),
+                        request_state: options.request_state.clone(),
+                        profile_id: profile_context_clone.profile_id.clone(),
+                        tenant_id: "default".to_string(),
+                        role: handle.state.rbac_engine.default_role().to_string(),
+                        authorization_expires_at_epoch_secs: None,
+                        approval_completed: requires_approval,
+                        batch_id: None,
+                        step_id: None,
+                    };
+                    match handle
+                        .state
+                        .hold_coordinator
+                        .queue_existing(
+                            &handle.state,
+                            &task_id_clone,
+                            worker_args.clone(),
+                            emission,
+                        )
+                        .await
+                    {
+                        Ok(Some(_)) => return,
+                        Ok(None) => return,
+                        Err(error) => {
+                            let _ = handle
+                                .state
+                                .task_registry
+                                .fail_task(
+                                    &task_id_clone,
+                                    serde_json::json!({"code": "EMISSION_PERSISTENCE_FAILED"}),
+                                    Some(error.to_string()),
+                                )
+                                .await;
+                            if let Some(key) = idempotency_key_clone.as_deref() {
+                                handle.state.idempotency_store.remove(key).await;
+                            }
+                            return;
                         }
                     }
                 }
@@ -1049,6 +1172,174 @@ impl ControlPlaneHandle {
                     }
                 }
             }
+        }
+
+        if let Some(contract) = reversibility
+            .as_ref()
+            .filter(|contract| contract.class == crate::config::ReversibilityClass::Delayable)
+        {
+            let global_window = self.state.policy.read().await.hold_window_secs;
+            let profile_window = prof_ctx
+                .profile_policy
+                .as_ref()
+                .and_then(|profile_policy| profile_policy.hold_window_secs);
+            let hold_secs = crate::emissions::effective_hold_window_secs(
+                contract,
+                profile_window,
+                global_window,
+            )
+            .unwrap_or(30);
+            let hold_ms = match hold_secs.checked_mul(1_000) {
+                Some(value) => value,
+                None => {
+                    return Envelope::failure(
+                        trace_id,
+                        Some(req_id),
+                        Some(req_ctx),
+                        WarmplaneError::new(
+                            "INVALID_HOLD_WINDOW",
+                            "Hold window overflows milliseconds",
+                            false,
+                        ),
+                        retry_base("not_started"),
+                    );
+                }
+            };
+            let release_at_ms = match crate::emissions::release_deadline_ms(hold_secs) {
+                Ok(deadline) => deadline,
+                Err(error) => {
+                    return Envelope::failure(
+                        trace_id,
+                        Some(req_id),
+                        Some(req_ctx),
+                        WarmplaneError::new("INVALID_HOLD_WINDOW", error.to_string(), false),
+                        retry_base("not_started"),
+                    );
+                }
+            };
+            let emission = crate::tasks::EmissionRecord {
+                phase: crate::tasks::EmissionPhase::PendingEmission,
+                release_at_ms,
+                cancellable: true,
+                tool_name: tool_name.clone(),
+                input_responses: options.input_responses.clone(),
+                request_state: options.request_state.clone(),
+                profile_id: prof_ctx.profile_id.clone(),
+                tenant_id: "default".to_string(),
+                role: self.state.rbac_engine.default_role().to_string(),
+                authorization_expires_at_epoch_secs: None,
+                approval_completed: requires_approval,
+                batch_id: None,
+                step_id: None,
+            };
+            let task = if let Some(existing) = task_record.as_ref() {
+                self.state
+                    .hold_coordinator
+                    .queue_existing(
+                        &self.state,
+                        &existing.task_id,
+                        effective_args.clone(),
+                        emission,
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+            } else {
+                self.state
+                    .hold_coordinator
+                    .accept(
+                        &self.state,
+                        crate::tasks::CreateTaskParams {
+                            capability_id: capability_id.to_string(),
+                            server_id: server_id.clone(),
+                            args: effective_args.clone(),
+                            request_id: Some(req_id.clone()),
+                            context: Some(req_ctx.clone()),
+                            idempotency_key: idempotency_key.clone(),
+                            initial_status: crate::tasks::TaskStatus::Working,
+                            status_message: Some(
+                                "Waiting for the emission release deadline".to_string(),
+                            ),
+                            input_requests: None,
+                            ttl_ms: None,
+                            poll_interval_ms: Some(1_000),
+                        },
+                        emission,
+                    )
+                    .await
+                    .ok()
+            };
+            let Some(task) = task else {
+                return Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "EMISSION_PERSISTENCE_FAILED",
+                        "Could not persist held emission",
+                        true,
+                    ),
+                    retry_base("not_started"),
+                );
+            };
+            if hold_ms < self.state.tool_timeout_ms {
+                let wait = std::time::Duration::from_millis(
+                    hold_ms.saturating_add(self.state.tool_timeout_ms),
+                );
+                if let Some(finished) = self
+                    .state
+                    .hold_coordinator
+                    .wait_for_terminal(&self.state, &task.task_id, wait)
+                    .await
+                {
+                    match finished.status {
+                        crate::tasks::TaskStatus::Completed => {
+                            let env = Envelope::success(
+                                trace_id,
+                                Some(req_id),
+                                Some(req_ctx),
+                                finished.result.unwrap_or(Value::Null),
+                                retry_base("completed"),
+                            );
+                            if let Some(key) = idempotency_key.as_deref() {
+                                if let Ok(value) = serde_json::to_value(&env) {
+                                    self.state.idempotency_store.complete(key, value).await;
+                                }
+                            }
+                            return env;
+                        }
+                        crate::tasks::TaskStatus::Failed | crate::tasks::TaskStatus::Cancelled => {
+                            return Envelope::failure(
+                                trace_id,
+                                Some(req_id),
+                                Some(req_ctx),
+                                WarmplaneError::new(
+                                    finished
+                                        .error
+                                        .as_ref()
+                                        .and_then(|error| error.get("code"))
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("EMISSION_FAILED"),
+                                    finished.status_message.unwrap_or_else(|| {
+                                        "Held emission did not complete".to_string()
+                                    }),
+                                    false,
+                                ),
+                                retry_base("completed"),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let receipt = crate::tasks::TaskResponse::from(&task);
+            return Envelope::success(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                serde_json::to_value(receipt).unwrap_or_default(),
+                retry_base("in_progress"),
+            );
         }
 
         let tx = {
@@ -1792,6 +2083,46 @@ impl ControlPlaneHandle {
     /// An [`Envelope`] indicating whether the task was cancelled.
     pub async fn cancel_task(&self, task_id: &str, reason: Option<String>) -> Envelope<bool> {
         let trace_id = next_trace_id();
+        match self
+            .state
+            .hold_coordinator
+            .cancel(&self.state, task_id, reason.clone())
+            .await
+        {
+            Ok(crate::tasks::EmissionCancelResult::Cancelled)
+            | Ok(crate::tasks::EmissionCancelResult::AlreadyCancelled) => {
+                return Envelope::success(
+                    trace_id,
+                    None,
+                    None,
+                    true,
+                    RetryMetadata::safe("completed"),
+                );
+            }
+            Ok(crate::tasks::EmissionCancelResult::TooLate) => {
+                return Envelope::failure(
+                    trace_id,
+                    None,
+                    None,
+                    WarmplaneError::new(
+                        "EMISSION_DISPATCHING",
+                        "Emission dispatch has already started and may have reached the upstream server",
+                        false,
+                    ),
+                    RetryMetadata::safe("not_started"),
+                );
+            }
+            Ok(crate::tasks::EmissionCancelResult::NotEmission) => {}
+            Err(error) => {
+                return Envelope::failure(
+                    trace_id,
+                    None,
+                    None,
+                    WarmplaneError::new("TASK_CANCEL_FAILED", error.to_string(), false),
+                    RetryMetadata::safe("not_started"),
+                );
+            }
+        }
         match self.state.task_registry.cancel_task(task_id, reason).await {
             Ok(true) => {
                 Envelope::success(trace_id, None, None, true, RetryMetadata::safe("completed"))

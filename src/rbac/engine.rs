@@ -1,5 +1,4 @@
-// Rust guideline compliant 2026-08-19
-
+// Rust guideline compliant 2026-11-16
 //! Core RBAC engine for token verification, claim resolution, and effective policy computation.
 
 use std::collections::HashMap;
@@ -54,6 +53,36 @@ impl RbacEngine {
     /// Returns the configured default role name.
     pub fn default_role(&self) -> &str {
         &self.default_role
+    }
+
+    /// Returns whether a role can be resolved under the active RBAC configuration.
+    pub fn recognizes_role(&self, role: &str) -> bool {
+        !self.enabled || role == self.default_role || self.roles.contains_key(role)
+    }
+
+    /// Revalidates stored tenant and role provenance without retaining caller credentials.
+    pub fn recognizes_provenance(
+        &self,
+        tenant_id: &str,
+        role: &str,
+        actor_id: Option<&str>,
+        grant_id: Option<&str>,
+    ) -> bool {
+        if !self.enabled {
+            return tenant_id == "default";
+        }
+        if !self.recognizes_role(role) {
+            return false;
+        }
+        if let Some(grant_id) = grant_id.filter(|grant| grant.starts_with("tok_")) {
+            return self.tokens.iter().any(|(token, assignment)| {
+                format!("tok_{}", byte_prefix(token, 8)) == grant_id
+                    && assignment.role == role
+                    && assignment.tenant_id.as_deref().unwrap_or("default") == tenant_id
+                    && assignment.actor_id.as_deref() == actor_id
+            });
+        }
+        tenant_id == "default" || grant_id.is_some()
     }
 
     /// Resolves the effective policy for a given role name, falling back to base policy.
@@ -111,6 +140,7 @@ impl RbacEngine {
                 role: "admin".to_string(),
                 actor_id: None,
                 grant_id: None,
+                grant_expires_at_epoch_secs: None,
                 effective_policy: base_policy.clone(),
             });
         }
@@ -123,6 +153,7 @@ impl RbacEngine {
                 role: self.default_role.clone(),
                 actor_id: None,
                 grant_id: None,
+                grant_expires_at_epoch_secs: None,
                 effective_policy,
             });
         };
@@ -141,6 +172,7 @@ impl RbacEngine {
                     role: assignment.role.clone(),
                     actor_id: assignment.actor_id.clone(),
                     grant_id: Some(format!("tok_{}", byte_prefix(token, 8))),
+                    grant_expires_at_epoch_secs: None,
                     effective_policy,
                 });
             }
@@ -210,14 +242,14 @@ impl RbacEngine {
         // claim as "no expiry" turns a single leaked token into a permanent
         // credential. A present-but-unusable claim counts as expired rather
         // than as absent, so it cannot be used to skip validation.
-        match payload_val.get("exp") {
+        let expiry = match payload_val.get("exp") {
             Some(serde_json::Value::Number(n)) => match n.as_u64() {
-                Some(exp) if now <= exp => {}
+                Some(exp) if now <= exp => exp,
                 _ => return Err("JWT_EXPIRED".to_string()),
             },
             Some(_) => return Err("JWT_EXPIRED".to_string()),
             None => return Err("JWT_EXPIRATION_MISSING".to_string()),
-        }
+        };
 
         // The `nbf` claim is optional, but a present-but-unusable claim must
         // not be silently dropped.
@@ -282,6 +314,7 @@ impl RbacEngine {
                 .get("jti")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
+            grant_expires_at_epoch_secs: Some(expiry),
             effective_policy,
         })
     }

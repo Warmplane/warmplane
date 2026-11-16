@@ -1,10 +1,9 @@
-// Rust guideline compliant 2026-08-17
-
+// Rust guideline compliant 2026-11-16
 //! Multi-step chained and batched capability execution with variable reference resolution (`M-CANONICAL-DOCS`).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 use tokio::sync::oneshot;
 
 use crate::daemon::{AppState, ServerMsg, UpstreamCallError};
@@ -82,6 +81,10 @@ pub struct BatchExecutionScope<'a> {
     pub profile: &'a crate::context::ProfileContext,
     /// Tenant used to scope persisted compensable usage.
     pub tenant_id: &'a str,
+    /// Authenticated role used to revalidate delayed batch steps.
+    pub role: &'a str,
+    /// JWT expiry bound for release-time authorization revalidation.
+    pub authorization_expires_at_epoch_secs: Option<u64>,
 }
 
 /// Executes an ordered sequence of tool execution steps, interpolating prior step outputs.
@@ -115,6 +118,8 @@ pub async fn execute_batch(
             policy,
             profile: prof_ctx,
             tenant_id: "default",
+            role: state.rbac_engine.default_role(),
+            authorization_expires_at_epoch_secs: None,
         },
     )
     .await
@@ -133,6 +138,8 @@ pub async fn execute_batch_for_tenant(
         policy,
         profile: prof_ctx,
         tenant_id,
+        role,
+        authorization_expires_at_epoch_secs,
     } = scope;
     let start_all = std::time::Instant::now();
 
@@ -354,10 +361,13 @@ pub async fn execute_batch_for_tenant(
                 is_replay: None,
             });
 
-            let resolution = match rx.await {
-                Ok(r) => r,
-                Err(_) => crate::approvals::ApprovalResolution::Expired,
-            };
+            let approval_budget_ms =
+                DEFAULT_BATCH_TIMEOUT_MS.saturating_sub(start_all.elapsed().as_millis() as u64);
+            let resolution =
+                match tokio::time::timeout(Duration::from_millis(approval_budget_ms), rx).await {
+                    Ok(Ok(resolution)) => resolution,
+                    _ => crate::approvals::ApprovalResolution::Expired,
+                };
 
             match resolution {
                 crate::approvals::ApprovalResolution::Approved { modified_args, .. } => {
@@ -390,7 +400,14 @@ pub async fn execute_batch_for_tenant(
                         capability_id: step.capability_id.clone(),
                         ok: false,
                         data: None,
-                        error: Some("HITL approval expired".to_string()),
+                        error: Some(
+                            if start_all.elapsed().as_millis() as u64 >= DEFAULT_BATCH_TIMEOUT_MS {
+                                "Batch execution budget expired while waiting for HITL approval"
+                                    .to_string()
+                            } else {
+                                "HITL approval expired".to_string()
+                            },
+                        ),
                         duration_us: step_start.elapsed().as_micros() as u64,
                     });
                     overall_ok = false;
@@ -445,6 +462,194 @@ pub async fn execute_batch_for_tenant(
                 error: Some(format!("Circuit open for server '{}': {}", server, cb_err)),
                 duration_us: step_start.elapsed().as_micros() as u64,
             });
+            overall_ok = false;
+            if !step.continue_on_error {
+                break;
+            }
+            continue;
+        }
+
+        if let Some(contract) = reversibility
+            .as_ref()
+            .filter(|contract| contract.class == crate::config::ReversibilityClass::Delayable)
+        {
+            let hold_secs = crate::emissions::effective_hold_window_secs(
+                contract,
+                prof_ctx
+                    .profile_policy
+                    .as_ref()
+                    .and_then(|item| item.hold_window_secs),
+                state.policy.read().await.hold_window_secs,
+            )
+            .unwrap_or(30);
+            let release_at_ms = match crate::emissions::release_deadline_ms(hold_secs) {
+                Ok(deadline) => deadline,
+                Err(error) => {
+                    results.push(BatchStepResult {
+                        id: step.id.clone(),
+                        capability_id: step.capability_id.clone(),
+                        ok: false,
+                        data: None,
+                        error: Some(error.to_string()),
+                        duration_us: step_start.elapsed().as_micros() as u64,
+                    });
+                    overall_ok = false;
+                    if !step.continue_on_error {
+                        break;
+                    }
+                    continue;
+                }
+            };
+            let emission = crate::tasks::EmissionRecord {
+                phase: crate::tasks::EmissionPhase::PendingEmission,
+                release_at_ms,
+                cancellable: true,
+                tool_name: tool.clone(),
+                input_responses: None,
+                request_state: None,
+                profile_id: prof_ctx.profile_id.clone(),
+                tenant_id: tenant_id.to_string(),
+                role: role.to_string(),
+                authorization_expires_at_epoch_secs,
+                approval_completed: requires_approval,
+                batch_id: request_id.clone(),
+                step_id: Some(step.id.clone()),
+            };
+            let task = state
+                .hold_coordinator
+                .accept(
+                    state,
+                    crate::tasks::CreateTaskParams {
+                        capability_id: step.capability_id.clone(),
+                        server_id: server.clone(),
+                        args: interpolated_args.clone(),
+                        request_id: request_id.clone(),
+                        context: context.clone(),
+                        idempotency_key: request_id
+                            .as_ref()
+                            .map(|batch_id| format!("batch:{batch_id}:step:{}", step.id)),
+                        initial_status: crate::tasks::TaskStatus::Working,
+                        status_message: Some(
+                            "Waiting for the batch emission release deadline".to_string(),
+                        ),
+                        input_requests: None,
+                        ttl_ms: None,
+                        poll_interval_ms: Some(500),
+                    },
+                    emission,
+                )
+                .await;
+            let task = match task {
+                Ok(task) => task,
+                Err(error) => {
+                    results.push(BatchStepResult {
+                        id: step.id.clone(),
+                        capability_id: step.capability_id.clone(),
+                        ok: false,
+                        data: None,
+                        error: Some(format!("Could not persist held emission: {error}")),
+                        duration_us: step_start.elapsed().as_micros() as u64,
+                    });
+                    overall_ok = false;
+                    if !step.continue_on_error {
+                        break;
+                    }
+                    continue;
+                }
+            };
+            let remaining_ms =
+                DEFAULT_BATCH_TIMEOUT_MS.saturating_sub(start_all.elapsed().as_millis() as u64);
+            let terminal = state
+                .hold_coordinator
+                .wait_for_terminal(state, &task.task_id, Duration::from_millis(remaining_ms))
+                .await;
+            let Some(terminal) = terminal else {
+                continue;
+            };
+            if terminal.status == crate::tasks::TaskStatus::Completed {
+                let value = terminal.result.unwrap_or(Value::Null);
+                state.circuit_breakers.record_success(&server).await;
+                let sanitized_args =
+                    crate::http_v1::helpers::redact_value(interpolated_args.clone(), &redact_keys);
+                let sanitized_response =
+                    crate::http_v1::helpers::redact_value(value.clone(), &redact_keys);
+                state.audit_handle.send(crate::audit::RawAuditEvent {
+                    event_type: crate::audit::AuditEventType::ToolExecution,
+                    trace_id: trace_id.clone(),
+                    request_id: request_id.clone(),
+                    actor_id: context.as_ref().and_then(|item| item.actor_id.clone()),
+                    work_item_id: context.as_ref().and_then(|item| item.work_item_id.clone()),
+                    client_ip: None,
+                    server_id: Some(server.clone()),
+                    capability_id: Some(step.capability_id.clone()),
+                    resource_uri: None,
+                    sanitized_args: Some(sanitized_args),
+                    sanitized_response: Some(
+                        serde_json::json!({"taskId": task.task_id, "result": sanitized_response}),
+                    ),
+                    execution_latency_us: Some(step_start.elapsed().as_micros() as u64),
+                    status: crate::audit::AuditEventStatus::Success,
+                    error_code: None,
+                    error_message: None,
+                    operator_id: None,
+                    approval_ticket_id: None,
+                    idempotency_key: request_id
+                        .as_ref()
+                        .map(|batch_id| format!("batch:{batch_id}:step:{}", step.id)),
+                    is_replay: Some(false),
+                });
+                step_outputs.insert(step.id.clone(), value.clone());
+                results.push(BatchStepResult {
+                    id: step.id.clone(),
+                    capability_id: step.capability_id.clone(),
+                    ok: true,
+                    data: Some(value),
+                    error: None,
+                    duration_us: step_start.elapsed().as_micros() as u64,
+                });
+                continue;
+            }
+            if !matches!(
+                terminal.status,
+                crate::tasks::TaskStatus::Failed | crate::tasks::TaskStatus::Cancelled
+            ) {
+                let cancellation = state
+                    .hold_coordinator
+                    .cancel(
+                        state,
+                        &task.task_id,
+                        Some("Batch execution budget expired".to_string()),
+                    )
+                    .await;
+                let message = match cancellation {
+                    Ok(
+                        crate::tasks::EmissionCancelResult::Cancelled
+                        | crate::tasks::EmissionCancelResult::AlreadyCancelled,
+                    ) => "Batch budget expired; held emission was cancelled before dispatch"
+                        .to_string(),
+                    _ => {
+                        "Batch budget expired after dispatch began; emission outcome may be pending"
+                            .to_string()
+                    }
+                };
+                results.push(BatchStepResult {
+                    id: step.id.clone(),
+                    capability_id: step.capability_id.clone(),
+                    ok: false,
+                    data: None,
+                    error: Some(message),
+                    duration_us: step_start.elapsed().as_micros() as u64,
+                });
+            } else {
+                results.push(BatchStepResult {
+                    id: step.id.clone(),
+                    capability_id: step.capability_id.clone(),
+                    ok: false,
+                    data: None,
+                    error: terminal.status_message,
+                    duration_us: step_start.elapsed().as_micros() as u64,
+                });
+            }
             overall_ok = false;
             if !step.continue_on_error {
                 break;

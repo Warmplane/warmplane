@@ -100,37 +100,15 @@ Each stage is self-contained, testable via `cargo test`, and maintains 100% adhe
 
 ### Stage 1: Delayable Hold-Window Engine ("Withholding Emissions")
 
-**Goal:** Eliminate blocking approval prompts for outbound emissions (emails, webhooks, social posts) by holding execution in a short cancellation window before crossing the system boundary.
+**Goal:** Persist outbound emissions in a shared cancellation window before submitting them to an upstream server. Existing `requireApproval` policy remains authoritative and resolves first; the hold begins with the approved arguments.
 
-* **Config & Policy Wiring (`src/config.rs`, `src/policy.rs`):**
-* Add `ReversibilityConfig` to `AliasTarget` and per-profile policy rules (`holdWindowSecs: u64`).
-
-
-* Update `compute_effective_policy` so capabilities marked `delayable` bypass the blocking `requireApproval` gate and route into the Hold Queue instead.
-
-
-
-
-* **Hold-Window State Machine (`src/tasks.rs`, `src/engine/mod.rs`):**
-* Extend `TaskStatus` (or add a sub-status on `TaskStatus::Working`) with `PendingEmission { release_at_ms: u64 }`.
-
-
-* When `call_capability` intercepts a `delayable` tool, spawn a Tokio timer gated by a `CancellationToken`.
-
-
-* If the caller passed `async_task: true` (or `Prefer: respond-async`), immediately return `202 Accepted` with the SEP-2663 task handle and countdown metadata. If synchronous, hold the call for `holdWindowSecs` (if under `toolTimeoutMs`) or return a structured receipt indicating the emission is queued for release in $N$ seconds.
-
-
-* If `cancel_task` (`POST /v1/tasks/:id/cancel` or `POST /v1/operations/:id/cancel`) is invoked before `release_at_ms`, abort the timer, drop the upstream call, transition the task to `Cancelled`, and append `AuditEventType::EmissionCancelled` to the WORM audit log.
-
-
-* If the timer expires uncancelled, dispatch the payload to the upstream MCP worker and transition to `Completed` or `Failed`.
-
-
-
-
-* **Stage 1 Verification:**
-* Add integration tests in `tests/tasks_tests.rs` verifying that a `delayable` capability with `holdWindowSecs: 2` is never received by the mock upstream server if cancelled at $t = 500\text{ms}$, and is delivered exactly once if left uncancelled.
+* **Configuration and effective policy (`src/config.rs`, `src/daemon/policy.rs`):** support `delayable` aliases, profile/global `holdWindowSecs`, validation on load/reload/API update, canonical alias propagation, and conflict detection. Resolve duration as profile override → alias value → global default → 30 seconds. A duration setting does not classify a capability as delayable.
+* **Shared coordinator and task receipts (`src/emissions.rs`, `src/tasks.rs`, `src/daemon/state.rs`):** route REST, embedded, MCP stdio/SSE, and batch calls through one coordinator. Keep SEP-2663 task statuses unchanged; expose `phase`, `releaseAtMs`, `cancellable`, and `requestId` on receipts. Persist approved arguments, canonical server/tool mapping, request/context and idempotency correlation, and authorization provenance. Never persist bearer credentials.
+* **Atomic transitions and recovery (`src/storage.rs`, daemon startup/shutdown):** persist acceptance before returning, and persist the dispatch claim before enqueueing `CallTool`. Use private temporary files, file sync, atomic rename, and directory sync. Serialize cancellation and dispatch claims through one gate. Resume future and overdue pending holds only after current policy, role, profile, capability mapping, and server checks. Fail recovered dispatching tasks as `EMISSION_OUTCOME_UNKNOWN`; never resend them. Keep pending holds in memory when persistence is disabled.
+* **Transport behavior and idempotency:** async calls return task receipts. Synchronous calls wait when `holdWindowMs < toolTimeoutMs`; at equality they return a receipt. Dropped connections do not cancel accepted work. Route task, MCP task, and operation cancellation through the coordinator; repeated emission cancellation is idempotent, while post-claim cancellation returns a too-late conflict. Deduplicated calls reuse the original task and deadline.
+* **Batch behavior:** execute each held step through the coordinator and await its result before resolving later references. Include approval, hold, and execution in the 60-second budget; cancel on budget expiry if dispatch is still pending. Persist batch/step correlation and recover only the current emission, never the entire batch continuation.
+* **Audit and documentation:** add `EmissionHeld` and `EmissionCancelled` filters, redact held and released payloads, and correlate release `ToolExecution` events with task IDs. Update user/integrator guides, Warmplane skill, schema, OpenAPI, whitepaper, and this plan.
+* **Verification:** cover cancellation at 500 ms of a two-second hold (zero upstream submissions), uncancelled exactly-once submission, approval and modified arguments, policy/profile/alias restrictions, cancellation races, all entry points, idempotency, restart recovery, persistence failure and permissions, batch budgets, and audit redaction/hash-chain integrity. Run repository-required Rust and UI checks.
 
 
 

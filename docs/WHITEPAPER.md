@@ -141,6 +141,7 @@ Warmplane consists of five major components:
    - Enforces allow/deny patterns across capability types.
    - Evaluates Human-in-the-Loop (HITL) approval rules (`requireApproval`) and manages suspension states with crash-safe atomic disk persistence (`AtomicFile`), auto-expiring timeouts across daemon restarts.
    - Applies payload redaction keys in logs and trace spans.
+   - Holds delayable emissions in a shared durable task coordinator after required approval. Cancellation and durable dispatch claim share one transition gate; pending emissions resume after authorization revalidation, while interrupted dispatches fail as `EMISSION_OUTCOME_UNKNOWN` and are never automatically resent. Batch execution waits for held step results within its existing budget.
    - Executes declared reversible and compensable contracts with policy-checked pre-state reads, SHA-256 content-addressed snapshot artifacts, and an atomically persisted undo ledger. Compensable invocation limits are scoped by tenant, profile, and capability and escalate through HITL.
    - Standardizes response envelopes with **Request Context** (`operation_id`, `actor_id`, `grant_id`, `work_item_id`) and **Retry Governance** (`safe|unsafe|idempotent` classification).
    - In-flight **Context Distillation & Truncation** (`_jsonpath`, `_limit_lines`, `_truncate_bytes`) reducing agent context token consumption.

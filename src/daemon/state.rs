@@ -1,5 +1,4 @@
-// Rust guideline compliant 2026-08-15
-
+// Rust guideline compliant 2026-11-16
 //! Shared daemon application state and builder implementations (`M-INIT-BUILDER`).
 
 use std::{collections::HashMap, sync::Arc};
@@ -73,6 +72,8 @@ pub struct AppState {
     pub approval_registry: crate::approvals::ApprovalRegistry,
     /// SEP-2663 task management registry.
     pub task_registry: crate::tasks::TaskRegistry,
+    /// Shared coordinator for durable delayable emission holds.
+    pub hold_coordinator: crate::emissions::HoldCoordinator,
     /// Persistent store for content-addressed pre-state snapshots, when enabled.
     pub snapshot_store: Option<crate::undo::SnapshotStore>,
     /// Persistent ledger of armed inverse actions, when state persistence is enabled.
@@ -139,6 +140,7 @@ pub struct AppStateBuilder {
     oauth_registry: Option<crate::oauth2::OAuthRegistry>,
     approval_registry: Option<crate::approvals::ApprovalRegistry>,
     task_registry: Option<crate::tasks::TaskRegistry>,
+    hold_coordinator: Option<crate::emissions::HoldCoordinator>,
     snapshot_store: Option<crate::undo::SnapshotStore>,
     undo_ledger: Option<crate::undo::UndoLedgerStore>,
     sampling_registry: Option<crate::sampling::SamplingRegistry>,
@@ -328,6 +330,12 @@ impl AppStateBuilder {
         self
     }
 
+    /// Sets the shared delayable emission coordinator.
+    pub fn hold_coordinator(mut self, coordinator: crate::emissions::HoldCoordinator) -> Self {
+        self.hold_coordinator = Some(coordinator);
+        self
+    }
+
     /// Sets the content-addressed snapshot store.
     pub fn snapshot_store(mut self, store: crate::undo::SnapshotStore) -> Self {
         self.snapshot_store = Some(store);
@@ -447,6 +455,7 @@ impl AppStateBuilder {
             oauth_registry: self.oauth_registry.unwrap_or_default(),
             approval_registry: self.approval_registry.unwrap_or_default(),
             task_registry: self.task_registry.unwrap_or_default(),
+            hold_coordinator: self.hold_coordinator.unwrap_or_default(),
             snapshot_store: self.snapshot_store,
             undo_ledger: self.undo_ledger,
             sampling_registry: self.sampling_registry.unwrap_or_default(),

@@ -1,5 +1,4 @@
-// Rust guideline compliant 2026-08-27
-
+// Rust guideline compliant 2026-11-16
 //! HTTP v1 API endpoints for managing SEP-2663 Tasks (`M-CANONICAL-DOCS`).
 //!
 //! Exposes REST endpoints for querying task status, submitting input responses,
@@ -42,9 +41,35 @@ pub struct ListTasksResponse {
 }
 
 /// Handles `GET /v1/tasks` - lists all known tasks.
-pub async fn handle_list_tasks(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn handle_list_tasks(
+    State(state): State<AppState>,
+    req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
+    prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
+) -> impl IntoResponse {
+    let tenant_id = req_ext
+        .0
+        .as_ref()
+        .map(|context| context.tenant_id.as_str())
+        .unwrap_or("default");
+    let role = req_ext
+        .0
+        .as_ref()
+        .map(|context| context.role.as_str())
+        .unwrap_or_else(|| state.rbac_engine.default_role());
+    let profile_id = prof_ext
+        .as_ref()
+        .and_then(|extension| extension.0.profile_id.as_deref());
     let records = state.task_registry.list_tasks().await;
-    let responses: Vec<TaskResponse> = records.iter().map(TaskResponse::from).collect();
+    let mut responses = Vec::new();
+    for record in &records {
+        if state
+            .hold_coordinator
+            .can_access_task(&state, record, tenant_id, role, profile_id)
+            .await
+        {
+            responses.push(TaskResponse::from(record));
+        }
+    }
     let total = responses.len();
 
     (
@@ -61,8 +86,30 @@ pub async fn handle_list_tasks(State(state): State<AppState>) -> impl IntoRespon
 pub async fn handle_get_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
+    prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
 ) -> impl IntoResponse {
     if let Some(record) = state.task_registry.get_task(&id).await {
+        let tenant_id = req_ext
+            .0
+            .as_ref()
+            .map(|context| context.tenant_id.as_str())
+            .unwrap_or("default");
+        let role = req_ext
+            .0
+            .as_ref()
+            .map(|context| context.role.as_str())
+            .unwrap_or_else(|| state.rbac_engine.default_role());
+        let profile_id = prof_ext
+            .as_ref()
+            .and_then(|extension| extension.0.profile_id.as_deref());
+        if !state
+            .hold_coordinator
+            .can_access_task(&state, &record, tenant_id, role, profile_id)
+            .await
+        {
+            return (StatusCode::NOT_FOUND, Json(json!({"ok": false, "error": {"code": "TASK_NOT_FOUND", "message": format!("Task '{}' was not found", id)}}))).into_response();
+        }
         let resp = TaskResponse::from(&record);
         (
             StatusCode::OK,
@@ -187,9 +234,62 @@ pub async fn handle_update_task(
 pub async fn handle_cancel_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
+    prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
     Json(payload): Json<CancelTaskRequest>,
 ) -> impl IntoResponse {
     let task_opt = state.task_registry.get_task(&id).await;
+    if let Some(task) = task_opt.as_ref() {
+        let tenant_id = req_ext
+            .0
+            .as_ref()
+            .map(|context| context.tenant_id.as_str())
+            .unwrap_or("default");
+        let role = req_ext
+            .0
+            .as_ref()
+            .map(|context| context.role.as_str())
+            .unwrap_or_else(|| state.rbac_engine.default_role());
+        let profile_id = prof_ext
+            .as_ref()
+            .and_then(|extension| extension.0.profile_id.as_deref());
+        if !state
+            .hold_coordinator
+            .can_access_task(&state, task, tenant_id, role, profile_id)
+            .await
+        {
+            return (StatusCode::NOT_FOUND, Json(json!({"ok": false, "error": {"code": "TASK_NOT_FOUND", "message": format!("Task '{}' was not found", id)}}))).into_response();
+        }
+    }
+    match state
+        .hold_coordinator
+        .cancel(&state, &id, payload.reason.clone())
+        .await
+    {
+        Ok(crate::tasks::EmissionCancelResult::Cancelled)
+        | Ok(crate::tasks::EmissionCancelResult::AlreadyCancelled) => {
+            return (
+                StatusCode::OK,
+                Json(json!({"ok": true, "resultType": "complete", "message": format!("Task '{}' cancelled", id)})),
+            )
+                .into_response();
+        }
+        Ok(crate::tasks::EmissionCancelResult::TooLate) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({"ok": false, "error": {"code": "EMISSION_DISPATCHING", "message": "Emission dispatch has already started and may have reached the upstream server"}})),
+            )
+                .into_response();
+        }
+        Ok(crate::tasks::EmissionCancelResult::NotEmission) => {}
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"ok": false, "error": {"code": "TASK_CANCEL_FAILED", "message": error.to_string()}})),
+            )
+                .into_response();
+        }
+    }
     match state.task_registry.cancel_task(&id, payload.reason.clone()).await {
         Ok(true) => {
             if let Some(task) = task_opt {

@@ -1,5 +1,4 @@
-// Rust guideline compliant 2026-08-18
-
+// Rust guideline compliant 2026-11-16
 //! Atomic filesystem storage engine for persistent application state.
 //!
 //! Provides thread-safe, crash-safe atomic JSON file persistence using temporary file
@@ -9,7 +8,7 @@ use anyhow::{Context, Result};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     fs,
-    io::ErrorKind,
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
 };
 use tracing::debug;
@@ -118,26 +117,64 @@ where
             .path
             .with_extension(format!("tmp.{}.{}", std::process::id(), nonce));
 
-        fs::write(&tmp_path, format!("{}\n", json_bytes)).with_context(|| {
+        let filename = self.path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+        let private_file = filename.contains("oauth")
+            || filename.contains("secret")
+            || filename.contains("token")
+            || filename.contains("undo")
+            || filename.contains("artifact")
+            || filename.contains("task");
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if private_file {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut tmp_file = options.open(&tmp_path).with_context(|| {
             format!(
-                "Failed to write temporary state file at {}",
+                "Failed to create temporary state file at {}",
                 tmp_path.display()
             )
         })?;
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let filename = self.path.file_name().and_then(|f| f.to_str()).unwrap_or("");
-            if filename.contains("oauth")
-                || filename.contains("secret")
-                || filename.contains("token")
-                || filename.contains("undo")
-                || filename.contains("artifact")
-            {
-                let _ = fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600));
+        #[cfg(not(unix))]
+        let _ = private_file;
+        let write_result = (|| -> Result<()> {
+            #[cfg(unix)]
+            if private_file {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600)).with_context(
+                    || {
+                        format!(
+                            "Failed to set private permissions on {}",
+                            tmp_path.display()
+                        )
+                    },
+                )?;
             }
+            tmp_file
+                .write_all(format!("{}\n", json_bytes).as_bytes())
+                .with_context(|| {
+                    format!(
+                        "Failed to write temporary state file at {}",
+                        tmp_path.display()
+                    )
+                })?;
+            tmp_file.sync_all().with_context(|| {
+                format!(
+                    "Failed to sync temporary state file at {}",
+                    tmp_path.display()
+                )
+            })?;
+            Ok(())
+        })();
+        if let Err(error) = write_result {
+            drop(tmp_file);
+            let _ = fs::remove_file(&tmp_path);
+            return Err(error);
         }
+        drop(tmp_file);
 
         fs::rename(&tmp_path, &self.path).with_context(|| {
             // Attempt cleanup of temp file if rename fails
@@ -148,6 +185,17 @@ where
                 tmp_path.display()
             )
         })?;
+
+        if let Some(parent) = self
+            .path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            #[cfg(unix)]
+            fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .with_context(|| format!("Failed to sync state directory {}", parent.display()))?;
+        }
 
         debug!(path = %self.path.display(), "atomically saved persistent state");
         Ok(())
@@ -212,7 +260,14 @@ impl StateDirectory {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = fs::set_permissions(&self.base_dir, fs::Permissions::from_mode(0o700));
+            fs::set_permissions(&self.base_dir, fs::Permissions::from_mode(0o700)).with_context(
+                || {
+                    format!(
+                        "Failed to set private permissions on state directory {}",
+                        self.base_dir.display()
+                    )
+                },
+            )?;
         }
 
         Ok(())
@@ -319,6 +374,15 @@ mod tests {
         assert!(!state_dir_path.exists());
         state_dir.ensure_exists().unwrap();
         assert!(state_dir_path.exists());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&state_dir_path).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
 
         assert_eq!(
             state_dir.approvals_file(),

@@ -1,5 +1,4 @@
-// Rust guideline compliant 2026-09-13
-
+// Rust guideline compliant 2026-11-16
 //! MCP server facade interface exposing compact tools/resources/prompts endpoints.
 //!
 //! Provides two server transports:
@@ -447,6 +446,24 @@ impl ServerHandler for FacadeMcpServer {
                     ));
                 };
                 if let Some(record) = self.state.task_registry.get_task(task_id).await {
+                    if !self
+                        .state
+                        .hold_coordinator
+                        .can_access_task(
+                            &self.state,
+                            &record,
+                            "default",
+                            self.state.rbac_engine.default_role(),
+                            self.profile.as_deref(),
+                        )
+                        .await
+                    {
+                        return Ok(CallToolResponse::Complete(
+                            CallToolResult::structured_error(invalid_args(
+                                "Task is not accessible to this profile",
+                            )),
+                        ));
+                    }
                     let resp = crate::tasks::TaskResponse::from(&record);
                     Ok(json!({
                         "ok": true,
@@ -524,19 +541,67 @@ impl ServerHandler for FacadeMcpServer {
                     .and_then(Value::as_str)
                     .map(ToString::to_string);
 
-                match self.state.task_registry.cancel_task(task_id, reason).await {
-                    Ok(true) => Ok(json!({
+                if let Some(record) = self.state.task_registry.get_task(task_id).await {
+                    if !self
+                        .state
+                        .hold_coordinator
+                        .can_access_task(
+                            &self.state,
+                            &record,
+                            "default",
+                            self.state.rbac_engine.default_role(),
+                            self.profile.as_deref(),
+                        )
+                        .await
+                    {
+                        return Ok(CallToolResponse::Complete(
+                            CallToolResult::structured_error(invalid_args("Task was not found")),
+                        ));
+                    }
+                }
+
+                match self
+                    .state
+                    .hold_coordinator
+                    .cancel(&self.state, task_id, reason.clone())
+                    .await
+                {
+                    Ok(crate::tasks::EmissionCancelResult::Cancelled)
+                    | Ok(crate::tasks::EmissionCancelResult::AlreadyCancelled) => Ok(json!({
                         "ok": true,
                         "resultType": "complete",
                         "message": format!("Task '{}' cancelled", task_id),
                     })),
-                    Ok(false) => Ok(json!({
+                    Ok(crate::tasks::EmissionCancelResult::TooLate) => Ok(json!({
                         "ok": false,
                         "error": {
-                            "code": "TASK_NOT_CANCELLABLE",
-                            "message": format!("Task '{}' is already completed, cancelled, or not found", task_id),
+                            "code": "EMISSION_DISPATCHING",
+                            "message": "Emission dispatch has already started and may have reached the upstream server",
                         }
                     })),
+                    Ok(crate::tasks::EmissionCancelResult::NotEmission) => {
+                        match self.state.task_registry.cancel_task(task_id, reason).await {
+                            Ok(true) => Ok(json!({
+                                "ok": true,
+                                "resultType": "complete",
+                                "message": format!("Task '{}' cancelled", task_id),
+                            })),
+                            Ok(false) => Ok(json!({
+                                "ok": false,
+                                "error": {
+                                    "code": "TASK_NOT_CANCELLABLE",
+                                    "message": format!("Task '{}' is already completed, cancelled, or not found", task_id),
+                                }
+                            })),
+                            Err(e) => Ok(json!({
+                                "ok": false,
+                                "error": {
+                                    "code": "TASK_CANCEL_FAILED",
+                                    "message": e.to_string(),
+                                }
+                            })),
+                        }
+                    }
                     Err(e) => Ok(json!({
                         "ok": false,
                         "error": {

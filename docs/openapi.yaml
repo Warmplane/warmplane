@@ -104,6 +104,21 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SuccessEnvelope"
+        "202":
+          description: Delayable execution accepted as a task receipt
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, resultType, task]
+                properties:
+                  ok:
+                    type: boolean
+                  resultType:
+                    type: string
+                    const: task
+                  task:
+                    $ref: "#/components/schemas/TaskResponse"
         "400":
           description: Invalid request
           content:
@@ -617,6 +632,7 @@ paths:
           name: event_type
           schema:
             type: string
+            description: Includes emission_held and emission_cancelled for delayable task lifecycle events
         - in: query
           name: limit
           schema:
@@ -673,6 +689,103 @@ paths:
       responses:
         "200":
           description: Streamed audit log file
+  /v1/tasks:
+    get:
+      summary: List tasks visible to the current tenant and profile
+      operationId: listTasks
+      responses:
+        "200":
+          description: Visible task receipts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, total, tasks]
+                properties:
+                  ok:
+                    type: boolean
+                  total:
+                    type: integer
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TaskResponse"
+  /v1/tasks/{id}:
+    get:
+      summary: Get a task receipt
+      operationId: getTask
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task receipt
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  task:
+                    $ref: "#/components/schemas/TaskResponse"
+        "404":
+          description: Task not found or not visible to this caller
+  /v1/tasks/{id}/update:
+    post:
+      summary: Submit input responses to a suspended task
+      operationId: updateTask
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [inputResponses]
+              properties:
+                inputResponses:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "200":
+          description: Task input accepted
+        "400":
+          description: Task is not waiting for input
+  /v1/tasks/{id}/cancel:
+    post:
+      summary: Cancel a task or pending emission
+      operationId: cancelTask
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: [string, "null"]
+      responses:
+        "200":
+          description: Task cancelled; repeated emission cancellation is idempotent
+        "409":
+          description: Emission dispatch was already claimed and may have reached the upstream server
+        "404":
+          description: Task not found or not visible to this caller
   /v1/operations/{id}/cancel:
     post:
       summary: Cancel in-flight operation
@@ -697,6 +810,8 @@ paths:
                     type: string
                   cancelled:
                     type: boolean
+        "409":
+          description: Emission dispatch has already started
 components:
   schemas:
     CapabilityListItem:
@@ -892,6 +1007,10 @@ components:
         request_state:
           type: [string, "null"]
           description: MRTR opaque state string
+        async_task:
+          type: boolean
+          default: false
+          description: Return a task receipt immediately, including for delayable hold windows
     ReadResourceRequest:
       type: object
       required: [resource_id]
@@ -992,6 +1111,46 @@ components:
           type: [string, "null"]
         grant_id:
           type: [string, "null"]
+    TaskResponse:
+      type: object
+      required: [taskId, status, createdAt, lastUpdatedAt, createdAtEpochSecs]
+      properties:
+        taskId:
+          type: string
+        status:
+          type: string
+          enum: [working, input_required, completed, failed, cancelled]
+        statusMessage:
+          type: [string, "null"]
+        capabilityId:
+          type: [string, "null"]
+        serverId:
+          type: [string, "null"]
+        requestId:
+          type: [string, "null"]
+        phase:
+          type: [string, "null"]
+          enum: [pending_emission, dispatching, null]
+        releaseAtMs:
+          type: [integer, "null"]
+          description: Absolute Unix deadline in milliseconds for a held emission
+        cancellable:
+          type: [boolean, "null"]
+          description: Whether cancellation can still prevent upstream submission
+        createdAt:
+          type: string
+        lastUpdatedAt:
+          type: string
+        createdAtEpochSecs:
+          type: integer
+        expiresAtEpochSecs:
+          type: [integer, "null"]
+        ttlMs:
+          type: [integer, "null"]
+        pollIntervalMs:
+          type: [integer, "null"]
+        result: {}
+        error: {}
     RetryMetadata:
       type: object
       required: [classification, upstream_execution_state]

@@ -1,5 +1,4 @@
-// Rust guideline compliant 2026-08-19
-
+// Rust guideline compliant 2026-11-16
 //! Data models and configuration schema for Multi-Tenant Role-Based Access Control (RBAC).
 
 use serde::{Deserialize, Serialize};
@@ -153,6 +152,8 @@ pub struct TenantContext {
     pub actor_id: Option<String>,
     /// Optional grant or token identifier.
     pub grant_id: Option<String>,
+    /// Optional verified Unix expiry time for a JWT-authenticated grant.
+    pub grant_expires_at_epoch_secs: Option<u64>,
     /// Effective policy computed for this role.
     pub effective_policy: crate::daemon::Policy,
 }
@@ -165,6 +166,7 @@ impl TenantContext {
             role: default_role.to_string(),
             actor_id: None,
             grant_id: None,
+            grant_expires_at_epoch_secs: None,
             effective_policy: base_policy.clone(),
         }
     }

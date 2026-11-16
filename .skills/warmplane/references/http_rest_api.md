@@ -19,7 +19,9 @@ Daemon default: `http://127.0.0.1:9090`
 
 ## 3. Human-in-the-Loop & Tasks
 - `GET /v1/approvals` / `POST /v1/approvals/{id}/approve` / `POST /v1/approvals/{id}/reject`
-- `GET /v1/tasks/{id}` / `POST /v1/tasks/{id}/input` (`{"input": "approved"}`)
+- `GET /v1/tasks` / `GET /v1/tasks/{id}` / `POST /v1/tasks/{id}/update` / `POST /v1/tasks/{id}/cancel`
+- Delayable calls may return a task receipt containing `phase`, `releaseAtMs`, and `cancellable`. Cancel with the task endpoint above or `POST /v1/operations/{request_id}/cancel`. Cancellation after dispatch claim returns `409 EMISSION_DISPATCHING`.
+- Hold duration precedence is profile policy, alias `holdWindowSecs`, global policy, then 30 seconds. Required approval resolves first. Pending holds resume after restart and current-policy revalidation; recovered dispatching tasks fail with `EMISSION_OUTCOME_UNKNOWN` and are never resent.
 
 ## 4. Secrets Vault
 - `GET /v1/secrets`

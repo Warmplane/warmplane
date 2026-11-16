@@ -1,5 +1,4 @@
-// Rust guideline compliant 2026-08-27
-
+// Rust guideline compliant 2026-11-16
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, io::ErrorKind, path::PathBuf};
@@ -282,11 +281,12 @@ pub enum ReversibilityClass {
     Irreversible,
 }
 
-/// Resolves a canonical capability's delayable hold duration from policy and alias settings.
+/// Resolves a canonical capability's delayable hold duration from profile policy, alias, and global policy.
 pub fn resolve_hold_window_secs(
     aliases: &HashMap<String, AliasTarget>,
     canonical_target: &str,
-    policy_window_secs: Option<u64>,
+    profile_window_secs: Option<u64>,
+    global_window_secs: Option<u64>,
 ) -> Option<u64> {
     let contract = aliases
         .values()
@@ -296,8 +296,9 @@ pub fn resolve_hold_window_secs(
         return None;
     }
     Some(
-        policy_window_secs
+        profile_window_secs
             .or(contract.hold_window_secs)
+            .or(global_window_secs)
             .unwrap_or(30),
     )
 }
@@ -1299,7 +1300,7 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn delayable_alias_hold_window_uses_policy_then_alias_then_default() {
+    fn delayable_alias_hold_window_uses_global_policy_then_default() {
         let aliases = HashMap::from([(
             "mail.send".to_string(),
             super::AliasTarget::Detailed {
@@ -1318,21 +1319,21 @@ mod tests {
             },
         )]);
         assert_eq!(
-            super::resolve_hold_window_secs(&aliases, "gmail.send", Some(12)),
+            super::resolve_hold_window_secs(&aliases, "gmail.send", None, Some(12)),
             Some(12)
         );
         assert_eq!(
-            super::resolve_hold_window_secs(&aliases, "gmail.send", None),
+            super::resolve_hold_window_secs(&aliases, "gmail.send", None, None),
             Some(30)
         );
         assert_eq!(
-            super::resolve_hold_window_secs(&HashMap::new(), "gmail.send", Some(12)),
+            super::resolve_hold_window_secs(&HashMap::new(), "gmail.send", None, Some(12)),
             None
         );
     }
 
     #[test]
-    fn policy_hold_window_overrides_delayable_alias() {
+    fn alias_hold_window_overrides_global_policy_and_profile_overrides_alias() {
         let aliases = HashMap::from([(
             "mail.send".to_string(),
             super::AliasTarget::Detailed {
@@ -1351,11 +1352,15 @@ mod tests {
             },
         )]);
         assert_eq!(
-            super::resolve_hold_window_secs(&aliases, "gmail.send", Some(12)),
-            Some(12)
+            super::resolve_hold_window_secs(&aliases, "gmail.send", None, Some(12)),
+            Some(7)
         );
         assert_eq!(
-            super::resolve_hold_window_secs(&aliases, "gmail.send", None),
+            super::resolve_hold_window_secs(&aliases, "gmail.send", Some(4), Some(12)),
+            Some(4)
+        );
+        assert_eq!(
+            super::resolve_hold_window_secs(&aliases, "gmail.send", None, None),
             Some(7)
         );
     }

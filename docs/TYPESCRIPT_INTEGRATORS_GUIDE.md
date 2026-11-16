@@ -103,6 +103,18 @@ interface BatchStep {
   continue_on_error?: boolean;
 }
 
+/** Task receipt returned for asynchronous execution and held emissions. */
+interface TaskReceipt {
+  taskId: string;
+  status: "working" | "input_required" | "completed" | "failed" | "cancelled";
+  requestId?: string;
+  phase?: "pending_emission" | "dispatching";
+  releaseAtMs?: number;
+  cancellable?: boolean;
+  result?: unknown;
+  error?: unknown;
+}
+
 /** Context distillation options for limiting tool output. */
 interface DistillOptions {
   /** JSONPath selector (e.g. `$.items[*].name`). */
@@ -410,6 +422,35 @@ const result = await wp.callTool("filesystem.read_file", {
 });
 console.log("Result:", JSON.stringify(result.data, null, 2));
 ```
+
+### Delayable Emissions
+
+For a delayable alias, send `async_task: true` to receive a task receipt without waiting for the hold window. A synchronous request waits only when the configured hold is shorter than `toolTimeoutMs`; otherwise it also returns a task. Duration precedence is profile policy, alias `holdWindowSecs`, global policy, then 30 seconds. Approval runs before the countdown and approved argument edits are preserved.
+
+```typescript
+const response = await fetch("http://127.0.0.1:9090/v1/tools/call", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    capability_id: "mail.send",
+    args: { to: "person@example.com", body: "Hello" },
+    async_task: true,
+  }),
+});
+const body = await response.json();
+const task = body.task as TaskReceipt;
+console.log(task.phase, task.releaseAtMs, task.cancellable);
+
+const cancelled = await fetch(
+  `http://127.0.0.1:9090/v1/tasks/${encodeURIComponent(task.taskId)}/cancel`,
+  { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+);
+if (cancelled.status === 409) {
+  // Dispatch has been claimed; the upstream outcome may be pending.
+}
+```
+
+Task status can be polled with `GET /v1/tasks/{taskId}`. Cancellation can also use `POST /v1/operations/{requestId}/cancel`; it succeeds only before dispatch claim. Pending holds resume after restart and policy/profile revalidation. A task recovered in `dispatching` fails with `EMISSION_OUTCOME_UNKNOWN` and is not resent automatically. Batch steps wait for held results within the shared 60-second batch budget.
 
 ### 3. Context distillation — limit large outputs
 

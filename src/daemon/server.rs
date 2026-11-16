@@ -1,5 +1,4 @@
-// Rust guideline compliant 2026-08-27
-
+// Rust guideline compliant 2026-11-16
 //! Daemon HTTP service initialization, routing, and TCP listener runtime.
 
 use anyhow::Result;
@@ -234,6 +233,8 @@ pub async fn initialize_state(
             configs_guard.insert(server_id.to_string(), srv_cfg.clone());
         }
     }
+
+    state.hold_coordinator.recover(&state).await;
 
     Ok(state)
 }
