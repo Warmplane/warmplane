@@ -450,3 +450,58 @@ async fn embedded_synchronous_call_waits_for_short_hold_then_returns_result() {
     assert_eq!(result.data, Some(json!({"sent": true})));
     assert!(upstream.try_recv().is_err());
 }
+
+#[tokio::test]
+async fn held_and_cancelled_audit_events_are_redacted_and_hash_chained() {
+    let (server_tx, _upstream) = mpsc::channel(8);
+    let mut capability = CapabilityMeta::new(
+        "mail",
+        "send",
+        "Send",
+        "Send a message",
+        json!({"type": "object"}),
+    );
+    capability.reversibility = Some(delayable_contract(30));
+    let policy = warmplane::daemon::Policy::from_config(Some(warmplane::config::PolicyConfig {
+        redact_keys: vec!["body".to_string()],
+        ..Default::default()
+    }));
+    let state = AppState::builder()
+        .servers(HashMap::from([("mail".to_string(), server_tx)]))
+        .capabilities(HashMap::from([("mail.send".to_string(), capability)]))
+        .policy(policy)
+        .build();
+    let coordinator = HoldCoordinator::default();
+    let mut task_params = params(None);
+    task_params.args = json!({"to": "person@example.com", "body": "secret text"});
+    let task = coordinator
+        .accept(&state, task_params, emission(now_ms() + 30_000))
+        .await
+        .unwrap();
+    coordinator
+        .cancel(&state, &task.task_id, Some("operator request".to_string()))
+        .await
+        .unwrap();
+    state.audit_handle.shutdown().await;
+
+    let filter = warmplane::audit::AuditQueryFilter {
+        event_type: Some(warmplane::audit::AuditEventType::EmissionHeld),
+        limit: 10,
+        ..Default::default()
+    };
+    let (events, count) = state.audit_store.query(&filter).await;
+    assert_eq!(count, 1);
+    assert_eq!(
+        events[0].sanitized_args.as_ref().unwrap()["body"],
+        "<redacted>"
+    );
+    assert!(state.audit_store.verify_chain().await.is_valid);
+
+    let filter = warmplane::audit::AuditQueryFilter {
+        event_type: Some(warmplane::audit::AuditEventType::EmissionCancelled),
+        limit: 10,
+        ..Default::default()
+    };
+    let (_, count) = state.audit_store.query(&filter).await;
+    assert_eq!(count, 1);
+}
