@@ -689,19 +689,33 @@ fn handle_alias_command(cmd: AliasCommands) -> Result<()> {
             config,
         } => {
             let mut mcp_config = load_or_default_config(&config)?;
-            let alias_target = if summary.is_some() || description.is_some() || passthrough {
+            let kind_lower = kind.to_lowercase();
+            let reversibility = if matches!(kind_lower.as_str(), "tool" | "capability" | "cap") {
+                mcp_config
+                    .capability_aliases
+                    .get(&alias)
+                    .and_then(crate::config::AliasTarget::reversibility)
+                    .cloned()
+            } else {
+                None
+            };
+            let alias_target = if summary.is_some()
+                || description.is_some()
+                || passthrough
+                || reversibility.is_some()
+            {
                 crate::config::AliasTarget::Detailed {
                     target: target.clone(),
                     summary,
                     description,
                     passthrough,
-                    reversibility: None,
+                    reversibility,
                 }
             } else {
                 crate::config::AliasTarget::Simple(target.clone())
             };
 
-            match kind.to_lowercase().as_str() {
+            match kind_lower.as_str() {
                 "tool" | "capability" | "cap" => {
                     if passthrough {
                         let has_invalid_chars = alias
@@ -1571,6 +1585,36 @@ mod tests {
             .get("git-commit")
             .unwrap()
             .is_passthrough());
+
+        let mut cfg = load_config(&cfg_str).unwrap();
+        if let Some(crate::config::AliasTarget::Detailed { reversibility, .. }) =
+            cfg.capability_aliases.get_mut("git-commit")
+        {
+            *reversibility = Some(crate::config::ReversibilityConfig {
+                class: crate::config::ReversibilityClass::Delayable,
+                hold_window_secs: Some(12),
+                ttl_secs: None,
+                daily_limit: None,
+                pre_snapshot: None,
+                inverse: None,
+            });
+        }
+        crate::config::save_config(&cfg_str, &cfg).unwrap();
+
+        handle_alias_command(AliasCommands::Set {
+            kind: "tool".to_string(),
+            alias: "git-commit".to_string(),
+            target: "github.create_commit_v2".to_string(),
+            summary: None,
+            description: None,
+            passthrough: false,
+            config: cfg_str.clone(),
+        })
+        .unwrap();
+        let cfg = load_config(&cfg_str).unwrap();
+        let updated = cfg.capability_aliases.get("git-commit").unwrap();
+        assert_eq!(updated.target(), "github.create_commit_v2");
+        assert_eq!(updated.reversibility().unwrap().hold_window_secs, Some(12));
 
         handle_alias_command(AliasCommands::Remove {
             kind: "tool".to_string(),

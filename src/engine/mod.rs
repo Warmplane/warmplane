@@ -426,6 +426,9 @@ impl ControlPlaneHandle {
             .filter(|contract| contract.class == crate::config::ReversibilityClass::Compensable)
         {
             if self.state.undo_ledger.is_none() {
+                if let Some(ref key) = idempotency_key {
+                    self.state.idempotency_store.remove(key).await;
+                }
                 return Envelope::failure(
                     trace_id,
                     Some(req_id),
@@ -453,6 +456,9 @@ impl ControlPlaneHandle {
                     Ok(true) => compensable_reserved = true,
                     Ok(false) => requires_approval = true,
                     Err(error) => {
+                        if let Some(ref key) = idempotency_key {
+                            self.state.idempotency_store.remove(key).await;
+                        }
                         return Envelope::failure(
                             trace_id,
                             Some(req_id),
@@ -615,6 +621,9 @@ impl ControlPlaneHandle {
                                         Some("Could not reserve compensable invocation".to_string()),
                                     )
                                     .await;
+                                if let Some(ref key) = idempotency_key_clone {
+                                    handle.state.idempotency_store.remove(key).await;
+                                }
                                 return;
                             }
                         }
@@ -1023,6 +1032,9 @@ impl ControlPlaneHandle {
                 {
                     Ok(true) => {}
                     Ok(false) | Err(_) => {
+                        if let Some(ref key) = idempotency_key {
+                            self.state.idempotency_store.remove(key).await;
+                        }
                         return Envelope::failure(
                             trace_id,
                             Some(req_id),
@@ -1108,6 +1120,9 @@ impl ControlPlaneHandle {
                     | crate::config::ReversibilityClass::Compensable
             ) && self.state.undo_ledger.is_none()
             {
+                if let Some(ref key) = idempotency_key {
+                    self.state.idempotency_store.remove(key).await;
+                }
                 return Envelope::failure(
                     trace_id,
                     Some(req_id),
@@ -1137,6 +1152,9 @@ impl ControlPlaneHandle {
                 {
                     Ok(snapshot) => snapshot,
                     Err(error) => {
+                        if let Some(ref key) = idempotency_key {
+                            self.state.idempotency_store.remove(key).await;
+                        }
                         return Envelope::failure(
                             trace_id,
                             Some(req_id),

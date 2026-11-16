@@ -266,6 +266,10 @@ pub async fn handle_call_capability(
         .filter(|contract| contract.class == crate::config::ReversibilityClass::Compensable)
     {
         if state.undo_ledger.is_none() {
+            state.operation_registry.unregister(&request_id).await;
+            if let Some(ref key) = idempotency_key {
+                state.idempotency_store.remove(key).await;
+            }
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(error_envelope(
@@ -295,6 +299,10 @@ pub async fn handle_call_capability(
                 Ok(true) => compensable_reserved = true,
                 Ok(false) => requires_approval = true,
                 Err(error) => {
+                    state.operation_registry.unregister(&request_id).await;
+                    if let Some(ref key) = idempotency_key {
+                        state.idempotency_store.remove(key).await;
+                    }
                     return (
                         StatusCode::SERVICE_UNAVAILABLE,
                         Json(error_envelope(
@@ -307,7 +315,7 @@ pub async fn handle_call_capability(
                             true,
                         )),
                     )
-                        .into_response()
+                        .into_response();
                 }
             }
         }
@@ -480,6 +488,9 @@ pub async fn handle_call_capability(
                                     serde_json::json!({"code": "COMPENSABLE_LIMIT_STORAGE_FAILED"}),
                                     Some("Could not reserve compensable invocation".to_string()),
                                 ).await;
+                                if let Some(ref key) = idempotency_key_clone {
+                                    state_clone.idempotency_store.remove(key).await;
+                                }
                                 return;
                             }
                         }
@@ -502,6 +513,9 @@ pub async fn handle_call_capability(
                                 Some("Persistent undo storage is unavailable".to_string()),
                             )
                             .await;
+                        if let Some(ref key) = idempotency_key_clone {
+                            state_clone.idempotency_store.remove(key).await;
+                        }
                         return;
                     }
                     if let Some(pre_snapshot) = &contract.pre_snapshot {
@@ -524,6 +538,9 @@ pub async fn handle_call_capability(
                                         Some(error.to_string()),
                                     )
                                     .await;
+                                if let Some(ref key) = idempotency_key_clone {
+                                    state_clone.idempotency_store.remove(key).await;
+                                }
                                 return;
                             }
                         }
@@ -619,6 +636,21 @@ pub async fn handle_call_capability(
                                         Some(error.to_string()),
                                     )
                                     .await;
+                                if let Some(ref key) = idempotency_key_clone {
+                                    let failed_response = crate::http_v1::types::error_envelope(
+                                        trace_id_clone.clone(),
+                                        Some(req_id_clone.clone()),
+                                        Some(req_ctx_clone.clone()),
+                                        retry_base("completed"),
+                                        "UNDO_REGISTRATION_FAILED",
+                                        format!("Forward call succeeded but inverse registration failed: {error}"),
+                                        false,
+                                    );
+                                    state_clone
+                                        .idempotency_store
+                                        .complete(key, failed_response)
+                                        .await;
+                                }
                                 return;
                             }
                         }
@@ -868,6 +900,9 @@ pub async fn handle_call_capability(
             .await
             {
                 state.operation_registry.unregister(&request_id).await;
+                if let Some(ref key) = idempotency_key {
+                    state.idempotency_store.remove(key).await;
+                }
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
                     Json(error_envelope(
@@ -893,6 +928,9 @@ pub async fn handle_call_capability(
         ) && state.undo_ledger.is_none()
         {
             state.operation_registry.unregister(&request_id).await;
+            if let Some(ref key) = idempotency_key {
+                state.idempotency_store.remove(key).await;
+            }
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(error_envelope(
@@ -1101,7 +1139,18 @@ pub async fn handle_call_capability(
                 .await
                 {
                     if let Some(ref key) = idempotency_key {
-                        state.idempotency_store.remove(key).await;
+                        let failed_response = error_envelope(
+                            trace_id.clone(),
+                            Some(request_id.clone()),
+                            Some(req_context.clone()),
+                            retry_base("completed"),
+                            "UNDO_REGISTRATION_FAILED",
+                            format!(
+                                "Forward call succeeded but inverse registration failed: {error}"
+                            ),
+                            false,
+                        );
+                        state.idempotency_store.complete(key, failed_response).await;
                     }
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
