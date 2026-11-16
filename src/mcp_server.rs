@@ -868,6 +868,7 @@ impl FacadeMcpServer {
             request_state,
             profile: self.profile.clone(),
             async_task: false,
+            suppress_undo_registration: false,
         };
 
         let env = self

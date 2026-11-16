@@ -340,6 +340,8 @@ pub struct ExecutionOptions {
     pub profile: Option<String>,
     /// Request asynchronous execution as a SEP-2663 task handle.
     pub async_task: bool,
+    /// Prevents inverse calls from registering another inverse action.
+    pub(crate) suppress_undo_registration: bool,
 }
 
 impl ExecutionOptions {

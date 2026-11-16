@@ -179,6 +179,94 @@ impl UndoLedgerStore {
         self.ledger.lock().await.entries.clone()
     }
 
+    /// Claims an armed, unexpired entry for execution and persists the claim.
+    ///
+    /// The transition is serialized with other ledger operations. A missing, expired, or
+    /// non-armed entry is left unchanged, which makes concurrent retries safe to reject.
+    ///
+    /// # Arguments
+    /// * `undo_id` - Stable identifier of the entry to claim.
+    /// * `now_ms` - Current Unix timestamp in milliseconds.
+    ///
+    /// # Returns
+    /// The entry in `Executing` state when the claim succeeds, or `None` when it is unavailable.
+    ///
+    /// # Errors
+    /// Returns an error if persisting the claim fails; the in-memory status is restored.
+    pub async fn claim(&self, undo_id: &str, now_ms: u64) -> Result<Option<UndoEntry>> {
+        let mut guard = self.ledger.lock().await;
+        let Some(entry) = guard
+            .entries
+            .iter_mut()
+            .find(|entry| entry.undo_id == undo_id)
+        else {
+            return Ok(None);
+        };
+        if entry.status != crate::undo::UndoEntryStatus::Armed || entry.expires_at_ms <= now_ms {
+            return Ok(None);
+        }
+        entry.status = crate::undo::UndoEntryStatus::Executing;
+        let claimed = entry.clone();
+        if let Err(error) = self.storage.save(&guard) {
+            if let Some(entry) = guard
+                .entries
+                .iter_mut()
+                .find(|entry| entry.undo_id == undo_id)
+            {
+                entry.status = crate::undo::UndoEntryStatus::Armed;
+            }
+            return Err(error).context("failed to persist undo claim");
+        }
+        Ok(Some(claimed))
+    }
+
+    /// Persists a terminal status for an executing entry.
+    ///
+    /// Only `Reverted`, `Failed`, and `Expired` are accepted. If persistence fails, the entry
+    /// remains `Executing` so a restart will not automatically redispatch an uncertain inverse.
+    ///
+    /// # Arguments
+    /// * `undo_id` - Stable identifier of the claimed entry.
+    /// * `status` - Terminal outcome to persist.
+    ///
+    /// # Errors
+    /// Returns an error when the entry is missing, not executing, the status is not terminal,
+    /// or the updated ledger cannot be persisted.
+    pub async fn finish(&self, undo_id: &str, status: crate::undo::UndoEntryStatus) -> Result<()> {
+        anyhow::ensure!(
+            matches!(
+                status,
+                crate::undo::UndoEntryStatus::Reverted
+                    | crate::undo::UndoEntryStatus::Failed
+                    | crate::undo::UndoEntryStatus::Expired
+            ),
+            "undo completion status must be terminal"
+        );
+        let mut guard = self.ledger.lock().await;
+        let entry = guard
+            .entries
+            .iter_mut()
+            .find(|entry| entry.undo_id == undo_id)
+            .context("undo entry not found")?;
+        anyhow::ensure!(
+            entry.status == crate::undo::UndoEntryStatus::Executing,
+            "undo entry is not executing"
+        );
+        let previous = entry.status.clone();
+        entry.status = status;
+        if let Err(error) = self.storage.save(&guard) {
+            if let Some(entry) = guard
+                .entries
+                .iter_mut()
+                .find(|entry| entry.undo_id == undo_id)
+            {
+                entry.status = previous;
+            }
+            return Err(error).context("failed to persist undo completion");
+        }
+        Ok(())
+    }
+
     /// Reserves a compensable invocation or reports that operator approval is required.
     pub async fn reserve_compensable(
         &self,
@@ -299,6 +387,7 @@ mod tests {
             undo_id: "undo-test-1".to_string(),
             operation_id: Some("op-1".to_string()),
             work_item_id: None,
+            batch_id: None,
             tenant_id: "tenant-a".to_string(),
             profile_id: Some("coding".to_string()),
             actor_id: Some("actor-a".to_string()),
@@ -327,6 +416,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn undo_claim_and_completion_are_persisted_and_terminal_entries_cannot_reclaim() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("undo_ledger.json");
+        let store = UndoLedgerStore::open(&path).unwrap();
+        let entry = UndoEntry {
+            undo_id: "undo-transition".to_string(),
+            operation_id: None,
+            work_item_id: Some("work-1".to_string()),
+            batch_id: Some("batch-1".to_string()),
+            tenant_id: "tenant-a".to_string(),
+            profile_id: None,
+            actor_id: None,
+            forward_capability: "mock.mutate".to_string(),
+            reversibility_class: "reversible".to_string(),
+            resolved_inverse_capability: "mock.restore".to_string(),
+            resolved_inverse_args: json!({"value": 0}),
+            snapshot_artifact_hash: None,
+            created_at_ms: 100,
+            expires_at_ms: 200,
+            status: UndoEntryStatus::Armed,
+        };
+        store.register(entry).await.unwrap();
+        assert_eq!(
+            store
+                .claim("undo-transition", 150)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            UndoEntryStatus::Executing
+        );
+        let recovered = UndoLedgerStore::open(&path).unwrap();
+        assert_eq!(
+            recovered.entries().await[0].status,
+            UndoEntryStatus::Executing
+        );
+        assert!(recovered
+            .claim("undo-transition", 150)
+            .await
+            .unwrap()
+            .is_none());
+        recovered
+            .finish("undo-transition", UndoEntryStatus::Reverted)
+            .await
+            .unwrap();
+        assert!(recovered
+            .claim("undo-transition", 150)
+            .await
+            .unwrap()
+            .is_none());
+        let reopened = UndoLedgerStore::open(path).unwrap();
+        assert_eq!(
+            reopened.entries().await[0].status,
+            UndoEntryStatus::Reverted
+        );
+    }
+
+    #[tokio::test]
     async fn undo_ledger_rejects_duplicate_ids_without_mutating_the_ledger() {
         let directory = tempdir().unwrap();
         let store = UndoLedgerStore::open(directory.path().join("undo_ledger.json")).unwrap();
@@ -334,6 +481,7 @@ mod tests {
             undo_id: "undo-duplicate".to_string(),
             operation_id: None,
             work_item_id: None,
+            batch_id: None,
             tenant_id: "tenant-a".to_string(),
             profile_id: None,
             actor_id: None,
@@ -362,6 +510,7 @@ mod tests {
             undo_id: "undo-duplicate-on-disk".to_string(),
             operation_id: None,
             work_item_id: None,
+            batch_id: None,
             tenant_id: "tenant-a".to_string(),
             profile_id: None,
             actor_id: None,

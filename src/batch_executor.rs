@@ -34,6 +34,9 @@ pub struct BatchCallRequest {
     /// Optional request context envelope.
     #[serde(default)]
     pub context: Option<crate::context::RequestContext>,
+    /// Automatically unwind successful reversible steps when the batch fails.
+    #[serde(default, rename = "autoRollbackOnFailure")]
+    pub auto_rollback_on_failure: bool,
 }
 
 /// Result of an individual step within a batch execution.
@@ -66,6 +69,9 @@ pub struct BatchCallResponse {
     pub results: Vec<BatchStepResult>,
     /// Total duration for the entire batch in microseconds.
     pub total_duration_us: u64,
+    /// Per-entry outcomes when automatic rollback was requested and run.
+    #[serde(default)]
+    pub rollback_results: Vec<crate::undo::RollbackResult>,
 }
 
 /// Maximum number of sequential steps permitted in a single batch request.
@@ -88,6 +94,11 @@ pub struct BatchExecutionScope<'a> {
     pub authorization_expires_at_epoch_secs: Option<u64>,
     /// Token cancelled when the batch operation is explicitly cancelled.
     pub cancellation_token: CancellationToken,
+}
+
+struct BatchExecutionOptions {
+    auto_rollback_on_failure: bool,
+    batch_timeout_ms: u64,
 }
 
 /// Executes an ordered sequence of tool execution steps, interpolating prior step outputs.
@@ -139,6 +150,38 @@ pub async fn execute_batch_for_tenant(
     context: Option<crate::context::RequestContext>,
     scope: BatchExecutionScope<'_>,
 ) -> BatchCallResponse {
+    execute_batch_for_tenant_with_rollback(
+        state, steps, trace_id, request_id, context, scope, false,
+    )
+    .await
+}
+
+/// Executes a batch with optional transactional rollback after the first failed step.
+///
+/// When enabled, execution stops at the first failed step and attempts registered inverses for
+/// prior successful steps. Existing callers can use `execute_batch_for_tenant` to preserve the
+/// default behavior without automatic rollback.
+///
+/// # Arguments
+/// * `state` - Active daemon state.
+/// * `steps` - Ordered batch steps.
+/// * `trace_id` - Trace identifier shared by the batch and rollback audit events.
+/// * `request_id` - Batch identity used to select its undo entries.
+/// * `context` - Caller and work-item metadata.
+/// * `scope` - Tenant, policy, profile, and authorization context.
+/// * `auto_rollback_on_failure` - Enables rollback after the first failed step.
+///
+/// # Returns
+/// Step results and, when applicable, per-inverse rollback outcomes.
+pub async fn execute_batch_for_tenant_with_rollback(
+    state: &AppState,
+    steps: Vec<BatchStep>,
+    trace_id: String,
+    request_id: Option<String>,
+    context: Option<crate::context::RequestContext>,
+    scope: BatchExecutionScope<'_>,
+    auto_rollback_on_failure: bool,
+) -> BatchCallResponse {
     execute_batch_for_tenant_with_budget(
         state,
         steps,
@@ -146,7 +189,10 @@ pub async fn execute_batch_for_tenant(
         request_id,
         context,
         scope,
-        DEFAULT_BATCH_TIMEOUT_MS,
+        BatchExecutionOptions {
+            auto_rollback_on_failure,
+            batch_timeout_ms: DEFAULT_BATCH_TIMEOUT_MS,
+        },
     )
     .await
 }
@@ -158,8 +204,12 @@ async fn execute_batch_for_tenant_with_budget(
     request_id: Option<String>,
     context: Option<crate::context::RequestContext>,
     scope: BatchExecutionScope<'_>,
-    batch_timeout_ms: u64,
+    options: BatchExecutionOptions,
 ) -> BatchCallResponse {
+    let BatchExecutionOptions {
+        auto_rollback_on_failure,
+        batch_timeout_ms,
+    } = options;
     let BatchExecutionScope {
         policy,
         profile: prof_ctx,
@@ -188,6 +238,7 @@ async fn execute_batch_for_tenant_with_budget(
                 duration_us: 0,
             }],
             total_duration_us: 0,
+            rollback_results: Vec::new(),
         };
     }
 
@@ -244,7 +295,7 @@ async fn execute_batch_for_tenant_with_budget(
                 duration_us: step_start.elapsed().as_micros() as u64,
             });
             overall_ok = false;
-            if !step.continue_on_error {
+            if auto_rollback_on_failure || !step.continue_on_error {
                 break;
             }
             continue;
@@ -263,7 +314,7 @@ async fn execute_batch_for_tenant_with_budget(
                     duration_us: step_start.elapsed().as_micros() as u64,
                 });
                 overall_ok = false;
-                if !step.continue_on_error {
+                if auto_rollback_on_failure || !step.continue_on_error {
                     break;
                 }
                 continue;
@@ -282,7 +333,7 @@ async fn execute_batch_for_tenant_with_budget(
                     duration_us: step_start.elapsed().as_micros() as u64,
                 });
                 overall_ok = false;
-                if !step.continue_on_error {
+                if auto_rollback_on_failure || !step.continue_on_error {
                     break;
                 }
                 continue;
@@ -313,7 +364,7 @@ async fn execute_batch_for_tenant_with_budget(
                     duration_us: step_start.elapsed().as_micros() as u64,
                 });
                 overall_ok = false;
-                if !step.continue_on_error {
+                if auto_rollback_on_failure || !step.continue_on_error {
                     break;
                 }
                 continue;
@@ -341,7 +392,7 @@ async fn execute_batch_for_tenant_with_budget(
                         duration_us: step_start.elapsed().as_micros() as u64,
                     });
                     overall_ok = false;
-                    if !step.continue_on_error {
+                    if auto_rollback_on_failure || !step.continue_on_error {
                         break;
                     }
                     continue;
@@ -435,7 +486,7 @@ async fn execute_batch_for_tenant_with_budget(
                         duration_us: step_start.elapsed().as_micros() as u64,
                     });
                     overall_ok = false;
-                    if !step.continue_on_error {
+                    if auto_rollback_on_failure || !step.continue_on_error {
                         break;
                     }
                     continue;
@@ -458,7 +509,7 @@ async fn execute_batch_for_tenant_with_budget(
                         duration_us: step_start.elapsed().as_micros() as u64,
                     });
                     overall_ok = false;
-                    if !step.continue_on_error {
+                    if auto_rollback_on_failure || !step.continue_on_error {
                         break;
                     }
                     continue;
@@ -491,7 +542,7 @@ async fn execute_batch_for_tenant_with_budget(
                         duration_us: step_start.elapsed().as_micros() as u64,
                     });
                     overall_ok = false;
-                    if !step.continue_on_error {
+                    if auto_rollback_on_failure || !step.continue_on_error {
                         break;
                     }
                     continue;
@@ -510,7 +561,7 @@ async fn execute_batch_for_tenant_with_budget(
                 duration_us: step_start.elapsed().as_micros() as u64,
             });
             overall_ok = false;
-            if !step.continue_on_error {
+            if auto_rollback_on_failure || !step.continue_on_error {
                 break;
             }
             continue;
@@ -541,7 +592,7 @@ async fn execute_batch_for_tenant_with_budget(
                         duration_us: step_start.elapsed().as_micros() as u64,
                     });
                     overall_ok = false;
-                    if !step.continue_on_error {
+                    if auto_rollback_on_failure || !step.continue_on_error {
                         break;
                     }
                     continue;
@@ -596,7 +647,7 @@ async fn execute_batch_for_tenant_with_budget(
                         duration_us: step_start.elapsed().as_micros() as u64,
                     });
                     overall_ok = false;
-                    if !step.continue_on_error {
+                    if auto_rollback_on_failure || !step.continue_on_error {
                         break;
                     }
                     continue;
@@ -749,7 +800,7 @@ async fn execute_batch_for_tenant_with_budget(
                     duration_us: step_start.elapsed().as_micros() as u64,
                 });
                 overall_ok = false;
-                if !step.continue_on_error {
+                if auto_rollback_on_failure || !step.continue_on_error {
                     break;
                 }
                 continue;
@@ -775,7 +826,7 @@ async fn execute_batch_for_tenant_with_budget(
                             duration_us: step_start.elapsed().as_micros() as u64,
                         });
                         overall_ok = false;
-                        if !step.continue_on_error {
+                        if auto_rollback_on_failure || !step.continue_on_error {
                             break;
                         }
                         continue;
@@ -802,7 +853,7 @@ async fn execute_batch_for_tenant_with_budget(
                     duration_us: step_start.elapsed().as_micros() as u64,
                 });
                 overall_ok = false;
-                if !step.continue_on_error {
+                if auto_rollback_on_failure || !step.continue_on_error {
                     break;
                 }
                 continue;
@@ -832,7 +883,7 @@ async fn execute_batch_for_tenant_with_budget(
                 duration_us: step_start.elapsed().as_micros() as u64,
             });
             overall_ok = false;
-            if !step.continue_on_error {
+            if auto_rollback_on_failure || !step.continue_on_error {
                 break;
             }
             continue;
@@ -852,6 +903,7 @@ async fn execute_batch_for_tenant_with_budget(
                             snapshot: &snapshot,
                             snapshot_hash,
                             context: context.as_ref().unwrap_or(&fallback_context),
+                            batch_id: request_id.as_deref(),
                             tenant_id,
                             profile_id: prof_ctx.profile_id.as_deref(),
                         },
@@ -869,7 +921,7 @@ async fn execute_batch_for_tenant_with_budget(
                             duration_us: step_start.elapsed().as_micros() as u64,
                         });
                         overall_ok = false;
-                        if !step.continue_on_error {
+                        if auto_rollback_on_failure || !step.continue_on_error {
                             break;
                         }
                         continue;
@@ -922,7 +974,7 @@ async fn execute_batch_for_tenant_with_budget(
                     duration_us: step_start.elapsed().as_micros() as u64,
                 });
                 overall_ok = false;
-                if !step.continue_on_error {
+                if auto_rollback_on_failure || !step.continue_on_error {
                     break;
                 }
             }
@@ -937,7 +989,7 @@ async fn execute_batch_for_tenant_with_budget(
                     duration_us: step_start.elapsed().as_micros() as u64,
                 });
                 overall_ok = false;
-                if !step.continue_on_error {
+                if auto_rollback_on_failure || !step.continue_on_error {
                     break;
                 }
             }
@@ -952,19 +1004,37 @@ async fn execute_batch_for_tenant_with_budget(
                     duration_us: step_start.elapsed().as_micros() as u64,
                 });
                 overall_ok = false;
-                if !step.continue_on_error {
+                if auto_rollback_on_failure || !step.continue_on_error {
                     break;
                 }
             }
         }
     }
 
+    let rollback_results = if auto_rollback_on_failure && !overall_ok {
+        crate::undo::unwind_batch_fiber(
+            state,
+            tenant_id,
+            request_id.as_deref().unwrap_or(""),
+            crate::undo::FiberExecutionScope {
+                policy,
+                profile: prof_ctx,
+                context: context.as_ref(),
+                authorization_expires_at_epoch_secs,
+                trace_id: &trace_id,
+            },
+        )
+        .await
+    } else {
+        Vec::new()
+    };
     BatchCallResponse {
         ok: overall_ok,
         request_id,
         trace_id,
         results,
         total_duration_us: start_all.elapsed().as_micros() as u64,
+        rollback_results,
     }
 }
 
@@ -1056,7 +1126,10 @@ mod tests {
                 authorization_expires_at_epoch_secs: None,
                 cancellation_token: CancellationToken::new(),
             },
-            50,
+            BatchExecutionOptions {
+                auto_rollback_on_failure: false,
+                batch_timeout_ms: 50,
+            },
         )
         .await;
 
@@ -1068,5 +1141,210 @@ mod tests {
         let task = state.task_registry.list_tasks().await.pop().unwrap();
         assert_eq!(task.status, TaskStatus::Cancelled);
         assert!(upstream.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn failed_batch_unwinds_successful_steps_in_lifo_order_once() {
+        use crate::{
+            config::{InverseConfig, PreSnapshotConfig, ReversibilityClass, ReversibilityConfig},
+            context::ProfileContext,
+            daemon::{AppState, CapabilityMeta, Policy, UpstreamCallError},
+            undo::{SnapshotStore, UndoLedgerStore},
+        };
+        use std::{collections::HashMap, sync::Arc};
+        use tokio::sync::mpsc;
+
+        let mut mutate = CapabilityMeta::new(
+            "mock",
+            "mutate",
+            "Mutate",
+            "Mutate state",
+            json!({"type":"object"}),
+        );
+        mutate.reversibility = Some(ReversibilityConfig {
+            class: ReversibilityClass::Reversible,
+            hold_window_secs: None,
+            ttl_secs: Some(60),
+            daily_limit: None,
+            pre_snapshot: Some(Box::new(PreSnapshotConfig {
+                capability: "mock.get_state".to_string(),
+                args: json!({}),
+                capture_json_path: None,
+            })),
+            inverse: Some(Box::new(InverseConfig {
+                capability: "mock.restore".to_string(),
+                args: json!({"value":"${snapshot}"}),
+            })),
+        });
+        let capabilities = HashMap::from([
+            ("mock.mutate".to_string(), mutate),
+            (
+                "mock.get_state".to_string(),
+                CapabilityMeta::new(
+                    "mock",
+                    "get_state",
+                    "Get",
+                    "Read state",
+                    json!({"type":"object"}),
+                ),
+            ),
+            (
+                "mock.restore".to_string(),
+                CapabilityMeta::new(
+                    "mock",
+                    "restore",
+                    "Restore",
+                    "Restore state",
+                    json!({"type":"object"}),
+                ),
+            ),
+            (
+                "mock.fail".to_string(),
+                CapabilityMeta::new("mock", "fail", "Fail", "Fail", json!({"type":"object"})),
+            ),
+        ]);
+        let (server_tx, mut server_rx) = mpsc::channel(16);
+        let temp = tempfile::tempdir().unwrap();
+        let ledger = UndoLedgerStore::open(temp.path().join("undo.json")).unwrap();
+        let snapshots = SnapshotStore::open(temp.path().join("snapshots")).unwrap();
+        let state = AppState::builder()
+            .servers(HashMap::from([("mock".to_string(), server_tx)]))
+            .capabilities(capabilities)
+            .undo_ledger(ledger.clone())
+            .snapshot_store(snapshots)
+            .build();
+        let mock_state = Arc::new(tokio::sync::Mutex::new(json!({"value": 0})));
+        let observed = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let server_state = mock_state.clone();
+        let server_observed = observed.clone();
+        let server = tokio::spawn(async move {
+            for _ in 0..7 {
+                let Some(crate::daemon::ServerMsg::CallTool {
+                    name,
+                    params,
+                    reply,
+                    ..
+                }) = server_rx.recv().await
+                else {
+                    break;
+                };
+                server_observed.lock().await.push(name.clone());
+                let result = match name.as_str() {
+                    "get_state" => Ok(server_state.lock().await.clone()),
+                    "mutate" | "restore" => {
+                        *server_state.lock().await = params["value"].clone();
+                        Ok(json!({"ok": true}))
+                    }
+                    "fail" => Err(UpstreamCallError::Upstream("planned failure".to_string())),
+                    _ => Err(UpstreamCallError::Upstream("unexpected tool".to_string())),
+                };
+                let _ = reply.send(result);
+            }
+        });
+        let policy = Policy::default();
+        let profile = ProfileContext::unrestricted();
+        let response = execute_batch_for_tenant_with_rollback(
+            &state,
+            vec![
+                BatchStep {
+                    id: "one".to_string(),
+                    capability_id: "mock.mutate".to_string(),
+                    args: json!({"value":{"value":1}}),
+                    continue_on_error: true,
+                },
+                BatchStep {
+                    id: "two".to_string(),
+                    capability_id: "mock.mutate".to_string(),
+                    args: json!({"value":{"value":2}}),
+                    continue_on_error: true,
+                },
+                BatchStep {
+                    id: "three".to_string(),
+                    capability_id: "mock.fail".to_string(),
+                    args: json!({}),
+                    continue_on_error: true,
+                },
+            ],
+            "trace-stage3".to_string(),
+            Some("batch-stage3".to_string()),
+            Some(crate::context::RequestContext {
+                operation_id: Some("op-stage3".to_string()),
+                work_item_id: Some("work-stage3".to_string()),
+                ..Default::default()
+            }),
+            BatchExecutionScope {
+                policy: &policy,
+                profile: &profile,
+                tenant_id: "tenant-a",
+                role: "admin",
+                authorization_expires_at_epoch_secs: None,
+                cancellation_token: CancellationToken::new(),
+            },
+            true,
+        )
+        .await;
+        assert!(!response.ok);
+        assert_eq!(response.rollback_results.len(), 2);
+        assert!(response.rollback_results.iter().all(|outcome| outcome.ok));
+        assert_eq!(*mock_state.lock().await, json!({"value":0}));
+        assert_eq!(
+            *observed.lock().await,
+            vec![
+                "get_state",
+                "mutate",
+                "get_state",
+                "mutate",
+                "fail",
+                "restore",
+                "restore"
+            ]
+        );
+        assert!(crate::undo::unwind_batch_fiber(
+            &state,
+            "tenant-a",
+            "batch-stage3",
+            crate::undo::FiberExecutionScope {
+                policy: &policy,
+                profile: &profile,
+                context: None,
+                authorization_expires_at_epoch_secs: None,
+                trace_id: "trace-again",
+            }
+        )
+        .await
+        .is_empty());
+        assert_eq!(observed.lock().await.len(), 7);
+        server.await.unwrap();
+        assert!(ledger
+            .entries()
+            .await
+            .iter()
+            .all(|entry| entry.status == crate::undo::UndoEntryStatus::Reverted));
+        let mut undo_events = Vec::new();
+        for _ in 0..50 {
+            undo_events = state
+                .audit_store
+                .query(&crate::audit::AuditQueryFilter {
+                    event_type: Some(crate::audit::AuditEventType::UndoExecuted),
+                    limit: 100,
+                    ..Default::default()
+                })
+                .await
+                .0;
+            if undo_events.len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(undo_events.len(), 2);
+        assert!(undo_events.iter().all(|event| {
+            event.sanitized_response.as_ref().is_some_and(|details| {
+                details.get("parentOperationId") == Some(&json!("op-stage3"))
+                    && details
+                        .get("snapshotArtifactHash")
+                        .is_some_and(Value::is_string)
+            })
+        }));
+        assert!(state.audit_store.verify_chain().await.is_valid);
     }
 }

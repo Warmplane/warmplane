@@ -103,6 +103,32 @@ interface BatchStep {
   continue_on_error?: boolean;
 }
 
+/** Request body for a chained batch call. */
+interface BatchCallRequest {
+  steps: BatchStep[];
+  request_id?: string;
+  autoRollbackOnFailure?: boolean;
+}
+
+/** Outcome reported for one inverse attempt during automatic rollback. */
+interface RollbackResult {
+  undo_id: string;
+  operation_id: string | null;
+  capability: string;
+  ok: boolean;
+  error: string | null;
+}
+
+/** Result envelope for a batch call. */
+interface BatchCallResponse {
+  ok: boolean;
+  request_id: string | null;
+  trace_id: string;
+  results: Array<Record<string, unknown>>;
+  total_duration_us: number;
+  rollback_results: RollbackResult[];
+}
+
 /** Task receipt returned for asynchronous execution and held emissions. */
 interface TaskReceipt {
   taskId: string;
@@ -271,8 +297,14 @@ class WarmplaneClient {
    * variable interpolation syntax. Configured reversible and compensable
    * contracts are applied to each successful step by the daemon.
    */
-  async batchCall(steps: BatchStep[]): Promise<unknown> {
-    return this.postJson("/v1/tools/batch_call", { steps });
+  async batchCall(
+    steps: BatchStep[],
+    autoRollbackOnFailure = false,
+  ): Promise<BatchCallResponse> {
+    return this.postJson("/v1/tools/batch_call", {
+      steps,
+      autoRollbackOnFailure,
+    });
   }
 
   // ------------------------------------------------------------------

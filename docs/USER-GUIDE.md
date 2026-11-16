@@ -1117,6 +1117,16 @@ curl -X POST http://127.0.0.1:9090/v1/tools/batch_call \
   }'
 ```
 
+Set `autoRollbackOnFailure` to `true` to stop at the first failed step and attempt registered inverses for earlier successful reversible or compensable steps in reverse order. Rollback outcomes are returned in `rollback_results` alongside the original step results. Inverses still pass current policy, profile, and approval checks; blocked or failed inverses are reported per entry. This option uses the request ID as the batch identity, scoped to the authenticated tenant. It does not provide exactly-once guarantees for upstream tools that do not honor idempotency.
+
+```json
+{
+  "request_id": "turn-42-batch-1",
+  "autoRollbackOnFailure": true,
+  "steps": []
+}
+```
+
 ---
 
 ### 6.5 Exactly-Once Idempotency & Replay Ledger

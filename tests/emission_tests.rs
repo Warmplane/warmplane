@@ -1018,6 +1018,7 @@ async fn cancelling_batch_operation_stops_the_current_hold_and_later_steps() {
                 ],
                 request_id: Some("batch-cancel-request".to_string()),
                 context: None,
+                auto_rollback_on_failure: false,
             }),
         )
         .await

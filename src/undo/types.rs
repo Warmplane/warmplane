@@ -30,6 +30,9 @@ pub struct UndoEntry {
     pub operation_id: Option<String>,
     /// Workflow item associated with the forward operation.
     pub work_item_id: Option<String>,
+    /// Batch request identifier when this entry was created by a batch call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>,
     /// Tenant that owns the undo action.
     pub tenant_id: String,
     /// Active profile associated with the forward operation.

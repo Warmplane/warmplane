@@ -28,6 +28,8 @@ pub(crate) struct ForwardCall<'a> {
     pub snapshot_hash: Option<String>,
     /// Request context associated with the forward operation.
     pub context: &'a RequestContext,
+    /// Batch request identifier when the forward call belongs to a batch.
+    pub batch_id: Option<&'a str>,
     /// Tenant owning this forward operation.
     pub tenant_id: &'a str,
     /// Active profile, when scoped.
@@ -180,6 +182,7 @@ pub(crate) async fn register_inverse(
         undo_id: generate_undo_id(now_ms),
         operation_id: forward.context.operation_id.clone(),
         work_item_id: forward.context.work_item_id.clone(),
+        batch_id: forward.batch_id.map(ToString::to_string),
         tenant_id: forward.tenant_id.to_string(),
         profile_id: forward.profile_id.map(ToString::to_string),
         actor_id: forward.context.actor_id.clone(),

@@ -753,6 +753,7 @@ pub async fn handle_call_capability(
                                     snapshot: &snapshot,
                                     snapshot_hash,
                                     context: &context_clone,
+                                    batch_id: None,
                                     tenant_id: &tenant_id_clone,
                                     profile_id: profile_clone.profile_id.as_deref(),
                                 },
@@ -1465,6 +1466,7 @@ pub async fn handle_call_capability(
                         snapshot: &snapshot,
                         snapshot_hash,
                         context: &req_context,
+                        batch_id: None,
                         tenant_id: &tenant_id,
                         profile_id: prof_ctx.profile_id.as_deref(),
                     },
@@ -1840,7 +1842,7 @@ pub async fn handle_batch_call_capabilities(
     let cancellation_token = state.operation_registry.register(&request_id).await;
 
     let default_role = state.rbac_engine.default_role();
-    let response = crate::batch_executor::execute_batch_for_tenant(
+    let response = crate::batch_executor::execute_batch_for_tenant_with_rollback(
         &state,
         payload.steps,
         trace_id,
@@ -1865,6 +1867,7 @@ pub async fn handle_batch_call_capabilities(
                 .and_then(|ctx| ctx.grant_expires_at_epoch_secs),
             cancellation_token,
         },
+        payload.auto_rollback_on_failure,
     )
     .await;
     state.operation_registry.unregister(&request_id).await;

@@ -272,6 +272,7 @@ impl ControlPlaneHandle {
             .clone()
             .unwrap_or_else(|| trace_id.clone());
         let req_ctx = options.context.clone().unwrap_or_default();
+        let suppress_undo_registration = options.suppress_undo_registration;
         let explicit_key = options.idempotency_key.clone();
         let idempotency_key = explicit_key.or_else(|| {
             if args.is_object() {
@@ -592,6 +593,7 @@ impl ControlPlaneHandle {
             let profile_context_clone = prof_ctx.clone();
             let capability_id_clone = capability_id.to_string();
             let compensable_reserved_clone = compensable_reserved;
+            let suppress_undo_registration_clone = suppress_undo_registration;
             let policy_for_undo = {
                 let policy = self.state.policy.read().await;
                 policy.merge_with_profile(prof_ctx.profile_policy.as_ref())
@@ -870,48 +872,59 @@ impl ControlPlaneHandle {
                             .circuit_breakers
                             .record_success(&server_id_clone)
                             .await;
-                        if let Some(contract) = &reversibility_clone {
-                            if let Err(error) = undo::register_inverse(
-                                &handle.state,
-                                contract,
-                                undo::ForwardCall {
-                                    capability: &capability_id_clone,
-                                    args: &worker_args,
-                                    result: &data,
-                                    snapshot: &snapshot,
-                                    snapshot_hash,
-                                    context: &req_ctx_clone,
-                                    tenant_id: "default",
-                                    profile_id: profile_context_clone.profile_id.as_deref(),
-                                },
-                            )
-                            .await
-                            {
-                                let message = format!(
-                                    "Forward call succeeded but inverse registration failed: {error}"
-                                );
-                                let _ = handle
-                                    .state
-                                    .task_registry
-                                    .fail_task(
-                                        &task_id_clone,
-                                        serde_json::json!({"code": "UNDO_REGISTRATION_FAILED"}),
-                                        Some(message.clone()),
-                                    )
-                                    .await;
-                                let env: Envelope<Value> = Envelope::failure(
-                                    trace_id_clone.clone(),
-                                    Some(req_id_clone.clone()),
-                                    Some(req_ctx_clone.clone()),
-                                    WarmplaneError::new("UNDO_REGISTRATION_FAILED", message, false),
-                                    retry_base("completed"),
-                                );
-                                if let Some(ref key) = idempotency_key_clone {
-                                    if let Ok(value) = serde_json::to_value(&env) {
-                                        handle.state.idempotency_store.complete(key, value).await;
+                        if !suppress_undo_registration_clone {
+                            if let Some(contract) = &reversibility_clone {
+                                if let Err(error) = undo::register_inverse(
+                                    &handle.state,
+                                    contract,
+                                    undo::ForwardCall {
+                                        capability: &capability_id_clone,
+                                        args: &worker_args,
+                                        result: &data,
+                                        snapshot: &snapshot,
+                                        snapshot_hash,
+                                        context: &req_ctx_clone,
+                                        batch_id: None,
+                                        tenant_id: "default",
+                                        profile_id: profile_context_clone.profile_id.as_deref(),
+                                    },
+                                )
+                                .await
+                                {
+                                    let message = format!(
+                                        "Forward call succeeded but inverse registration failed: {error}"
+                                    );
+                                    let _ = handle
+                                        .state
+                                        .task_registry
+                                        .fail_task(
+                                            &task_id_clone,
+                                            serde_json::json!({"code": "UNDO_REGISTRATION_FAILED"}),
+                                            Some(message.clone()),
+                                        )
+                                        .await;
+                                    let env: Envelope<Value> = Envelope::failure(
+                                        trace_id_clone.clone(),
+                                        Some(req_id_clone.clone()),
+                                        Some(req_ctx_clone.clone()),
+                                        WarmplaneError::new(
+                                            "UNDO_REGISTRATION_FAILED",
+                                            message,
+                                            false,
+                                        ),
+                                        retry_base("completed"),
+                                    );
+                                    if let Some(ref key) = idempotency_key_clone {
+                                        if let Ok(value) = serde_json::to_value(&env) {
+                                            handle
+                                                .state
+                                                .idempotency_store
+                                                .complete(key, value)
+                                                .await;
+                                        }
                                     }
+                                    return;
                                 }
-                                return;
                             }
                         }
                         let distilled_data = distill_value(data, &distill_opts);
@@ -1514,45 +1527,48 @@ impl ControlPlaneHandle {
                     .total_tool_duration_us
                     .fetch_add(elapsed_us, Ordering::Relaxed);
 
-                if let Some(contract) = &reversibility {
-                    if let Err(error) = undo::register_inverse(
-                        &self.state,
-                        contract,
-                        undo::ForwardCall {
-                            capability: capability_id,
-                            args: &effective_args,
-                            result: &data,
-                            snapshot: &snapshot,
-                            snapshot_hash,
-                            context: &req_ctx,
-                            tenant_id: "default",
-                            profile_id: prof_ctx.profile_id.as_deref(),
-                        },
-                    )
-                    .await
-                    {
-                        if let Some(ref rec) = task_record {
-                            let _ = self
-                                .state
-                                .task_registry
-                                .fail_task(
-                                    &rec.task_id,
-                                    serde_json::json!({"code": "UNDO_REGISTRATION_FAILED"}),
-                                    Some(error.to_string()),
-                                )
-                                .await;
+                if !suppress_undo_registration {
+                    if let Some(contract) = &reversibility {
+                        if let Err(error) = undo::register_inverse(
+                            &self.state,
+                            contract,
+                            undo::ForwardCall {
+                                capability: capability_id,
+                                args: &effective_args,
+                                result: &data,
+                                snapshot: &snapshot,
+                                snapshot_hash,
+                                context: &req_ctx,
+                                batch_id: None,
+                                tenant_id: "default",
+                                profile_id: prof_ctx.profile_id.as_deref(),
+                            },
+                        )
+                        .await
+                        {
+                            if let Some(ref rec) = task_record {
+                                let _ = self
+                                    .state
+                                    .task_registry
+                                    .fail_task(
+                                        &rec.task_id,
+                                        serde_json::json!({"code": "UNDO_REGISTRATION_FAILED"}),
+                                        Some(error.to_string()),
+                                    )
+                                    .await;
+                            }
+                            return Envelope::failure(
+                                trace_id,
+                                Some(req_id),
+                                Some(req_ctx),
+                                WarmplaneError::new(
+                                    "UNDO_REGISTRATION_FAILED",
+                                    format!("Forward call succeeded but inverse registration failed: {error}"),
+                                    false,
+                                ),
+                                retry_base("completed"),
+                            );
                         }
-                        return Envelope::failure(
-                            trace_id,
-                            Some(req_id),
-                            Some(req_ctx),
-                            WarmplaneError::new(
-                                "UNDO_REGISTRATION_FAILED",
-                                format!("Forward call succeeded but inverse registration failed: {error}"),
-                                false,
-                            ),
-                            retry_base("completed"),
-                        );
                     }
                 }
                 let distilled_data = distill_value(data, &distill_opts);

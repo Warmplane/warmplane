@@ -31,6 +31,10 @@ pub enum AuditEventType {
     EmissionHeld,
     /// A pending delayable emission was cancelled before dispatch.
     EmissionCancelled,
+    /// An inverse action completed successfully.
+    UndoExecuted,
+    /// An inverse action failed or was blocked.
+    UndoFailed,
 }
 
 /// Execution or disposition status for an audit event.

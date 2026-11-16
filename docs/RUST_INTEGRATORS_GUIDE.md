@@ -77,7 +77,7 @@ If the embedded host uses an in-memory `TaskRegistry` without task persistence, 
 
 The embedded API uses the same alias reversibility contracts as the daemon. Configure a detailed entry in `capabilityAliases` with `class: "reversible"` or `"compensable"`, an optional policy-allowed `preSnapshot`, and an `inverse` template. On a successful forward call or batch step, Warmplane captures configured pre-state and persists an `Armed` inverse in the state directory. Compensable calls require `dailyLimit`; exceeding it enters the existing approval flow. Persistent state must remain enabled for these contracts, since the engine fails closed if the undo ledger or snapshot store is unavailable. See the [user guide reversibility example](USER-GUIDE.md#reversibility-example) and [configuration schema reference](../.skills/warmplane/references/configuration_schema.md).
 
-No special `ControlPlaneHandle` method is required: call `call_capability` or `batch_call` as usual, and Warmplane applies the contract from the loaded config. Stage 2 records inverses; it does not expose a public undo endpoint yet.
+No special `ControlPlaneHandle` method is required: call `call_capability` or `batch_call` as usual, and Warmplane applies the contract from the loaded config. HTTP batch requests can set `autoRollbackOnFailure: true` to stop on the first failed step and attempt eligible inverses in reverse order. Rollback outcomes appear in the response's `rollback_results`; current policy, profile, and approval requirements still apply. A deterministic key deduplicates dispatch through Warmplane, but upstream exactly-once behavior requires upstream support. Stage 3 does not expose a standalone operator unwind endpoint.
 
 ---
 
