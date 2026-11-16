@@ -2,8 +2,10 @@
 //! Authorization-aware operator operations for persisted undo entries.
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::{
+    audit::{AuditEventStatus, AuditEventType, RawAuditEvent},
     context::{ProfileContext, RequestContext},
     daemon::{AppState, Policy},
     undo::{
@@ -211,6 +213,29 @@ pub async fn execute_undo(
                 400,
             ));
         }
+        let entry = state
+            .undo_ledger
+            .as_ref()
+            .ok_or_else(|| {
+                operation_error(
+                    "UNDO_STORAGE_UNAVAILABLE",
+                    "Undo storage is unavailable",
+                    503,
+                )
+            })?
+            .get(undo_id)
+            .await
+            .filter(|entry| entry.tenant_id == access.tenant_id)
+            .ok_or_else(not_found)?;
+        persist_force_authorization(
+            state,
+            access,
+            force_reason.unwrap_or_default(),
+            json!({
+                "undoId": entry.undo_id,
+            }),
+        )
+        .await?;
     }
     let result = execute_operator_undo(
         state,
@@ -275,6 +300,15 @@ pub async fn rollback_work_item(
     {
         return Err(not_found());
     }
+    if force_expired {
+        persist_force_authorization(
+            state,
+            access,
+            force_reason.unwrap_or_default(),
+            json!({"workItemId": work_item_id}),
+        )
+        .await?;
+    }
     Ok(rollback_operator_work_item(
         state,
         &access.tenant_id,
@@ -284,6 +318,51 @@ pub async fn rollback_work_item(
         force_reason,
     )
     .await)
+}
+
+async fn persist_force_authorization(
+    state: &AppState,
+    access: &UndoAccessContext,
+    reason: &str,
+    target: serde_json::Value,
+) -> Result<(), UndoOperationError> {
+    let work_item_id = target
+        .get("workItemId")
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string)
+        .or_else(|| access.request_context.work_item_id.clone());
+    state
+        .audit_handle
+        .send_confirmed(RawAuditEvent {
+            event_type: AuditEventType::UndoForceAuthorized,
+            trace_id: access.trace_id.clone(),
+            request_id: access.request_context.operation_id.clone(),
+            actor_id: access.actor_id.clone(),
+            work_item_id,
+            client_ip: None,
+            server_id: None,
+            capability_id: None,
+            resource_uri: None,
+            sanitized_args: Some(target),
+            sanitized_response: Some(json!({"reason": reason})),
+            execution_latency_us: None,
+            status: AuditEventStatus::Success,
+            error_code: None,
+            error_message: None,
+            operator_id: access.actor_id.clone(),
+            approval_ticket_id: None,
+            idempotency_key: None,
+            is_replay: Some(false),
+        })
+        .await
+        .map(|_| ())
+        .map_err(|error| {
+            operation_error(
+                "AUDIT_PERSISTENCE_FAILED",
+                format!("Could not persist expiry override authorization: {error}"),
+                503,
+            )
+        })
 }
 
 /// Executes an agent-requested self-undo only when role and profile both opt in.
@@ -515,7 +594,48 @@ fn operation_error(
 
 #[cfg(test)]
 mod tests {
-    use super::{require_permission, UndoAccessContext, UndoPermission};
+    use super::{
+        persist_force_authorization, require_permission, UndoAccessContext, UndoPermission,
+    };
+
+    #[tokio::test]
+    async fn force_expiry_reason_is_committed_before_dispatch() {
+        let state = crate::daemon::AppState::builder().build();
+        let access = UndoAccessContext {
+            tenant_id: "default".to_string(),
+            role: "operator".to_string(),
+            actor_id: Some("human-1".to_string()),
+            request_context: crate::context::RequestContext {
+                work_item_id: Some("work-1".to_string()),
+                ..Default::default()
+            },
+            policy: crate::daemon::Policy::default(),
+            profile: crate::context::ProfileContext::unrestricted(),
+            grant_expires_at_epoch_secs: None,
+            trace_id: "force-trace".to_string(),
+        };
+
+        persist_force_authorization(
+            &state,
+            &access,
+            "incident-42",
+            serde_json::json!({"undoId": "undo-1"}),
+        )
+        .await
+        .unwrap();
+        let (events, _) = state.audit_store.query(&Default::default()).await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].event_type,
+            crate::audit::AuditEventType::UndoForceAuthorized
+        );
+        assert_eq!(
+            events[0].sanitized_response.as_ref().unwrap()["reason"],
+            "incident-42"
+        );
+        assert_eq!(events[0].work_item_id.as_deref(), Some("work-1"));
+        state.shutdown().await;
+    }
 
     #[tokio::test]
     async fn expiry_override_requires_explicit_permission_even_without_general_rbac() {

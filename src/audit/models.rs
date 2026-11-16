@@ -35,6 +35,8 @@ pub enum AuditEventType {
     UndoExecuted,
     /// An inverse action failed or was blocked.
     UndoFailed,
+    /// An operator authorized execution after an undo window expired.
+    UndoForceAuthorized,
 }
 
 /// Execution or disposition status for an audit event.
