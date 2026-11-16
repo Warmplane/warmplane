@@ -1328,6 +1328,78 @@ async fn held_and_cancelled_audit_events_are_redacted_and_hash_chained() {
 }
 
 #[tokio::test]
+async fn failed_emission_audit_does_not_include_raw_upstream_error_text() {
+    let (server_tx, mut upstream) = mpsc::channel(8);
+    let mut capability = CapabilityMeta::new(
+        "mail",
+        "send",
+        "Send",
+        "Send a message",
+        json!({"type": "object"}),
+    );
+    capability.reversibility = Some(delayable_contract(1));
+    let policy = warmplane::daemon::Policy::from_config(Some(warmplane::config::PolicyConfig {
+        redact_keys: vec!["password".to_string()],
+        ..Default::default()
+    }));
+    let state = AppState::builder()
+        .servers(HashMap::from([("mail".to_string(), server_tx)]))
+        .capabilities(HashMap::from([("mail.send".to_string(), capability)]))
+        .policy(policy)
+        .build();
+    let coordinator = HoldCoordinator::default();
+    let mut task_params = params(None);
+    task_params.args = json!({"password": "request-secret"});
+    let task = coordinator
+        .accept(&state, task_params, emission(now_ms() + 50))
+        .await
+        .unwrap();
+    let Some(ServerMsg::CallTool { reply, .. }) =
+        tokio::time::timeout(Duration::from_secs(2), upstream.recv())
+            .await
+            .unwrap()
+    else {
+        panic!("expected failed emission to be dispatched");
+    };
+    reply
+        .send(Err(warmplane::daemon::UpstreamCallError::Upstream(
+            "upstream rejected password=upstream-secret".to_string(),
+        )))
+        .unwrap();
+    assert_eq!(
+        coordinator
+            .wait_for_terminal(&state, &task.task_id, Duration::from_secs(1))
+            .await
+            .unwrap()
+            .status,
+        TaskStatus::Failed
+    );
+    state.audit_handle.shutdown().await;
+
+    let filter = warmplane::audit::AuditQueryFilter {
+        event_type: Some(warmplane::audit::AuditEventType::ToolExecution),
+        limit: 10,
+        ..Default::default()
+    };
+    let (events, count) = state.audit_store.query(&filter).await;
+    assert_eq!(count, 1);
+    assert_eq!(
+        events[0].sanitized_args.as_ref().unwrap()["password"],
+        "<redacted>"
+    );
+    assert_eq!(
+        events[0].error_message.as_deref(),
+        Some("Emission failed; see the task error for details")
+    );
+    assert!(!events[0]
+        .error_message
+        .as_deref()
+        .unwrap_or_default()
+        .contains("upstream-secret"));
+    assert!(state.audit_store.verify_chain().await.is_valid);
+}
+
+#[tokio::test]
 async fn approval_argument_edits_are_the_payload_held_and_dispatched() {
     let (server_tx, mut upstream) = mpsc::channel(8);
     let mut capability = CapabilityMeta::new(

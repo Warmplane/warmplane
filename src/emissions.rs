@@ -534,7 +534,8 @@ impl HoldCoordinator {
                 crate::audit::AuditEventStatus::Success
             },
             error_code: failure.as_ref().map(|(code, _)| (*code).to_string()),
-            error_message: failure.map(|(_, message)| message),
+            error_message: failure
+                .map(|_| "Emission failed; see the task error for details".to_string()),
             operator_id: None,
             approval_ticket_id: None,
             idempotency_key: record.idempotency_key.clone(),
