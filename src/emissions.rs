@@ -677,9 +677,10 @@ async fn revalidate(state: &AppState, record: &TaskRecord) -> Result<()> {
 async fn current_emission_policy(state: &AppState, record: &TaskRecord) -> Policy {
     let emission = record.emission.as_ref();
     let base = state.policy.read().await.clone();
+    let default_role = state.rbac_engine.default_role();
     let role = emission
         .map(|emission| emission.role.as_str())
-        .unwrap_or_else(|| state.rbac_engine.default_role());
+        .unwrap_or(default_role.as_str());
     let mut effective = state.rbac_engine.compute_effective_policy(role, &base);
     if let Some(profile_id) = emission.and_then(|emission| emission.profile_id.as_deref()) {
         let profiles = state.profiles.read().await;

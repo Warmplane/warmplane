@@ -302,7 +302,7 @@ impl ControlPlaneHandle {
                             &self.state,
                             &task,
                             "default",
-                            self.state.rbac_engine.default_role(),
+                            &self.state.rbac_engine.default_role(),
                             prof_ctx.profile_id.as_deref(),
                         )
                         .await

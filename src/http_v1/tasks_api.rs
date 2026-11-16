@@ -51,11 +51,12 @@ pub async fn handle_list_tasks(
         .as_ref()
         .map(|context| context.tenant_id.as_str())
         .unwrap_or("default");
+    let default_role = state.rbac_engine.default_role();
     let role = req_ext
         .0
         .as_ref()
         .map(|context| context.role.as_str())
-        .unwrap_or_else(|| state.rbac_engine.default_role());
+        .unwrap_or(default_role.as_str());
     let profile_id = prof_ext
         .as_ref()
         .and_then(|extension| extension.0.profile_id.as_deref());
@@ -95,11 +96,12 @@ pub async fn handle_get_task(
             .as_ref()
             .map(|context| context.tenant_id.as_str())
             .unwrap_or("default");
+        let default_role = state.rbac_engine.default_role();
         let role = req_ext
             .0
             .as_ref()
             .map(|context| context.role.as_str())
-            .unwrap_or_else(|| state.rbac_engine.default_role());
+            .unwrap_or(default_role.as_str());
         let profile_id = prof_ext
             .as_ref()
             .and_then(|extension| extension.0.profile_id.as_deref());
@@ -245,11 +247,12 @@ pub async fn handle_cancel_task(
             .as_ref()
             .map(|context| context.tenant_id.as_str())
             .unwrap_or("default");
+        let default_role = state.rbac_engine.default_role();
         let role = req_ext
             .0
             .as_ref()
             .map(|context| context.role.as_str())
-            .unwrap_or_else(|| state.rbac_engine.default_role());
+            .unwrap_or(default_role.as_str());
         let profile_id = prof_ext
             .as_ref()
             .and_then(|extension| extension.0.profile_id.as_deref());

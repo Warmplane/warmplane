@@ -81,11 +81,12 @@ pub async fn handle_call_capability(
                     .as_ref()
                     .map(|context| context.tenant_id.as_str())
                     .unwrap_or("default");
+                let default_role = state.rbac_engine.default_role();
                 let role = req_ext
                     .0
                     .as_ref()
                     .map(|context| context.role.as_str())
-                    .unwrap_or_else(|| state.rbac_engine.default_role());
+                    .unwrap_or(default_role.as_str());
                 let profile = prof_ext
                     .as_ref()
                     .and_then(|extension| extension.0.profile_id.as_deref());
@@ -1684,11 +1685,12 @@ pub async fn handle_cancel_operation(
             .as_ref()
             .map(|context| context.tenant_id.as_str())
             .unwrap_or("default");
+        let default_role = state.rbac_engine.default_role();
         let role = req_ext
             .0
             .as_ref()
             .map(|context| context.role.as_str())
-            .unwrap_or_else(|| state.rbac_engine.default_role());
+            .unwrap_or(default_role.as_str());
         let profile_id = prof_ext
             .as_ref()
             .and_then(|extension| extension.0.profile_id.as_deref());
@@ -1736,11 +1738,12 @@ pub async fn handle_cancel_operation(
                 .as_ref()
                 .map(|context| context.tenant_id.as_str())
                 .unwrap_or("default");
+            let default_role = state.rbac_engine.default_role();
             let role = req_ext
                 .0
                 .as_ref()
                 .map(|context| context.role.as_str())
-                .unwrap_or_else(|| state.rbac_engine.default_role());
+                .unwrap_or(default_role.as_str());
             let profile_id = prof_ext
                 .as_ref()
                 .and_then(|extension| extension.0.profile_id.as_deref());
@@ -1836,6 +1839,7 @@ pub async fn handle_batch_call_capabilities(
         .merge_with_profile(prof_ctx.profile_policy.as_ref());
     let cancellation_token = state.operation_registry.register(&request_id).await;
 
+    let default_role = state.rbac_engine.default_role();
     let response = crate::batch_executor::execute_batch_for_tenant(
         &state,
         payload.steps,
@@ -1854,7 +1858,7 @@ pub async fn handle_batch_call_capabilities(
                 .0
                 .as_ref()
                 .map(|ctx| ctx.role.as_str())
-                .unwrap_or_else(|| state.rbac_engine.default_role()),
+                .unwrap_or(default_role.as_str()),
             authorization_expires_at_epoch_secs: req_ext
                 .0
                 .as_ref()

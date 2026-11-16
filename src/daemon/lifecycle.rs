@@ -375,6 +375,7 @@ impl AppState {
             let mut profiles = self.profiles.write().await;
             *profiles = config.profiles.clone();
         }
+        self.rbac_engine.reload(config.rbac.clone());
 
         // 2. Identify active servers vs disk servers
         let current_server_ids: Vec<String> = {

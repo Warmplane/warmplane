@@ -119,6 +119,34 @@ fn test_rbac_default_role_fallback() {
 }
 
 #[test]
+fn test_rbac_reload_revalidates_tokens_and_roles_for_in_flight_provenance() {
+    let engine = RbacEngine::new(Some(sample_rbac_config()));
+    let context = engine
+        .authenticate(Some("admin_key_123"), &Policy::default())
+        .unwrap();
+    assert!(engine.recognizes_provenance(
+        &context.tenant_id,
+        &context.role,
+        context.actor_id.as_deref(),
+        context.grant_id.as_deref(),
+    ));
+
+    let mut reloaded = sample_rbac_config();
+    reloaded.tokens.remove("admin_key_123");
+    engine.reload(Some(reloaded));
+
+    assert!(!engine.recognizes_provenance(
+        &context.tenant_id,
+        &context.role,
+        context.actor_id.as_deref(),
+        context.grant_id.as_deref(),
+    ));
+    assert!(engine
+        .authenticate(Some("admin_key_123"), &Policy::default())
+        .is_err());
+}
+
+#[test]
 fn test_rbac_jwt_iss_aud_nbf_validation() {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;

@@ -111,6 +111,7 @@ pub async fn execute_batch(
     policy: &crate::daemon::Policy,
     prof_ctx: &crate::context::ProfileContext,
 ) -> BatchCallResponse {
+    let default_role = state.rbac_engine.default_role();
     execute_batch_for_tenant(
         state,
         steps,
@@ -121,7 +122,7 @@ pub async fn execute_batch(
             policy,
             profile: prof_ctx,
             tenant_id: "default",
-            role: state.rbac_engine.default_role(),
+            role: &default_role,
             authorization_expires_at_epoch_secs: None,
             cancellation_token: CancellationToken::new(),
         },
@@ -705,7 +706,7 @@ pub async fn execute_batch_for_tenant(
                 });
             }
             overall_ok = false;
-            if !step.continue_on_error {
+            if cancellation_token.is_cancelled() || !step.continue_on_error {
                 break;
             }
             continue;
