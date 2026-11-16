@@ -219,6 +219,7 @@ async fn execute_batch_for_tenant_with_budget(
         cancellation_token,
     } = scope;
     let start_all = std::time::Instant::now();
+    let batch_fiber_id = request_id.clone().unwrap_or_else(|| trace_id.clone());
 
     if steps.len() > MAX_BATCH_STEPS {
         return BatchCallResponse {
@@ -903,7 +904,7 @@ async fn execute_batch_for_tenant_with_budget(
                             snapshot: &snapshot,
                             snapshot_hash,
                             context: context.as_ref().unwrap_or(&fallback_context),
-                            batch_id: request_id.as_deref(),
+                            batch_id: Some(&batch_fiber_id),
                             tenant_id,
                             profile_id: prof_ctx.profile_id.as_deref(),
                         },
@@ -1015,7 +1016,7 @@ async fn execute_batch_for_tenant_with_budget(
         crate::undo::unwind_batch_fiber(
             state,
             tenant_id,
-            request_id.as_deref().unwrap_or(""),
+            &batch_fiber_id,
             crate::undo::FiberExecutionScope {
                 policy,
                 profile: prof_ctx,
