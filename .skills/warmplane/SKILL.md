@@ -53,6 +53,8 @@ If an upstream process crashes or reports `Circuit: OPEN`:
 ### W4: Hold and Cancel Delayable Emissions
 For aliases configured with `reversibility.class: "delayable"`, Warmplane starts the hold after any required approval. The duration precedence is profile policy, alias `holdWindowSecs`, global policy, then 30 seconds. Async calls return a task receipt (`phase`, `releaseAtMs`, `cancellable`); synchronous calls wait only when the hold is shorter than `toolTimeoutMs`. Cancel with `/v1/tasks/{taskId}/cancel`, `/v1/operations/{requestId}/cancel`, MCP `tasks/cancel`, or the embedded `ControlPlaneHandle::cancel_task` API. A `409 EMISSION_DISPATCHING` means dispatch was durably claimed. Pending calls resume after restart and policy/profile revalidation; calls recovered in `dispatching` fail as `EMISSION_OUTCOME_UNKNOWN` and are never automatically resent. Batch steps wait for the held result within the batch budget.
 
+When task persistence is disabled, accepted holds exist only in memory and are lost when the process exits. Persistent state is required for restart recovery.
+
 ## 4. Reference Map
 - [Setup & Install Guide](./references/setup_and_installation.md): Binaries, package managers, and verification.
 - [MCP Stdio Usage](./references/mcp_stdio_usage.md): 1-Click client config for 17 IDEs/agents and stdio tools.

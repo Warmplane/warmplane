@@ -69,6 +69,8 @@ Embedded `call_capability` calls and `batch_call` steps honor delayable alias co
 
 The duration precedence is profile policy, alias `holdWindowSecs`, global policy, then 30 seconds. Synchronous calls wait only when the hold is shorter than `toolTimeoutMs`; otherwise they return the receipt. Batch steps await their result and count hold time against the 60-second batch budget.
 
+If the embedded host uses an in-memory `TaskRegistry` without task persistence, held emissions work while that process is running but are lost on process exit. Configure persistent task state when restart recovery is required.
+
 ---
 
 ### Reversible and Compensable Calls

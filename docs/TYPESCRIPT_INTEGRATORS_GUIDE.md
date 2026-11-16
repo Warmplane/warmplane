@@ -452,6 +452,8 @@ if (cancelled.status === 409) {
 
 Task status can be polled with `GET /v1/tasks/{taskId}`. Cancellation can also use `POST /v1/operations/{requestId}/cancel`; it succeeds only before dispatch claim. Pending holds resume after restart and policy/profile revalidation. A task recovered in `dispatching` fails with `EMISSION_OUTCOME_UNKNOWN` and is not resent automatically. Batch steps wait for held results within the shared 60-second batch budget.
 
+If task persistence is disabled, held emissions remain in memory and are lost when the daemon exits. Configure persistent state to recover them after restart.
+
 ### 3. Context distillation — limit large outputs
 
 ```typescript

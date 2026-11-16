@@ -139,6 +139,27 @@ pub async fn execute_batch_for_tenant(
     context: Option<crate::context::RequestContext>,
     scope: BatchExecutionScope<'_>,
 ) -> BatchCallResponse {
+    execute_batch_for_tenant_with_budget(
+        state,
+        steps,
+        trace_id,
+        request_id,
+        context,
+        scope,
+        DEFAULT_BATCH_TIMEOUT_MS,
+    )
+    .await
+}
+
+async fn execute_batch_for_tenant_with_budget(
+    state: &AppState,
+    steps: Vec<BatchStep>,
+    trace_id: String,
+    request_id: Option<String>,
+    context: Option<crate::context::RequestContext>,
+    scope: BatchExecutionScope<'_>,
+    batch_timeout_ms: u64,
+) -> BatchCallResponse {
     let BatchExecutionScope {
         policy,
         profile: prof_ctx,
@@ -191,7 +212,7 @@ pub async fn execute_batch_for_tenant(
             overall_ok = false;
             break;
         }
-        if start_all.elapsed().as_millis() as u64 >= DEFAULT_BATCH_TIMEOUT_MS {
+        if start_all.elapsed().as_millis() as u64 >= batch_timeout_ms {
             results.push(BatchStepResult {
                 id: step.id.clone(),
                 capability_id: step.capability_id.clone(),
@@ -199,7 +220,7 @@ pub async fn execute_batch_for_tenant(
                 data: None,
                 error: Some(format!(
                     "Batch execution timed out after {}ms budget",
-                    DEFAULT_BATCH_TIMEOUT_MS
+                    batch_timeout_ms
                 )),
                 duration_us: step_start.elapsed().as_micros() as u64,
             });
@@ -380,7 +401,7 @@ pub async fn execute_batch_for_tenant(
             });
 
             let approval_budget_ms =
-                DEFAULT_BATCH_TIMEOUT_MS.saturating_sub(start_all.elapsed().as_millis() as u64);
+                batch_timeout_ms.saturating_sub(start_all.elapsed().as_millis() as u64);
             let resolution = tokio::select! {
                 _ = cancellation_token.cancelled() => crate::approvals::ApprovalResolution::Expired,
                 result = tokio::time::timeout(Duration::from_millis(approval_budget_ms), rx) => {
@@ -425,8 +446,7 @@ pub async fn execute_batch_for_tenant(
                         error: Some(if cancellation_token.is_cancelled() {
                             "Batch execution was cancelled while waiting for HITL approval"
                                 .to_string()
-                        } else if start_all.elapsed().as_millis() as u64 >= DEFAULT_BATCH_TIMEOUT_MS
-                        {
+                        } else if start_all.elapsed().as_millis() as u64 >= batch_timeout_ms {
                             "Batch execution budget expired while waiting for HITL approval"
                                 .to_string()
                         } else {
@@ -582,7 +602,7 @@ pub async fn execute_batch_for_tenant(
                 }
             };
             let remaining_ms =
-                DEFAULT_BATCH_TIMEOUT_MS.saturating_sub(start_all.elapsed().as_millis() as u64);
+                batch_timeout_ms.saturating_sub(start_all.elapsed().as_millis() as u64);
             let terminal = tokio::select! {
                 _ = cancellation_token.cancelled() => None,
                 result = state.hold_coordinator.wait_for_terminal(
@@ -981,5 +1001,71 @@ mod tests {
         assert_eq!(resolved["target_id"], 42);
         assert_eq!(resolved["username"], "alice");
         assert_eq!(resolved["literal"], "hello");
+    }
+
+    #[tokio::test]
+    async fn batch_budget_cancels_a_pending_emission_before_dispatch() {
+        use crate::{
+            config::{ReversibilityClass, ReversibilityConfig},
+            context::ProfileContext,
+            daemon::{AppState, CapabilityMeta, Policy},
+            tasks::TaskStatus,
+        };
+        use std::collections::HashMap;
+        use tokio::sync::mpsc;
+
+        let (server_tx, mut upstream) = mpsc::channel(8);
+        let mut capability = CapabilityMeta::new(
+            "mail",
+            "send",
+            "Send",
+            "Send a message",
+            json!({"type": "object"}),
+        );
+        capability.reversibility = Some(ReversibilityConfig {
+            class: ReversibilityClass::Delayable,
+            hold_window_secs: Some(30),
+            ttl_secs: None,
+            daily_limit: None,
+            pre_snapshot: None,
+            inverse: None,
+        });
+        let state = AppState::builder()
+            .servers(HashMap::from([("mail".to_string(), server_tx)]))
+            .capabilities(HashMap::from([("mail.send".to_string(), capability)]))
+            .build();
+        let policy = Policy::default();
+        let profile = ProfileContext::unrestricted();
+        let response = execute_batch_for_tenant_with_budget(
+            &state,
+            vec![BatchStep {
+                id: "send".to_string(),
+                capability_id: "mail.send".to_string(),
+                args: json!({"to": "person@example.com"}),
+                continue_on_error: false,
+            }],
+            "batch-budget-test".to_string(),
+            Some("batch-budget-test".to_string()),
+            None,
+            BatchExecutionScope {
+                policy: &policy,
+                profile: &profile,
+                tenant_id: "default",
+                role: "anonymous",
+                authorization_expires_at_epoch_secs: None,
+                cancellation_token: CancellationToken::new(),
+            },
+            50,
+        )
+        .await;
+
+        assert!(!response.ok);
+        assert!(response.results[0]
+            .error
+            .as_deref()
+            .is_some_and(|message| message.contains("budget expired")));
+        let task = state.task_registry.list_tasks().await.pop().unwrap();
+        assert_eq!(task.status, TaskStatus::Cancelled);
+        assert!(upstream.try_recv().is_err());
     }
 }
