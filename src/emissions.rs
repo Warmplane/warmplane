@@ -162,6 +162,21 @@ impl HoldCoordinator {
             .task_registry
             .cancel_emission_task(task_id, reason)
             .await?;
+        if matches!(
+            result,
+            EmissionCancelResult::Cancelled
+                | EmissionCancelResult::AlreadyCancelled
+                | EmissionCancelResult::TooLate
+        ) {
+            if let Some(batch_id) = state
+                .task_registry
+                .get_task(task_id)
+                .await
+                .and_then(|record| record.emission.and_then(|emission| emission.batch_id))
+            {
+                let _ = state.operation_registry.cancel(batch_id).await;
+            }
+        }
         if result == EmissionCancelResult::Cancelled {
             if let Some(token) = self.workers.lock().await.remove(task_id) {
                 token.cancel();

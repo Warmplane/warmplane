@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 use crate::daemon::{AppState, ServerMsg, UpstreamCallError};
 
@@ -85,6 +86,8 @@ pub struct BatchExecutionScope<'a> {
     pub role: &'a str,
     /// JWT expiry bound for release-time authorization revalidation.
     pub authorization_expires_at_epoch_secs: Option<u64>,
+    /// Token cancelled when the batch operation is explicitly cancelled.
+    pub cancellation_token: CancellationToken,
 }
 
 /// Executes an ordered sequence of tool execution steps, interpolating prior step outputs.
@@ -120,6 +123,7 @@ pub async fn execute_batch(
             tenant_id: "default",
             role: state.rbac_engine.default_role(),
             authorization_expires_at_epoch_secs: None,
+            cancellation_token: CancellationToken::new(),
         },
     )
     .await
@@ -140,6 +144,7 @@ pub async fn execute_batch_for_tenant(
         tenant_id,
         role,
         authorization_expires_at_epoch_secs,
+        cancellation_token,
     } = scope;
     let start_all = std::time::Instant::now();
 
@@ -173,6 +178,18 @@ pub async fn execute_batch_for_tenant(
         let step_start = std::time::Instant::now();
 
         // Check aggregate batch timeout budget
+        if cancellation_token.is_cancelled() {
+            results.push(BatchStepResult {
+                id: step.id.clone(),
+                capability_id: step.capability_id.clone(),
+                ok: false,
+                data: None,
+                error: Some("Batch execution was cancelled".to_string()),
+                duration_us: step_start.elapsed().as_micros() as u64,
+            });
+            overall_ok = false;
+            break;
+        }
         if start_all.elapsed().as_millis() as u64 >= DEFAULT_BATCH_TIMEOUT_MS {
             results.push(BatchStepResult {
                 id: step.id.clone(),
@@ -363,11 +380,15 @@ pub async fn execute_batch_for_tenant(
 
             let approval_budget_ms =
                 DEFAULT_BATCH_TIMEOUT_MS.saturating_sub(start_all.elapsed().as_millis() as u64);
-            let resolution =
-                match tokio::time::timeout(Duration::from_millis(approval_budget_ms), rx).await {
-                    Ok(Ok(resolution)) => resolution,
-                    _ => crate::approvals::ApprovalResolution::Expired,
-                };
+            let resolution = tokio::select! {
+                _ = cancellation_token.cancelled() => crate::approvals::ApprovalResolution::Expired,
+                result = tokio::time::timeout(Duration::from_millis(approval_budget_ms), rx) => {
+                    match result {
+                        Ok(Ok(resolution)) => resolution,
+                        _ => crate::approvals::ApprovalResolution::Expired,
+                    }
+                }
+            };
 
             match resolution {
                 crate::approvals::ApprovalResolution::Approved { modified_args, .. } => {
@@ -400,14 +421,16 @@ pub async fn execute_batch_for_tenant(
                         capability_id: step.capability_id.clone(),
                         ok: false,
                         data: None,
-                        error: Some(
-                            if start_all.elapsed().as_millis() as u64 >= DEFAULT_BATCH_TIMEOUT_MS {
-                                "Batch execution budget expired while waiting for HITL approval"
-                                    .to_string()
-                            } else {
-                                "HITL approval expired".to_string()
-                            },
-                        ),
+                        error: Some(if cancellation_token.is_cancelled() {
+                            "Batch execution was cancelled while waiting for HITL approval"
+                                .to_string()
+                        } else if start_all.elapsed().as_millis() as u64 >= DEFAULT_BATCH_TIMEOUT_MS
+                        {
+                            "Batch execution budget expired while waiting for HITL approval"
+                                .to_string()
+                        } else {
+                            "HITL approval expired".to_string()
+                        }),
                         duration_us: step_start.elapsed().as_micros() as u64,
                     });
                     overall_ok = false;
@@ -559,12 +582,43 @@ pub async fn execute_batch_for_tenant(
             };
             let remaining_ms =
                 DEFAULT_BATCH_TIMEOUT_MS.saturating_sub(start_all.elapsed().as_millis() as u64);
-            let terminal = state
-                .hold_coordinator
-                .wait_for_terminal(state, &task.task_id, Duration::from_millis(remaining_ms))
-                .await;
+            let terminal = tokio::select! {
+                _ = cancellation_token.cancelled() => None,
+                result = state.hold_coordinator.wait_for_terminal(
+                    state,
+                    &task.task_id,
+                    Duration::from_millis(remaining_ms),
+                ) => result,
+            };
             let Some(terminal) = terminal else {
-                continue;
+                let cancellation = state
+                    .hold_coordinator
+                    .cancel(
+                        state,
+                        &task.task_id,
+                        Some("Batch execution cancelled".to_string()),
+                    )
+                    .await;
+                let message = match cancellation {
+                    Ok(
+                        crate::tasks::EmissionCancelResult::Cancelled
+                        | crate::tasks::EmissionCancelResult::AlreadyCancelled,
+                    ) => {
+                        "Batch cancelled; held emission was prevented from dispatching".to_string()
+                    }
+                    _ => "Batch cancelled after dispatch began; emission outcome may be pending"
+                        .to_string(),
+                };
+                results.push(BatchStepResult {
+                    id: step.id.clone(),
+                    capability_id: step.capability_id.clone(),
+                    ok: false,
+                    data: None,
+                    error: Some(message),
+                    duration_us: step_start.elapsed().as_micros() as u64,
+                });
+                overall_ok = false;
+                break;
             };
             if terminal.status == crate::tasks::TaskStatus::Completed {
                 let value = terminal.result.unwrap_or(Value::Null);

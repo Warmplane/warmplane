@@ -1710,6 +1710,7 @@ pub async fn handle_cancel_operation(
         {
             Ok(crate::tasks::EmissionCancelResult::Cancelled)
             | Ok(crate::tasks::EmissionCancelResult::AlreadyCancelled) => {
+                let _ = state.operation_registry.cancel(&id).await;
                 return (StatusCode::OK, Json(json!({"ok": true, "request_id": id, "cancelled": true, "task_id": task.task_id}))).into_response();
             }
             Ok(crate::tasks::EmissionCancelResult::TooLate) => {
@@ -1763,6 +1764,7 @@ pub async fn handle_cancel_operation(
                     crate::tasks::EmissionCancelResult::Cancelled
                     | crate::tasks::EmissionCancelResult::AlreadyCancelled,
                 ) => {
+                    let _ = state.operation_registry.cancel(&id).await;
                     return (StatusCode::OK, Json(json!({"ok": true, "request_id": id, "cancelled": true, "task_id": task.task_id}))).into_response();
                 }
                 Ok(crate::tasks::EmissionCancelResult::TooLate) => {
@@ -1832,12 +1834,13 @@ pub async fn handle_batch_call_capabilities(
         .map(|ctx| ctx.effective_policy.clone())
         .unwrap_or_else(|| base_pol.clone())
         .merge_with_profile(prof_ctx.profile_policy.as_ref());
+    let cancellation_token = state.operation_registry.register(&request_id).await;
 
     let response = crate::batch_executor::execute_batch_for_tenant(
         &state,
         payload.steps,
         trace_id,
-        Some(request_id),
+        Some(request_id.clone()),
         Some(req_context),
         crate::batch_executor::BatchExecutionScope {
             policy: &pol,
@@ -1856,9 +1859,11 @@ pub async fn handle_batch_call_capabilities(
                 .0
                 .as_ref()
                 .and_then(|ctx| ctx.grant_expires_at_epoch_secs),
+            cancellation_token,
         },
     )
     .await;
+    state.operation_registry.unregister(&request_id).await;
 
     (StatusCode::OK, Json(response)).into_response()
 }

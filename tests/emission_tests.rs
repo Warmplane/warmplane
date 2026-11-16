@@ -397,6 +397,73 @@ async fn batch_delayable_step_persists_a_stable_idempotency_key() {
 }
 
 #[tokio::test]
+async fn cancelling_batch_operation_stops_the_current_hold_and_later_steps() {
+    let (state, mut upstream) = create_state();
+    let batch_state = state.clone();
+    let batch = tokio::spawn(async move {
+        warmplane::http_v1::execute::handle_batch_call_capabilities(
+            State(batch_state),
+            axum::Extension(None),
+            None,
+            HeaderMap::new(),
+            Json(warmplane::batch_executor::BatchCallRequest {
+                steps: vec![
+                    warmplane::batch_executor::BatchStep {
+                        id: "send-1".to_string(),
+                        capability_id: "mail.send".to_string(),
+                        args: json!({"to": "person@example.com"}),
+                        continue_on_error: true,
+                    },
+                    warmplane::batch_executor::BatchStep {
+                        id: "send-2".to_string(),
+                        capability_id: "mail.send".to_string(),
+                        args: json!({"to": "second@example.com"}),
+                        continue_on_error: false,
+                    },
+                ],
+                request_id: Some("batch-cancel-request".to_string()),
+                context: None,
+            }),
+        )
+        .await
+        .into_response()
+    });
+
+    let mut held_task = None;
+    for _ in 0..50 {
+        held_task = state
+            .task_registry
+            .list_tasks()
+            .await
+            .into_iter()
+            .find(|task| task.emission.is_some());
+        if held_task.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(held_task.is_some(), "batch should accept its first hold");
+
+    let cancellation = warmplane::http_v1::execute::handle_cancel_operation(
+        State(state.clone()),
+        Path("batch-cancel-request".to_string()),
+        axum::Extension(None),
+        None,
+    )
+    .await
+    .into_response();
+    assert_eq!(cancellation.status(), StatusCode::OK);
+    let response = batch.await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["results"].as_array().unwrap().len(), 1);
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    assert!(upstream.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn rest_async_receipt_can_cancel_the_shared_hold() {
     let (state, mut upstream) = create_state();
     let response = warmplane::http_v1::execute::handle_call_capability(
