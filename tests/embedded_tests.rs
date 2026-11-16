@@ -141,6 +141,191 @@ async fn reversible_call_captures_pre_state_and_persists_interpolated_inverse() 
 }
 
 #[tokio::test]
+async fn failed_pre_snapshot_prevents_the_forward_mutation() {
+    let mut forward = CapabilityMeta::new(
+        "mock",
+        "set_priority",
+        "Set issue priority",
+        "Set issue priority",
+        json!({"type": "object"}),
+    );
+    forward.reversibility = Some(ReversibilityConfig {
+        class: ReversibilityClass::Reversible,
+        hold_window_secs: None,
+        ttl_secs: Some(60),
+        daily_limit: None,
+        pre_snapshot: Some(Box::new(PreSnapshotConfig {
+            capability: "mock.get_issue".to_string(),
+            args: json!({"id": "${args.id}"}),
+            capture_json_path: Some("$.priority".to_string()),
+        })),
+        inverse: Some(Box::new(InverseConfig {
+            capability: "mock.set_priority".to_string(),
+            args: json!({"id": "${args.id}", "priority": "${snapshot}"}),
+        })),
+    });
+    let getter = CapabilityMeta::new(
+        "mock",
+        "get_issue",
+        "Get issue",
+        "Get issue",
+        json!({"type": "object"}),
+    );
+    let capabilities = HashMap::from([
+        ("mock.set_priority".to_string(), forward),
+        ("mock.get_issue".to_string(), getter),
+    ]);
+    let (upstream_tx, mut upstream_rx) = tokio::sync::mpsc::channel(4);
+    let temp = tempfile::tempdir().unwrap();
+    let snapshot_store = SnapshotStore::open(temp.path().join("artifacts")).unwrap();
+    let ledger = UndoLedgerStore::open(temp.path().join("undo_ledger.json")).unwrap();
+    let state = AppState::builder()
+        .servers(HashMap::from([("mock".to_string(), upstream_tx)]))
+        .capabilities(capabilities)
+        .snapshot_store(snapshot_store)
+        .undo_ledger(ledger.clone())
+        .build();
+    let handle = ControlPlaneHandle::new(state);
+    let call = tokio::spawn(async move {
+        handle
+            .call_capability(
+                "mock.set_priority",
+                json!({"id": "ISSUE-7", "priority": "high"}),
+                ExecutionOptions::default(),
+            )
+            .await
+    });
+
+    let Some(ServerMsg::CallTool { name, reply, .. }) = upstream_rx.recv().await else {
+        panic!("expected the pre-snapshot read");
+    };
+    assert_eq!(name, "get_issue");
+    reply
+        .send(Err(warmplane::daemon::UpstreamCallError::Upstream(
+            "snapshot read failed".to_string(),
+        )))
+        .unwrap();
+
+    let response = call.await.unwrap();
+    assert!(!response.ok);
+    assert_eq!(response.error.unwrap().code, "PRE_SNAPSHOT_FAILED");
+    assert!(upstream_rx.try_recv().is_err());
+    assert!(ledger.entries().await.is_empty());
+}
+
+#[tokio::test]
+async fn compensable_daily_limit_requires_approval_before_another_forward_call() {
+    let mut capability = CapabilityMeta::new(
+        "mock",
+        "charge",
+        "Charge account",
+        "Charge account",
+        json!({"type": "object"}),
+    );
+    capability.reversibility = Some(ReversibilityConfig {
+        class: ReversibilityClass::Compensable,
+        hold_window_secs: None,
+        ttl_secs: Some(3600),
+        daily_limit: Some(1),
+        pre_snapshot: None,
+        inverse: Some(Box::new(InverseConfig {
+            capability: "mock.refund".to_string(),
+            args: json!({"charge_id": "${result.charge_id}"}),
+        })),
+    });
+    let (upstream_tx, mut upstream_rx) = tokio::sync::mpsc::channel(8);
+    let temp = tempfile::tempdir().unwrap();
+    let ledger = UndoLedgerStore::open(temp.path().join("undo_ledger.json")).unwrap();
+    let state = AppState::builder()
+        .servers(HashMap::from([("mock".to_string(), upstream_tx)]))
+        .capabilities(HashMap::from([("mock.charge".to_string(), capability)]))
+        .undo_ledger(ledger.clone())
+        .build();
+    let handle = ControlPlaneHandle::new(state.clone());
+
+    let first_handle = handle.clone();
+    let first_call = tokio::spawn(async move {
+        first_handle
+            .call_capability(
+                "mock.charge",
+                json!({"amount": 10}),
+                ExecutionOptions::default().with_async_task(true),
+            )
+            .await
+    });
+    let Some(ServerMsg::CallTool { reply, .. }) =
+        tokio::time::timeout(std::time::Duration::from_secs(2), upstream_rx.recv())
+            .await
+            .unwrap()
+    else {
+        panic!("first compensable call should dispatch under the daily limit");
+    };
+    reply.send(Ok(json!({"charge_id": "charge-1"}))).unwrap();
+    let first_response = first_call.await.unwrap();
+    assert!(first_response.ok);
+    let first_task_id = first_response.data.unwrap()["taskId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let first_terminal = state
+        .hold_coordinator
+        .wait_for_terminal(&state, &first_task_id, std::time::Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(
+        first_terminal.status,
+        warmplane::tasks::TaskStatus::Completed,
+        "task failed: {first_terminal:#?}"
+    );
+    assert_eq!(ledger.entries().await.len(), 1);
+
+    let second = handle
+        .call_capability(
+            "mock.charge",
+            json!({"amount": 20}),
+            ExecutionOptions::default()
+                .with_async_task(true)
+                .with_request_id("over-limit-charge")
+                .with_idempotency_key("over-limit-charge-key"),
+        )
+        .await;
+    assert!(second.ok);
+    let task_id = second.data.unwrap()["taskId"].as_str().unwrap().to_string();
+    let pending = state.task_registry.get_task(&task_id).await.unwrap();
+    assert_eq!(pending.status, warmplane::tasks::TaskStatus::InputRequired);
+    assert!(upstream_rx.try_recv().is_err());
+
+    let responses = std::collections::BTreeMap::from([(
+        "hitl_approval".to_string(),
+        json!({"approved": true}),
+    )]);
+    assert!(state
+        .task_registry
+        .update_task(&task_id, responses)
+        .await
+        .unwrap());
+    let Some(ServerMsg::CallTool { reply, .. }) =
+        tokio::time::timeout(std::time::Duration::from_secs(2), upstream_rx.recv())
+            .await
+            .unwrap()
+    else {
+        panic!("approved over-limit compensable call should dispatch");
+    };
+    reply.send(Ok(json!({"charge_id": "charge-2"}))).unwrap();
+    assert_eq!(
+        state
+            .hold_coordinator
+            .wait_for_terminal(&state, &task_id, std::time::Duration::from_secs(2))
+            .await
+            .unwrap()
+            .status,
+        warmplane::tasks::TaskStatus::Completed
+    );
+    assert_eq!(ledger.entries().await.len(), 2);
+    assert!(upstream_rx.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn test_embedded_warmplane_call_capability_lifecycle() {
     let mut mcp_servers = HashMap::new();
     mcp_servers.insert(

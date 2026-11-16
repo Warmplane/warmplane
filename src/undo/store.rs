@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashSet,
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
@@ -47,7 +48,20 @@ impl SnapshotStore {
         let bytes = serde_json::to_vec(value).context("failed to encode snapshot JSON")?;
         let hash = hex::encode(Sha256::digest(&bytes));
         let path = self.directory.join(format!("art_{}.json", hash));
-        if !path.exists() {
+        if path.exists() {
+            let existing = fs::read(&path).with_context(|| {
+                format!("failed to verify snapshot artifact {}", path.display())
+            })?;
+            anyhow::ensure!(
+                hex::encode(Sha256::digest(&existing)) == hash,
+                "existing snapshot artifact hash mismatch"
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+            }
+        } else {
             let temporary =
                 self.directory
                     .join(format!(".art_{}.{}.tmp", hash, rand::random::<u64>()));
@@ -127,6 +141,14 @@ impl UndoLedgerStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let storage = AtomicFile::new(path);
         let ledger = storage.load_or_default(UndoLedger::default())?;
+        let mut undo_ids = HashSet::with_capacity(ledger.entries.len());
+        anyhow::ensure!(
+            ledger
+                .entries
+                .iter()
+                .all(|entry| undo_ids.insert(entry.undo_id.as_str())),
+            "undo ledger contains duplicate entry IDs"
+        );
         Ok(Self {
             ledger: Arc::new(Mutex::new(ledger)),
             storage,
@@ -136,6 +158,14 @@ impl UndoLedgerStore {
     /// Appends an undo entry and persists the complete ledger before returning.
     pub async fn register(&self, entry: UndoEntry) -> Result<()> {
         let mut guard = self.ledger.lock().await;
+        anyhow::ensure!(
+            !guard
+                .entries
+                .iter()
+                .any(|registered| registered.undo_id == entry.undo_id),
+            "undo entry ID '{}' is already registered",
+            entry.undo_id
+        );
         guard.entries.push(entry);
         if let Err(error) = self.storage.save(&guard) {
             guard.entries.pop();
@@ -233,7 +263,31 @@ mod tests {
                 std::fs::metadata(artifact).unwrap().permissions().mode() & 0o777,
                 0o600
             );
+            assert_eq!(
+                std::fs::metadata(directory.path().join("artifacts"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
         }
+    }
+
+    #[test]
+    fn snapshot_store_rejects_corrupt_existing_content_addressed_artifact() {
+        let directory = tempdir().unwrap();
+        let store = SnapshotStore::open(directory.path().join("artifacts")).unwrap();
+        let snapshot = json!({"priority": "high"});
+        let hash = store.put(&snapshot).unwrap();
+        let artifact = directory
+            .path()
+            .join("artifacts")
+            .join(format!("art_{hash}.json"));
+        std::fs::write(&artifact, b"{\"priority\":\"low\"}").unwrap();
+
+        assert!(store.put(&snapshot).is_err());
+        assert!(store.get(&hash).is_err());
     }
 
     #[tokio::test]
@@ -273,6 +327,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn undo_ledger_rejects_duplicate_ids_without_mutating_the_ledger() {
+        let directory = tempdir().unwrap();
+        let store = UndoLedgerStore::open(directory.path().join("undo_ledger.json")).unwrap();
+        let entry = UndoEntry {
+            undo_id: "undo-duplicate".to_string(),
+            operation_id: None,
+            work_item_id: None,
+            tenant_id: "tenant-a".to_string(),
+            profile_id: None,
+            actor_id: None,
+            forward_capability: "tickets.set_priority".to_string(),
+            reversibility_class: "reversible".to_string(),
+            resolved_inverse_capability: "tickets.set_priority".to_string(),
+            resolved_inverse_args: json!({"id": "ISSUE-1", "priority": "low"}),
+            snapshot_artifact_hash: None,
+            created_at_ms: 100,
+            expires_at_ms: 200,
+            status: UndoEntryStatus::Armed,
+        };
+
+        store.register(entry.clone()).await.unwrap();
+        assert!(store.register(entry.clone()).await.is_err());
+        assert_eq!(store.entries().await, vec![entry]);
+    }
+
+    #[test]
+    fn undo_ledger_rejects_duplicate_ids_loaded_from_disk() {
+        use crate::{storage::AtomicFile, undo::UndoLedger};
+
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("undo_ledger.json");
+        let entry = UndoEntry {
+            undo_id: "undo-duplicate-on-disk".to_string(),
+            operation_id: None,
+            work_item_id: None,
+            tenant_id: "tenant-a".to_string(),
+            profile_id: None,
+            actor_id: None,
+            forward_capability: "tickets.set_priority".to_string(),
+            reversibility_class: "reversible".to_string(),
+            resolved_inverse_capability: "tickets.set_priority".to_string(),
+            resolved_inverse_args: json!({"id": "ISSUE-1", "priority": "low"}),
+            snapshot_artifact_hash: None,
+            created_at_ms: 100,
+            expires_at_ms: 200,
+            status: UndoEntryStatus::Armed,
+        };
+        AtomicFile::new(&path)
+            .save(&UndoLedger {
+                entries: vec![entry.clone(), entry],
+                compensable_usage: Vec::new(),
+            })
+            .unwrap();
+
+        assert!(UndoLedgerStore::open(path).is_err());
+    }
+
+    #[tokio::test]
     async fn compensable_reservations_enforce_rolling_daily_scope() {
         let directory = tempdir().unwrap();
         let store = UndoLedgerStore::open(directory.path().join("undo_ledger.json")).unwrap();
@@ -285,6 +397,18 @@ mod tests {
                 idempotency_key: Some("k1"),
                 approved_over_limit: false,
                 now_ms: 10_000
+            })
+            .await
+            .unwrap());
+        assert!(store
+            .reserve_compensable(CompensableReservation {
+                tenant_id: "tenant-a",
+                profile_id: Some("coding"),
+                capability: "billing.refund",
+                daily_limit: 1,
+                idempotency_key: Some("k1"),
+                approved_over_limit: false,
+                now_ms: 15_000
             })
             .await
             .unwrap());
@@ -333,6 +457,40 @@ mod tests {
                 idempotency_key: Some("k4"),
                 approved_over_limit: false,
                 now_ms: 86_420_001
+            })
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn compensable_usage_survives_ledger_reopen() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("undo_ledger.json");
+        let store = UndoLedgerStore::open(&path).unwrap();
+        assert!(store
+            .reserve_compensable(CompensableReservation {
+                tenant_id: "tenant-a",
+                profile_id: Some("coding"),
+                capability: "billing.refund",
+                daily_limit: 1,
+                idempotency_key: Some("first-attempt"),
+                approved_over_limit: false,
+                now_ms: 10_000,
+            })
+            .await
+            .unwrap());
+        drop(store);
+
+        let reopened = UndoLedgerStore::open(path).unwrap();
+        assert!(!reopened
+            .reserve_compensable(CompensableReservation {
+                tenant_id: "tenant-a",
+                profile_id: Some("coding"),
+                capability: "billing.refund",
+                daily_limit: 1,
+                idempotency_key: Some("second-attempt"),
+                approved_over_limit: false,
+                now_ms: 20_000,
             })
             .await
             .unwrap());

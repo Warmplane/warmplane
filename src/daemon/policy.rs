@@ -5,7 +5,7 @@
 use crate::config::PolicyConfig;
 
 /// Active security policy rules governing capability/resource access and approvals.
-#[derive(Clone, Default, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Policy {
     /// List of wildcard patterns allowed for execution.
     pub allow: Vec<String>,
@@ -21,6 +21,20 @@ pub struct Policy {
     pub hold_window_secs: Option<u64>,
     /// Outbound webhook configuration.
     pub webhook: Option<crate::config::WebhookConfig>,
+}
+
+impl Default for Policy {
+    fn default() -> Self {
+        Self {
+            allow: Vec::new(),
+            deny: Vec::new(),
+            redact_keys: Vec::new(),
+            require_approval: Vec::new(),
+            approval_timeout_secs: 300,
+            hold_window_secs: None,
+            webhook: None,
+        }
+    }
 }
 
 impl Policy {
@@ -206,6 +220,12 @@ pub fn wildcard_match(pattern: &str, value: &str) -> bool {
 mod tests {
     use super::Policy;
     use crate::config::PolicyConfig;
+
+    #[test]
+    fn default_policy_uses_the_configured_approval_timeout_default() {
+        assert_eq!(Policy::default().approval_timeout_secs, 300);
+        assert_eq!(Policy::from_config(None).approval_timeout_secs, 300);
+    }
 
     #[test]
     fn profile_hold_window_overrides_global_and_preserves_other_policy() {

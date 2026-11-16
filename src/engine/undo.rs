@@ -14,8 +14,6 @@ use crate::{
     undo::{CompensableReservation, UndoEntry, UndoEntryStatus},
 };
 
-static UNDO_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-
 /// Forward execution data used to resolve and persist an inverse action.
 pub(crate) struct ForwardCall<'a> {
     /// Capability identifier used for the forward operation.
@@ -177,15 +175,9 @@ pub(crate) async fn register_inverse(
         .unwrap_or_default()
         .as_millis() as u64;
     let ttl_secs = contract.ttl_secs.unwrap_or(3600);
-    let expires_at_ms = now_ms
-        .checked_add(ttl_secs.saturating_mul(1000))
-        .context("undo expiry timestamp overflow")?;
+    let expires_at_ms = undo_expiry_ms(now_ms, ttl_secs)?;
     let entry = UndoEntry {
-        undo_id: format!(
-            "undo_{}_{}",
-            now_ms,
-            UNDO_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ),
+        undo_id: generate_undo_id(now_ms),
         operation_id: forward.context.operation_id.clone(),
         work_item_id: forward.context.work_item_id.clone(),
         tenant_id: forward.tenant_id.to_string(),
@@ -211,4 +203,37 @@ pub(crate) async fn register_inverse(
         .context("persistent undo ledger is required for inverse registration")?
         .register(entry)
         .await
+}
+
+fn generate_undo_id(now_ms: u64) -> String {
+    format!("undo_{now_ms}_{:032x}", rand::random::<u128>())
+}
+
+fn undo_expiry_ms(now_ms: u64, ttl_secs: u64) -> Result<u64> {
+    let ttl_ms = ttl_secs
+        .checked_mul(1000)
+        .context("undo TTL milliseconds overflow")?;
+    now_ms
+        .checked_add(ttl_ms)
+        .context("undo expiry timestamp overflow".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{generate_undo_id, undo_expiry_ms};
+
+    #[test]
+    fn undo_ids_remain_unique_within_the_same_millisecond() {
+        let ids = (0..32)
+            .map(|_| generate_undo_id(1234))
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(ids.len(), 32);
+    }
+
+    #[test]
+    fn undo_expiry_rejects_millisecond_and_deadline_overflow() {
+        assert!(undo_expiry_ms(0, u64::MAX).is_err());
+        assert!(undo_expiry_ms(u64::MAX - 10, 1).is_err());
+        assert_eq!(undo_expiry_ms(100, 2).unwrap(), 2_100);
+    }
 }

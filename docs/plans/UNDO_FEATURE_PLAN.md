@@ -87,7 +87,7 @@ Extend `AliasTarget` in `src/config.rs` and `docs/config.schema.json` to accept 
 * **`ReversibilityClass`**: Enum of `Reversible`, `Compensable`, `Delayable`, and `Irreversible` (defaulting to standard policy evaluation when omitted).
 
 
-* **`UndoEntry`**: Struct persisted in `AtomicFile<UndoLedger>` containing `undo_id` (`undo_<timestamp>_<seq>`), `operation_id`, `work_item_id`, `tenant_id`, `actor_id`, `forward_capability`, `reversibility_class`, `resolved_inverse_capability`, `resolved_inverse_args` (`serde_json::Value`), `snapshot_artifact_hash` (`Option<String>`), `created_at_ms`, `expires_at_ms`, and `status` (`Armed`, `Executing`, `Reverted`, `Expired`, `Failed`).
+* **`UndoEntry`**: Struct persisted in `AtomicFile<UndoLedger>` containing a restart-safe random `undo_id` (`undo_<timestamp>_<random>`), `operation_id`, `work_item_id`, `tenant_id`, `actor_id`, `forward_capability`, `reversibility_class`, `resolved_inverse_capability`, `resolved_inverse_args` (`serde_json::Value`), `snapshot_artifact_hash` (`Option<String>`), `created_at_ms`, `expires_at_ms`, and `status` (`Armed`, `Executing`, `Reverted`, `Expired`, `Failed`). The ledger rejects duplicate IDs on registration and load.
 
 
 * **`GuardArmed` Atomic Flag**: Mirroring Algorithm 1 of the Cordis specification, each `UndoEntry` transitions atomically from `Armed` to `Executing` via compare-and-swap so concurrent operator clicks or fiber unwinds execute the inverse at most once.

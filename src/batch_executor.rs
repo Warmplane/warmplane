@@ -295,6 +295,9 @@ async fn execute_batch_for_tenant_with_budget(
             )
         };
 
+        let compensable_idempotency_key = request_id
+            .as_ref()
+            .map(|batch_id| format!("batch:{batch_id}:step:{}", step.id));
         let mut compensable_reserved = false;
         if let Some(contract) = reversibility
             .as_ref()
@@ -321,7 +324,7 @@ async fn execute_batch_for_tenant_with_budget(
                 &step.capability_id,
                 tenant_id,
                 prof_ctx.profile_id.as_deref(),
-                None,
+                compensable_idempotency_key.as_deref(),
                 false,
             )
             .await
@@ -474,7 +477,7 @@ async fn execute_batch_for_tenant_with_budget(
                     &step.capability_id,
                     tenant_id,
                     prof_ctx.profile_id.as_deref(),
-                    None,
+                    compensable_idempotency_key.as_deref(),
                     true,
                 )
                 .await
@@ -569,9 +572,7 @@ async fn execute_batch_for_tenant_with_budget(
                         args: interpolated_args.clone(),
                         request_id: request_id.clone(),
                         context: context.clone(),
-                        idempotency_key: request_id
-                            .as_ref()
-                            .map(|batch_id| format!("batch:{batch_id}:step:{}", step.id)),
+                        idempotency_key: compensable_idempotency_key.clone(),
                         initial_status: crate::tasks::TaskStatus::Working,
                         status_message: Some(
                             "Waiting for the batch emission release deadline".to_string(),
