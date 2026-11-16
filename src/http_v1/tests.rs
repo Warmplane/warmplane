@@ -905,6 +905,7 @@ async fn test_hitl_approval_flow_and_endpoints() {
         redact_keys: vec![],
         require_approval: vec!["docker.run*".to_string()],
         approval_timeout_secs: 10,
+        hold_window_secs: None,
         webhook: None,
     };
 
@@ -1058,6 +1059,7 @@ async fn test_hitl_rejection_returns_structured_envelope() {
         redact_keys: vec![],
         require_approval: vec!["db.drop*".to_string()],
         approval_timeout_secs: 5,
+        hold_window_secs: None,
         webhook: None,
     };
 

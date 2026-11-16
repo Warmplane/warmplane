@@ -695,6 +695,7 @@ fn handle_alias_command(cmd: AliasCommands) -> Result<()> {
                     summary,
                     description,
                     passthrough,
+                    reversibility: None,
                 }
             } else {
                 crate::config::AliasTarget::Simple(target.clone())

@@ -17,6 +17,8 @@ pub struct Policy {
     pub require_approval: Vec<String>,
     /// Timeout in seconds before a pending approval expires.
     pub approval_timeout_secs: u64,
+    /// Default delayable emission hold window in seconds.
+    pub hold_window_secs: Option<u64>,
     /// Outbound webhook configuration.
     pub webhook: Option<crate::config::WebhookConfig>,
 }
@@ -39,6 +41,7 @@ impl Policy {
             redact_keys: config.redact_keys,
             require_approval: config.require_approval,
             approval_timeout_secs: config.approval_timeout_secs.unwrap_or(300),
+            hold_window_secs: config.hold_window_secs,
             webhook: config.webhook,
         }
     }
@@ -92,6 +95,7 @@ impl Policy {
     /// - **Allow:** If profile policy defines a non-empty `allow` list, it restricts capabilities to that list; otherwise inherits base `allow`.
     /// - **Approval Timeout:** Overridden by profile if present.
     /// - **Webhook:** Overridden by profile if present.
+    /// - **Hold Window:** Overridden by profile when explicitly configured.
     pub fn merge_with_profile(&self, profile_policy: Option<&Policy>) -> Policy {
         let Some(prof_pol) = profile_policy else {
             return self.clone();
@@ -137,6 +141,7 @@ impl Policy {
                 self.approval_timeout_secs
             },
             webhook: prof_pol.webhook.clone().or_else(|| self.webhook.clone()),
+            hold_window_secs: prof_pol.hold_window_secs.or(self.hold_window_secs),
         }
     }
 }
@@ -195,4 +200,40 @@ pub fn wildcard_match(pattern: &str, value: &str) -> bool {
     }
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Policy;
+    use crate::config::PolicyConfig;
+
+    #[test]
+    fn profile_hold_window_overrides_global_and_preserves_other_policy() {
+        let base = Policy::from_config(Some(PolicyConfig {
+            allow: vec!["mail.*".to_string()],
+            hold_window_secs: Some(30),
+            ..PolicyConfig::default()
+        }));
+        let profile = Policy::from_config(Some(PolicyConfig {
+            hold_window_secs: Some(8),
+            ..PolicyConfig::default()
+        }));
+
+        let effective = base.merge_with_profile(Some(&profile));
+        assert_eq!(effective.hold_window_secs, Some(8));
+        assert!(effective.allows("mail.send"));
+    }
+
+    #[test]
+    fn missing_profile_hold_window_inherits_global() {
+        let base = Policy::from_config(Some(PolicyConfig {
+            hold_window_secs: Some(30),
+            ..PolicyConfig::default()
+        }));
+        let profile = Policy::default();
+        assert_eq!(
+            base.merge_with_profile(Some(&profile)).hold_window_secs,
+            Some(30)
+        );
+    }
 }

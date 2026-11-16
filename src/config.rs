@@ -200,7 +200,53 @@ pub enum AliasTarget {
         /// Expose this alias directly as a top-level native tool in tools/list
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         passthrough: bool,
+        /// Optional execution reversibility contract.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reversibility: Option<ReversibilityConfig>,
     },
+}
+
+/// Execution reversibility behavior configured for an alias.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub struct ReversibilityConfig {
+    /// Reversibility class supported by this configuration.
+    #[serde(rename = "class")]
+    pub class: ReversibilityClass,
+    /// Cancellation hold duration in seconds for delayable emissions.
+    #[serde(
+        default,
+        rename = "holdWindowSecs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hold_window_secs: Option<u64>,
+}
+
+/// Reversibility behavior classes.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReversibilityClass {
+    /// Delay dispatch so an operator can cancel an outbound emission.
+    Delayable,
+}
+
+/// Resolves a canonical capability's delayable hold duration from policy and alias settings.
+pub fn resolve_hold_window_secs(
+    aliases: &HashMap<String, AliasTarget>,
+    canonical_target: &str,
+    policy_window_secs: Option<u64>,
+) -> Option<u64> {
+    let contract = aliases
+        .values()
+        .find(|alias| alias.target() == canonical_target)
+        .and_then(AliasTarget::reversibility)?;
+    if contract.class != ReversibilityClass::Delayable {
+        return None;
+    }
+    Some(
+        policy_window_secs
+            .or(contract.hold_window_secs)
+            .unwrap_or(30),
+    )
 }
 
 impl AliasTarget {
@@ -233,6 +279,14 @@ impl AliasTarget {
         match self {
             Self::Simple(_) => false,
             Self::Detailed { passthrough, .. } => *passthrough,
+        }
+    }
+
+    /// Returns the optional reversibility contract configured on this alias.
+    pub fn reversibility(&self) -> Option<&ReversibilityConfig> {
+        match self {
+            Self::Simple(_) => None,
+            Self::Detailed { reversibility, .. } => reversibility.as_ref(),
         }
     }
 }
@@ -472,6 +526,14 @@ pub struct PolicyConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub approval_timeout_secs: Option<u64>,
+    /// Default hold window in seconds for delayable capabilities.
+    #[serde(
+        default,
+        rename = "holdWindowSecs",
+        alias = "hold_window_secs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hold_window_secs: Option<u64>,
     /// Outbound webhook configuration for dispatching approval events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook: Option<WebhookConfig>,
@@ -871,6 +933,51 @@ pub fn resolve_client_port(
 }
 
 fn validate_config(config: &McpConfig) -> Result<()> {
+    fn validate_hold_window(value: Option<u64>, context: &str) -> Result<()> {
+        if let Some(seconds) = value {
+            if seconds == 0 || seconds.checked_mul(1000).is_none() {
+                anyhow::bail!(
+                    "{} must be between 1 and {} seconds",
+                    context,
+                    u64::MAX / 1000
+                );
+            }
+        }
+        Ok(())
+    }
+
+    if let Some(policy) = &config.policy {
+        validate_hold_window(policy.hold_window_secs, "policy.holdWindowSecs")?;
+    }
+    for (name, profile) in &config.profiles {
+        if let Some(policy) = &profile.policy {
+            validate_hold_window(
+                policy.hold_window_secs,
+                &format!("profiles.{}.policy.holdWindowSecs", name),
+            )?;
+        }
+    }
+    for (alias, target) in &config.capability_aliases {
+        if let Some(contract) = target.reversibility() {
+            validate_hold_window(
+                contract.hold_window_secs,
+                &format!("capabilityAliases.{}.reversibility.holdWindowSecs", alias),
+            )?;
+        }
+    }
+    let mut contracts = HashMap::new();
+    for (alias, target) in &config.capability_aliases {
+        if let Some(contract) = target.reversibility() {
+            match contracts.insert(target.target(), contract) {
+                Some(existing) if existing != contract => anyhow::bail!(
+                    "Capability aliases targeting '{}' define conflicting reversibility contracts (including '{}')",
+                    target.target(), alias
+                ),
+                _ => {}
+            }
+        }
+    }
+
     for (server_id, server) in &config.mcp_servers {
         let has_command = server
             .command
@@ -1060,6 +1167,106 @@ fn validate_config(config: &McpConfig) -> Result<()> {
 mod tests {
     use super::{validate_config, AuthConfig, McpConfig, ServerConfig};
     use std::collections::HashMap;
+
+    #[test]
+    fn delayable_alias_hold_window_uses_policy_then_alias_then_default() {
+        let aliases = HashMap::from([(
+            "mail.send".to_string(),
+            super::AliasTarget::Detailed {
+                target: "gmail.send".to_string(),
+                summary: None,
+                description: None,
+                passthrough: false,
+                reversibility: Some(super::ReversibilityConfig {
+                    class: super::ReversibilityClass::Delayable,
+                    hold_window_secs: None,
+                }),
+            },
+        )]);
+        assert_eq!(
+            super::resolve_hold_window_secs(&aliases, "gmail.send", Some(12)),
+            Some(12)
+        );
+        assert_eq!(
+            super::resolve_hold_window_secs(&aliases, "gmail.send", None),
+            Some(30)
+        );
+        assert_eq!(
+            super::resolve_hold_window_secs(&HashMap::new(), "gmail.send", Some(12)),
+            None
+        );
+    }
+
+    #[test]
+    fn policy_hold_window_overrides_delayable_alias() {
+        let aliases = HashMap::from([(
+            "mail.send".to_string(),
+            super::AliasTarget::Detailed {
+                target: "gmail.send".to_string(),
+                summary: None,
+                description: None,
+                passthrough: false,
+                reversibility: Some(super::ReversibilityConfig {
+                    class: super::ReversibilityClass::Delayable,
+                    hold_window_secs: Some(7),
+                }),
+            },
+        )]);
+        assert_eq!(
+            super::resolve_hold_window_secs(&aliases, "gmail.send", Some(12)),
+            Some(12)
+        );
+        assert_eq!(
+            super::resolve_hold_window_secs(&aliases, "gmail.send", None),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn config_rejects_zero_hold_window_and_conflicting_target_contracts() {
+        let mut config = McpConfig {
+            policy: Some(super::PolicyConfig {
+                hold_window_secs: Some(0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(validate_config(&config).is_err());
+
+        config.policy = None;
+        let contract = |seconds| super::AliasTarget::Detailed {
+            target: "mail.send".to_string(),
+            summary: None,
+            description: None,
+            passthrough: false,
+            reversibility: Some(super::ReversibilityConfig {
+                class: super::ReversibilityClass::Delayable,
+                hold_window_secs: Some(seconds),
+            }),
+        };
+        config
+            .capability_aliases
+            .insert("send_one".to_string(), contract(5));
+        config
+            .capability_aliases
+            .insert("send_two".to_string(), contract(9));
+        assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn delayable_alias_contract_deserializes_and_round_trips() {
+        let value = serde_json::json!({
+            "target": "gmail.send",
+            "reversibility": {"class": "delayable", "holdWindowSecs": 4}
+        });
+        let alias: super::AliasTarget = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(alias.reversibility().unwrap().hold_window_secs, Some(4));
+        assert_eq!(serde_json::to_value(alias).unwrap(), value);
+        assert!(serde_json::from_value::<super::ReversibilityConfig>(
+            serde_json::json!({"class": "reversible"})
+        )
+        .is_err());
+    }
 
     fn empty_server() -> ServerConfig {
         ServerConfig {

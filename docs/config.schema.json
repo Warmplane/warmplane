@@ -19,7 +19,9 @@
             "properties": {
               "target": { "type": "string" },
               "summary": { "type": "string" },
-              "description": { "type": "string" }
+              "description": { "type": "string" },
+              "passthrough": { "type": "boolean" },
+              "reversibility": { "$ref": "#/$defs/reversibilityConfig" }
             },
             "additionalProperties": false
           }
@@ -89,11 +91,24 @@
           "type": "integer",
           "minimum": 1
         },
+        "holdWindowSecs": { "type": "integer", "minimum": 1 },
         "webhook": {
           "$ref": "#/$defs/webhookConfig"
         }
       },
       "additionalProperties": false
+    },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "servers": { "type": "array", "items": { "type": "string" } },
+          "description": { "type": "string" },
+          "policy": { "$ref": "#/$defs/policyConfig" }
+        },
+        "additionalProperties": false
+      }
     },
     "audit": {
       "type": "object",
@@ -212,6 +227,28 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "policyConfig": {
+      "type": "object",
+      "properties": {
+        "allow": { "type": "array", "items": { "type": "string" } },
+        "deny": { "type": "array", "items": { "type": "string" } },
+        "redactKeys": { "type": "array", "items": { "type": "string" } },
+        "requireApproval": { "type": "array", "items": { "type": "string" } },
+        "approvalTimeoutSecs": { "type": "integer", "minimum": 1 },
+        "holdWindowSecs": { "type": "integer", "minimum": 1 },
+        "webhook": { "$ref": "#/$defs/webhookConfig" }
+      },
+      "additionalProperties": false
+    },
+    "reversibilityConfig": {
+      "type": "object",
+      "required": ["class"],
+      "properties": {
+        "class": { "const": "delayable" },
+        "holdWindowSecs": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
     "webhookConfig": {
       "type": "object",
       "required": ["url"],

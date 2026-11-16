@@ -51,6 +51,7 @@ async fn test_tasks_lifecycle_and_hitl_integration() {
         redact_keys: vec!["card_number".to_string()],
         require_approval: vec!["payments.*".to_string()],
         approval_timeout_secs: Some(30),
+        hold_window_secs: None,
         webhook: None,
     };
 

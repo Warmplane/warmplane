@@ -31,6 +31,7 @@
         "allow": ["sqlite.query", "postgres.*"],
         "deny": ["sqlite.delete*"],
         "requireApproval": ["postgres.mutation*"],
+        "holdWindowSecs": 15,
         "redactKeys": ["password", "token"]
       }
     }
@@ -42,7 +43,7 @@
       "summary": "Search codebase with semantic or BM25 ranking. Pass absolute repo path."
     }
   },
-  "policy": { "requireApproval": ["*.drop*"], "redactKeys": ["secret", "key"] },
+  "policy": { "requireApproval": ["*.drop*"], "holdWindowSecs": 30, "redactKeys": ["secret", "key"] },
   "chatops": {
     "webhooks": [{ "platform": "slack", "url": "https://hooks.slack.com/...", "signingSecret": "keychain://SLACK_SECRET" }]
   }

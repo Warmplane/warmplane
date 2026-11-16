@@ -217,6 +217,9 @@ pub struct UpdateAliasRequest {
     /// Whether to expose this alias directly as a native tool in tools/list.
     #[serde(default)]
     pub passthrough: Option<bool>,
+    /// Optional reversibility contract for capability aliases.
+    #[serde(default)]
+    pub reversibility: Option<crate::config::ReversibilityConfig>,
 }
 
 /// Request body for creating or updating a server profile constellation.

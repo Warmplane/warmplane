@@ -212,7 +212,7 @@ The configuration file (default: `mcp_servers.json`) controls upstream server co
 | :--- | :--- | :---: | :--- | :--- |
 | `port` | Number | No | `9090` | TCP listening port for the HTTP daemon. |
 | `toolTimeoutMs` | Number | No | `15000` | Upstream operation timeout in milliseconds. |
-| `capabilityAliases` | Object | No | `{}` | Map of public alias names to canonical upstream tool targets (`<server>.<tool>`) or detailed objects with custom `summary` and `description` overrides. |
+| `capabilityAliases` | Object | No | `{}` | Map public alias names to canonical upstream tool targets (`<server>.<tool>`); detailed objects may override descriptions and declare a `delayable` reversibility contract. |
 | `resourceAliases` | Object | No | `{}` | Map of public alias names to canonical upstream resource URIs or detailed objects with custom `summary` and `description` overrides. |
 | `promptAliases` | Object | No | `{}` | Map of public alias names to canonical upstream prompt names or detailed objects with custom `summary` and `description` overrides. |
 | `policy` | Object | No | `null` | Access control rules, approval workflows, and data redaction settings. |
@@ -350,6 +350,7 @@ The `policy` block enforces global security boundaries, human approval gates, an
   "allow": ["github.*", "obs.*", "db.read_*"],
   "deny": ["*.delete", "db.drop_*", "admin.*"],
   "requireApproval": ["docker.run*", "db.write_*", "payments.*"],
+  "holdWindowSecs": 30,
   "approvalTimeoutSecs": 300,
   "redactKeys": ["password", "api_key", "secret", "private_key"],
   "webhook": {
@@ -365,6 +366,7 @@ The `policy` block enforces global security boundaries, human approval gates, an
 
 - **Deny Precedence**: Rules in `deny` take absolute precedence over `allow` and `requireApproval` rules. Matching a `deny` pattern blocks execution immediately.
 - **Human-in-the-Loop Interception**: Capabilities matching `requireApproval` suspend execution and return a pending ticket until approved or rejected.
+- **Delayable Emissions**: A capability alias may declare `"reversibility": {"class":"delayable"}`. The effective profile policy window overrides the global policy window; either policy value overrides the optional alias `holdWindowSecs`. If none is configured, the window defaults to 30 seconds. The hold window begins after any required approval.
 - **Crash-Safe Persistence**: Pending approval tickets and decisions are atomically stored to disk (`AtomicFile`), ensuring unexpired tickets and timeout schedules survive daemon restarts.
 - **Default Permissiveness**: If `allow` is empty or omitted, all non-denied items are permitted.
 - **Data Redaction**: Fields matching keys in `redactKeys` are masked in logs, trace spans, and webhook payloads.
@@ -513,7 +515,8 @@ The `profiles` block defines named server constellations. Profiles allow a singl
       "servers": ["github", "sqlite"],
       "policy": {
         "deny": ["*.write*", "*.create*", "*.delete*"],
-        "requireApproval": ["sqlite.query"]
+        "requireApproval": ["sqlite.query"],
+        "holdWindowSecs": 10
       }
     }
   }

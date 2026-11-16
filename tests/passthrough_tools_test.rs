@@ -30,6 +30,7 @@ async fn test_mcp_passthrough_tools_listing_and_execution() {
             summary: Some("Search indexed documentation".to_string()),
             description: Some("Search documentation using full text".to_string()),
             passthrough: true,
+            reversibility: None,
         },
     );
     mcp_config.capability_aliases.insert(
@@ -39,6 +40,7 @@ async fn test_mcp_passthrough_tools_listing_and_execution() {
             summary: Some("Internal hidden operation".to_string()),
             description: None,
             passthrough: false,
+            reversibility: None,
         },
     );
     save_config(&config_path, &mcp_config).unwrap();

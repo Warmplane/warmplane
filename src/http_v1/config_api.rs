@@ -455,19 +455,46 @@ pub async fn handle_update_alias(
     };
 
     let kind_lower = payload.kind.to_lowercase();
+    if payload.reversibility.is_some()
+        && !matches!(kind_lower.as_str(), "tool" | "capability" | "cap")
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "ok": false,
+                "error": "Reversibility contracts are supported only for capability aliases"
+            })),
+        )
+            .into_response();
+    }
     if let Some(ref target) = payload.target {
         let passthrough = payload.passthrough.unwrap_or(false);
-        let alias_target =
-            if payload.summary.is_some() || payload.description.is_some() || passthrough {
-                crate::config::AliasTarget::Detailed {
-                    target: target.clone(),
-                    summary: payload.summary.clone(),
-                    description: payload.description.clone(),
-                    passthrough,
-                }
-            } else {
-                crate::config::AliasTarget::Simple(target.clone())
-            };
+        let reversibility = payload.reversibility.clone().or_else(|| {
+            config
+                .capability_aliases
+                .get(&payload.alias)
+                .and_then(|existing| match existing {
+                    crate::config::AliasTarget::Detailed { reversibility, .. } => {
+                        reversibility.clone()
+                    }
+                    crate::config::AliasTarget::Simple(_) => None,
+                })
+        });
+        let alias_target = if payload.summary.is_some()
+            || payload.description.is_some()
+            || passthrough
+            || reversibility.is_some()
+        {
+            crate::config::AliasTarget::Detailed {
+                target: target.clone(),
+                summary: payload.summary.clone(),
+                description: payload.description.clone(),
+                passthrough,
+                reversibility,
+            }
+        } else {
+            crate::config::AliasTarget::Simple(target.clone())
+        };
 
         match kind_lower.as_str() {
             "tool" | "capability" | "cap" => {
