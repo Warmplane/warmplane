@@ -50,6 +50,8 @@ pub async fn initialize_state(
         approval_registry,
         task_registry,
         sampling_registry,
+        snapshot_store,
+        undo_ledger,
     ) = if let Some(dir_str) = state_dir_opt {
         let state_dir = crate::storage::StateDirectory::new(dir_str);
         let _ = state_dir.ensure_exists();
@@ -64,7 +66,9 @@ pub async fn initialize_state(
         let app = crate::approvals::ApprovalRegistry::open_or_create(state_dir.approvals_file())?;
         let tasks = crate::tasks::TaskRegistry::open_or_create(state_dir.tasks_file())?;
         let samp = crate::sampling::SamplingRegistry::open_or_create(state_dir.sampling_file())?;
-        (ev, idm, oa, app, tasks, samp)
+        let snapshots = crate::undo::SnapshotStore::open(state_dir.artifacts_dir())?;
+        let ledger = crate::undo::UndoLedgerStore::open(state_dir.undo_ledger_file())?;
+        (ev, idm, oa, app, tasks, samp, Some(snapshots), Some(ledger))
     } else {
         (
             Arc::new(crate::catalog::CatalogEventStore::new()),
@@ -73,6 +77,8 @@ pub async fn initialize_state(
             crate::approvals::ApprovalRegistry::default(),
             crate::tasks::TaskRegistry::new(),
             crate::sampling::SamplingRegistry::new(),
+            None,
+            None,
         )
     };
 
@@ -175,6 +181,8 @@ pub async fn initialize_state(
         .oauth_registry(oauth_registry)
         .approval_registry(approval_registry)
         .task_registry(task_registry)
+        .snapshot_store_opt(snapshot_store)
+        .undo_ledger_opt(undo_ledger)
         .sampling_registry(sampling_registry)
         .audit_store(audit_store)
         .audit_handle(audit_handle)

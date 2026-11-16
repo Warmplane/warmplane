@@ -212,7 +212,7 @@ The configuration file (default: `mcp_servers.json`) controls upstream server co
 | :--- | :--- | :---: | :--- | :--- |
 | `port` | Number | No | `9090` | TCP listening port for the HTTP daemon. |
 | `toolTimeoutMs` | Number | No | `15000` | Upstream operation timeout in milliseconds. |
-| `capabilityAliases` | Object | No | `{}` | Map public alias names to canonical upstream tool targets (`<server>.<tool>`); detailed objects may override descriptions and declare a `delayable` reversibility contract. |
+| `capabilityAliases` | Object | No | `{}` | Map public alias names to canonical upstream tool targets (`<server>.<tool>`); detailed objects may declare reversibility contracts. |
 | `resourceAliases` | Object | No | `{}` | Map of public alias names to canonical upstream resource URIs or detailed objects with custom `summary` and `description` overrides. |
 | `promptAliases` | Object | No | `{}` | Map of public alias names to canonical upstream prompt names or detailed objects with custom `summary` and `description` overrides. |
 | `policy` | Object | No | `null` | Access control rules, approval workflows, and data redaction settings. |
@@ -367,6 +367,31 @@ The `policy` block enforces global security boundaries, human approval gates, an
 - **Deny Precedence**: Rules in `deny` take absolute precedence over `allow` and `requireApproval` rules. Matching a `deny` pattern blocks execution immediately.
 - **Human-in-the-Loop Interception**: Capabilities matching `requireApproval` suspend execution and return a pending ticket until approved or rejected.
 - **Delayable Emissions**: A capability alias may declare `"reversibility": {"class":"delayable"}`. The effective profile policy window overrides the global policy window; either policy value overrides the optional alias `holdWindowSecs`. If none is configured, the window defaults to 30 seconds. The hold window begins after any required approval.
+- **Reversible and Compensable Calls**: Detailed capability aliases can capture pre-state and register an inverse after a successful single call or batch step. The pre-snapshot capability must be allowed by the effective policy and available in the active profile. Snapshot or ledger persistence failure prevents execution or reports that inverse registration failed after execution; operators should treat that latter result as requiring reconciliation.
+- **Snapshot and Inverse Templates**: Template strings support `${args.path}`, `${result.path}`, and `${snapshot.path}`. An exact placeholder preserves the referenced JSON type; embedded placeholders are rendered as strings. A configured `preSnapshot` runs before the forward call and may select a JSONPath with `captureJsonPath`. Snapshot JSON is stored by SHA-256 content hash under the state directory. `inverse` supplies the compensating capability and arguments.
+- **Compensable Daily Limit**: `dailyLimit` is required for `compensable` contracts and counts invocations over a rolling 24-hour period per tenant, profile, and capability. Once reached, Warmplane routes the invocation through the existing human approval flow.
+- **Reversibility Example**:
+
+  ```json
+  "capabilityAliases": {
+    "set-priority": {
+      "target": "linear.update_issue",
+      "reversibility": {
+        "class": "reversible",
+        "ttlSecs": 86400,
+        "preSnapshot": {
+          "capability": "linear.get_issue",
+          "args": {"id": "${args.id}"},
+          "captureJsonPath": "$.priority"
+        },
+        "inverse": {
+          "capability": "linear.update_issue",
+          "args": {"id": "${args.id}", "priority": "${snapshot}"}
+        }
+      }
+    }
+  }
+  ```
 - **Crash-Safe Persistence**: Pending approval tickets and decisions are atomically stored to disk (`AtomicFile`), ensuring unexpired tickets and timeout schedules survive daemon restarts.
 - **Default Permissiveness**: If `allow` is empty or omitted, all non-denied items are permitted.
 - **Data Redaction**: Fields matching keys in `redactKeys` are masked in logs, trace spans, and webhook payloads.

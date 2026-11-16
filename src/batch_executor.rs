@@ -74,6 +74,16 @@ pub const MAX_BATCH_STEPS: usize = 50;
 /// Default overall execution budget for a multi-step batch (60 seconds).
 pub const DEFAULT_BATCH_TIMEOUT_MS: u64 = 60_000;
 
+/// Policy and tenant scope for batch execution.
+pub struct BatchExecutionScope<'a> {
+    /// Effective policy applied to each batch step.
+    pub policy: &'a crate::daemon::Policy,
+    /// Active profile and server boundaries.
+    pub profile: &'a crate::context::ProfileContext,
+    /// Tenant used to scope persisted compensable usage.
+    pub tenant_id: &'a str,
+}
+
 /// Executes an ordered sequence of tool execution steps, interpolating prior step outputs.
 ///
 /// # Arguments
@@ -95,6 +105,35 @@ pub async fn execute_batch(
     policy: &crate::daemon::Policy,
     prof_ctx: &crate::context::ProfileContext,
 ) -> BatchCallResponse {
+    execute_batch_for_tenant(
+        state,
+        steps,
+        trace_id,
+        request_id,
+        context,
+        BatchExecutionScope {
+            policy,
+            profile: prof_ctx,
+            tenant_id: "default",
+        },
+    )
+    .await
+}
+
+/// Executes a batch with an explicit tenant scope for persisted undo accounting.
+pub async fn execute_batch_for_tenant(
+    state: &AppState,
+    steps: Vec<BatchStep>,
+    trace_id: String,
+    request_id: Option<String>,
+    context: Option<crate::context::RequestContext>,
+    scope: BatchExecutionScope<'_>,
+) -> BatchCallResponse {
+    let BatchExecutionScope {
+        policy,
+        profile: prof_ctx,
+        tenant_id,
+    } = scope;
     let start_all = std::time::Instant::now();
 
     if steps.len() > MAX_BATCH_STEPS {
@@ -121,6 +160,7 @@ pub async fn execute_batch(
     let mut step_outputs: HashMap<String, Value> = HashMap::new();
     let mut results = Vec::new();
     let mut overall_ok = true;
+    let fallback_context = crate::context::RequestContext::default();
 
     for step in steps {
         let step_start = std::time::Instant::now();
@@ -165,7 +205,7 @@ pub async fn execute_batch(
         }
 
         // Lookup capability target
-        let (server, tool) = {
+        let (server, tool, reversibility) = {
             let caps_guard = state.capabilities.read().await;
             let Some(meta) = caps_guard.get(&step.capability_id) else {
                 results.push(BatchStepResult {
@@ -202,19 +242,78 @@ pub async fn execute_batch(
                 continue;
             }
 
-            (meta.server.clone(), meta.tool.clone())
-        };
-
-        // Enforce HITL approval gate if required
-        let (requires_approval, redact_keys, approval_timeout_secs, webhook_cfg) = {
-            let p = state.policy.read().await;
             (
-                p.requires_approval(&step.capability_id),
-                p.redact_keys.clone(),
-                p.approval_timeout_secs,
-                p.webhook.clone(),
+                meta.server.clone(),
+                meta.tool.clone(),
+                meta.reversibility.clone(),
             )
         };
+
+        let mut compensable_reserved = false;
+        if let Some(contract) = reversibility
+            .as_ref()
+            .filter(|contract| contract.class == crate::config::ReversibilityClass::Compensable)
+        {
+            if state.undo_ledger.is_none() {
+                results.push(BatchStepResult {
+                    id: step.id.clone(),
+                    capability_id: step.capability_id.clone(),
+                    ok: false,
+                    data: None,
+                    error: Some("Persistent undo storage is unavailable".to_string()),
+                    duration_us: step_start.elapsed().as_micros() as u64,
+                });
+                overall_ok = false;
+                if !step.continue_on_error {
+                    break;
+                }
+                continue;
+            }
+            match crate::engine::undo::reserve_compensable(
+                state,
+                contract,
+                &step.capability_id,
+                tenant_id,
+                prof_ctx.profile_id.as_deref(),
+                None,
+                false,
+            )
+            .await
+            {
+                Ok(true) => compensable_reserved = true,
+                Ok(false) => {}
+                Err(error) => {
+                    results.push(BatchStepResult {
+                        id: step.id.clone(),
+                        capability_id: step.capability_id.clone(),
+                        ok: false,
+                        data: None,
+                        error: Some(error.to_string()),
+                        duration_us: step_start.elapsed().as_micros() as u64,
+                    });
+                    overall_ok = false;
+                    if !step.continue_on_error {
+                        break;
+                    }
+                    continue;
+                }
+            }
+        }
+
+        // Enforce HITL approval gate if required
+        let (mut requires_approval, redact_keys, approval_timeout_secs, webhook_cfg) = (
+            policy.requires_approval(&step.capability_id),
+            policy.redact_keys.clone(),
+            policy.approval_timeout_secs,
+            policy.webhook.clone(),
+        );
+
+        if reversibility.as_ref().is_some_and(|contract| {
+            contract.class == crate::config::ReversibilityClass::Compensable
+        }) && !compensable_reserved
+        {
+            requires_approval = true;
+        }
 
         if requires_approval {
             let sanitized =
@@ -303,6 +402,39 @@ pub async fn execute_batch(
             }
         }
 
+        if requires_approval && !compensable_reserved {
+            if let Some(contract) = reversibility
+                .as_ref()
+                .filter(|contract| contract.class == crate::config::ReversibilityClass::Compensable)
+            {
+                if let Err(error) = crate::engine::undo::reserve_compensable(
+                    state,
+                    contract,
+                    &step.capability_id,
+                    tenant_id,
+                    prof_ctx.profile_id.as_deref(),
+                    None,
+                    true,
+                )
+                .await
+                {
+                    results.push(BatchStepResult {
+                        id: step.id.clone(),
+                        capability_id: step.capability_id.clone(),
+                        ok: false,
+                        data: None,
+                        error: Some(error.to_string()),
+                        duration_us: step_start.elapsed().as_micros() as u64,
+                    });
+                    overall_ok = false;
+                    if !step.continue_on_error {
+                        break;
+                    }
+                    continue;
+                }
+            }
+        }
+
         // Circuit breaker check
         if let Err(cb_err) = state.circuit_breakers.check_permission(&server).await {
             results.push(BatchStepResult {
@@ -319,6 +451,61 @@ pub async fn execute_batch(
             }
             continue;
         }
+
+        let (snapshot, snapshot_hash) = if let Some(contract) = reversibility.as_ref() {
+            if matches!(
+                contract.class,
+                crate::config::ReversibilityClass::Reversible
+                    | crate::config::ReversibilityClass::Compensable
+            ) && state.undo_ledger.is_none()
+            {
+                results.push(BatchStepResult {
+                    id: step.id.clone(),
+                    capability_id: step.capability_id.clone(),
+                    ok: false,
+                    data: None,
+                    error: Some("Persistent undo storage is unavailable".to_string()),
+                    duration_us: step_start.elapsed().as_micros() as u64,
+                });
+                overall_ok = false;
+                if !step.continue_on_error {
+                    break;
+                }
+                continue;
+            }
+            if let Some(pre_snapshot) = &contract.pre_snapshot {
+                match crate::engine::undo::capture_pre_snapshot(
+                    state,
+                    pre_snapshot,
+                    &interpolated_args,
+                    prof_ctx,
+                    policy,
+                )
+                .await
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        results.push(BatchStepResult {
+                            id: step.id.clone(),
+                            capability_id: step.capability_id.clone(),
+                            ok: false,
+                            data: None,
+                            error: Some(format!("Pre-snapshot failed: {error}")),
+                            duration_us: step_start.elapsed().as_micros() as u64,
+                        });
+                        overall_ok = false;
+                        if !step.continue_on_error {
+                            break;
+                        }
+                        continue;
+                    }
+                }
+            } else {
+                (Value::Null, None)
+            }
+        } else {
+            (Value::Null, None)
+        };
 
         // Lookup server sender channel
         let tx = {
@@ -373,6 +560,40 @@ pub async fn execute_batch(
         match reply_rx.await {
             Ok(Ok(val)) => {
                 state.circuit_breakers.record_success(&server).await;
+                if let Some(contract) = reversibility.as_ref() {
+                    if let Err(error) = crate::engine::undo::register_inverse(
+                        state,
+                        contract,
+                        crate::engine::undo::ForwardCall {
+                            capability: &step.capability_id,
+                            args: &interpolated_args,
+                            result: &val,
+                            snapshot: &snapshot,
+                            snapshot_hash,
+                            context: context.as_ref().unwrap_or(&fallback_context),
+                            tenant_id,
+                            profile_id: prof_ctx.profile_id.as_deref(),
+                        },
+                    )
+                    .await
+                    {
+                        results.push(BatchStepResult {
+                            id: step.id.clone(),
+                            capability_id: step.capability_id.clone(),
+                            ok: false,
+                            data: None,
+                            error: Some(format!(
+                                "Forward call succeeded but inverse registration failed: {error}"
+                            )),
+                            duration_us: step_start.elapsed().as_micros() as u64,
+                        });
+                        overall_ok = false;
+                        if !step.continue_on_error {
+                            break;
+                        }
+                        continue;
+                    }
+                }
                 let sanitized_res =
                     crate::http_v1::helpers::redact_value(val.clone(), &redact_keys);
                 let sanitized_args =
@@ -469,41 +690,7 @@ pub async fn execute_batch(
 /// Recursively traverses a JSON Value, replacing any `$step_id.path` string references
 /// with corresponding values extracted from previous completed steps.
 pub fn interpolate_step_references(val: &Value, outputs: &HashMap<String, Value>) -> Value {
-    match val {
-        Value::String(s) if s.starts_with('$') => {
-            let ref_expr = &s[1..];
-            resolve_reference(ref_expr, outputs).unwrap_or_else(|| val.clone())
-        }
-        Value::Array(arr) => Value::Array(
-            arr.iter()
-                .map(|item| interpolate_step_references(item, outputs))
-                .collect(),
-        ),
-        Value::Object(map) => {
-            let mut new_map = serde_json::Map::new();
-            for (k, v) in map {
-                new_map.insert(k.clone(), interpolate_step_references(v, outputs));
-            }
-            Value::Object(new_map)
-        }
-        other => other.clone(),
-    }
-}
-
-fn resolve_reference(expr: &str, outputs: &HashMap<String, Value>) -> Option<Value> {
-    let mut parts = expr.splitn(2, '.');
-    let step_id = parts.next()?;
-    let step_val = outputs.get(step_id)?;
-
-    if let Some(subpath) = parts.next() {
-        let mut cur = step_val;
-        for key in subpath.split('.') {
-            cur = cur.get(key)?;
-        }
-        Some(cur.clone())
-    } else {
-        Some(step_val.clone())
-    }
+    crate::engine::interpolation::interpolate_step_references(val, outputs)
 }
 
 #[cfg(test)]

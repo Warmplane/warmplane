@@ -241,6 +241,11 @@ macro_rules! discover_supervisor_items {
                                         input_schema,
                                         tags: vec![$server_id.to_string()],
                                         examples: vec![],
+                                        reversibility: $capability_aliases
+                                            .values()
+                                            .find(|target_cfg| target_cfg.target() == source_id)
+                                            .and_then(AliasTarget::reversibility)
+                                            .cloned(),
                                     },
                                 ));
                             }

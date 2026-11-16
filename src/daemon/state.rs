@@ -73,6 +73,10 @@ pub struct AppState {
     pub approval_registry: crate::approvals::ApprovalRegistry,
     /// SEP-2663 task management registry.
     pub task_registry: crate::tasks::TaskRegistry,
+    /// Persistent store for content-addressed pre-state snapshots, when enabled.
+    pub snapshot_store: Option<crate::undo::SnapshotStore>,
+    /// Persistent ledger of armed inverse actions, when state persistence is enabled.
+    pub undo_ledger: Option<crate::undo::UndoLedgerStore>,
     /// Append-only WORM audit store.
     pub audit_store: crate::audit::SharedAuditStore,
     /// Non-blocking async audit event dispatcher handle.
@@ -135,6 +139,8 @@ pub struct AppStateBuilder {
     oauth_registry: Option<crate::oauth2::OAuthRegistry>,
     approval_registry: Option<crate::approvals::ApprovalRegistry>,
     task_registry: Option<crate::tasks::TaskRegistry>,
+    snapshot_store: Option<crate::undo::SnapshotStore>,
+    undo_ledger: Option<crate::undo::UndoLedgerStore>,
     sampling_registry: Option<crate::sampling::SamplingRegistry>,
     audit_store: Option<crate::audit::SharedAuditStore>,
     audit_handle: Option<crate::audit::AuditHandle>,
@@ -322,6 +328,30 @@ impl AppStateBuilder {
         self
     }
 
+    /// Sets the content-addressed snapshot store.
+    pub fn snapshot_store(mut self, store: crate::undo::SnapshotStore) -> Self {
+        self.snapshot_store = Some(store);
+        self
+    }
+
+    /// Sets an optional content-addressed snapshot store.
+    pub fn snapshot_store_opt(mut self, store: Option<crate::undo::SnapshotStore>) -> Self {
+        self.snapshot_store = store;
+        self
+    }
+
+    /// Sets the persistent undo ledger store.
+    pub fn undo_ledger(mut self, store: crate::undo::UndoLedgerStore) -> Self {
+        self.undo_ledger = Some(store);
+        self
+    }
+
+    /// Sets an optional persistent undo ledger store.
+    pub fn undo_ledger_opt(mut self, store: Option<crate::undo::UndoLedgerStore>) -> Self {
+        self.undo_ledger = store;
+        self
+    }
+
     /// Sets MCP sampling delegation registry.
     pub fn sampling_registry(mut self, registry: crate::sampling::SamplingRegistry) -> Self {
         self.sampling_registry = Some(registry);
@@ -417,6 +447,8 @@ impl AppStateBuilder {
             oauth_registry: self.oauth_registry.unwrap_or_default(),
             approval_registry: self.approval_registry.unwrap_or_default(),
             task_registry: self.task_registry.unwrap_or_default(),
+            snapshot_store: self.snapshot_store,
+            undo_ledger: self.undo_ledger,
             sampling_registry: self.sampling_registry.unwrap_or_default(),
             audit_store,
             audit_handle,

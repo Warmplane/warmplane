@@ -242,10 +242,53 @@
     },
     "reversibilityConfig": {
       "type": "object",
+      "allOf": [
+        {
+          "if": { "properties": { "class": { "enum": ["reversible", "compensable"] } }, "required": ["class"] },
+          "then": { "required": ["inverse"] }
+        },
+        {
+          "if": { "properties": { "class": { "const": "compensable" } }, "required": ["class"] },
+          "then": { "required": ["dailyLimit"] }
+        },
+        {
+          "if": { "properties": { "class": { "not": { "const": "delayable" } } }, "required": ["class"] },
+          "then": { "not": { "required": ["holdWindowSecs"] } }
+        },
+        {
+          "if": { "properties": { "class": { "not": { "const": "compensable" } } }, "required": ["class"] },
+          "then": { "not": { "required": ["dailyLimit"] } }
+        },
+        {
+          "if": { "properties": { "class": { "enum": ["delayable", "irreversible"] } }, "required": ["class"] },
+          "then": { "not": { "anyOf": [{ "required": ["preSnapshot"] }, { "required": ["inverse"] }, { "required": ["ttlSecs"] }] } }
+        }
+      ],
       "required": ["class"],
       "properties": {
-        "class": { "const": "delayable" },
-        "holdWindowSecs": { "type": "integer", "minimum": 1 }
+        "class": { "enum": ["delayable", "reversible", "compensable", "irreversible"] },
+        "holdWindowSecs": { "type": "integer", "minimum": 1 },
+        "ttlSecs": { "type": "integer", "minimum": 1 },
+        "dailyLimit": { "type": "integer", "minimum": 1 },
+        "preSnapshot": {
+          "type": "object",
+          "required": ["capability"],
+          "properties": {
+            "capability": { "type": "string", "minLength": 1 },
+            "args": { "type": "object" },
+            "captureJsonPath": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "inverse": {
+          "type": "object",
+          "required": ["capability"],
+          "properties": {
+            "capability": { "type": "string", "minLength": 1 },
+            "args": { "type": "object" }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     },

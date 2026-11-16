@@ -6,7 +6,9 @@
 //! - [`EmbeddedWarmplane`]: In-process entry point to boot and supervise upstream MCP sessions.
 //! - [`ControlPlaneHandle`]: Cloneable, `Send + Sync` handle to query catalogs, invoke capabilities, and run batches.
 
+pub mod interpolation;
 pub mod types;
+pub(crate) mod undo;
 
 use anyhow::Result;
 use serde_json::Value;
@@ -346,7 +348,7 @@ impl ControlPlaneHandle {
             );
         }
 
-        let (requires_approval, approval_timeout_secs, webhook_cfg, redact_keys) = {
+        let (mut requires_approval, approval_timeout_secs, webhook_cfg, redact_keys) = {
             let pol = self.state.policy.read().await;
             if !pol.allows(capability_id) {
                 if let Some(ref key) = idempotency_key {
@@ -372,7 +374,7 @@ impl ControlPlaneHandle {
             )
         };
 
-        let (server_id, tool_name) = {
+        let (server_id, tool_name, reversibility) = {
             let caps_guard = self.state.capabilities.read().await;
             let Some(meta) = caps_guard.get(capability_id) else {
                 if let Some(ref key) = idempotency_key {
@@ -411,8 +413,61 @@ impl ControlPlaneHandle {
                 );
             }
 
-            (meta.server.clone(), meta.tool.clone())
+            (
+                meta.server.clone(),
+                meta.tool.clone(),
+                meta.reversibility.clone(),
+            )
         };
+
+        let mut compensable_reserved = false;
+        if let Some(contract) = reversibility
+            .as_ref()
+            .filter(|contract| contract.class == crate::config::ReversibilityClass::Compensable)
+        {
+            if self.state.undo_ledger.is_none() {
+                return Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "UNDO_STORAGE_UNAVAILABLE",
+                        "Persistent usage storage is required for compensable capabilities",
+                        false,
+                    ),
+                    retry_base("not_started"),
+                );
+            }
+            if !requires_approval {
+                match undo::reserve_compensable(
+                    &self.state,
+                    contract,
+                    capability_id,
+                    "default",
+                    prof_ctx.profile_id.as_deref(),
+                    idempotency_key.as_deref(),
+                    false,
+                )
+                .await
+                {
+                    Ok(true) => compensable_reserved = true,
+                    Ok(false) => requires_approval = true,
+                    Err(error) => {
+                        return Envelope::failure(
+                            trace_id,
+                            Some(req_id),
+                            Some(req_ctx),
+                            WarmplaneError::new(
+                                "COMPENSABLE_LIMIT_STORAGE_FAILED",
+                                error.to_string(),
+                                true,
+                            ),
+                            retry_base("not_started"),
+                        );
+                    }
+                }
+            }
+        }
 
         let mut effective_args = args.clone();
 
@@ -478,6 +533,14 @@ impl ControlPlaneHandle {
             let trace_id_clone = trace_id.clone();
             let req_id_clone = req_id.clone();
             let req_ctx_clone = req_ctx.clone();
+            let reversibility_clone = reversibility.clone();
+            let profile_context_clone = prof_ctx.clone();
+            let capability_id_clone = capability_id.to_string();
+            let compensable_reserved_clone = compensable_reserved;
+            let policy_for_undo = {
+                let policy = self.state.policy.read().await;
+                policy.merge_with_profile(prof_ctx.profile_policy.as_ref())
+            };
 
             tokio::spawn(async move {
                 let mut worker_args = args_clone.clone();
@@ -525,6 +588,93 @@ impl ControlPlaneHandle {
                         }
                     }
                 }
+
+                if !compensable_reserved_clone {
+                    if let Some(contract) = reversibility_clone.as_ref().filter(|contract| {
+                        contract.class == crate::config::ReversibilityClass::Compensable
+                    }) {
+                        match undo::reserve_compensable(
+                            &handle.state,
+                            contract,
+                            &capability_id_clone,
+                            "default",
+                            profile_context_clone.profile_id.as_deref(),
+                            idempotency_key_clone.as_deref(),
+                            true,
+                        )
+                        .await
+                        {
+                            Ok(true) => {}
+                            Ok(false) | Err(_) => {
+                                let _ = handle
+                                    .state
+                                    .task_registry
+                                    .fail_task(
+                                        &task_id_clone,
+                                        serde_json::json!({"code": "COMPENSABLE_LIMIT_STORAGE_FAILED"}),
+                                        Some("Could not reserve compensable invocation".to_string()),
+                                    )
+                                    .await;
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                let (snapshot, snapshot_hash) = if let Some(contract) = &reversibility_clone {
+                    if matches!(
+                        contract.class,
+                        crate::config::ReversibilityClass::Reversible
+                            | crate::config::ReversibilityClass::Compensable
+                    ) && handle.state.undo_ledger.is_none()
+                    {
+                        let _ = handle
+                            .state
+                            .task_registry
+                            .fail_task(
+                                &task_id_clone,
+                                serde_json::json!({"code": "UNDO_STORAGE_UNAVAILABLE"}),
+                                Some("Persistent undo ledger is unavailable".to_string()),
+                            )
+                            .await;
+                        if let Some(ref key) = idempotency_key_clone {
+                            handle.state.idempotency_store.remove(key).await;
+                        }
+                        return;
+                    }
+                    if let Some(pre_snapshot) = &contract.pre_snapshot {
+                        match undo::capture_pre_snapshot(
+                            &handle.state,
+                            pre_snapshot,
+                            &worker_args,
+                            &profile_context_clone,
+                            &policy_for_undo,
+                        )
+                        .await
+                        {
+                            Ok(snapshot) => snapshot,
+                            Err(error) => {
+                                let _ = handle
+                                    .state
+                                    .task_registry
+                                    .fail_task(
+                                        &task_id_clone,
+                                        serde_json::json!({"code": "PRE_SNAPSHOT_FAILED"}),
+                                        Some(error.to_string()),
+                                    )
+                                    .await;
+                                if let Some(ref key) = idempotency_key_clone {
+                                    handle.state.idempotency_store.remove(key).await;
+                                }
+                                return;
+                            }
+                        }
+                    } else {
+                        (Value::Null, None)
+                    }
+                } else {
+                    (Value::Null, None)
+                };
 
                 let tx = {
                     let servers_guard = handle.state.servers.read().await;
@@ -588,6 +738,50 @@ impl ControlPlaneHandle {
                             .circuit_breakers
                             .record_success(&server_id_clone)
                             .await;
+                        if let Some(contract) = &reversibility_clone {
+                            if let Err(error) = undo::register_inverse(
+                                &handle.state,
+                                contract,
+                                undo::ForwardCall {
+                                    capability: &capability_id_clone,
+                                    args: &worker_args,
+                                    result: &data,
+                                    snapshot: &snapshot,
+                                    snapshot_hash,
+                                    context: &req_ctx_clone,
+                                    tenant_id: "default",
+                                    profile_id: profile_context_clone.profile_id.as_deref(),
+                                },
+                            )
+                            .await
+                            {
+                                let message = format!(
+                                    "Forward call succeeded but inverse registration failed: {error}"
+                                );
+                                let _ = handle
+                                    .state
+                                    .task_registry
+                                    .fail_task(
+                                        &task_id_clone,
+                                        serde_json::json!({"code": "UNDO_REGISTRATION_FAILED"}),
+                                        Some(message.clone()),
+                                    )
+                                    .await;
+                                let env: Envelope<Value> = Envelope::failure(
+                                    trace_id_clone.clone(),
+                                    Some(req_id_clone.clone()),
+                                    Some(req_ctx_clone.clone()),
+                                    WarmplaneError::new("UNDO_REGISTRATION_FAILED", message, false),
+                                    retry_base("completed"),
+                                );
+                                if let Some(ref key) = idempotency_key_clone {
+                                    if let Ok(value) = serde_json::to_value(&env) {
+                                        handle.state.idempotency_store.complete(key, value).await;
+                                    }
+                                }
+                                return;
+                            }
+                        }
                         let distilled_data = distill_value(data, &distill_opts);
                         let _ = handle
                             .state
@@ -811,6 +1005,40 @@ impl ControlPlaneHandle {
             None
         };
 
+        if !compensable_reserved {
+            if let Some(contract) = reversibility
+                .as_ref()
+                .filter(|contract| contract.class == crate::config::ReversibilityClass::Compensable)
+            {
+                match undo::reserve_compensable(
+                    &self.state,
+                    contract,
+                    capability_id,
+                    "default",
+                    prof_ctx.profile_id.as_deref(),
+                    idempotency_key.as_deref(),
+                    true,
+                )
+                .await
+                {
+                    Ok(true) => {}
+                    Ok(false) | Err(_) => {
+                        return Envelope::failure(
+                            trace_id,
+                            Some(req_id),
+                            Some(req_ctx),
+                            WarmplaneError::new(
+                                "COMPENSABLE_LIMIT_STORAGE_FAILED",
+                                "Could not reserve compensable invocation",
+                                true,
+                            ),
+                            retry_base("not_started"),
+                        );
+                    }
+                }
+            }
+        }
+
         let tx = {
             let servers_guard = self.state.servers.read().await;
             let Some(tx) = servers_guard.get(&server_id).cloned() else {
@@ -873,13 +1101,65 @@ impl ControlPlaneHandle {
             );
         }
 
+        let (snapshot, snapshot_hash) = if let Some(contract) = &reversibility {
+            if matches!(
+                contract.class,
+                crate::config::ReversibilityClass::Reversible
+                    | crate::config::ReversibilityClass::Compensable
+            ) && self.state.undo_ledger.is_none()
+            {
+                return Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "UNDO_STORAGE_UNAVAILABLE",
+                        "Persistent undo ledger is required for reversible capabilities",
+                        false,
+                    ),
+                    retry_base("not_started"),
+                );
+            }
+            if let Some(pre_snapshot) = &contract.pre_snapshot {
+                match undo::capture_pre_snapshot(
+                    &self.state,
+                    pre_snapshot,
+                    &effective_args,
+                    &prof_ctx,
+                    &self
+                        .state
+                        .policy
+                        .read()
+                        .await
+                        .merge_with_profile(prof_ctx.profile_policy.as_ref()),
+                )
+                .await
+                {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        return Envelope::failure(
+                            trace_id,
+                            Some(req_id),
+                            Some(req_ctx),
+                            WarmplaneError::new("PRE_SNAPSHOT_FAILED", error.to_string(), true),
+                            retry_base("not_started"),
+                        );
+                    }
+                }
+            } else {
+                (Value::Null, None)
+            }
+        } else {
+            (Value::Null, None)
+        };
+
         let distill_opts = DistillationOptions::from_args(Some(&args));
         let (reply_tx, reply_rx) = oneshot::channel();
 
         if tx
             .send(ServerMsg::CallTool {
                 name: tool_name,
-                params: effective_args,
+                params: effective_args.clone(),
                 input_responses: options.input_responses,
                 request_state: options.request_state,
                 reply: reply_tx,
@@ -925,6 +1205,47 @@ impl ControlPlaneHandle {
                     .total_tool_duration_us
                     .fetch_add(elapsed_us, Ordering::Relaxed);
 
+                if let Some(contract) = &reversibility {
+                    if let Err(error) = undo::register_inverse(
+                        &self.state,
+                        contract,
+                        undo::ForwardCall {
+                            capability: capability_id,
+                            args: &effective_args,
+                            result: &data,
+                            snapshot: &snapshot,
+                            snapshot_hash,
+                            context: &req_ctx,
+                            tenant_id: "default",
+                            profile_id: prof_ctx.profile_id.as_deref(),
+                        },
+                    )
+                    .await
+                    {
+                        if let Some(ref rec) = task_record {
+                            let _ = self
+                                .state
+                                .task_registry
+                                .fail_task(
+                                    &rec.task_id,
+                                    serde_json::json!({"code": "UNDO_REGISTRATION_FAILED"}),
+                                    Some(error.to_string()),
+                                )
+                                .await;
+                        }
+                        return Envelope::failure(
+                            trace_id,
+                            Some(req_id),
+                            Some(req_ctx),
+                            WarmplaneError::new(
+                                "UNDO_REGISTRATION_FAILED",
+                                format!("Forward call succeeded but inverse registration failed: {error}"),
+                                false,
+                            ),
+                            retry_base("completed"),
+                        );
+                    }
+                }
                 let distilled_data = distill_value(data, &distill_opts);
                 if let Some(ref rec) = task_record {
                     let _ = self
@@ -1046,7 +1367,12 @@ impl ControlPlaneHandle {
     ) -> BatchCallResponse {
         let trace_id = next_trace_id();
         let prof_ctx = self.resolve_profile_context(profile).await;
-        let policy = self.state.policy.read().await.clone();
+        let policy = self
+            .state
+            .policy
+            .read()
+            .await
+            .merge_with_profile(prof_ctx.profile_policy.as_ref());
 
         execute_batch(
             &self.state,

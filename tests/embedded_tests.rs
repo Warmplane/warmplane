@@ -3,7 +3,13 @@ use std::collections::HashMap;
 use tempfile::NamedTempFile;
 
 use warmplane::{
-    config::{save_config, McpConfig, ServerConfig},
+    config::{
+        save_config, InverseConfig, McpConfig, PreSnapshotConfig, ReversibilityClass,
+        ReversibilityConfig, ServerConfig,
+    },
+    daemon::{AppState, CapabilityMeta, ServerMsg},
+    engine::{ControlPlaneHandle, ExecutionOptions},
+    undo::{SnapshotStore, UndoEntryStatus, UndoLedgerStore},
     EmbeddedWarmplane,
 };
 
@@ -35,6 +41,103 @@ async fn test_embedded_warmplane_start_and_shutdown() {
     // Trigger handle shutdown
     cp.shutdown().await;
     assert!(shutdown_token.is_cancelled());
+}
+
+#[tokio::test]
+async fn reversible_call_captures_pre_state_and_persists_interpolated_inverse() {
+    let mut forward = CapabilityMeta::new(
+        "mock",
+        "set_priority",
+        "Set issue priority",
+        "Set issue priority",
+        json!({"type": "object"}),
+    );
+    forward.reversibility = Some(ReversibilityConfig {
+        class: ReversibilityClass::Reversible,
+        hold_window_secs: None,
+        ttl_secs: Some(60),
+        daily_limit: None,
+        pre_snapshot: Some(Box::new(PreSnapshotConfig {
+            capability: "mock.get_issue".to_string(),
+            args: json!({"id": "${args.id}"}),
+            capture_json_path: Some("$.priority".to_string()),
+        })),
+        inverse: Some(Box::new(InverseConfig {
+            capability: "mock.set_priority".to_string(),
+            args: json!({"id": "${args.id}", "priority": "${snapshot}"}),
+        })),
+    });
+    let getter = CapabilityMeta::new(
+        "mock",
+        "get_issue",
+        "Get issue",
+        "Get issue",
+        json!({"type": "object"}),
+    );
+    let capabilities = HashMap::from([
+        ("mock.set_priority".to_string(), forward),
+        ("mock.get_issue".to_string(), getter),
+    ]);
+    let (upstream_tx, mut upstream_rx) = tokio::sync::mpsc::channel(4);
+    let servers = HashMap::from([("mock".to_string(), upstream_tx)]);
+    let temp = tempfile::tempdir().unwrap();
+    let snapshot_store = SnapshotStore::open(temp.path().join("artifacts")).unwrap();
+    let ledger = UndoLedgerStore::open(temp.path().join("undo_ledger.json")).unwrap();
+    let state = AppState::builder()
+        .servers(servers)
+        .capabilities(capabilities)
+        .snapshot_store(snapshot_store.clone())
+        .undo_ledger(ledger.clone())
+        .build();
+    let handle = ControlPlaneHandle::new(state);
+    let call = tokio::spawn(async move {
+        handle
+            .call_capability(
+                "mock.set_priority",
+                json!({"id": "ISSUE-7", "priority": "high"}),
+                ExecutionOptions::default(),
+            )
+            .await
+    });
+
+    match upstream_rx.recv().await.unwrap() {
+        ServerMsg::CallTool {
+            name,
+            params,
+            reply,
+            ..
+        } => {
+            assert_eq!(name, "get_issue");
+            assert_eq!(params["id"], "ISSUE-7");
+            reply.send(Ok(json!({"priority": "low"}))).unwrap();
+        }
+        _ => panic!("expected pre-snapshot read"),
+    }
+    match upstream_rx.recv().await.unwrap() {
+        ServerMsg::CallTool {
+            name,
+            params,
+            reply,
+            ..
+        } => {
+            assert_eq!(name, "set_priority");
+            reply.send(Ok(json!({"ok": true}))).unwrap();
+            assert_eq!(params["priority"], "high");
+        }
+        _ => panic!("expected forward mutation"),
+    }
+
+    let response = call.await.unwrap();
+    assert!(response.ok, "response error: {:?}", response.error);
+    let entries = ledger.entries().await;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].status, UndoEntryStatus::Armed);
+    assert_eq!(
+        entries[0].resolved_inverse_args,
+        json!({"id": "ISSUE-7", "priority": "low"})
+    );
+    let hash = entries[0].snapshot_artifact_hash.as_ref().unwrap();
+    assert_eq!(snapshot_store.get(hash).unwrap(), json!("low"));
 }
 
 #[tokio::test]

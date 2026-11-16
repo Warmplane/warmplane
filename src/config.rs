@@ -219,6 +219,53 @@ pub struct ReversibilityConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub hold_window_secs: Option<u64>,
+    /// Maximum lifetime of a registered inverse action, in seconds.
+    #[serde(default, rename = "ttlSecs", skip_serializing_if = "Option::is_none")]
+    pub ttl_secs: Option<u64>,
+    /// Maximum calls for a compensable capability in a rolling day.
+    #[serde(
+        default,
+        rename = "dailyLimit",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub daily_limit: Option<u64>,
+    /// Read operation used to capture the pre-mutation state.
+    #[serde(
+        default,
+        rename = "preSnapshot",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pre_snapshot: Option<Box<PreSnapshotConfig>>,
+    /// Inverse operation to register after a successful forward call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inverse: Option<Box<InverseConfig>>,
+}
+
+/// Configuration for reading and distilling a pre-mutation snapshot.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub struct PreSnapshotConfig {
+    /// Capability used to read the current state.
+    pub capability: String,
+    /// Arguments passed to the read capability.
+    #[serde(default)]
+    pub args: serde_json::Value,
+    /// Optional JSONPath selecting the snapshot value to persist.
+    #[serde(
+        default,
+        rename = "captureJsonPath",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub capture_json_path: Option<String>,
+}
+
+/// Inverse capability and its argument template.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub struct InverseConfig {
+    /// Capability used to reverse the forward operation.
+    pub capability: String,
+    /// JSON argument template supporting `${args...}`, `${result...}`, and `${snapshot...}` references.
+    #[serde(default)]
+    pub args: serde_json::Value,
 }
 
 /// Reversibility behavior classes.
@@ -227,6 +274,12 @@ pub struct ReversibilityConfig {
 pub enum ReversibilityClass {
     /// Delay dispatch so an operator can cancel an outbound emission.
     Delayable,
+    /// An operation with an inverse that restores captured pre-state.
+    Reversible,
+    /// An operation whose inverse compensates for its effect.
+    Compensable,
+    /// An operation with no configured inverse.
+    Irreversible,
 }
 
 /// Resolves a canonical capability's delayable hold duration from policy and alias settings.
@@ -963,6 +1016,83 @@ fn validate_config(config: &McpConfig) -> Result<()> {
                 contract.hold_window_secs,
                 &format!("capabilityAliases.{}.reversibility.holdWindowSecs", alias),
             )?;
+            validate_hold_window(
+                contract.ttl_secs,
+                &format!("capabilityAliases.{}.reversibility.ttlSecs", alias),
+            )?;
+            if contract.daily_limit == Some(0) {
+                anyhow::bail!(
+                    "capabilityAliases.{}.reversibility.dailyLimit must be greater than zero",
+                    alias
+                );
+            }
+            if contract.hold_window_secs.is_some()
+                && contract.class != ReversibilityClass::Delayable
+            {
+                anyhow::bail!(
+                    "capabilityAliases.{}.reversibility.holdWindowSecs is only valid for delayable class",
+                    alias
+                );
+            }
+            if contract.daily_limit.is_some() && contract.class != ReversibilityClass::Compensable {
+                anyhow::bail!(
+                    "capabilityAliases.{}.reversibility.dailyLimit is only valid for compensable class",
+                    alias
+                );
+            }
+            if contract.ttl_secs.is_some()
+                && !matches!(
+                    contract.class,
+                    ReversibilityClass::Reversible | ReversibilityClass::Compensable
+                )
+            {
+                anyhow::bail!(
+                    "capabilityAliases.{}.reversibility.ttlSecs is only valid for reversible and compensable classes",
+                    alias
+                );
+            }
+            if matches!(
+                contract.class,
+                ReversibilityClass::Reversible | ReversibilityClass::Compensable
+            ) && contract.inverse.is_none()
+            {
+                anyhow::bail!("capabilityAliases.{}.reversibility.inverse is required for reversible and compensable classes", alias);
+            }
+            if contract.inverse.is_some()
+                && !matches!(
+                    contract.class,
+                    ReversibilityClass::Reversible | ReversibilityClass::Compensable
+                )
+            {
+                anyhow::bail!(
+                    "capabilityAliases.{}.reversibility.inverse is only valid for reversible and compensable classes",
+                    alias
+                );
+            }
+            if contract.class == ReversibilityClass::Compensable && contract.daily_limit.is_none() {
+                anyhow::bail!("capabilityAliases.{}.reversibility.dailyLimit is required for compensable class", alias);
+            }
+            if contract.pre_snapshot.is_some()
+                && !matches!(
+                    contract.class,
+                    ReversibilityClass::Reversible | ReversibilityClass::Compensable
+                )
+            {
+                anyhow::bail!(
+                    "capabilityAliases.{}.reversibility.preSnapshot is only valid for reversible and compensable classes",
+                    alias
+                );
+            }
+            if let Some(snapshot) = &contract.pre_snapshot {
+                if snapshot.capability.trim().is_empty() || !snapshot.args.is_object() {
+                    anyhow::bail!("capabilityAliases.{}.reversibility.preSnapshot requires a capability and object args", alias);
+                }
+            }
+            if let Some(inverse) = &contract.inverse {
+                if inverse.capability.trim().is_empty() || !inverse.args.is_object() {
+                    anyhow::bail!("capabilityAliases.{}.reversibility.inverse requires a capability and object args", alias);
+                }
+            }
         }
     }
     let mut contracts = HashMap::new();
@@ -1180,6 +1310,10 @@ mod tests {
                 reversibility: Some(super::ReversibilityConfig {
                     class: super::ReversibilityClass::Delayable,
                     hold_window_secs: None,
+                    ttl_secs: None,
+                    daily_limit: None,
+                    pre_snapshot: None,
+                    inverse: None,
                 }),
             },
         )]);
@@ -1209,6 +1343,10 @@ mod tests {
                 reversibility: Some(super::ReversibilityConfig {
                     class: super::ReversibilityClass::Delayable,
                     hold_window_secs: Some(7),
+                    ttl_secs: None,
+                    daily_limit: None,
+                    pre_snapshot: None,
+                    inverse: None,
                 }),
             },
         )]);
@@ -1242,6 +1380,10 @@ mod tests {
             reversibility: Some(super::ReversibilityConfig {
                 class: super::ReversibilityClass::Delayable,
                 hold_window_secs: Some(seconds),
+                ttl_secs: None,
+                daily_limit: None,
+                pre_snapshot: None,
+                inverse: None,
             }),
         };
         config
@@ -1262,10 +1404,12 @@ mod tests {
         let alias: super::AliasTarget = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(alias.reversibility().unwrap().hold_window_secs, Some(4));
         assert_eq!(serde_json::to_value(alias).unwrap(), value);
-        assert!(serde_json::from_value::<super::ReversibilityConfig>(
-            serde_json::json!({"class": "reversible"})
-        )
-        .is_err());
+        let reversible: super::ReversibilityConfig = serde_json::from_value(serde_json::json!({
+            "class": "reversible",
+            "inverse": {"capability": "tickets.set_priority", "args": {}}
+        }))
+        .unwrap();
+        assert_eq!(reversible.class, super::ReversibilityClass::Reversible);
     }
 
     fn empty_server() -> ServerConfig {

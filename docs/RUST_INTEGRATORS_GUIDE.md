@@ -7,7 +7,6 @@ This guide explains two approaches to integrating Warmplane in Rust:
 
 
 ---
-
 ## 1. In-Process Integration (`EmbeddedWarmplane`)
 
 For lowest latency, zero network hops, and single-binary deployment, import `warmplane` directly as a library crate.
@@ -61,6 +60,14 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+---
+
+### Reversible and Compensable Calls
+
+The embedded API uses the same alias reversibility contracts as the daemon. Configure a detailed entry in `capabilityAliases` with `class: "reversible"` or `"compensable"`, an optional policy-allowed `preSnapshot`, and an `inverse` template. On a successful forward call or batch step, Warmplane captures configured pre-state and persists an `Armed` inverse in the state directory. Compensable calls require `dailyLimit`; exceeding it enters the existing approval flow. Persistent state must remain enabled for these contracts, since the engine fails closed if the undo ledger or snapshot store is unavailable. See the [user guide reversibility example](USER-GUIDE.md#reversibility-example) and [configuration schema reference](../.skills/warmplane/references/configuration_schema.md).
+
+No special `ControlPlaneHandle` method is required: call `call_capability` or `batch_call` as usual, and Warmplane applies the contract from the loaded config. Stage 2 records inverses; it does not expose a public undo endpoint yet.
 
 ---
 

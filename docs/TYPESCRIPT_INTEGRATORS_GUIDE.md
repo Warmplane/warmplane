@@ -208,6 +208,10 @@ class WarmplaneClient {
    *
    * Optionally pass an `idempotencyKey` for safe retries of mutating
    * operations.
+   * Reversible and compensable behavior is configured on the daemon's
+   * capability alias; it does not require extra request fields. When a
+   * compensable daily limit is reached, the daemon routes the call through
+   * its existing approval flow.
    */
   async callTool(
     capabilityId: string,
@@ -252,7 +256,8 @@ class WarmplaneClient {
    * Executes a chained batch of tool steps in a single round-trip.
    *
    * Steps can reference outputs from earlier steps using `$step_id.field`
-   * variable interpolation syntax.
+   * variable interpolation syntax. Configured reversible and compensable
+   * contracts are applied to each successful step by the daemon.
    */
   async batchCall(steps: BatchStep[]): Promise<unknown> {
     return this.postJson("/v1/tools/batch_call", { steps });

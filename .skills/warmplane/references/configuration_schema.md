@@ -38,6 +38,22 @@
   },
   "capabilityAliases": {
     "query": "sqlite.query",
+    "set-priority": {
+      "target": "linear.update_issue",
+      "reversibility": {
+        "class": "reversible",
+        "ttlSecs": 86400,
+        "preSnapshot": {
+          "capability": "linear.get_issue",
+          "args": { "id": "${args.id}" },
+          "captureJsonPath": "$.priority"
+        },
+        "inverse": {
+          "capability": "linear.update_issue",
+          "args": { "id": "${args.id}", "priority": "${snapshot}" }
+        }
+      }
+    },
     "search": {
       "target": "semble-rs.search",
       "summary": "Search codebase with semantic or BM25 ranking. Pass absolute repo path."
@@ -54,3 +70,7 @@
 - `keychain://<KEY>`: Native OS Keychain
 - `op://<vault>/<item>/<field>`: 1Password CLI
 - `env://<VAR>`: Process environment variable
+
+## Reversibility Contracts
+
+Detailed capability aliases may set `reversibility.class` to `delayable`, `reversible`, `compensable`, or `irreversible`. Reversible and compensable contracts require an `inverse` capability and object-valued `args`; an optional `preSnapshot` performs a policy-checked upstream read before the forward call. `captureJsonPath` narrows the captured value. Template references support `${args.path}`, `${result.path}`, and `${snapshot.path}`; exact references preserve JSON values. Snapshots are content addressed in the Warmplane state directory, and inverse records are persisted in the undo ledger. Compensable contracts require a positive `dailyLimit`; the rolling limit is scoped by tenant, profile, and capability, and over-limit calls enter human approval.

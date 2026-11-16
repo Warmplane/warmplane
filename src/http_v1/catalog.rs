@@ -517,6 +517,7 @@ pub async fn handle_describe_capability(
             input_schema,
             tags: _,
             examples,
+            reversibility: _,
         }) if prof_ctx.is_server_allowed(server) => (
             StatusCode::OK,
             make_etag_header(&catalog_ver),

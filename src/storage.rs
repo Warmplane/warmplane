@@ -132,6 +132,8 @@ where
             if filename.contains("oauth")
                 || filename.contains("secret")
                 || filename.contains("token")
+                || filename.contains("undo")
+                || filename.contains("artifact")
             {
                 let _ = fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600));
             }
@@ -249,6 +251,16 @@ impl StateDirectory {
     /// Returns the file path for persistent SEP-2663 tasks.
     pub fn tasks_file(&self) -> PathBuf {
         self.base_dir.join("tasks.json")
+    }
+
+    /// Returns the file path for the persistent undo ledger.
+    pub fn undo_ledger_file(&self) -> PathBuf {
+        self.base_dir.join("undo_ledger.json")
+    }
+
+    /// Returns the directory path for content-addressed snapshot artifacts.
+    pub fn artifacts_dir(&self) -> PathBuf {
+        self.base_dir.join("artifacts")
     }
 }
 

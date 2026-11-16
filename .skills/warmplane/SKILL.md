@@ -55,5 +55,5 @@ If an upstream process crashes or reports `Circuit: OPEN`:
 - [MCP Stdio Usage](./references/mcp_stdio_usage.md): 1-Click client config for 17 IDEs/agents and stdio tools.
 - [HTTP REST API](./references/http_rest_api.md): Complete `/v1/...` endpoint reference.
 - [CLI Cheatsheet](./references/cli_cheatsheet.md): Shell commands for daemon, 1-click sync, and vault.
-- [Configuration Schema](./references/configuration_schema.md): `mcp_servers.json` spec, dynamic secrets (`keychain://`, `op://`, `env://`), profiles, and resilience.
+- [Configuration Schema](./references/configuration_schema.md): `mcp_servers.json` spec, dynamic secrets (`keychain://`, `op://`, `env://`), profiles, resilience, and reversibility contracts.
 - [Troubleshooting](./references/error_resolution.md): Circuit breakers, policy denials, and cascade cleanup.
