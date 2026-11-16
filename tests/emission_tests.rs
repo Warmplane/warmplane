@@ -13,7 +13,10 @@ use warmplane::{
     config::{ReversibilityClass, ReversibilityConfig},
     daemon::{AppState, CapabilityMeta, ServerMsg},
     emissions::HoldCoordinator,
-    tasks::{CreateTaskParams, EmissionCancelResult, EmissionPhase, EmissionRecord, TaskStatus},
+    tasks::{
+        CreateTaskParams, EmissionCancelResult, EmissionPhase, EmissionRecord, TaskRegistry,
+        TaskStatus,
+    },
 };
 
 fn delayable_contract(hold_window_secs: u64) -> ReversibilityConfig {
@@ -176,6 +179,62 @@ async fn recovery_never_resends_a_durably_claimed_dispatch() {
 }
 
 #[tokio::test]
+async fn recovery_resumes_future_and_overdue_pending_emissions() {
+    let directory = tempfile::tempdir().unwrap();
+    let task_path = directory.path().join("tasks.json");
+    let registry = TaskRegistry::open_or_create(&task_path).unwrap();
+    let overdue = registry
+        .create_emission_task(
+            params(Some("recovery-overdue")),
+            emission(now_ms().saturating_sub(1)),
+        )
+        .await
+        .unwrap();
+    let future = registry
+        .create_emission_task(params(Some("recovery-future")), emission(now_ms() + 100))
+        .await
+        .unwrap();
+    drop(registry);
+
+    let (server_tx, mut upstream) = mpsc::channel(8);
+    let mut capability = CapabilityMeta::new(
+        "mail",
+        "send",
+        "Send",
+        "Send a message",
+        json!({"type": "object"}),
+    );
+    capability.reversibility = Some(delayable_contract(1));
+    let state = AppState::builder()
+        .task_registry(TaskRegistry::open_or_create(&task_path).unwrap())
+        .servers(HashMap::from([("mail".to_string(), server_tx)]))
+        .capabilities(HashMap::from([("mail.send".to_string(), capability)]))
+        .tool_timeout_ms(2_000)
+        .build();
+    state.hold_coordinator.recover(&state).await;
+
+    for _ in 0..2 {
+        let Some(ServerMsg::CallTool { reply, .. }) =
+            tokio::time::timeout(Duration::from_secs(2), upstream.recv())
+                .await
+                .unwrap()
+        else {
+            panic!("expected recovered pending emission to dispatch");
+        };
+        reply.send(Ok(json!({"sent": true}))).unwrap();
+    }
+    for task_id in [overdue.task_id, future.task_id] {
+        let result = state
+            .hold_coordinator
+            .wait_for_terminal(&state, &task_id, Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert_eq!(result.status, TaskStatus::Completed);
+    }
+    assert!(upstream.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn release_revalidates_current_policy_before_dispatch() {
     let (state, mut upstream) = create_state();
     let task = state
@@ -189,6 +248,35 @@ async fn release_revalidates_current_policy_before_dispatch() {
         .await
         .deny
         .push("mail.send".to_string());
+
+    let failed = state
+        .hold_coordinator
+        .wait_for_terminal(&state, &task.task_id, Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(failed.status, TaskStatus::Failed);
+    assert_eq!(
+        failed.error.unwrap()["code"],
+        "EMISSION_REVALIDATION_FAILED"
+    );
+    assert!(upstream.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn release_rejects_a_changed_upstream_tool_mapping() {
+    let (state, mut upstream) = create_state();
+    let task = state
+        .hold_coordinator
+        .accept(&state, params(None), emission(now_ms() + 50))
+        .await
+        .unwrap();
+    state
+        .capabilities
+        .write()
+        .await
+        .get_mut("mail.send")
+        .unwrap()
+        .tool = "send_to_different_endpoint".to_string();
 
     let failed = state
         .hold_coordinator
@@ -378,6 +466,31 @@ async fn rest_async_receipt_can_cancel_the_shared_hold() {
     .await
     .into_response();
     assert_eq!(repeated_cancel.status(), StatusCode::OK);
+    let duplicate_after_cancel = warmplane::http_v1::execute::handle_call_capability(
+        State(state.clone()),
+        axum::Extension(None),
+        None,
+        HeaderMap::new(),
+        Json(warmplane::http_v1::CallCapabilityRequest {
+            capability_id: "mail.send".to_string(),
+            args: json!({"to": "person@example.com"}),
+            request_id: Some("rest-emission-after-cancel".to_string()),
+            idempotency_key: Some("rest-emission-key".to_string()),
+            async_task: true,
+            ..Default::default()
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(duplicate_after_cancel.status(), StatusCode::OK);
+    let duplicate_after_cancel: serde_json::Value = serde_json::from_slice(
+        &to_bytes(duplicate_after_cancel.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(duplicate_after_cancel["task"]["taskId"], task_id);
+    assert_eq!(duplicate_after_cancel["task"]["status"], "cancelled");
     tokio::time::sleep(Duration::from_millis(1_100)).await;
     assert!(upstream.try_recv().is_err());
     assert_eq!(
@@ -482,6 +595,13 @@ async fn held_and_cancelled_audit_events_are_redacted_and_hash_chained() {
         .cancel(&state, &task.task_id, Some("operator request".to_string()))
         .await
         .unwrap();
+    assert_eq!(
+        coordinator
+            .cancel(&state, &task.task_id, Some("repeat request".to_string()))
+            .await
+            .unwrap(),
+        EmissionCancelResult::AlreadyCancelled
+    );
     state.audit_handle.shutdown().await;
 
     let filter = warmplane::audit::AuditQueryFilter {
@@ -504,4 +624,84 @@ async fn held_and_cancelled_audit_events_are_redacted_and_hash_chained() {
     };
     let (_, count) = state.audit_store.query(&filter).await;
     assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn approval_argument_edits_are_the_payload_held_and_dispatched() {
+    let (server_tx, mut upstream) = mpsc::channel(8);
+    let mut capability = CapabilityMeta::new(
+        "mail",
+        "send",
+        "Send",
+        "Send a message",
+        json!({"type": "object"}),
+    );
+    capability.reversibility = Some(delayable_contract(1));
+    let policy = warmplane::daemon::Policy::from_config(Some(warmplane::config::PolicyConfig {
+        require_approval: vec!["mail.send".to_string()],
+        ..Default::default()
+    }));
+    let state = AppState::builder()
+        .servers(HashMap::from([("mail".to_string(), server_tx)]))
+        .capabilities(HashMap::from([("mail.send".to_string(), capability)]))
+        .policy(policy)
+        .tool_timeout_ms(2_000)
+        .build();
+    let response = warmplane::http_v1::execute::handle_call_capability(
+        State(state.clone()),
+        axum::Extension(None),
+        None,
+        HeaderMap::new(),
+        Json(warmplane::http_v1::CallCapabilityRequest {
+            capability_id: "mail.send".to_string(),
+            args: json!({"to": "original@example.com", "body": "draft"}),
+            request_id: Some("approved-emission-1".to_string()),
+            idempotency_key: Some("approved-emission-key".to_string()),
+            async_task: true,
+            ..Default::default()
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let task_id = body["task"]["taskId"].as_str().unwrap().to_string();
+    assert_eq!(body["task"]["status"], "input_required");
+
+    let mut responses = std::collections::BTreeMap::new();
+    responses.insert(
+        "hitl_approval".to_string(),
+        json!({
+            "approved": true,
+            "modified_args": {"to": "approved@example.com", "body": "approved body"}
+        }),
+    );
+    let updated = warmplane::http_v1::tasks_api::handle_update_task(
+        State(state.clone()),
+        Path(task_id.clone()),
+        Json(warmplane::http_v1::tasks_api::UpdateTaskRequest {
+            input_responses: responses,
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(updated.status(), StatusCode::OK);
+
+    let Some(ServerMsg::CallTool { params, reply, .. }) =
+        tokio::time::timeout(Duration::from_secs(3), upstream.recv())
+            .await
+            .unwrap()
+    else {
+        panic!("expected approved emission to dispatch after its hold");
+    };
+    assert_eq!(params["to"], "approved@example.com");
+    assert_eq!(params["body"], "approved body");
+    reply.send(Ok(json!({"sent": true}))).unwrap();
+    let completed = state
+        .hold_coordinator
+        .wait_for_terminal(&state, &task_id, Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert_eq!(completed.status, TaskStatus::Completed);
 }
