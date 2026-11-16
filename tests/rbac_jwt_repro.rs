@@ -46,6 +46,8 @@ fn engine() -> RbacEngine {
             deny: vec![],
             require_approval: vec![],
             redact_keys: vec![],
+            undo_permissions: Default::default(),
+            allow_agent_self_undo: false,
         },
     );
     roles.insert(
@@ -56,6 +58,8 @@ fn engine() -> RbacEngine {
             deny: vec![],
             require_approval: vec![],
             redact_keys: vec![],
+            undo_permissions: Default::default(),
+            allow_agent_self_undo: false,
         },
     );
 

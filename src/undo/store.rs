@@ -118,6 +118,17 @@ pub struct UndoLedgerStore {
     storage: AtomicFile<UndoLedger>,
 }
 
+/// Result of atomically claiming an undo entry for operator execution.
+#[derive(Clone, Debug, PartialEq)]
+pub enum UndoClaimResult {
+    /// The entry is durably marked `Executing` and may be dispatched.
+    Claimed(UndoEntry),
+    /// The undo window expired and the entry is durably marked `Expired`.
+    Expired(UndoEntry),
+    /// The entry is terminal, executing, missing, or otherwise unavailable.
+    Unavailable(Option<UndoEntry>),
+}
+
 /// Values that identify and authorize a compensable invocation reservation.
 pub struct CompensableReservation<'a> {
     /// Tenant that owns the invocation.
@@ -177,6 +188,94 @@ impl UndoLedgerStore {
     /// Returns a snapshot of all ledger entries.
     pub async fn entries(&self) -> Vec<UndoEntry> {
         self.ledger.lock().await.entries.clone()
+    }
+
+    /// Returns one ledger entry by its stable identifier.
+    pub async fn get(&self, undo_id: &str) -> Option<UndoEntry> {
+        self.ledger
+            .lock()
+            .await
+            .entries
+            .iter()
+            .find(|entry| entry.undo_id == undo_id)
+            .cloned()
+    }
+
+    /// Returns entries belonging to one tenant, newest first, with optional work-item/status filters.
+    pub async fn list_for_tenant(
+        &self,
+        tenant_id: &str,
+        work_item_id: Option<&str>,
+        status: Option<&crate::undo::UndoEntryStatus>,
+    ) -> Vec<UndoEntry> {
+        let mut entries = self
+            .ledger
+            .lock()
+            .await
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.tenant_id == tenant_id
+                    && work_item_id.is_none_or(|id| entry.work_item_id.as_deref() == Some(id))
+                    && status.is_none_or(|wanted| &entry.status == wanted)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| {
+            right
+                .created_at_ms
+                .cmp(&left.created_at_ms)
+                .then_with(|| right.undo_id.cmp(&left.undo_id))
+        });
+        entries
+    }
+
+    /// Claims an entry for an operator, optionally forcing an expired entry after authorization.
+    pub async fn claim_for_operator(
+        &self,
+        undo_id: &str,
+        now_ms: u64,
+        force_expired: bool,
+    ) -> Result<UndoClaimResult> {
+        let mut guard = self.ledger.lock().await;
+        let Some(index) = guard
+            .entries
+            .iter()
+            .position(|entry| entry.undo_id == undo_id)
+        else {
+            return Ok(UndoClaimResult::Unavailable(None));
+        };
+        let entry = &guard.entries[index];
+        let expired = entry.expires_at_ms <= now_ms;
+        if entry.status == crate::undo::UndoEntryStatus::Armed && expired && !force_expired {
+            let previous = entry.status.clone();
+            guard.entries[index].status = crate::undo::UndoEntryStatus::Expired;
+            if let Err(error) = self.storage.save(&guard) {
+                guard.entries[index].status = previous;
+                return Err(error).context("failed to persist expired undo status");
+            }
+            return Ok(UndoClaimResult::Expired(guard.entries[index].clone()));
+        }
+        let forceable = force_expired
+            && expired
+            && matches!(
+                entry.status,
+                crate::undo::UndoEntryStatus::Armed | crate::undo::UndoEntryStatus::Expired
+            );
+        if entry.status != crate::undo::UndoEntryStatus::Armed && !forceable {
+            return Ok(UndoClaimResult::Unavailable(Some(entry.clone())));
+        }
+        guard.entries[index].status = crate::undo::UndoEntryStatus::Executing;
+        let claimed = guard.entries[index].clone();
+        if let Err(error) = self.storage.save(&guard) {
+            guard.entries[index].status = if expired {
+                crate::undo::UndoEntryStatus::Expired
+            } else {
+                crate::undo::UndoEntryStatus::Armed
+            };
+            return Err(error).context("failed to persist operator undo claim");
+        }
+        Ok(UndoClaimResult::Claimed(claimed))
     }
 
     /// Claims an armed, unexpired entry for execution and persists the claim.
@@ -413,6 +512,61 @@ mod tests {
 
         let reopened = UndoLedgerStore::open(path).unwrap();
         assert_eq!(reopened.entries().await, vec![entry]);
+    }
+
+    #[tokio::test]
+    async fn operator_listing_is_tenant_scoped_and_expiry_override_is_durable() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("undo_operator.json");
+        let store = UndoLedgerStore::open(&path).unwrap();
+        let make_entry = |undo_id: &str, tenant_id: &str| UndoEntry {
+            undo_id: undo_id.to_string(),
+            operation_id: None,
+            work_item_id: Some("work-1".to_string()),
+            batch_id: None,
+            tenant_id: tenant_id.to_string(),
+            profile_id: None,
+            actor_id: None,
+            forward_capability: "forward.call".to_string(),
+            reversibility_class: "reversible".to_string(),
+            resolved_inverse_capability: "inverse.call".to_string(),
+            resolved_inverse_args: json!({"secret": "hidden"}),
+            snapshot_artifact_hash: None,
+            created_at_ms: 1,
+            expires_at_ms: 10,
+            status: UndoEntryStatus::Armed,
+        };
+        store.register(make_entry("a", "tenant-a")).await.unwrap();
+        store.register(make_entry("b", "tenant-b")).await.unwrap();
+
+        let visible = store
+            .list_for_tenant("tenant-a", Some("work-1"), None)
+            .await;
+        assert_eq!(
+            visible
+                .iter()
+                .map(|entry| entry.undo_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a"]
+        );
+        assert!(matches!(
+            store.claim_for_operator("a", 10, false).await.unwrap(),
+            crate::undo::UndoClaimResult::Expired(_)
+        ));
+        assert!(matches!(
+            store.claim_for_operator("a", 10, true).await.unwrap(),
+            crate::undo::UndoClaimResult::Claimed(_)
+        ));
+
+        let reopened = UndoLedgerStore::open(path).unwrap();
+        assert_eq!(
+            reopened.get("a").await.unwrap().status,
+            UndoEntryStatus::Executing
+        );
+        assert_eq!(
+            reopened.get("b").await.unwrap().status,
+            UndoEntryStatus::Armed
+        );
     }
 
     #[tokio::test]

@@ -266,6 +266,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: TaskCommands,
     },
+    /// Inspect and execute persisted undo operations.
+    Undo {
+        #[command(subcommand)]
+        command: UndoCommands,
+    },
     /// Inspect and manage cached idempotency records
     Idempotency {
         #[command(subcommand)]
@@ -710,6 +715,58 @@ pub enum TaskCommands {
         id: String,
         /// Optional cancellation reason
         #[arg(short = 'r', long)]
+        reason: Option<String>,
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+}
+
+/// Persisted undo inspection and operator actions.
+#[derive(Subcommand, Debug, Clone)]
+pub enum UndoCommands {
+    /// List undo entries owned by the current tenant.
+    List {
+        #[arg(long)]
+        work_item_id: Option<String>,
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Show a safe summary of one undo entry.
+    Show {
+        id: String,
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Execute one undo entry.
+    Run {
+        id: String,
+        #[arg(long)]
+        force_expired: bool,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
+    /// Roll back eligible entries for a work item in reverse order.
+    Rollback {
+        work_item_id: String,
+        #[arg(long)]
+        force_expired: bool,
+        #[arg(long)]
         reason: Option<String>,
         #[arg(short = 'p', long)]
         port: Option<u16>,

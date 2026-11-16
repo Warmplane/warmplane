@@ -235,6 +235,9 @@ pub struct UpsertProfileRequest {
     /// Optional per-profile security and governance policy.
     #[serde(default)]
     pub policy: Option<crate::config::PolicyConfig>,
+    /// Explicitly opts this profile into the protected MCP self-undo tool.
+    #[serde(default, rename = "allowAgentSelfUndo")]
+    pub allow_agent_self_undo: bool,
 }
 
 /// Request body for approving a pending capability execution.

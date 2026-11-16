@@ -8,7 +8,9 @@ use std::{
 use tracing::warn;
 
 use crate::daemon::Policy;
-use crate::rbac::models::{RbacConfig, RolePolicyConfig, TenantContext, TokenAssignment};
+use crate::rbac::models::{
+    RbacConfig, RolePolicyConfig, TenantContext, TokenAssignment, UndoPermissions,
+};
 
 /// In-memory RBAC evaluation engine.
 #[derive(Clone, Debug)]
@@ -59,6 +61,23 @@ impl RbacEngine {
     /// Returns the configured default role name.
     pub fn default_role(&self) -> String {
         self.read_state().default_role.clone()
+    }
+
+    /// Returns the configured undo permissions for `role`, or no permissions when it is unknown.
+    pub fn undo_permissions(&self, role: &str) -> UndoPermissions {
+        self.read_state()
+            .roles
+            .get(role)
+            .map(|config| config.undo_permissions.clone())
+            .unwrap_or_default()
+    }
+
+    /// Returns whether `role` explicitly opts into the MCP self-undo tool.
+    pub fn allows_agent_self_undo(&self, role: &str) -> bool {
+        self.read_state()
+            .roles
+            .get(role)
+            .is_some_and(|config| config.allow_agent_self_undo)
     }
 
     /// Returns whether a role can be resolved under the active RBAC configuration.

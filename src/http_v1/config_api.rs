@@ -674,6 +674,7 @@ pub async fn handle_upsert_profile(
         servers: payload.servers.clone(),
         description: payload.description.clone(),
         policy: payload.policy.clone(),
+        allow_agent_self_undo: payload.allow_agent_self_undo,
     };
 
     config

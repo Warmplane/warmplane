@@ -689,6 +689,84 @@ paths:
       responses:
         "200":
           description: Streamed audit log file
+  /v1/undo:
+    get:
+      summary: List tenant-owned undo entries
+      operationId: listUndoEntries
+      parameters:
+        - in: query
+          name: work_item_id
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string, enum: [armed, executing, reverted, expired, failed] }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200": { description: Safe summaries without inverse arguments or snapshot contents }
+        "403": { description: Role lacks undo list permission }
+  /v1/undo/{undo_id}:
+    get:
+      summary: Show one tenant-owned undo entry
+      operationId: getUndoEntry
+      parameters:
+        - in: path
+          name: undo_id
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Safe undo summary }
+        "404": { description: Entry is missing or belongs to another tenant }
+  /v1/undo/{undo_id}/execute:
+    post:
+      summary: Execute one undo entry
+      operationId: executeUndoEntry
+      parameters:
+        - in: path
+          name: undo_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                forceExpired: { type: boolean, default: false }
+                reason: { type: string }
+              additionalProperties: false
+      responses:
+        "200": { description: Inverse outcome and committed audit receipt }
+        "404": { description: Entry is missing or belongs to another tenant }
+        "409": { description: Entry is expired or not executable }
+        "403": { description: Role lacks required permission }
+  /v1/undo/work-items/{work_item_id}/rollback:
+    post:
+      summary: Roll back eligible entries for a work item in reverse order
+      operationId: rollbackWorkItem
+      parameters:
+        - in: path
+          name: work_item_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                forceExpired: { type: boolean, default: false }
+                reason: { type: string }
+              additionalProperties: false
+      responses:
+        "200": { description: Per-entry rollback outcomes }
+        "403": { description: Role lacks rollback permission }
   /v1/tasks:
     get:
       summary: List tasks visible to the current tenant and profile

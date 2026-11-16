@@ -48,6 +48,7 @@ const TOOL_PROMPT_GET: &str = "prompt_get";
 const TOOL_TASK_GET: &str = "task_get";
 const TOOL_TASK_UPDATE: &str = "task_update";
 const TOOL_TASK_CANCEL: &str = "task_cancel";
+const TOOL_UNDO_EXECUTE: &str = "undo_execute";
 const TOOL_COMPLETION_COMPLETE: &str = "completion_complete";
 const TOOL_SUBSCRIPTIONS_LISTEN: &str = "subscriptions_listen";
 
@@ -122,6 +123,13 @@ impl ServerHandler for FacadeMcpServer {
     ) -> std::result::Result<ListToolsResult, McpError> {
         let mut tools = facade_tools();
         let prof_ctx = self.profile_context().await;
+        if self.agent_self_undo_enabled(&prof_ctx).await {
+            tools.push(Tool::new(
+                TOOL_UNDO_EXECUTE,
+                "Execute the newest armed undo for one of this agent's work items",
+                schema_object(json!({"type":"object","properties":{"undo_id":{"type":"string","description":"Explicit undo entry identifier"},"work_item_id":{"type":"string","description":"Execute the newest armed inverse for this work item"}},"anyOf":[{"required":["undo_id"]},{"required":["work_item_id"]}],"additionalProperties":false})),
+            ));
+        }
         let caps_guard = self.state.capabilities.read().await;
 
         if let Ok(config) = crate::config::load_or_default_config(&self.state.config_path) {
@@ -191,6 +199,63 @@ impl ServerHandler for FacadeMcpServer {
         let args = request.arguments.unwrap_or_default();
 
         let output = match request.name.as_ref() {
+            TOOL_UNDO_EXECUTE => {
+                let profile = self.profile_context().await;
+                if !self.agent_self_undo_enabled(&profile).await {
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "Agent self-undo is disabled for this role or profile",
+                        )),
+                    ));
+                }
+                let undo_id = args.get("undo_id").and_then(Value::as_str);
+                let work_item_id = args.get("work_item_id").and_then(Value::as_str);
+                if undo_id.is_none() && work_item_id.is_none() {
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "Provide 'undo_id' or 'work_item_id'",
+                        )),
+                    ));
+                };
+                let role = self.state.rbac_engine.default_role();
+                let policy = self
+                    .state
+                    .policy
+                    .read()
+                    .await
+                    .clone()
+                    .merge_with_profile(profile.profile_policy.as_ref());
+                let access = crate::undo::UndoAccessContext {
+                    tenant_id: "default".to_string(),
+                    role,
+                    actor_id: None,
+                    request_context: Default::default(),
+                    policy,
+                    profile,
+                    grant_expires_at_epoch_secs: None,
+                    trace_id: next_trace_id(),
+                };
+                let handle = crate::engine::ControlPlaneHandle::new(self.state.clone());
+                let result = if let Some(work_item_id) = work_item_id {
+                    handle
+                        .execute_agent_self_undo_for_work_item(work_item_id, &access)
+                        .await
+                } else if let Some(undo_id) = undo_id {
+                    handle.execute_agent_self_undo(undo_id, &access).await
+                } else {
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "Provide 'undo_id' or 'work_item_id'",
+                        )),
+                    ));
+                };
+                match result {
+                    Ok(result) => serde_json::to_value(result).map_err(|error| error.to_string()),
+                    Err(error) => {
+                        Ok(json!({"ok":false,"error":{"code":error.code,"message":error.message}}))
+                    }
+                }
+            }
             TOOL_CAPABILITIES_LIST => self.list_capabilities_value().await,
             TOOL_CAPABILITY_SEARCH => {
                 let query = args
@@ -712,6 +777,13 @@ impl ServerHandler for FacadeMcpServer {
 }
 
 impl FacadeMcpServer {
+    async fn agent_self_undo_enabled(&self, profile: &crate::context::ProfileContext) -> bool {
+        self.state
+            .rbac_engine
+            .allows_agent_self_undo(&self.state.rbac_engine.default_role())
+            && (profile.profile_id.is_none() || profile.allow_agent_self_undo)
+    }
+
     async fn profile_context(&self) -> crate::context::ProfileContext {
         if let Some(ref prof_id) = self.profile {
             let profiles_guard = self.state.profiles.read().await;
@@ -724,7 +796,8 @@ impl FacadeMcpServer {
                     prof_id.clone(),
                     prof_cfg.servers.clone(),
                     prof_policy,
-                );
+                )
+                .with_agent_self_undo(prof_cfg.allow_agent_self_undo);
             }
         }
         crate::context::ProfileContext::unrestricted()
@@ -1472,6 +1545,35 @@ mod tests {
     use super::{facade_tools, invalid_args};
 
     #[tokio::test]
+    async fn mcp_self_undo_requires_role_and_active_profile_opt_in() {
+        let rbac = crate::rbac::RbacConfig {
+            enabled: true,
+            default_role: "agent".to_string(),
+            roles: std::collections::HashMap::from([(
+                "agent".to_string(),
+                crate::rbac::RolePolicyConfig {
+                    allow_agent_self_undo: true,
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        let state = crate::daemon::AppState::builder()
+            .rbac_engine(crate::rbac::RbacEngine::new(Some(rbac)))
+            .build();
+        let facade = super::FacadeMcpServer::new(state, None);
+        let disabled_profile = crate::context::ProfileContext::scoped("coding", ["repo"]);
+        assert!(!facade.agent_self_undo_enabled(&disabled_profile).await);
+        let enabled_profile = disabled_profile.with_agent_self_undo(true);
+        assert!(facade.agent_self_undo_enabled(&enabled_profile).await);
+        assert!(
+            facade
+                .agent_self_undo_enabled(&crate::context::ProfileContext::unrestricted())
+                .await
+        );
+    }
+
+    #[tokio::test]
     async fn mcp_facade_call_uses_the_delayable_hold_before_upstream_dispatch() {
         use crate::{
             config::{ReversibilityClass, ReversibilityConfig},
@@ -1809,6 +1911,7 @@ mod tests {
                 servers: vec!["sqlite".to_string()],
                 description: None,
                 policy: None,
+                allow_agent_self_undo: false,
             },
         );
 

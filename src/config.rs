@@ -368,6 +368,9 @@ pub struct ProfileConfig {
     /// Optional per-profile security and governance policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<PolicyConfig>,
+    /// Allows an opted-in MCP role to invoke undo for its own work.
+    #[serde(default, rename = "allowAgentSelfUndo")]
+    pub allow_agent_self_undo: bool,
 }
 
 /// Persistent runtime state configuration.
@@ -1581,6 +1584,7 @@ mod tests {
                 servers: vec!["srv_a".to_string()],
                 description: Some("test profile".to_string()),
                 policy: None,
+                allow_agent_self_undo: false,
             },
         );
 
@@ -1598,6 +1602,7 @@ mod tests {
                 servers: vec!["srv_c".to_string()],
                 description: None,
                 policy: None,
+                allow_agent_self_undo: false,
             },
         );
         let bad_config = McpConfig {

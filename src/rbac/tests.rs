@@ -37,6 +37,8 @@ fn sample_rbac_config() -> RbacConfig {
             deny: vec![],
             require_approval: vec![],
             redact_keys: vec![],
+            undo_permissions: Default::default(),
+            allow_agent_self_undo: false,
         },
     );
     roles.insert(
@@ -47,6 +49,8 @@ fn sample_rbac_config() -> RbacConfig {
             deny: vec!["*.write_*".to_string(), "docker.*".to_string()],
             require_approval: vec!["db.query_large".to_string()],
             redact_keys: vec!["ssn".to_string(), "password".to_string()],
+            undo_permissions: Default::default(),
+            allow_agent_self_undo: false,
         },
     );
 

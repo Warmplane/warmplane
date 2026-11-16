@@ -99,7 +99,8 @@ pub async fn resolve_profile_context(
                 profile_id,
                 profile_cfg.servers.clone(),
                 prof_policy,
-            ))
+            )
+            .with_agent_self_undo(profile_cfg.allow_agent_self_undo))
         }
         None => {
             let trace_id = next_trace_id();

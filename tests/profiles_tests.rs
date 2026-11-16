@@ -56,6 +56,7 @@ async fn test_profile_http_filtering_and_etag_caching() {
             servers: vec!["server_a".to_string()],
             description: Some("Profile with only server A".to_string()),
             policy: None,
+            allow_agent_self_undo: false,
         },
     );
 

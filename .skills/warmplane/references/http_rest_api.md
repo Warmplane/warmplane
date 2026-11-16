@@ -27,3 +27,10 @@ Daemon default: `http://127.0.0.1:9090`
 - `GET /v1/secrets`
 - `POST /v1/secrets` (`{"key": "DB_PASSWORD", "value": "secret"}`)
 - `DELETE /v1/secrets/{key}`
+
+## 5. Undo Operations
+- `GET /v1/undo` lists safe summaries for the authenticated tenant; optional query filters: `work_item_id`, `status`, `offset`, and `limit`.
+- `GET /v1/undo/{undo_id}` shows one safe summary. Cross-tenant IDs are concealed with `404`.
+- `POST /v1/undo/{undo_id}/execute` executes one inverse.
+- `POST /v1/undo/work-items/{work_item_id}/rollback` executes eligible inverses in reverse order.
+- Summaries never include inverse arguments or snapshot contents. With RBAC enabled, roles need `undoPermissions.list`, `.execute`, or `.rollback`; forcing expiry always requires the caller role's dedicated `.forceExpired` permission and JSON `{"forceExpired":true,"reason":"..."}`. The reason is included in the committed audit record.

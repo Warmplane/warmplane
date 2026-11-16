@@ -105,9 +105,36 @@
         "properties": {
           "servers": { "type": "array", "items": { "type": "string" } },
           "description": { "type": "string" },
-          "policy": { "$ref": "#/$defs/policyConfig" }
+          "policy": { "$ref": "#/$defs/policyConfig" },
+          "allowAgentSelfUndo": { "type": "boolean", "default": false }
         },
         "additionalProperties": false
+      }
+    },
+    "rbac": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "defaultRole": { "type": "string" },
+        "roles": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "undoPermissions": {
+                "type": "object",
+                "properties": {
+                  "list": { "type": "boolean" },
+                  "execute": { "type": "boolean" },
+                  "rollback": { "type": "boolean" },
+                  "forceExpired": { "type": "boolean" }
+                },
+                "additionalProperties": false
+              },
+              "allowAgentSelfUndo": { "type": "boolean", "default": false }
+            }
+          }
+        }
       }
     },
     "audit": {

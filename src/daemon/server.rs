@@ -360,6 +360,17 @@ pub fn build_router(app_state: AppState) -> Router {
         .route("/v1/tasks/:id", get(http_v1::handle_get_task))
         .route("/v1/tasks/:id/update", post(http_v1::handle_update_task))
         .route("/v1/tasks/:id/cancel", post(http_v1::handle_cancel_task))
+        // Undo inspection and operator actions.
+        .route("/v1/undo", get(http_v1::handle_list_undo))
+        .route("/v1/undo/:undo_id", get(http_v1::handle_get_undo))
+        .route(
+            "/v1/undo/:undo_id/execute",
+            post(http_v1::handle_execute_undo),
+        )
+        .route(
+            "/v1/undo/work-items/:work_item_id/rollback",
+            post(http_v1::handle_rollback_work_item),
+        )
         // WORM Audit & Compliance Endpoints
         .route("/v1/audit/events", get(http_v1::handle_list_audit_events))
         .route("/v1/audit/events/:id", get(http_v1::handle_get_audit_event))

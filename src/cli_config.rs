@@ -1549,6 +1549,109 @@ pub async fn handle_task_command(cmd: crate::models::TaskCommands) -> Result<()>
     Ok(())
 }
 
+/// Handles persisted undo inspection and operator actions.
+pub async fn handle_undo_command(cmd: crate::models::UndoCommands) -> Result<()> {
+    use crate::models::UndoCommands;
+    let (port, config, method, path, body) = match cmd {
+        UndoCommands::List {
+            work_item_id,
+            status,
+            offset,
+            limit,
+            port,
+            config,
+        } => {
+            let mut query = vec![format!("offset={offset}"), format!("limit={limit}")];
+            if let Some(value) = work_item_id {
+                query.push(format!("work_item_id={}", encode_query_component(&value)));
+            }
+            if let Some(value) = status {
+                query.push(format!("status={}", encode_query_component(&value)));
+            }
+            (
+                port,
+                config,
+                reqwest::Method::GET,
+                format!("/v1/undo?{}", query.join("&")),
+                None,
+            )
+        }
+        UndoCommands::Show { id, port, config } => (
+            port,
+            config,
+            reqwest::Method::GET,
+            format!("/v1/undo/{}", encode_query_component(&id)),
+            None,
+        ),
+        UndoCommands::Run {
+            id,
+            force_expired,
+            reason,
+            port,
+            config,
+        } => (
+            port,
+            config,
+            reqwest::Method::POST,
+            format!("/v1/undo/{}/execute", encode_query_component(&id)),
+            Some(serde_json::json!({"forceExpired": force_expired, "reason": reason})),
+        ),
+        UndoCommands::Rollback {
+            work_item_id,
+            force_expired,
+            reason,
+            port,
+            config,
+        } => (
+            port,
+            config,
+            reqwest::Method::POST,
+            format!(
+                "/v1/undo/work-items/{}/rollback",
+                encode_query_component(&work_item_id)
+            ),
+            Some(serde_json::json!({"forceExpired": force_expired, "reason": reason})),
+        ),
+    };
+    let resolved_port = resolve_client_port(port, &config)?;
+    let config_data = load_or_default_config(&config)?;
+    let token = std::env::var("WARMPLANE_OPERATOR_TOKEN")
+        .ok()
+        .or(config_data.auth_token);
+    let client = reqwest::Client::new();
+    let mut request = client.request(method, format!("http://127.0.0.1:{resolved_port}{path}"));
+    if let Some(token) = token {
+        request = request.bearer_auth(token);
+    }
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let response = request
+        .send()
+        .await
+        .with_context(|| format!("Could not reach daemon at 127.0.0.1:{resolved_port}"))?;
+    let status = response.status();
+    let payload = response.text().await?;
+    println!("{payload}");
+    if !status.is_success() {
+        anyhow::bail!("Undo request failed with HTTP {status}");
+    }
+    Ok(())
+}
+
+fn encode_query_component(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+                char::from(byte).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

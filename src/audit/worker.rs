@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::error;
 
-use crate::audit::models::RawAuditEvent;
+use crate::audit::models::{AuditEvent, RawAuditEvent};
 use crate::audit::siem::SiemDispatcher;
 use crate::audit::store::SharedAuditStore;
 
@@ -25,6 +25,11 @@ pub const DEFAULT_AUDIT_MAX_BATCH_SIZE: usize = 100;
 pub enum AuditWorkerMsg {
     /// Raw audit event record to append.
     Event(Box<RawAuditEvent>),
+    /// Appends one event after flushing prior events and returns its committed hash-chain record.
+    EventWithAck(
+        Box<RawAuditEvent>,
+        tokio::sync::oneshot::Sender<std::result::Result<AuditEvent, String>>,
+    ),
     /// Signals the background flusher to drain all buffered events and terminate.
     FlushAndShutdown(tokio::sync::oneshot::Sender<()>),
 }
@@ -65,6 +70,21 @@ impl AuditHandle {
         {
             tracing::warn!("Audit worker channel closed: {:?}", e);
         }
+    }
+
+    /// Sends an event and waits until the WORM store commits its hash-chain record.
+    pub async fn send_confirmed(
+        &self,
+        event: RawAuditEvent,
+    ) -> std::result::Result<AuditEvent, String> {
+        let (reply, receiver) = tokio::sync::oneshot::channel();
+        self.sender
+            .send(AuditWorkerMsg::EventWithAck(Box::new(event), reply))
+            .await
+            .map_err(|error| format!("audit worker is unavailable: {error}"))?;
+        receiver
+            .await
+            .map_err(|error| format!("audit worker dropped confirmation: {error}"))?
     }
 
     /// Triggers an immediate buffer drain and shutdown of the background worker task.
@@ -126,11 +146,44 @@ pub fn spawn_audit_worker(
                                 }
                             }
                         }
+                        AuditWorkerMsg::EventWithAck(event, reply) => {
+                            let flush_result = if buffer.is_empty() {
+                                Ok(Vec::new())
+                            } else {
+                                let batch = std::mem::take(&mut buffer);
+                                store.append_batch(batch).await.map_err(|error| error.to_string())
+                            };
+                            match flush_result {
+                                Ok(committed) => {
+                                    if let Some(ref siem) = siem_dispatcher {
+                                        siem.dispatch_batch(&committed).await;
+                                    }
+                                    match store.append(*event).await {
+                                        Ok(record) => {
+                                            if let Some(ref siem) = siem_dispatcher {
+                                                siem.dispatch_batch(std::slice::from_ref(&record)).await;
+                                            }
+                                            let _ = reply.send(Ok(record));
+                                        }
+                                        Err(error) => {
+                                            let _ = reply.send(Err(error.to_string()));
+                                        }
+                                    }
+                                }
+                                Err(error) => {
+                                    let _ = reply.send(Err(format!("failed to flush prior audit events: {error}")));
+                                }
+                            }
+                        }
                         AuditWorkerMsg::FlushAndShutdown(reply) => {
                             // Drain any remaining messages already queued in channel
                             while let Ok(msg) = rx.try_recv() {
-                                if let AuditWorkerMsg::Event(ev) = msg {
-                                    buffer.push(*ev);
+                                match msg {
+                                    AuditWorkerMsg::Event(ev) => buffer.push(*ev),
+                                    AuditWorkerMsg::EventWithAck(_, reply) => {
+                                        let _ = reply.send(Err("audit worker is shutting down".to_string()));
+                                    }
+                                    AuditWorkerMsg::FlushAndShutdown(_) => {}
                                 }
                             }
                             if !buffer.is_empty() {

@@ -105,7 +105,8 @@ impl ControlPlaneHandle {
                     prof_id.to_string(),
                     prof_cfg.servers.clone(),
                     prof_policy,
-                );
+                )
+                .with_agent_self_undo(prof_cfg.allow_agent_self_undo);
             }
         }
         ProfileContext::unrestricted()
@@ -128,6 +129,138 @@ impl ControlPlaneHandle {
             total_tool_calls: self.state.total_tool_calls.load(Ordering::Relaxed),
             total_tool_duration_us: self.state.total_tool_duration_us.load(Ordering::Relaxed),
         }
+    }
+
+    /// Lists safe summaries of undo entries available to an authorized caller.
+    ///
+    /// Inverse arguments and snapshot contents are not included in list responses. Tenant
+    /// ownership is always taken from `access`, never from the filter.
+    ///
+    /// # Arguments
+    /// * `filter` - Optional status/work-item filters and pagination.
+    /// * `access` - Trusted tenant, role, policy, profile, and caller context.
+    ///
+    /// # Returns
+    /// A tenant-scoped page and the total number of matching entries.
+    ///
+    /// # Errors
+    /// Returns an authorization or persistent-storage error.
+    pub async fn list_undo_entries(
+        &self,
+        filter: crate::undo::UndoListFilter,
+        access: &crate::undo::UndoAccessContext,
+    ) -> Result<crate::undo::UndoListResponse, crate::undo::UndoOperationError> {
+        crate::undo::list_undo_entries(&self.state, access, filter).await
+    }
+
+    /// Returns safe details for one undo entry belonging to the caller's tenant.
+    ///
+    /// # Arguments
+    /// * `undo_id` - Stable undo-entry identifier.
+    /// * `access` - Trusted tenant and role context.
+    ///
+    /// # Returns
+    /// A safe summary without inverse arguments or snapshot contents.
+    ///
+    /// # Errors
+    /// Returns not-found for missing or cross-tenant entries, or an authorization error.
+    pub async fn get_undo_entry(
+        &self,
+        undo_id: &str,
+        access: &crate::undo::UndoAccessContext,
+    ) -> Result<crate::undo::UndoEntrySummary, crate::undo::UndoOperationError> {
+        crate::undo::get_undo_entry(&self.state, access, undo_id).await
+    }
+
+    /// Executes one authorized undo entry and returns its inverse output and audit receipt.
+    ///
+    /// # Arguments
+    /// * `undo_id` - Stable undo-entry identifier.
+    /// * `access` - Trusted tenant, policy, profile, and operator context.
+    /// * `force_expired` - Whether the authorized caller explicitly overrides expiration.
+    /// * `force_reason` - Required audit reason when `force_expired` is true.
+    ///
+    /// # Returns
+    /// Per-entry execution outcome, sanitized inverse output, and committed audit receipt.
+    ///
+    /// # Errors
+    /// Returns authorization, expiry, state-conflict, or storage errors.
+    pub async fn execute_undo(
+        &self,
+        undo_id: &str,
+        access: &crate::undo::UndoAccessContext,
+        force_expired: bool,
+        force_reason: Option<&str>,
+    ) -> Result<crate::undo::RollbackResult, crate::undo::UndoOperationError> {
+        crate::undo::execute_undo(&self.state, access, undo_id, force_expired, force_reason).await
+    }
+
+    /// Rolls back all eligible entries for a work item in LIFO order.
+    ///
+    /// # Arguments
+    /// * `work_item_id` - Work-item fiber to unwind.
+    /// * `access` - Trusted tenant, policy, profile, and operator context.
+    /// * `force_expired` - Whether the authorized caller overrides expired entries.
+    /// * `force_reason` - Required audit reason when `force_expired` is true.
+    ///
+    /// # Returns
+    /// One structured outcome per selected undo entry.
+    ///
+    /// # Errors
+    /// Returns authorization or persistent-storage errors.
+    pub async fn rollback_work_item(
+        &self,
+        work_item_id: &str,
+        access: &crate::undo::UndoAccessContext,
+        force_expired: bool,
+        force_reason: Option<&str>,
+    ) -> Result<Vec<crate::undo::RollbackResult>, crate::undo::UndoOperationError> {
+        crate::undo::rollback_work_item(
+            &self.state,
+            access,
+            work_item_id,
+            force_expired,
+            force_reason,
+        )
+        .await
+    }
+
+    /// Executes an undo requested by an opted-in MCP agent.
+    ///
+    /// # Arguments
+    /// * `undo_id` - Stable undo-entry identifier.
+    /// * `access` - Trusted role, profile, tenant, and actor context.
+    ///
+    /// # Returns
+    /// The inverse execution result and committed audit receipt.
+    ///
+    /// # Errors
+    /// Returns policy, ownership, expiry, or storage errors.
+    pub async fn execute_agent_self_undo(
+        &self,
+        undo_id: &str,
+        access: &crate::undo::UndoAccessContext,
+    ) -> Result<crate::undo::RollbackResult, crate::undo::UndoOperationError> {
+        crate::undo::execute_agent_self_undo(&self.state, access, undo_id).await
+    }
+
+    /// Executes the newest armed undo entry for an opted-in MCP agent's work item.
+    ///
+    /// # Arguments
+    /// * `work_item_id` - Work-item fiber associated with the agent's current turn.
+    /// * `access` - Trusted role, profile, tenant, and caller context.
+    ///
+    /// # Returns
+    /// The inverse execution result and committed audit receipt.
+    ///
+    /// # Errors
+    /// Returns policy, ownership, expiry, or storage errors.
+    pub async fn execute_agent_self_undo_for_work_item(
+        &self,
+        work_item_id: &str,
+        access: &crate::undo::UndoAccessContext,
+    ) -> Result<crate::undo::RollbackResult, crate::undo::UndoOperationError> {
+        crate::undo::execute_agent_self_undo_for_work_item(&self.state, access, work_item_id).await
     }
 
     /// Lists registered capabilities, optionally filtered by a named profile constellation.

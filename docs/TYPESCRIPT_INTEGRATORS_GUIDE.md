@@ -484,6 +484,10 @@ if (cancelled.status === 409) {
 
 Task status can be polled with `GET /v1/tasks/{taskId}`. Cancellation can also use `POST /v1/operations/{requestId}/cancel`; it succeeds only before dispatch claim. Pending holds resume after restart and policy/profile revalidation. A task recovered in `dispatching` fails with `EMISSION_OUTCOME_UNKNOWN` and is not resent automatically. Batch steps wait for held results within the shared 60-second batch budget.
 
+### Operator Undo
+
+The daemon provides `GET /v1/undo`, `GET /v1/undo/{undo_id}`, `POST /v1/undo/{undo_id}/execute`, and `POST /v1/undo/work-items/{work_item_id}/rollback`. Configure per-role `undoPermissions` in RBAC. Entry summaries omit inverse arguments and snapshot contents, and cross-tenant entry IDs return `404`. Setting `forceExpired: true` additionally requires the `forceExpired` permission and a non-empty `reason`; successful execution returns the committed audit event ID and hash.
+
 If task persistence is disabled, held emissions remain in memory and are lost when the daemon exits. Configure persistent state to recover them after restart.
 
 ### 3. Context distillation — limit large outputs

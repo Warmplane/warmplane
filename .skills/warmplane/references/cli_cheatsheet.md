@@ -23,3 +23,11 @@
 ## 5. Standalone Proxy
 - Stdio proxy: `warmplane mcp-server --config <path> [--profile <name>]`
 - HTTP/SSE proxy: `warmplane mcp-http-server --config <path> --bind 127.0.0.1 --port 9191`
+
+## 6. Undo Operations
+- List: `warmplane undo list [--work-item-id <id>] [--status armed]`
+- Show: `warmplane undo show <undo-id>`
+- Execute: `warmplane undo run <undo-id>`
+- Roll back a work item: `warmplane undo rollback <work-item-id>`
+- Force past expiry only with the elevated `forceExpired` permission and `--reason <text>`: add `--force-expired --reason "incident reference"`.
+- Supply daemon bearer credentials with `WARMPLANE_OPERATOR_TOKEN`; static `authToken` from the config is used when that environment variable is unset.

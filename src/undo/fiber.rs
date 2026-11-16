@@ -27,6 +27,27 @@ pub struct RollbackResult {
     pub ok: bool,
     /// Failure or authorization detail.
     pub error: Option<String>,
+    /// Machine-readable outcome code, when the inverse could not be completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    /// Sanitized output from the inverse call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<serde_json::Value>,
+    /// Committed audit event identifier for this inverse outcome.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_event_id: Option<String>,
+    /// Committed audit event hash for this inverse outcome.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_hash: Option<String>,
+    /// Audit persistence error, independent of the inverse execution outcome.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit_error: Option<String>,
+    /// Whether the expired-window operator override was used.
+    #[serde(default)]
+    pub forced_expired: bool,
+    /// Persisted ledger status after the operation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_status: Option<UndoEntryStatus>,
 }
 
 /// Authorization and tracing context reused for every inverse in one unwind.
@@ -44,6 +65,10 @@ pub struct FiberExecutionScope<'a> {
     pub authorization_expires_at_epoch_secs: Option<u64>,
     /// Trace identifier attached to inverse audit events.
     pub trace_id: &'a str,
+    /// Operator identity for an explicitly authorized undo action.
+    pub operator_id: Option<&'a str>,
+    /// Reason recorded when an operator forces execution after expiry.
+    pub force_expired_reason: Option<&'a str>,
 }
 
 /// Unwinds armed entries associated with a tenant and batch request in LIFO order.
@@ -114,6 +139,8 @@ async fn unwind_matching_fiber(
         context,
         authorization_expires_at_epoch_secs,
         trace_id,
+        operator_id,
+        force_expired_reason,
     } = scope;
     let Some(ledger) = state.undo_ledger.as_ref() else {
         return Vec::new();
@@ -166,11 +193,15 @@ async fn unwind_matching_fiber(
         let outcome = dispatch_inverse(
             state,
             &claimed,
-            policy,
-            profile,
-            context,
-            authorization_expires_at_epoch_secs,
-            trace_id,
+            FiberExecutionScope {
+                policy,
+                profile,
+                context,
+                authorization_expires_at_epoch_secs,
+                operator_id,
+                force_expired_reason,
+                trace_id,
+            },
         )
         .await;
         let terminal = if outcome.ok {
@@ -197,18 +228,30 @@ fn failed_result(entry: &UndoEntry, error: String) -> RollbackResult {
         capability: entry.resolved_inverse_capability.clone(),
         ok: false,
         error: Some(error),
+        error_code: Some("UNDO_FAILED".to_string()),
+        output: None,
+        audit_event_id: None,
+        audit_hash: None,
+        audit_error: None,
+        forced_expired: false,
+        entry_status: None,
     }
 }
 
 async fn dispatch_inverse(
     state: &AppState,
     entry: &UndoEntry,
-    policy: &Policy,
-    profile: &ProfileContext,
-    context: Option<&RequestContext>,
-    authorization_expires_at_epoch_secs: Option<u64>,
-    trace_id: &str,
+    scope: FiberExecutionScope<'_>,
 ) -> RollbackResult {
+    let FiberExecutionScope {
+        policy,
+        profile,
+        context,
+        authorization_expires_at_epoch_secs,
+        operator_id,
+        force_expired_reason,
+        trace_id,
+    } = scope;
     let capability = &entry.resolved_inverse_capability;
     let denied = if authorization_expires_at_epoch_secs.is_some_and(|expiry| now_secs() >= expiry) {
         Some("caller authorization expired before inverse dispatch".to_string())
@@ -234,6 +277,7 @@ async fn dispatch_inverse(
     if error.is_none() && !allowed_server {
         error = Some("inverse capability is missing or outside the active profile".to_string());
     }
+    let mut output = None;
     let ok = if error.is_none() {
         let mut options =
             crate::engine::ExecutionOptions::new().with_idempotency_key(idempotency_key.clone());
@@ -250,6 +294,9 @@ async fn dispatch_inverse(
             .call_capability(capability, entry.resolved_inverse_args.clone(), options)
             .await;
         if response.ok {
+            output = response
+                .data
+                .map(|value| crate::http_v1::helpers::redact_value(value, &policy.redact_keys));
             true
         } else {
             error = response
@@ -266,46 +313,213 @@ async fn dispatch_inverse(
         "parentOperationId": entry.operation_id,
         "snapshotArtifactHash": entry.snapshot_artifact_hash,
         "idempotencyKey": idempotency_key,
+        "forceExpiredReason": force_expired_reason,
         "outcome": if ok { "executed" } else { "failed" },
         "error": error,
+        "result": output,
     });
-    state.audit_handle.send(RawAuditEvent {
-        event_type: if ok {
-            AuditEventType::UndoExecuted
-        } else {
-            AuditEventType::UndoFailed
-        },
-        trace_id: trace_id.to_string(),
-        request_id: entry.batch_id.clone(),
-        actor_id: context
-            .and_then(|value| value.actor_id.clone())
-            .or_else(|| entry.actor_id.clone()),
-        work_item_id: entry.work_item_id.clone(),
-        client_ip: None,
-        server_id,
-        capability_id: Some(capability.clone()),
-        resource_uri: None,
-        sanitized_args: Some(json!({"undoId": entry.undo_id})),
-        sanitized_response: Some(audit_payload),
-        execution_latency_us: None,
-        status: if ok {
-            AuditEventStatus::Success
-        } else {
-            AuditEventStatus::Failed
-        },
-        error_code: error.as_ref().map(|_| "UNDO_FAILED".to_string()),
-        error_message: error.clone(),
-        operator_id: None,
-        approval_ticket_id: None,
-        idempotency_key: Some(idempotency_key),
-        is_replay: Some(false),
-    });
+    let audit_result = state
+        .audit_handle
+        .send_confirmed(RawAuditEvent {
+            event_type: if ok {
+                AuditEventType::UndoExecuted
+            } else {
+                AuditEventType::UndoFailed
+            },
+            trace_id: trace_id.to_string(),
+            request_id: entry.batch_id.clone(),
+            actor_id: operator_id.map(ToString::to_string).or_else(|| {
+                context
+                    .and_then(|value| value.actor_id.clone())
+                    .or_else(|| entry.actor_id.clone())
+            }),
+            work_item_id: entry.work_item_id.clone(),
+            client_ip: None,
+            server_id,
+            capability_id: Some(capability.clone()),
+            resource_uri: None,
+            sanitized_args: Some(json!({"undoId": entry.undo_id})),
+            sanitized_response: Some(audit_payload),
+            execution_latency_us: None,
+            status: if ok {
+                AuditEventStatus::Success
+            } else {
+                AuditEventStatus::Failed
+            },
+            error_code: error.as_ref().map(|_| "UNDO_FAILED".to_string()),
+            error_message: error.clone(),
+            operator_id: operator_id.map(ToString::to_string),
+            approval_ticket_id: None,
+            idempotency_key: Some(idempotency_key),
+            is_replay: Some(false),
+        })
+        .await;
     RollbackResult {
         undo_id: entry.undo_id.clone(),
         operation_id: entry.operation_id.clone(),
         capability: capability.clone(),
         ok,
         error,
+        error_code: if ok {
+            None
+        } else {
+            Some("UNDO_FAILED".to_string())
+        },
+        output,
+        audit_event_id: audit_result.as_ref().ok().map(|record| record.id.clone()),
+        audit_hash: audit_result.as_ref().ok().map(|record| record.hash.clone()),
+        audit_error: audit_result.err(),
+        forced_expired: force_expired_reason.is_some(),
+        entry_status: None,
+    }
+}
+
+/// Executes one tenant-owned undo entry after atomically claiming it in the ledger.
+pub async fn execute_operator_undo(
+    state: &AppState,
+    tenant_id: &str,
+    undo_id: &str,
+    scope: FiberExecutionScope<'_>,
+    force_expired: bool,
+    force_reason: Option<&str>,
+) -> Option<RollbackResult> {
+    let ledger = state.undo_ledger.as_ref()?;
+    let entry = ledger.get(undo_id).await?;
+    if entry.tenant_id != tenant_id {
+        return None;
+    }
+    if force_expired && force_reason.is_none_or(str::is_empty) {
+        let mut result = failed_result(
+            &entry,
+            "a reason is required to force an expired undo".to_string(),
+        );
+        result.error_code = Some("UNDO_FORCE_REASON_REQUIRED".to_string());
+        result.entry_status = Some(entry.status);
+        return Some(result);
+    }
+    let claim = match ledger
+        .claim_for_operator(undo_id, now_ms(), force_expired)
+        .await
+    {
+        Ok(claim) => claim,
+        Err(error) => {
+            let mut result = failed_result(&entry, error.to_string());
+            result.error_code = Some("UNDO_PERSISTENCE_FAILED".to_string());
+            result.entry_status = Some(entry.status);
+            return Some(result);
+        }
+    };
+    let claimed = match claim {
+        crate::undo::UndoClaimResult::Claimed(entry) => entry,
+        crate::undo::UndoClaimResult::Expired(entry) => {
+            let mut result = failed_result(&entry, "undo window expired".to_string());
+            result.error_code = Some("UNDO_WINDOW_EXPIRED".to_string());
+            result.entry_status = Some(UndoEntryStatus::Expired);
+            return Some(result);
+        }
+        crate::undo::UndoClaimResult::Unavailable(Some(entry)) => {
+            let code = match entry.status {
+                UndoEntryStatus::Reverted => "UNDO_ALREADY_REVERTED",
+                UndoEntryStatus::Executing => "UNDO_OUTCOME_UNKNOWN",
+                UndoEntryStatus::Expired => "UNDO_WINDOW_EXPIRED",
+                UndoEntryStatus::Failed => "UNDO_PREVIOUSLY_FAILED",
+                UndoEntryStatus::Armed => "UNDO_UNAVAILABLE",
+            };
+            let mut result = failed_result(
+                &entry,
+                format!("undo entry is {}", status_name(&entry.status)),
+            );
+            result.error_code = Some(code.to_string());
+            result.entry_status = Some(entry.status);
+            return Some(result);
+        }
+        crate::undo::UndoClaimResult::Unavailable(None) => return None,
+    };
+    let mut dispatch_scope = scope;
+    dispatch_scope.force_expired_reason = force_reason;
+    let mut outcome = dispatch_inverse(state, &claimed, dispatch_scope).await;
+    let terminal = if outcome.ok {
+        UndoEntryStatus::Reverted
+    } else {
+        UndoEntryStatus::Failed
+    };
+    match ledger.finish(undo_id, terminal.clone()).await {
+        Ok(()) => outcome.entry_status = Some(terminal),
+        Err(error) => {
+            outcome.error_code = Some("UNDO_PERSISTENCE_FAILED".to_string());
+            outcome.error = Some(format!(
+                "inverse dispatched but ledger completion was not persisted: {error}"
+            ));
+            outcome.entry_status = Some(UndoEntryStatus::Executing);
+        }
+    }
+    Some(outcome)
+}
+
+/// Rolls back active entries for a work item in reverse creation order.
+pub async fn rollback_operator_work_item(
+    state: &AppState,
+    tenant_id: &str,
+    work_item_id: &str,
+    scope: FiberExecutionScope<'_>,
+    force_expired: bool,
+    force_reason: Option<&str>,
+) -> Vec<RollbackResult> {
+    let Some(ledger) = state.undo_ledger.as_ref() else {
+        return Vec::new();
+    };
+    let entries = ledger
+        .list_for_tenant(tenant_id, Some(work_item_id), None)
+        .await
+        .into_iter()
+        .filter(|entry| {
+            matches!(
+                entry.status,
+                UndoEntryStatus::Armed | UndoEntryStatus::Expired
+            )
+        })
+        .collect::<Vec<_>>();
+    let started = std::time::Instant::now();
+    let mut outcomes = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if started.elapsed() >= MAX_FIBER_UNWIND_DURATION {
+            outcomes.push(failed_result(
+                &entry,
+                "work-item rollback budget exhausted".to_string(),
+            ));
+            continue;
+        }
+        if let Some(outcome) = execute_operator_undo(
+            state,
+            tenant_id,
+            &entry.undo_id,
+            FiberExecutionScope {
+                policy: scope.policy,
+                profile: scope.profile,
+                context: scope.context,
+                authorization_expires_at_epoch_secs: scope.authorization_expires_at_epoch_secs,
+                trace_id: scope.trace_id,
+                operator_id: scope.operator_id,
+                force_expired_reason: scope.force_expired_reason,
+            },
+            force_expired,
+            force_reason,
+        )
+        .await
+        {
+            outcomes.push(outcome);
+        }
+    }
+    outcomes
+}
+
+fn status_name(status: &UndoEntryStatus) -> &'static str {
+    match status {
+        UndoEntryStatus::Armed => "armed",
+        UndoEntryStatus::Executing => "executing",
+        UndoEntryStatus::Reverted => "reverted",
+        UndoEntryStatus::Expired => "expired",
+        UndoEntryStatus::Failed => "failed",
     }
 }
 

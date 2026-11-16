@@ -1175,6 +1175,7 @@ async fn configuration_reload_replaces_profiles_used_by_release_revalidation() {
                 hold_window_secs: Some(9),
                 ..Default::default()
             }),
+            allow_agent_self_undo: false,
         },
     )]);
     let config = warmplane::config::McpConfig {

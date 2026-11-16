@@ -1023,6 +1023,8 @@ async fn execute_batch_for_tenant_with_budget(
                 context: context.as_ref(),
                 authorization_expires_at_epoch_secs,
                 trace_id: &trace_id,
+                operator_id: None,
+                force_expired_reason: None,
             },
         )
         .await
@@ -1310,6 +1312,8 @@ mod tests {
                 context: None,
                 authorization_expires_at_epoch_secs: None,
                 trace_id: "trace-again",
+                operator_id: None,
+                force_expired_reason: None,
             }
         )
         .await

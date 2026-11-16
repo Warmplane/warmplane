@@ -11,6 +11,7 @@ pub mod helpers;
 pub mod tasks_api;
 pub mod types;
 pub mod ui;
+pub mod undo_api;
 pub mod webhooks_api;
 
 #[cfg(test)]
@@ -56,4 +57,7 @@ pub use types::{
     UpsertServerRequest,
 };
 pub use ui::handle_ui_dashboard;
+pub use undo_api::{
+    handle_execute_undo, handle_get_undo, handle_list_undo, handle_rollback_work_item,
+};
 pub use webhooks_api::{handle_test_webhook, handle_webhook_callback};

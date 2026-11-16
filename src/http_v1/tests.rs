@@ -87,6 +87,72 @@ async fn test_completion_endpoint() {
 }
 
 #[tokio::test]
+async fn undo_get_conceals_cross_tenant_ids_and_redacts_inverse_arguments() {
+    let directory = tempfile::tempdir().unwrap();
+    let ledger = crate::undo::UndoLedgerStore::open(directory.path().join("undo.json")).unwrap();
+    ledger
+        .register(crate::undo::UndoEntry {
+            undo_id: "undo-owned".to_string(),
+            operation_id: None,
+            work_item_id: None,
+            batch_id: None,
+            tenant_id: "tenant-a".to_string(),
+            profile_id: None,
+            actor_id: None,
+            forward_capability: "forward.call".to_string(),
+            reversibility_class: "reversible".to_string(),
+            resolved_inverse_capability: "inverse.call".to_string(),
+            resolved_inverse_args: json!({"private": "value"}),
+            snapshot_artifact_hash: Some("a".repeat(64)),
+            created_at_ms: 1,
+            expires_at_ms: 100,
+            status: crate::undo::UndoEntryStatus::Armed,
+        })
+        .await
+        .unwrap();
+    let state = AppState::builder().undo_ledger(ledger).build();
+    let response = crate::http_v1::undo_api::handle_get_undo(
+        State(state.clone()),
+        Path("undo-owned".to_string()),
+        axum::extract::Extension(Some(crate::rbac::TenantContext {
+            tenant_id: "tenant-b".to_string(),
+            role: "operator".to_string(),
+            actor_id: None,
+            grant_id: None,
+            grant_expires_at_epoch_secs: None,
+            effective_policy: crate::daemon::Policy::default(),
+        })),
+        None,
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = crate::http_v1::undo_api::handle_get_undo(
+        State(state),
+        Path("undo-owned".to_string()),
+        axum::extract::Extension(Some(crate::rbac::TenantContext {
+            tenant_id: "tenant-a".to_string(),
+            role: "operator".to_string(),
+            actor_id: None,
+            grant_id: None,
+            grant_expires_at_epoch_secs: None,
+            effective_policy: crate::daemon::Policy::default(),
+        })),
+        None,
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: Value = serde_json::from_slice(&body).unwrap();
+    let serialized = value.to_string();
+    assert!(!serialized.contains("resolved_inverse_args"));
+    assert!(!serialized.contains("private"));
+    assert!(serialized.contains(&"a".repeat(64)));
+}
+
+#[tokio::test]
 async fn test_sampling_async_delegation_flow() {
     let mut servers = HashMap::new();
     let (tx, _rx) = mpsc::channel(1);
@@ -1472,6 +1538,7 @@ async fn test_ui_config_profiles_crud() {
             servers: vec!["s1".to_string()],
             description: Some("Developer tools".to_string()),
             policy: None,
+            allow_agent_self_undo: false,
         }),
     )
     .await
@@ -1495,6 +1562,7 @@ async fn test_ui_config_profiles_crud() {
             servers: vec!["nonexistent_srv".to_string()],
             description: None,
             policy: None,
+            allow_agent_self_undo: false,
         }),
     )
     .await
