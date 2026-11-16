@@ -333,6 +333,30 @@ async fn rest_async_receipt_can_cancel_the_shared_hold() {
     let task_id = body["task"]["taskId"].as_str().unwrap().to_string();
     assert_eq!(body["task"]["phase"], "pending_emission");
     assert_eq!(body["task"]["cancellable"], true);
+    let release_at = body["task"]["releaseAtMs"].as_u64().unwrap();
+
+    let duplicate = warmplane::http_v1::execute::handle_call_capability(
+        State(state.clone()),
+        axum::Extension(None),
+        None,
+        HeaderMap::new(),
+        Json(warmplane::http_v1::CallCapabilityRequest {
+            capability_id: "mail.send".to_string(),
+            args: json!({"to": "different@example.com"}),
+            request_id: Some("rest-emission-duplicate".to_string()),
+            idempotency_key: Some("rest-emission-key".to_string()),
+            async_task: true,
+            ..Default::default()
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(duplicate.status(), StatusCode::ACCEPTED);
+    let duplicate: serde_json::Value =
+        serde_json::from_slice(&to_bytes(duplicate.into_body(), usize::MAX).await.unwrap())
+            .unwrap();
+    assert_eq!(duplicate["task"]["taskId"], task_id);
+    assert_eq!(duplicate["task"]["releaseAtMs"], release_at);
 
     let cancel = warmplane::http_v1::tasks_api::handle_cancel_task(
         State(state.clone()),
@@ -344,6 +368,16 @@ async fn rest_async_receipt_can_cancel_the_shared_hold() {
     .await
     .into_response();
     assert_eq!(cancel.status(), StatusCode::OK);
+    let repeated_cancel = warmplane::http_v1::tasks_api::handle_cancel_task(
+        State(state.clone()),
+        Path(task_id.clone()),
+        axum::Extension(None),
+        None,
+        Json(warmplane::http_v1::tasks_api::CancelTaskRequest::default()),
+    )
+    .await
+    .into_response();
+    assert_eq!(repeated_cancel.status(), StatusCode::OK);
     tokio::time::sleep(Duration::from_millis(1_100)).await;
     assert!(upstream.try_recv().is_err());
     assert_eq!(
@@ -384,4 +418,35 @@ async fn configuration_reload_replaces_profiles_used_by_release_revalidation() {
         current["work"].policy.as_ref().unwrap().hold_window_secs,
         Some(9)
     );
+}
+
+#[tokio::test]
+async fn embedded_synchronous_call_waits_for_short_hold_then_returns_result() {
+    let (state, mut upstream) = create_state();
+    let handle = warmplane::engine::ControlPlaneHandle::new(state);
+    let call = tokio::spawn(async move {
+        handle
+            .call_capability(
+                "mail.send",
+                json!({"to": "person@example.com"}),
+                warmplane::engine::ExecutionOptions::default()
+                    .with_request_id("embedded-emission-1"),
+            )
+            .await
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(upstream.try_recv().is_err());
+    let Some(ServerMsg::CallTool { reply, .. }) =
+        tokio::time::timeout(Duration::from_secs(2), upstream.recv())
+            .await
+            .unwrap()
+    else {
+        panic!("expected embedded delayable call to dispatch after its hold");
+    };
+    reply.send(Ok(json!({"sent": true}))).unwrap();
+    let result = call.await.unwrap();
+    assert!(result.ok);
+    assert_eq!(result.data, Some(json!({"sent": true})));
+    assert!(upstream.try_recv().is_err());
 }
