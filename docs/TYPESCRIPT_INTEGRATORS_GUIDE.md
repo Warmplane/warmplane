@@ -486,7 +486,11 @@ Task status can be polled with `GET /v1/tasks/{taskId}`. Cancellation can also u
 
 ### Operator Undo
 
-The daemon provides `GET /v1/undo`, `GET /v1/undo/{undo_id}`, `POST /v1/undo/{undo_id}/execute`, and `POST /v1/undo/work-items/{work_item_id}/rollback`. Configure per-role `undoPermissions` in RBAC. Entry summaries omit inverse arguments and snapshot contents, and cross-tenant entry IDs return `404`. Setting `forceExpired: true` additionally requires the `forceExpired` permission and a non-empty `reason`; successful execution returns the committed audit event ID and hash.
+The daemon provides `GET /v1/undo`, `GET /v1/undo/{undo_id}`, `POST /v1/undo/{undo_id}/execute`, and `POST /v1/undo/work-items/{work_item_id}/rollback`. Configure per-role `undoPermissions` in RBAC. Entry summaries may include filtered inverse field names, but omit inverse arguments and snapshot contents; cross-tenant entry IDs return `404`. Setting `forceExpired: true` additionally requires the `forceExpired` permission and a non-empty `reason`; successful execution returns the committed audit event ID and hash.
+
+`GET /v1/resources/updates` also emits named `action_capsule` invalidations with only `{ "refresh": true }`; fetch `/v1/undo` and `/v1/tasks` to update the current tenant's feed. Optional `preUndoCheck` blocks inverse dispatch when the upstream state hash has drifted. ChatOps cards are opt-in through `policy.webhook.events` and submit a target-scoped action token to `/v1/webhooks/actions`; force-expired undo is unavailable through that route.
+
+`POST /v1/undo/test` accepts `{ "alias": "..." }` for an alias configured with `testTarget.server`, fixed `testTarget.args`, and `preSnapshot`. It runs the cycle against that test server and returns whether the observed state matched its original snapshot, without returning snapshot or tool output values.
 
 If task persistence is disabled, held emissions remain in memory and are lost when the daemon exits. Configure persistent state to recover them after restart.
 

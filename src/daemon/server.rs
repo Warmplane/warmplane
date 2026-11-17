@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-17
 //! Daemon HTTP service initialization, routing, and TCP listener runtime.
 
 use anyhow::Result;
@@ -354,6 +354,7 @@ pub fn build_router(app_state: AppState) -> Router {
             "/v1/webhooks/callbacks",
             post(http_v1::handle_webhook_callback),
         )
+        .route("/v1/webhooks/actions", post(http_v1::handle_webhook_action))
         .route("/v1/webhooks/test", post(http_v1::handle_test_webhook))
         // SEP-2663 Tasks Endpoints
         .route("/v1/tasks", get(http_v1::handle_list_tasks))
@@ -362,6 +363,7 @@ pub fn build_router(app_state: AppState) -> Router {
         .route("/v1/tasks/:id/cancel", post(http_v1::handle_cancel_task))
         // Undo inspection and operator actions.
         .route("/v1/undo", get(http_v1::handle_list_undo))
+        .route("/v1/undo/test", post(http_v1::handle_test_undo_contract))
         .route("/v1/undo/:undo_id", get(http_v1::handle_get_undo))
         .route(
             "/v1/undo/:undo_id/execute",
@@ -369,7 +371,7 @@ pub fn build_router(app_state: AppState) -> Router {
         )
         .route(
             "/v1/undo/work-items/:work_item_id/rollback",
-            post(http_v1::handle_rollback_work_item),
+            post(http_v1::handle_execute_undo),
         )
         // WORM Audit & Compliance Endpoints
         .route("/v1/audit/events", get(http_v1::handle_list_audit_events))
@@ -405,6 +407,8 @@ pub async fn security_guard_middleware(
 ) -> axum::response::Response {
     use axum::{http::StatusCode, response::IntoResponse, Json};
     let headers = req.headers();
+    let path = req.uri().path();
+    let signed_chatops_action = path == "/v1/webhooks/actions";
 
     // 1. Host Validation (prevents DNS rebinding against 127.0.0.1)
     if let Some(host_hdr) = headers.get("host").and_then(|h| h.to_str().ok()) {
@@ -414,7 +418,9 @@ pub async fn security_guard_middleware(
             || host_name == "::1"
             || host_name == "[::1]";
 
-        if !is_valid_host {
+        let configured_chatops_host =
+            signed_chatops_action && configured_chatops_callback_host(&state.config_path, host_hdr);
+        if !is_valid_host && !configured_chatops_host {
             return (
                 StatusCode::FORBIDDEN,
                 Json(serde_json::json!({
@@ -450,10 +456,11 @@ pub async fn security_guard_middleware(
 
     // 3. RBAC & Auth Token verification
     let mut tenant_ctx = None;
-    let path = req.uri().path();
+    // ChatOps actions authenticate with a purpose- and target-bound HMAC token in the payload.
+    // This is the only `/v1` exception to the ordinary bearer/RBAC middleware.
 
     if state.rbac_engine.is_enabled() {
-        if path.starts_with("/v1/") {
+        if path.starts_with("/v1/") && !signed_chatops_action {
             let token = headers
                 .get("authorization")
                 .and_then(|h| h.to_str().ok())
@@ -482,7 +489,7 @@ pub async fn security_guard_middleware(
             }
         }
     } else if let Some(ref expected_token) = state.auth_token {
-        if !expected_token.trim().is_empty() && path.starts_with("/v1/") {
+        if !expected_token.trim().is_empty() && path.starts_with("/v1/") && !signed_chatops_action {
             let is_authed = headers
                 .get("authorization")
                 .and_then(|h| h.to_str().ok())
@@ -549,6 +556,32 @@ pub async fn security_guard_middleware(
     req.extensions_mut().insert(tenant_ctx);
 
     next.run(req).await
+}
+
+fn configured_chatops_callback_host(config_path: &str, host_header: &str) -> bool {
+    let Ok(config) = crate::config::load_or_default_config(config_path) else {
+        return false;
+    };
+    let Some(callback_url) = config
+        .policy
+        .and_then(|policy| policy.webhook)
+        .and_then(|webhook| webhook.callback_url)
+    else {
+        return false;
+    };
+    let Ok(callback_url) = reqwest::Url::parse(&callback_url) else {
+        return false;
+    };
+    let Ok(authority) = host_header.parse::<axum::http::uri::Authority>() else {
+        return false;
+    };
+    let Some(callback_host) = callback_url.host_str() else {
+        return false;
+    };
+    let port_matches = authority
+        .port_u16()
+        .is_none_or(|port| callback_url.port_or_known_default() == Some(port));
+    authority.host().eq_ignore_ascii_case(callback_host) && port_matches
 }
 
 /// Awaits process termination signals (`SIGINT` or `SIGTERM`) for graceful server shutdown.

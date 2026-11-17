@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-26
+// Rust guideline compliant 2026-11-16
 
 //! Multi-platform ChatOps payload formatting and incoming callback resolution.
 //!
@@ -14,6 +14,7 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::Sha256;
+use subtle::ConstantTimeEq;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -156,6 +157,43 @@ fn build_slack_payload(event_type: &str, data: &Value, callback_url: Option<&str
                 ]
             }));
         }
+    } else if matches!(event_type, "undo.action_available" | "emission.held") {
+        let capability = data
+            .get("capability")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let actor = data
+            .get("actor")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let profile = data
+            .get("profile")
+            .and_then(Value::as_str)
+            .unwrap_or("default");
+        blocks.push(json!({
+            "type": "section",
+            "fields": [
+                {"type": "mrkdwn", "text": format!("*Capability:*\\n`{capability}`")},
+                {"type": "mrkdwn", "text": format!("*Actor:*\\n`{actor}`")},
+                {"type": "mrkdwn", "text": format!("*Profile:*\\n`{profile}`")},
+                {"type": "mrkdwn", "text": "*Details:*\\nSensitive arguments and snapshots are omitted."}
+            ]
+        }));
+        if let (Some(callback), Some(token)) = (
+            callback_url,
+            data.get("action_token").and_then(Value::as_str),
+        ) {
+            let (label, action_id) = if event_type == "emission.held" {
+                ("Cancel Send", "warmplane_cancel_send")
+            } else {
+                ("Undo Action", "warmplane_undo_action")
+            };
+            blocks.push(json!({"type":"actions","elements":[{
+                "type":"button","text":{"type":"plain_text","text":label},
+                "value":token,"action_id":action_id,
+                "url":callback
+            }]}));
+        }
     } else {
         let details_str = serde_json::to_string_pretty(data).unwrap_or_else(|_| "{}".to_string());
         blocks.push(json!({
@@ -207,6 +245,15 @@ fn build_discord_payload(event_type: &str, data: &Value, callback_url: Option<&s
             json!({ "name": "Ticket ID", "value": format!("`{}`", ticket_id), "inline": true }),
         );
         fields.push(json!({ "name": "Arguments", "value": format!("```json\n{}\n```", args_str), "inline": false }));
+    } else if matches!(event_type, "undo.action_available" | "emission.held") {
+        let capability = data
+            .get("capability")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        fields.push(json!({"name":"Capability","value":capability,"inline":true}));
+        fields.push(json!({"name":"Actor","value":data.get("actor").and_then(Value::as_str).unwrap_or("unknown"),"inline":true}));
+        fields.push(json!({"name":"Profile","value":data.get("profile").and_then(Value::as_str).unwrap_or("default"),"inline":true}));
+        fields.push(json!({"name":"Details","value":"Sensitive arguments and snapshots are omitted.","inline":false}));
     }
 
     let embed = json!({
@@ -248,6 +295,14 @@ fn build_discord_payload(event_type: &str, data: &Value, callback_url: Option<&s
                     ]
                 }
             ]);
+        } else if matches!(event_type, "undo.action_available" | "emission.held") {
+            if let Some(token) = data.get("action_token").and_then(Value::as_str) {
+                payload["components"] = json!([{"type":1,"components":[{
+                    "type":2,"style": if event_type == "emission.held" { 4 } else { 3 },
+                    "label": if event_type == "emission.held" { "Cancel Send" } else { "Undo Action" },
+                    "custom_id": token
+                }]}]);
+            }
         }
     }
 
@@ -287,6 +342,13 @@ fn build_teams_payload(event_type: &str, data: &Value, callback_url: Option<&str
                 { "title": "Server", "value": server_id }
             ]
         }));
+    } else if matches!(event_type, "undo.action_available" | "emission.held") {
+        body.push(json!({"type":"FactSet","facts":[
+            {"title":"Capability","value":data.get("capability").and_then(Value::as_str).unwrap_or("unknown")},
+            {"title":"Actor","value":data.get("actor").and_then(Value::as_str).unwrap_or("unknown")},
+            {"title":"Profile","value":data.get("profile").and_then(Value::as_str).unwrap_or("default")},
+            {"title":"Details","value":"Sensitive arguments and snapshots are omitted."}
+        ]}));
     }
 
     let mut card = json!({
@@ -330,6 +392,14 @@ fn build_teams_payload(event_type: &str, data: &Value, callback_url: Option<&str
                     "url": cb_url
                 }
             ]);
+        } else if matches!(event_type, "undo.action_available" | "emission.held") {
+            if let Some(token) = data.get("action_token").and_then(Value::as_str) {
+                card["attachments"][0]["content"]["actions"] = json!([{
+                    "type":"Action.Submit",
+                    "title": if event_type == "emission.held" { "Cancel Send" } else { "Undo Action" },
+                    "data":{"action_token":token}
+                }]);
+            }
         }
     }
 
@@ -351,19 +421,92 @@ pub fn verify_signature(
         signature_header
     };
 
-    let expected_mac = match HmacSha256::new_from_slice(secret.as_bytes()) {
-        Ok(mut mac) => {
-            if let Some(ts) = timestamp {
-                mac.update(format!("{}.{}", ts, body).as_bytes());
-            } else {
-                mac.update(body.as_bytes());
-            }
-            hex::encode(mac.finalize().into_bytes())
-        }
+    let signature = match hex::decode(sig_to_check) {
+        Ok(signature) => signature,
         Err(_) => return false,
     };
+    let mut mac = match HmacSha256::new_from_slice(secret.as_bytes()) {
+        Ok(mac) => mac,
+        Err(_) => return false,
+    };
+    if let Some(ts) = timestamp {
+        mac.update(format!("{}.{}", ts, body).as_bytes());
+    } else {
+        mac.update(body.as_bytes());
+    }
+    mac.verify_slice(&signature).is_ok()
+}
 
-    sig_to_check.eq_ignore_ascii_case(&expected_mac)
+/// Creates a short bearer token for one signed ChatOps action.
+///
+/// The target and expiry are included in the token. Tenant and role are bound into the HMAC
+/// input and must be recovered from trusted server state when verifying it.
+///
+/// # Arguments
+/// * `secret` - Webhook secret used as the HMAC key.
+/// * `action` - Purpose-bound action name, such as `undo` or `cancel`.
+/// * `target_id` - One persisted undo or held-task identifier.
+/// * `tenant_id` - Trusted tenant that owns the target.
+/// * `role` - Configured RBAC role for the action.
+/// * `expires_at_ms` - Absolute expiry in Unix milliseconds.
+///
+/// # Returns
+/// An opaque target, expiry, and truncated HMAC token, or `None` if HMAC initialization fails.
+pub fn sign_action_token(
+    secret: &str,
+    action: &str,
+    target_id: &str,
+    tenant_id: &str,
+    role: &str,
+    expires_at_ms: u64,
+) -> Option<String> {
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).ok()?;
+    mac.update(format!("{action}|{target_id}|{tenant_id}|{role}|{expires_at_ms}").as_bytes());
+    let tag = mac.finalize().into_bytes();
+    Some(format!(
+        "{target_id}.{expires_at_ms}.{}",
+        hex::encode(&tag[..16])
+    ))
+}
+
+/// Verifies a ChatOps action token using a constant-time comparison.
+///
+/// # Arguments
+/// * `secret` - Webhook secret used as the HMAC key.
+/// * `action` - Expected purpose-bound action name.
+/// * `token` - Opaque token received from a platform callback.
+/// * `tenant_id` - Tenant recovered from the persisted target.
+/// * `role` - Current configured ChatOps role.
+/// * `now_ms` - Current Unix time in milliseconds.
+///
+/// # Returns
+/// The target identifier only when the signature and expiry are valid.
+pub fn verify_action_token(
+    secret: &str,
+    action: &str,
+    token: &str,
+    tenant_id: &str,
+    role: &str,
+    now_ms: u64,
+) -> Option<String> {
+    let (target_and_expiry, provided_tag) = token.rsplit_once('.')?;
+    let (target_id, expiry_text) = target_and_expiry.rsplit_once('.')?;
+    let expires_at_ms = expiry_text.parse::<u64>().ok()?;
+    if target_id.is_empty() || expires_at_ms <= now_ms || provided_tag.len() != 32 {
+        return None;
+    }
+    let provided_tag = hex::decode(provided_tag).ok()?;
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).ok()?;
+    mac.update(format!("{action}|{target_id}|{tenant_id}|{role}|{expires_at_ms}").as_bytes());
+    let expected_tag = mac.finalize().into_bytes();
+    if expected_tag[..16]
+        .ct_eq(provided_tag.as_slice())
+        .unwrap_u8()
+        != 1
+    {
+        return None;
+    }
+    Some(target_id.to_string())
 }
 
 #[cfg(test)]
@@ -407,5 +550,62 @@ mod tests {
 
         assert!(verify_signature(secret, body, &valid_sig, Some(ts)));
         assert!(!verify_signature(secret, body, "sha256=invalid", Some(ts)));
+    }
+
+    #[test]
+    fn action_tokens_are_target_bound_expiring_and_tamper_evident() {
+        let token =
+            sign_action_token("secret", "undo", "undo_1", "tenant-a", "operator", 10_000).unwrap();
+        assert_eq!(
+            verify_action_token("secret", "undo", &token, "tenant-a", "operator", 9_999).as_deref(),
+            Some("undo_1")
+        );
+        assert!(verify_action_token("wrong", "undo", &token, "tenant-a", "operator", 1).is_none());
+        assert!(
+            verify_action_token("secret", "cancel", &token, "tenant-a", "operator", 1).is_none()
+        );
+        assert!(verify_action_token("secret", "undo", &token, "tenant-b", "operator", 1).is_none());
+        assert!(
+            verify_action_token("secret", "undo", &token, "tenant-a", "operator", 10_000).is_none()
+        );
+    }
+
+    #[test]
+    fn action_cards_omit_arguments_and_include_signed_button_values() {
+        let payload = format_webhook_payload(
+            WebhookFormat::Slack,
+            "undo.action_available",
+            &json!({
+                "capability": "tickets.update",
+                "actor": "operator-a",
+                "action_token": "undo_1.1000.deadbeef",
+                "args": {"secret": "must-not-appear"},
+                "snapshot": {"secret": "must-not-appear"}
+            }),
+            Some("https://warmplane.example/v1/webhooks/actions"),
+        );
+        let serialized = serde_json::to_string(&payload).unwrap();
+        assert!(serialized.contains("undo_1.1000.deadbeef"));
+        assert!(!serialized.contains("must-not-appear"));
+        let discord = format_webhook_payload(
+            WebhookFormat::Discord,
+            "emission.held",
+            &json!({"capability":"mail.send","action_token":"task_1.1000.deadbeef"}),
+            Some("https://warmplane.example/v1/webhooks/actions"),
+        );
+        assert_eq!(
+            discord["components"][0]["components"][0]["custom_id"],
+            "task_1.1000.deadbeef"
+        );
+        let teams = format_webhook_payload(
+            WebhookFormat::Teams,
+            "undo.action_available",
+            &json!({"capability":"tickets.update","action_token":"undo_1.1000.deadbeef"}),
+            Some("https://warmplane.example/v1/webhooks/actions"),
+        );
+        assert_eq!(
+            teams["attachments"][0]["content"]["actions"][0]["data"]["action_token"],
+            "undo_1.1000.deadbeef"
+        );
     }
 }

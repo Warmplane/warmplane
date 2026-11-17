@@ -5,6 +5,7 @@ import { renderOverview } from './components/overview';
 import { renderServers } from './components/servers';
 import { renderPlayground, generateSampleArgsFromSchema } from './components/playground';
 import { renderTasks } from './components/tasks';
+import { renderUndoFeed } from './components/undo';
 import { renderApprovals } from './components/approvals';
 import { renderAudit } from './components/audit';
 import { renderPolicy } from './components/policy';
@@ -26,14 +27,44 @@ class WarmplaneApp {
 
     await this.refreshData();
     this.initSSE();
+    this.bindUndoFeedActions();
     this.render();
 
     store.subscribe(() => {
       this.render();
     });
+    window.setInterval(() => {
+      if (store.getState().activeTab === 'undo') this.render();
+    }, 1000);
   }
 
   private auditSearchTimeout: any = null;
+
+  private bindUndoFeedActions() {
+    const mainEl = document.getElementById('app-main');
+    if (!mainEl) return;
+    mainEl.addEventListener('click', event => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const button = target.closest<HTMLButtonElement>('[data-undo-action], [data-playground-action]');
+      if (!button || !mainEl.contains(button)) return;
+      if (button.dataset.playgroundAction === 'test-undo' && button.dataset.undoAlias) {
+        void this.testUndoContract(button.dataset.undoAlias);
+        return;
+      }
+      const action = button.dataset.undoAction;
+      const targetId = button.dataset.undoTarget;
+      if (action === 'refresh') {
+        void this.refreshUndo();
+      } else if (action === 'cancel-task' && targetId) {
+        void this.cancelHeldTask(targetId);
+      } else if (action === 'rollback' && targetId) {
+        void this.rollbackWorkItem(targetId);
+      } else if (action === 'execute' && targetId) {
+        void this.executeUndo(targetId);
+      }
+    });
+  }
 
   async refreshData() {
     try {
@@ -137,6 +168,8 @@ class WarmplaneApp {
           tasks: tasksRes.tasks
         });
       }
+
+      await this.refreshUndo();
 
       if (auditEventsRes && Array.isArray(auditEventsRes.events)) {
         store.setState({
@@ -301,12 +334,64 @@ class WarmplaneApp {
         store.addEventLog('SSE', '/v1/resources/updates', 'UPDATED', '0.1ms');
         this.refreshData();
       };
+      sse.addEventListener('action_capsule', () => {
+        this.refreshUndo();
+        this.refreshTasks();
+      });
+      sse.addEventListener('error', () => {
+        if (store.getState().activeTab === 'undo') this.refreshUndo();
+      });
     } catch (e) {
       console.warn('SSE connection unavailable');
     }
   }
 
-  switchTab(tab: 'overview' | 'servers' | 'playground' | 'tasks' | 'approvals' | 'audit' | 'policy' | 'secrets' | 'aliases' | 'profiles') {
+  async refreshUndo() {
+    try {
+      const response = await api.listUndo();
+      if (response.ok && response.result && Array.isArray(response.result.entries)) {
+        store.setState({ undoEntries: response.result.entries, undoError: null });
+      } else {
+        store.setState({ undoError: response.error?.message || response.error?.code || 'Undo entries could not be loaded.' });
+      }
+    } catch (error: any) {
+      store.setState({ undoError: error?.message || 'Undo entries could not be loaded.' });
+    }
+  }
+
+  async executeUndo(undoId: string) {
+    if (!confirm('Run the configured inverse for this action?')) return;
+    const response = await api.executeUndo(undoId);
+    if (!response.ok) alert(`Undo failed: ${response.error?.message || response.error?.code || 'Request failed'}`);
+    await this.refreshUndo();
+  }
+
+  async rollbackWorkItem(workItemId: string) {
+    if (!confirm('Run configured inverses for this work item in reverse order?')) return;
+    const response = await api.rollbackWorkItem(workItemId);
+    if (!response.ok) alert(`Rollback incomplete: ${response.error?.message || response.error?.code || 'One or more inverses failed'}`);
+    await this.refreshUndo();
+  }
+
+  async cancelHeldTask(taskId: string) {
+    if (!confirm('Cancel this send before it is released?')) return;
+    const response = await api.cancelTask(taskId, 'Cancelled from Control Deck Action Feed');
+    if (!response.ok) alert(`Cancellation failed: ${response.error?.message || response.error?.code || 'Request failed'}`);
+    await this.refreshTasks();
+  }
+
+  async testUndoContract(alias: string) {
+    if (!confirm(`Run the configured forward and inverse cycle on the test server for '${alias}'?`)) return;
+    const response = await api.testUndoContract(alias);
+    const result = response.result;
+    if (response.ok && result?.observationally_equivalent) {
+      alert(`Undo contract passed on ${result.test_server}. The observed state matches its snapshot.`);
+    } else {
+      alert(`Undo contract failed: ${result?.error_code || response.error?.message || 'state did not return to its snapshot'}`);
+    }
+  }
+
+  switchTab(tab: 'overview' | 'servers' | 'playground' | 'tasks' | 'undo' | 'approvals' | 'audit' | 'policy' | 'secrets' | 'aliases' | 'profiles') {
     store.setState({ activeTab: tab });
     this.refreshData();
   }
@@ -343,6 +428,7 @@ class WarmplaneApp {
       servers: 'Server Hub & Connections',
       playground: 'MCP Capability Playground',
       tasks: 'SEP-2663 Tasks & HITL Review',
+      undo: 'Action Feed & Undo',
       approvals: 'SEP-2663 Tasks & HITL Review',
       audit: 'WORM Audit & Compliance Ledger',
       policy: 'Security Governance & Redaction',
@@ -368,6 +454,9 @@ class WarmplaneApp {
       case 'tasks':
       case 'approvals':
         mainEl.innerHTML = renderTasks(state);
+        break;
+      case 'undo':
+        mainEl.innerHTML = renderUndoFeed(state);
         break;
       case 'audit':
         mainEl.innerHTML = renderAudit();

@@ -44,16 +44,33 @@ pub(crate) async fn capture_pre_snapshot(
     profile: &ProfileContext,
     policy: &Policy,
 ) -> Result<(Value, Option<String>)> {
+    let snapshot = read_checked_state(state, config, forward_args, profile, policy).await?;
+    let store = state
+        .snapshot_store
+        .as_ref()
+        .context("persistent snapshot storage is required for configured pre-snapshots")?;
+    let hash = store.put(&snapshot)?;
+    Ok((snapshot, Some(hash)))
+}
+
+/// Reads and distills a configured state value without exposing it to the caller.
+pub(crate) async fn read_checked_state(
+    state: &AppState,
+    config: &PreSnapshotConfig,
+    forward_args: &Value,
+    profile: &ProfileContext,
+    policy: &Policy,
+) -> Result<Value> {
     if !policy.allows(&config.capability) {
-        bail!("pre-snapshot capability is denied by policy");
+        bail!("state-check capability is denied by policy");
     }
     let (server_id, tool_name) = {
         let capabilities = state.capabilities.read().await;
         let meta = capabilities
             .get(&config.capability)
-            .context("pre-snapshot capability was not found")?;
+            .context("state-check capability was not found")?;
         if !profile.is_server_allowed(&meta.server) {
-            bail!("pre-snapshot capability is outside the active profile");
+            bail!("state-check capability is outside the active profile");
         }
         (meta.server.clone(), meta.tool.clone())
     };
@@ -66,7 +83,7 @@ pub(crate) async fn capture_pre_snapshot(
         servers
             .get(&server_id)
             .cloned()
-            .context("pre-snapshot upstream server is unavailable")?
+            .context("state-check upstream server is unavailable")?
     };
     let (reply_tx, reply_rx) = oneshot::channel();
     upstream
@@ -78,16 +95,16 @@ pub(crate) async fn capture_pre_snapshot(
             reply: reply_tx,
         })
         .await
-        .context("failed to queue pre-snapshot call")?;
+        .context("failed to queue state-check call")?;
     let timeout = tokio::time::Duration::from_millis(state.tool_timeout_ms);
     let result = tokio::time::timeout(timeout, reply_rx)
         .await
-        .context("pre-snapshot call timed out")?
-        .context("pre-snapshot upstream dropped its response")?
+        .context("state-check call timed out")?
+        .context("state-check upstream dropped its response")?
         .map_err(|error| match error {
-            UpstreamCallError::Timeout => anyhow::anyhow!("pre-snapshot upstream timed out"),
+            UpstreamCallError::Timeout => anyhow::anyhow!("state-check upstream timed out"),
             UpstreamCallError::Upstream(message) => {
-                anyhow::anyhow!("pre-snapshot failed: {message}")
+                anyhow::anyhow!("state-check failed: {message}")
             }
         })?;
 
@@ -102,12 +119,7 @@ pub(crate) async fn capture_pre_snapshot(
     } else {
         result
     };
-    let store = state
-        .snapshot_store
-        .as_ref()
-        .context("persistent snapshot storage is required for configured pre-snapshots")?;
-    let hash = store.put(&snapshot)?;
-    Ok((snapshot, Some(hash)))
+    Ok(snapshot)
 }
 
 /// Reserves use of a compensable capability within its configured rolling daily limit.
@@ -152,6 +164,8 @@ pub(crate) async fn register_inverse(
     state: &AppState,
     contract: &ReversibilityConfig,
     forward: ForwardCall<'_>,
+    profile: &ProfileContext,
+    policy: &Policy,
 ) -> Result<()> {
     if !matches!(
         contract.class,
@@ -178,6 +192,38 @@ pub(crate) async fn register_inverse(
         .as_millis() as u64;
     let ttl_secs = contract.ttl_secs.unwrap_or(3600);
     let expires_at_ms = undo_expiry_ms(now_ms, ttl_secs)?;
+    let change_preview = inverse_args
+        .as_object()
+        .into_iter()
+        .flat_map(|object| object.keys())
+        .filter(|key| is_safe_preview_key(key, &policy.redact_keys))
+        .cloned()
+        .collect();
+    let (pre_undo_check, expected_post_snapshot_hash) =
+        if let Some(check) = &contract.pre_undo_check {
+            let mut resolved_check = check.as_ref().clone();
+            resolved_check.args = interpolate_undo_template(
+                &resolved_check.args,
+                forward.args,
+                forward.result,
+                forward.snapshot,
+            )?;
+            if !resolved_check.args.is_object() {
+                bail!("preUndoCheck arguments must resolve to a JSON object");
+            }
+            let post_state =
+                read_checked_state(state, &resolved_check, &Value::Null, profile, policy).await?;
+            let hash = Some(
+                state
+                    .snapshot_store
+                    .as_ref()
+                    .context("persistent snapshot storage is required for preUndoCheck")?
+                    .put(&post_state)?,
+            );
+            (Some(resolved_check), hash)
+        } else {
+            (None, None)
+        };
     let entry = UndoEntry {
         undo_id: generate_undo_id(now_ms),
         operation_id: forward.context.operation_id.clone(),
@@ -195,17 +241,55 @@ pub(crate) async fn register_inverse(
         .to_string(),
         resolved_inverse_capability: inverse.capability.clone(),
         resolved_inverse_args: inverse_args,
+        change_preview,
         snapshot_artifact_hash: forward.snapshot_hash,
+        pre_undo_check,
+        expected_post_snapshot_hash,
         created_at_ms: now_ms,
         expires_at_ms,
         status: UndoEntryStatus::Armed,
     };
+    let action_entry = entry.clone();
     state
         .undo_ledger
         .as_ref()
         .context("persistent undo ledger is required for inverse registration")?
         .register(entry)
-        .await
+        .await?;
+    state.notify_action_capsules_changed();
+    crate::approvals::dispatch_signed_action(
+        state.clone(),
+        crate::approvals::SignedActionDispatch {
+            event_type: "undo.action_available",
+            action: "undo",
+            target_id: action_entry.undo_id,
+            tenant_id: action_entry.tenant_id,
+            expires_at_ms: action_entry.expires_at_ms,
+            capability: action_entry.forward_capability,
+            actor: action_entry.actor_id,
+            profile_id: action_entry.profile_id,
+        },
+    );
+    Ok(())
+}
+
+fn is_safe_preview_key(key: &str, redact_keys: &[String]) -> bool {
+    let normalized = key.to_ascii_lowercase();
+    let sensitive = [
+        "password",
+        "secret",
+        "token",
+        "credential",
+        "authorization",
+        "private",
+        "api_key",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker));
+    let redacted = redact_keys
+        .iter()
+        .any(|redact_key| redact_key.eq_ignore_ascii_case(key));
+    !sensitive && !redacted
 }
 
 fn generate_undo_id(now_ms: u64) -> String {
@@ -223,7 +307,7 @@ fn undo_expiry_ms(now_ms: u64, ttl_secs: u64) -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{generate_undo_id, undo_expiry_ms};
+    use super::{generate_undo_id, is_safe_preview_key, undo_expiry_ms};
 
     #[test]
     fn undo_ids_remain_unique_within_the_same_millisecond() {
@@ -238,5 +322,13 @@ mod tests {
         assert!(undo_expiry_ms(0, u64::MAX).is_err());
         assert!(undo_expiry_ms(u64::MAX - 10, 1).is_err());
         assert_eq!(undo_expiry_ms(100, 2).unwrap(), 2_100);
+    }
+
+    #[test]
+    fn change_preview_hides_sensitive_and_policy_redacted_fields() {
+        let redact_keys = vec!["customer_name".to_string()];
+        assert!(is_safe_preview_key("priority", &redact_keys));
+        assert!(!is_safe_preview_key("api_token", &redact_keys));
+        assert!(!is_safe_preview_key("customer_name", &redact_keys));
     }
 }

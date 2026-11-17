@@ -164,7 +164,8 @@ Warmplane consists of five major components:
 6. **1-Click AI Client Sync and Native Secrets Vault**
    - **Ecosystem Integration Adapter**: Automated discovery and bidirectional proxy injection across Claude Desktop, OpenCode, Claude Code CLI, Cursor, Zed, Windsurf, and Roo Code / Cline with multi-dialect support (`StandardMcpServers`, OpenCode `mcp`, Zed `context_servers`).
    - **Native OS Keychain Vault**: Secure OS-level credential storage with dynamic runtime URI resolution (`keychain://`, `op://`, `env://`).
-   - **Actionable ChatOps**: Bidirectional webhook approval cards for Slack (Block Kit), Discord (Embeds), and Microsoft Teams (Adaptive Cards) signed with HMAC-SHA256.
+   - **Actionable ChatOps**: Bidirectional approval and action cards for Slack (Block Kit), Discord (Embeds), and Microsoft Teams (Adaptive Cards). Undo and hold-cancellation buttons use target-, tenant-, role-, action-, and expiry-bound HMAC tokens; action events require explicit webhook subscription.
+   - **Drift-aware recovery**: Optional post-state hashes stop an inverse when an external writer changed the resource after the forward operation. The inverse stays armed for operator review. Contract tests execute only against an explicitly configured test server and compare the final state to the captured pre-state.
 
 7. **Access Modes & Execution Topologies**
    - **MCP Stdio Server Mode (`mcp-server`)**: Self-contained child process spawned directly by desktop AI clients communicating over standard I/O (no daemon dependency).

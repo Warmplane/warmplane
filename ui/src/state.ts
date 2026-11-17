@@ -12,6 +12,7 @@ import {
   CircuitBreakerSnapshot,
   ClientAppStatus,
   SecretItem,
+  UndoEntrySummary,
 } from './api';
 
 export interface AuditFiltersState {
@@ -48,6 +49,8 @@ export interface AppState {
   promptsHiddenByPolicy: number;
   catalogEvents: CatalogEventItem[];
   tasks: TaskItem[];
+  undoEntries: UndoEntrySummary[];
+  undoError: string | null;
   selectedTaskId: string | null;
   taskFilterStatus: string;
   approvals: PendingApproval[];
@@ -67,7 +70,7 @@ export interface AppState {
   activeRequestId: string | null;
   isBatchModalOpen: boolean;
   batchSteps: BatchStepState[];
-  activeTab: 'overview' | 'servers' | 'playground' | 'tasks' | 'approvals' | 'audit' | 'policy' | 'secrets' | 'aliases' | 'profiles';
+  activeTab: 'overview' | 'servers' | 'playground' | 'tasks' | 'undo' | 'approvals' | 'audit' | 'policy' | 'secrets' | 'aliases' | 'profiles';
   activeProfile: string | null;
   eventLogs: Array<{ time: string; method: string; target: string; status: string; latency: string }>;
   executionResult: { status: number; durationMs: number; data: any } | null;
@@ -102,6 +105,8 @@ class Store {
     promptsHiddenByPolicy: 0,
     catalogEvents: [],
     tasks: [],
+    undoEntries: [],
+    undoError: null,
     selectedTaskId: null,
     taskFilterStatus: 'all',
     approvals: [],

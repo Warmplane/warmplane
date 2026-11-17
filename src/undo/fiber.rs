@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-17
 //! Tenant-scoped reverse-order execution of persisted inverse actions.
 
 use serde::{Deserialize, Serialize};
@@ -71,6 +71,20 @@ pub struct FiberExecutionScope<'a> {
     pub force_expired_reason: Option<&'a str>,
 }
 
+enum FiberSelector<'a> {
+    Batch(&'a str),
+    WorkItem(&'a str),
+}
+
+impl FiberSelector<'_> {
+    fn matches(&self, entry: &UndoEntry) -> bool {
+        match self {
+            Self::Batch(batch_id) => entry.batch_id.as_deref() == Some(*batch_id),
+            Self::WorkItem(work_item_id) => entry.work_item_id.as_deref() == Some(*work_item_id),
+        }
+    }
+}
+
 /// Unwinds armed entries associated with a tenant and batch request in LIFO order.
 ///
 /// Entries are durably claimed before dispatch and retained in the ledger after completion.
@@ -90,13 +104,7 @@ pub async fn unwind_batch_fiber(
     batch_id: &str,
     scope: FiberExecutionScope<'_>,
 ) -> Vec<RollbackResult> {
-    unwind_matching_fiber(
-        state,
-        tenant_id,
-        |entry| entry.batch_id.as_deref() == Some(batch_id),
-        scope,
-    )
-    .await
+    unwind_matching_fiber(state, tenant_id, FiberSelector::Batch(batch_id), scope).await
 }
 
 /// Unwinds armed entries associated with a tenant and work item in LIFO order.
@@ -121,7 +129,7 @@ pub async fn unwind_fiber(
     unwind_matching_fiber(
         state,
         tenant_id,
-        |entry| entry.work_item_id.as_deref() == Some(work_item_id),
+        FiberSelector::WorkItem(work_item_id),
         scope,
     )
     .await
@@ -130,7 +138,7 @@ pub async fn unwind_fiber(
 async fn unwind_matching_fiber(
     state: &AppState,
     tenant_id: &str,
-    matches_fiber: impl Fn(&UndoEntry) -> bool,
+    selector: FiberSelector<'_>,
     scope: FiberExecutionScope<'_>,
 ) -> Vec<RollbackResult> {
     let FiberExecutionScope {
@@ -153,7 +161,7 @@ async fn unwind_matching_fiber(
         .enumerate()
         .filter(|(_, entry)| {
             entry.tenant_id == tenant_id
-                && matches_fiber(entry)
+                && selector.matches(entry)
                 && entry.status == UndoEntryStatus::Armed
                 && entry.expires_at_ms > now_ms
         })
@@ -190,20 +198,22 @@ async fn unwind_matching_fiber(
                 continue;
             }
         };
-        let outcome = dispatch_inverse(
-            state,
-            &claimed,
-            FiberExecutionScope {
-                policy,
-                profile,
-                context,
-                authorization_expires_at_epoch_secs,
-                operator_id,
-                force_expired_reason,
-                trace_id,
-            },
-        )
-        .await;
+        let dispatch_scope = FiberExecutionScope {
+            policy,
+            profile,
+            context,
+            authorization_expires_at_epoch_secs,
+            operator_id,
+            force_expired_reason,
+            trace_id,
+        };
+        if let Some(outcome) =
+            block_on_pre_undo_drift(state, ledger, &claimed, &dispatch_scope).await
+        {
+            outcomes.push(outcome);
+            continue;
+        }
+        let outcome = dispatch_inverse(state, &claimed, dispatch_scope).await;
         let terminal = if outcome.ok {
             UndoEntryStatus::Reverted
         } else {
@@ -236,6 +246,102 @@ fn failed_result(entry: &UndoEntry, error: String) -> RollbackResult {
         forced_expired: false,
         entry_status: None,
     }
+}
+
+async fn block_on_pre_undo_drift(
+    state: &AppState,
+    ledger: &crate::undo::UndoLedgerStore,
+    claimed: &UndoEntry,
+    scope: &FiberExecutionScope<'_>,
+) -> Option<RollbackResult> {
+    let check = claimed.pre_undo_check.as_ref()?;
+    let checked_state = crate::engine::undo::read_checked_state(
+        state,
+        check,
+        &serde_json::Value::Null,
+        scope.profile,
+        scope.policy,
+    )
+    .await;
+    let current_hash = checked_state.and_then(|value| {
+        state
+            .snapshot_store
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("snapshot storage is unavailable"))?
+            .put(&value)
+    });
+    let guard_error = match current_hash {
+        Ok(hash) if claimed.expected_post_snapshot_hash.as_deref() == Some(hash.as_str()) => {
+            return None;
+        }
+        Ok(_) => Some((
+            "UNDO_STATE_DRIFT",
+            "upstream state changed after the forward action",
+        )),
+        Err(_) => Some((
+            "UNDO_STATE_CHECK_FAILED",
+            "could not verify upstream state before undo",
+        )),
+    };
+    let (code, message) = guard_error?;
+    let release_result = ledger.release_operator_claim(&claimed.undo_id).await;
+    state.notify_action_capsules_changed();
+    let mut result = failed_result(claimed, message.to_string());
+    result.error_code = Some(if release_result.is_ok() {
+        code.to_string()
+    } else {
+        "UNDO_PERSISTENCE_FAILED".to_string()
+    });
+    result.entry_status = Some(if release_result.is_ok() {
+        UndoEntryStatus::Armed
+    } else {
+        UndoEntryStatus::Executing
+    });
+    let server_id = state
+        .capabilities
+        .read()
+        .await
+        .get(&check.capability)
+        .map(|meta| meta.server.clone());
+    let audit = state
+        .audit_handle
+        .send_confirmed(RawAuditEvent {
+            event_type: AuditEventType::UndoFailed,
+            trace_id: scope.trace_id.to_string(),
+            request_id: claimed.batch_id.clone(),
+            actor_id: scope
+                .operator_id
+                .map(ToString::to_string)
+                .or_else(|| claimed.actor_id.clone()),
+            work_item_id: claimed.work_item_id.clone(),
+            client_ip: None,
+            server_id,
+            capability_id: Some(check.capability.clone()),
+            resource_uri: None,
+            sanitized_args: Some(json!({"undoId": claimed.undo_id})),
+            sanitized_response: Some(json!({
+                "outcome": "blocked",
+                "reasonCode": result.error_code,
+                "expectedPostSnapshotHash": claimed.expected_post_snapshot_hash,
+            })),
+            execution_latency_us: None,
+            status: AuditEventStatus::Failed,
+            error_code: result.error_code.clone(),
+            error_message: result.error.clone(),
+            operator_id: scope.operator_id.map(ToString::to_string),
+            approval_ticket_id: None,
+            idempotency_key: None,
+            is_replay: Some(false),
+        })
+        .await;
+    match audit {
+        Ok(record) => {
+            result.audit_event_id = Some(record.id.clone());
+            result.audit_hash = Some(record.hash.clone());
+        }
+        Err(error) => result.audit_error = Some(error.to_string()),
+    }
+    Some(result)
 }
 
 async fn dispatch_inverse(
@@ -308,6 +414,9 @@ async fn dispatch_inverse(
     } else {
         false
     };
+    let audit_error = error
+        .as_ref()
+        .map(|_| "inverse call failed; see the operator response");
     let audit_payload = json!({
         "undoId": entry.undo_id,
         "parentOperationId": entry.operation_id,
@@ -315,7 +424,7 @@ async fn dispatch_inverse(
         "idempotencyKey": idempotency_key,
         "forceExpiredReason": force_expired_reason,
         "outcome": if ok { "executed" } else { "failed" },
-        "error": error,
+        "error": audit_error,
         "result": output,
     });
     let audit_result = state
@@ -347,7 +456,7 @@ async fn dispatch_inverse(
                 AuditEventStatus::Failed
             },
             error_code: error.as_ref().map(|_| "UNDO_FAILED".to_string()),
-            error_message: error.clone(),
+            error_message: audit_error.map(ToString::to_string),
             operator_id: operator_id.map(ToString::to_string),
             approval_ticket_id: None,
             idempotency_key: Some(idempotency_key),
@@ -437,6 +546,9 @@ pub async fn execute_operator_undo(
     };
     let mut dispatch_scope = scope;
     dispatch_scope.force_expired_reason = force_reason;
+    if let Some(result) = block_on_pre_undo_drift(state, ledger, &claimed, &dispatch_scope).await {
+        return Some(result);
+    }
     let mut outcome = dispatch_inverse(state, &claimed, dispatch_scope).await;
     let terminal = if outcome.ok {
         UndoEntryStatus::Reverted
@@ -453,6 +565,7 @@ pub async fn execute_operator_undo(
             outcome.entry_status = Some(UndoEntryStatus::Executing);
         }
     }
+    state.notify_action_capsules_changed();
     Some(outcome)
 }
 

@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-13
+// Rust guideline compliant 2026-11-16
 
 use clap::{Parser, Subcommand};
 
@@ -726,6 +726,15 @@ pub enum TaskCommands {
 /// Persisted undo inspection and operator actions.
 #[derive(Subcommand, Debug, Clone)]
 pub enum UndoCommands {
+    /// Run the reversible contract against its explicitly configured test target.
+    Test {
+        /// Capability alias to test.
+        alias: String,
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+        #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
+        config: String,
+    },
     /// List undo entries owned by the current tenant.
     List {
         #[arg(long)]

@@ -294,11 +294,11 @@ paths:
                 $ref: "#/components/schemas/ErrorEnvelope"
   /v1/resources/updates:
     get:
-      summary: Real-time resource update SSE feed
+      summary: Real-time resource and action capsule invalidation SSE feed
       operationId: resourceUpdates
       responses:
         "200":
-          description: SSE event stream
+          description: SSE stream. Named action_capsule events contain only {"refresh":true}; clients fetch tenant-scoped details from REST.
           content:
             text/event-stream:
               schema:
@@ -709,6 +709,26 @@ paths:
       responses:
         "200": { description: Safe summaries without inverse arguments or snapshot contents }
         "403": { description: Role lacks undo list permission }
+  /v1/undo/test:
+    post:
+      summary: Test an inverse contract on its configured test server
+      operationId: testUndoContract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [alias]
+              properties:
+                alias: { type: string }
+              additionalProperties: false
+      responses:
+        "200": { description: Forward and inverse completed and state matched the original snapshot }
+        "400": { description: Alias lacks an explicit testTarget or preSnapshot contract }
+        "403": { description: Role is not authorized or policy denies the contract }
+        "409": { description: Inverse failed or state did not return to its snapshot }
+        "502": { description: Forward, inverse, snapshot, or verification call failed }
   /v1/undo/{undo_id}:
     get:
       summary: Show one tenant-owned undo entry
@@ -767,6 +787,27 @@ paths:
       responses:
         "200": { description: Per-entry rollback outcomes }
         "403": { description: Role lacks rollback permission }
+  /v1/webhooks/actions:
+    post:
+      summary: Apply one signed ChatOps Undo or Cancel Send action
+      operationId: applyChatOpsAction
+      description: The action_token is bound to one target, tenant, action, configured role, and expiry. Force-expired undo is not supported.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action_token]
+              properties:
+                action_token: { type: string }
+              additionalProperties: true
+      responses:
+        "200": { description: Signed action accepted for background execution }
+        "401": { description: Missing, invalid, or expired action token }
+        "403": { description: Configured role is not authorized }
+        "404": { description: Target is unavailable to the token }
+        "409": { description: Target is no longer actionable or drift blocked undo }
   /v1/tasks:
     get:
       summary: List tasks visible to the current tenant and profile
@@ -1309,6 +1350,15 @@ components:
           type: object
           additionalProperties:
             type: string
+        events:
+          type: array
+          items: { type: string }
+          description: ChatOps action events must be explicitly listed to enable buttons, including when this list is empty.
+        callbackUrl:
+          type: string
+          format: uri
+        actionRole:
+          type: string
     PolicyConfig:
       type: object
       properties:

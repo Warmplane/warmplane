@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-27
+// Rust guideline compliant 2026-11-16
 
 //! Human-in-the-Loop (HITL) Approval Engine and Registry.
 //!
@@ -503,6 +503,121 @@ pub async fn dispatch_webhook(cfg: &WebhookConfig, event_type: &str, approval: &
             error!(url = %cfg.url, error = %e, event = %event_type, "failed to dispatch webhook event");
         }
     }
+}
+
+/// Metadata needed to issue a signed, single-target ChatOps action card.
+pub(crate) struct SignedActionDispatch {
+    pub(crate) event_type: &'static str,
+    pub(crate) action: &'static str,
+    pub(crate) target_id: String,
+    pub(crate) tenant_id: String,
+    pub(crate) expires_at_ms: u64,
+    pub(crate) capability: String,
+    pub(crate) actor: Option<String>,
+    pub(crate) profile_id: Option<String>,
+}
+
+/// Schedules a signed, single-target ChatOps action card without blocking tool execution.
+pub(crate) fn dispatch_signed_action(
+    state: crate::daemon::AppState,
+    dispatch: SignedActionDispatch,
+) {
+    tokio::spawn(async move {
+        let config = match crate::config::load_or_default_config(&state.config_path) {
+            Ok(config) => config,
+            Err(error) => {
+                warn!(error = %error, "failed to load ChatOps action configuration");
+                return;
+            }
+        };
+        let Some(webhook) = config.policy.and_then(|policy| policy.webhook) else {
+            return;
+        };
+        if !webhook
+            .events
+            .iter()
+            .any(|event| event == dispatch.event_type)
+        {
+            return;
+        }
+        let (Some(secret), Some(callback_url), Some(role)) = (
+            webhook.resolve_secret(),
+            webhook.callback_url.as_deref(),
+            webhook
+                .action_role
+                .as_deref()
+                .filter(|role| !role.trim().is_empty()),
+        ) else {
+            warn!(
+                dispatch.event_type,
+                "ChatOps action event requires secret, callbackUrl, and actionRole"
+            );
+            return;
+        };
+        let Some(action_token) = crate::chatops::sign_action_token(
+            &secret,
+            dispatch.action,
+            &dispatch.target_id,
+            &dispatch.tenant_id,
+            role,
+            dispatch.expires_at_ms,
+        ) else {
+            return;
+        };
+        let data = serde_json::json!({
+            "target_id": dispatch.target_id,
+            "capability": dispatch.capability,
+            "actor": dispatch.actor,
+            "profile": dispatch.profile_id,
+            "action_token": action_token,
+        });
+        let payload = crate::chatops::format_webhook_payload(
+            webhook.format.unwrap_or_default(),
+            dispatch.event_type,
+            &data,
+            Some(callback_url),
+        );
+        let Ok(payload) = serde_json::to_string(&payload) else {
+            return;
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        let client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+        {
+            Ok(client) => client,
+            Err(error) => {
+                error!(error = %error, "failed to create ChatOps action HTTP client");
+                return;
+            }
+        };
+        let mut request = client
+            .post(&webhook.url)
+            .header("Content-Type", "application/json")
+            .header("X-Warmplane-Timestamp", now.to_string())
+            .header("X-Warmplane-Event", dispatch.event_type);
+        if let Some(auth) = &webhook.auth_header {
+            request = request.header("Authorization", auth);
+        }
+        if let Some(headers) = &webhook.headers {
+            for (name, value) in headers {
+                request = request.header(name, value);
+            }
+        }
+        if let Ok(mut mac) = HmacSha256::new_from_slice(secret.as_bytes()) {
+            mac.update(format!("{now}.{payload}").as_bytes());
+            request = request.header(
+                "X-Warmplane-Signature",
+                format!("sha256={}", hex::encode(mac.finalize().into_bytes())),
+            );
+        }
+        if let Err(error) = request.body(payload).send().await {
+            warn!(url = %webhook.url, error = %error, event_type = dispatch.event_type, "ChatOps action notification failed");
+        }
+    });
 }
 
 #[cfg(test)]

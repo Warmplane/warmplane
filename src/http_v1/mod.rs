@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-15
+// Rust guideline compliant 2026-11-16
 
 //! HTTP v1 facade API handlers for capabilities, resources, prompts, events, operations, and control deck.
 
@@ -58,6 +58,6 @@ pub use types::{
 };
 pub use ui::handle_ui_dashboard;
 pub use undo_api::{
-    handle_execute_undo, handle_get_undo, handle_list_undo, handle_rollback_work_item,
+    handle_execute_undo, handle_get_undo, handle_list_undo, handle_test_undo_contract,
 };
-pub use webhooks_api::{handle_test_webhook, handle_webhook_callback};
+pub use webhooks_api::{handle_test_webhook, handle_webhook_action, handle_webhook_callback};

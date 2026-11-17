@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-27
+// Rust guideline compliant 2026-11-16
 
 //! Catalog discovery and exploration endpoints for tools, resources, prompts, completions, and change feeds.
 
@@ -165,10 +165,12 @@ pub async fn handle_resource_updates(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = std::result::Result<Event, std::convert::Infallible>>> {
     let rx = state.resource_update_tx.subscribe();
+    let action_rx = state.action_capsule_tx.subscribe();
 
     let shutdown_token = state.shutdown_token.clone();
-    let stream =
-        futures::stream::unfold((rx, shutdown_token), |(mut receiver, token)| async move {
+    let stream = futures::stream::unfold(
+        (rx, action_rx, shutdown_token),
+        |(mut receiver, mut actions, token)| async move {
             loop {
                 tokio::select! {
                     _ = token.cancelled() => return None,
@@ -176,15 +178,24 @@ pub async fn handle_resource_updates(
                         Ok(evt) => {
                             if let Ok(data) = serde_json::to_string(&evt) {
                                 let event = Event::default().event("resource_updated").data(data);
-                                return Some((Ok(event), (receiver, token)));
+                                return Some((Ok(event), (receiver, actions, token)));
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
-                    }
+                    },
+                    msg = actions.recv() => match msg {
+                        Ok(()) => {
+                            let event = Event::default().event("action_capsule").data("{\"refresh\":true}");
+                            return Some((Ok(event), (receiver, actions, token)));
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+                    },
                 }
             }
-        });
+        },
+    );
 
     Sse::new(stream).keep_alive(KeepAlive::default())
 }

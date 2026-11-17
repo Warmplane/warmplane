@@ -357,6 +357,9 @@ The `policy` block enforces global security boundaries, human approval gates, an
     "url": "https://ops.internal/webhooks/warmplane",
     "secretEnv": "WARMPLANE_WEBHOOK_SECRET",
     "authHeader": "Bearer ops-token-xyz",
+    "events": ["undo.action_available", "emission.held"],
+    "callbackUrl": "https://warmplane.internal/v1/webhooks/actions",
+    "actionRole": "operator",
     "allowedUrls": ["https://discord.com/api/webhooks/123/abc"]
   }
 }
@@ -370,7 +373,10 @@ The `policy` block enforces global security boundaries, human approval gates, an
 - If task persistence is disabled, held emissions remain in memory for the current process only and are not recovered after restart. Configure persistent state when a hold must survive a daemon restart.
 - **Reversible and Compensable Calls**: Detailed capability aliases can capture pre-state and register an inverse after a successful single call or batch step. The pre-snapshot capability must be allowed by the effective policy and available in the active profile. Snapshot or ledger persistence failure prevents execution or reports that inverse registration failed after execution; operators should treat that latter result as requiring reconciliation.
 - **Snapshot and Inverse Templates**: Template strings support `${args.path}`, `${result.path}`, and `${snapshot.path}`. An exact placeholder preserves the referenced JSON type; embedded placeholders are rendered as strings. A configured `preSnapshot` runs before the forward call and may select a JSONPath with `captureJsonPath`. Snapshot JSON is stored by SHA-256 content hash under the state directory. `inverse` supplies the compensating capability and arguments.
+- **Undo Contract Testing**: Set `testTarget.server` to a dedicated test MCP server that exposes the same tool names and `testTarget.args` to fixed safe test inputs. The `preSnapshot` is required so Warmplane can compare the final observed state with the original snapshot. Run `warmplane undo test <alias>` or use **Test undo contract** in the Playground. The test command sends both forward and inverse calls only to the configured test server and reports the result without returning state or tool output values.
+- **Drift Protection**: Optional `preUndoCheck` uses the same read contract shape as `preSnapshot`. Warmplane captures the expected post-execution state hash when it registers the inverse, then rereads the state immediately before undo. A mismatch returns `UNDO_STATE_DRIFT`, leaves the entry armed, and does not dispatch the inverse.
 - **Operator Undo**: `GET /v1/undo` lists tenant-owned entries; `GET /v1/undo/{undo_id}` shows a safe summary; `POST /v1/undo/{undo_id}/execute` runs one inverse; and `POST /v1/undo/work-items/{work_item_id}/rollback` runs eligible entries in reverse order. Responses omit inverse arguments and snapshot contents. Cross-tenant IDs return `404`. With RBAC enabled, configure `undoPermissions` (`list`, `execute`, `rollback`, `forceExpired`) per role. Every expiry override requires the dedicated `forceExpired` permission on the caller's role, `forceExpired: true`, and a non-empty `reason`; the reason is recorded in the audit event. The CLI exposes the same operations under `warmplane undo list|show|run|rollback`; `WARMPLANE_OPERATOR_TOKEN` supplies a bearer token when needed.
+- **Action Feed and ChatOps**: The Control Deck Action Feed refreshes tenant-scoped undo and delayable task lists when it receives `action_capsule` SSE invalidations. Cards show provenance, capability, safe inverse field names, and expiry without snapshot values or inverse arguments. ChatOps action events are opt-in: list `undo.action_available` and/or `emission.held` in `policy.webhook.events`, and configure `secret`/`secretEnv`, `callbackUrl`, and `actionRole`. The configured callback host is accepted only on `/v1/webhooks/actions`; all other routes keep loopback-only Host validation. Buttons carry a token bound to one action, target, tenant, role, and expiry. `/v1/webhooks/actions` acknowledges a valid callback immediately and runs the action in the background; inspect the Action Feed for its resulting state. Force-expired execution is not supported. With RBAC enabled, `actionRole` must have `undoPermissions.execute`.
 - **MCP Agent Self-Undo**: The `undo_execute` tool is hidden and rejected unless the caller's RBAC role sets `allowAgentSelfUndo: true`. When a profile is active, that profile must also set `allowAgentSelfUndo: true`. It accepts an explicit `undo_id` or a `work_item_id` to execute that work item's newest armed inverse. The tool does not accept inverse arguments or snapshot data.
 - **Compensable Daily Limit**: `dailyLimit` is required for `compensable` contracts and counts invocations over a rolling 24-hour period per tenant, profile, and capability. Once reached, Warmplane routes the invocation through the existing human approval flow.
 - **Reversibility Example**:
@@ -386,6 +392,15 @@ The `policy` block enforces global security boundaries, human approval gates, an
           "capability": "linear.get_issue",
           "args": {"id": "${args.id}"},
           "captureJsonPath": "$.priority"
+        },
+        "preUndoCheck": {
+          "capability": "linear.get_issue",
+          "args": {"id": "${args.id}"},
+          "captureJsonPath": "$.priority"
+        },
+        "testTarget": {
+          "server": "linear-test",
+          "args": {"id": "UNDO-TEST-1"}
         },
         "inverse": {
           "capability": "linear.update_issue",
@@ -987,7 +1002,7 @@ All HTTP API endpoints return standard JSON response envelopes.
 | `GET` | `/v1/prompts` | List compact prompt index with `ttl_ms` and `cache_scope` hints. | Yes |
 | `POST` | `/v1/prompts/get` | Render an upstream prompt template. | No |
 | `GET` | `/v1/catalog/events` | Read catalog mutation change feed with cursor pagination. | Yes |
-| `GET` | `/v1/resources/updates` | Server-Sent Events (SSE) stream for real-time resource mutations. | No |
+| `GET` | `/v1/resources/updates` | SSE stream for resource changes and action capsule invalidations. | No |
 | `POST` | `/v1/completion/complete` | Request prompt or resource argument completions. | Yes |
 | `POST` | `/v1/sampling/create_message` | Sample LLM completions on behalf of upstream servers. | Yes |
 | `POST` | `/v1/operations/:id/cancel` | Cancel an in-flight async operation. | No |
@@ -1007,6 +1022,8 @@ All HTTP API endpoints return standard JSON response envelopes.
 | `GET` | `/v1/approvals/:id` | Get details and sanitized parameters for an approval ticket. | No |
 | `POST` | `/v1/approvals/:id/approve` | Approve a pending capability execution. | No |
 | `POST` | `/v1/approvals/:id/reject` | Reject a pending capability execution. | No |
+| `POST` | `/v1/undo/test` | Test an inverse contract against its configured test server. | No |
+| `POST` | `/v1/webhooks/actions` | Apply a single-target signed ChatOps Undo or Cancel Send action. | No |
 | `GET` | `/v1/audit/events` | List paginated audit events with filters (`start_time`, `actor_id`, `status`, etc.). | No |
 | `GET` | `/v1/audit/events/:id` | Get single audit event record with cryptographic hash details. | No |
 | `GET` | `/v1/audit/verify` | Verify cryptographic SHA-256 hash chain integrity. | No |

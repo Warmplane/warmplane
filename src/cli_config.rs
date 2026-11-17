@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-14
+// Rust guideline compliant 2026-11-16
 
 //! Handlers for `warmplane server` and `warmplane config` CLI commands.
 
@@ -1553,6 +1553,17 @@ pub async fn handle_task_command(cmd: crate::models::TaskCommands) -> Result<()>
 pub async fn handle_undo_command(cmd: crate::models::UndoCommands) -> Result<()> {
     use crate::models::UndoCommands;
     let (port, config, method, path, body) = match cmd {
+        UndoCommands::Test {
+            alias,
+            port,
+            config,
+        } => (
+            port,
+            config,
+            reqwest::Method::POST,
+            "/v1/undo/test".to_string(),
+            Some(serde_json::json!({"alias": alias})),
+        ),
         UndoCommands::List {
             work_item_id,
             status,
@@ -1699,6 +1710,8 @@ mod tests {
                 ttl_secs: None,
                 daily_limit: None,
                 pre_snapshot: None,
+                pre_undo_check: None,
+                test_target: None,
                 inverse: None,
             });
         }

@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-15
+// Rust guideline compliant 2026-11-17
 
 //! Unit tests for policy rules and pattern matching in daemon module.
 
@@ -147,6 +147,27 @@ async fn test_security_guard_token_auth() {
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 
+    // Signed ChatOps callbacks bypass bearer auth only at the exact action endpoint; the
+    // callback handler then rejects a missing or invalid target-bound action token.
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/webhooks/actions")
+        .header("host", "127.0.0.1:9090")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"action_token":"invalid"}"#))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/webhooks/actions/extra")
+        .header("host", "127.0.0.1:9090")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
     // 2. Authenticated with Authorization Bearer header
     let req = Request::builder()
         .uri("/v1/capabilities")
@@ -166,6 +187,55 @@ async fn test_security_guard_token_auth() {
         .unwrap();
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn chatops_callback_accepts_only_its_configured_public_host() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.json");
+    let config = crate::config::McpConfig {
+        policy: Some(crate::config::PolicyConfig {
+            webhook: Some(crate::config::WebhookConfig {
+                url: "https://chat.example/webhook".to_string(),
+                callback_url: Some("https://warmplane.example/v1/webhooks/actions".to_string()),
+                secret: Some("secret".to_string()),
+                action_role: Some("operator".to_string()),
+                events: vec!["undo.action_available".to_string()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    crate::config::save_config(config_path.to_str().unwrap(), &config).unwrap();
+    let state = AppState::builder()
+        .config_path(config_path.to_string_lossy().to_string())
+        .build();
+    let app = crate::daemon::server::build_router(state);
+
+    let callback = Request::builder()
+        .method("POST")
+        .uri("/v1/webhooks/actions")
+        .header("host", "warmplane.example")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"action_token":"invalid"}"#))
+        .unwrap();
+    let response = app.clone().oneshot(callback).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let unrelated_route = Request::builder()
+        .uri("/v1/capabilities")
+        .header("host", "warmplane.example")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(unrelated_route).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

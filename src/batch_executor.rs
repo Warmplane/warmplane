@@ -908,6 +908,8 @@ async fn execute_batch_for_tenant_with_budget(
                             tenant_id,
                             profile_id: prof_ctx.profile_id.as_deref(),
                         },
+                        prof_ctx,
+                        policy,
                     )
                     .await
                     {
@@ -1102,6 +1104,8 @@ mod tests {
             ttl_secs: None,
             daily_limit: None,
             pre_snapshot: None,
+            pre_undo_check: None,
+            test_target: None,
             inverse: None,
         });
         let state = AppState::builder()
@@ -1174,6 +1178,8 @@ mod tests {
                 args: json!({}),
                 capture_json_path: None,
             })),
+            pre_undo_check: None,
+            test_target: None,
             inverse: Some(Box::new(InverseConfig {
                 capability: "mock.restore".to_string(),
                 args: json!({"value":"${snapshot}"}),

@@ -235,9 +235,33 @@ pub struct ReversibilityConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub pre_snapshot: Option<Box<PreSnapshotConfig>>,
+    /// Read operation used to verify the post-execution state before applying an inverse.
+    #[serde(
+        default,
+        rename = "preUndoCheck",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pre_undo_check: Option<Box<PreSnapshotConfig>>,
+    /// Explicit non-production target and arguments used by the undo contract test command.
+    #[serde(
+        default,
+        rename = "testTarget",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub test_target: Option<Box<UndoTestTargetConfig>>,
     /// Inverse operation to register after a successful forward call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inverse: Option<Box<InverseConfig>>,
+}
+
+/// Upstream target reserved for an observational undo contract test.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub struct UndoTestTargetConfig {
+    /// Dedicated test server identifier that exposes the contract's tool names.
+    pub server: String,
+    /// Fixed, non-production arguments used for the test cycle.
+    #[serde(default)]
+    pub args: serde_json::Value,
 }
 
 /// Configuration for reading and distilling a pre-mutation snapshot.
@@ -504,7 +528,7 @@ pub struct WebhookConfig {
     /// Optional payload format (generic, slack, discord, teams).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<crate::chatops::WebhookFormat>,
-    /// Subscribed event types (defaults to `["approval.requested"]`).
+    /// Optional event filter for legacy approval notifications and explicitly enabled action events.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<String>,
     /// Public callback URL for interactive action buttons.
@@ -515,6 +539,13 @@ pub struct WebhookConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub callback_url: Option<String>,
+    /// RBAC role used for actions initiated by signed ChatOps buttons.
+    #[serde(
+        default,
+        rename = "actionRole",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub action_role: Option<String>,
     /// Optional custom HTTP headers map.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headers: Option<HashMap<String, String>>,
@@ -1005,6 +1036,36 @@ fn validate_config(config: &McpConfig) -> Result<()> {
 
     if let Some(policy) = &config.policy {
         validate_hold_window(policy.hold_window_secs, "policy.holdWindowSecs")?;
+        if let Some(webhook) = &policy.webhook {
+            for event in ["undo.action_available", "emission.held"] {
+                if webhook.events.iter().any(|configured| configured == event) {
+                    if webhook.secret.is_none() && webhook.secret_env.is_none() {
+                        anyhow::bail!("policy.webhook.secret or secretEnv is required when subscribing to {event}");
+                    }
+                    if webhook.callback_url.as_deref().is_none_or(str::is_empty) {
+                        anyhow::bail!(
+                            "policy.webhook.callbackUrl is required when subscribing to {event}"
+                        );
+                    }
+                    let role = webhook
+                        .action_role
+                        .as_deref()
+                        .filter(|role| !role.trim().is_empty())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "policy.webhook.actionRole is required when subscribing to {event}"
+                            )
+                        })?;
+                    if config.rbac.as_ref().is_some_and(|rbac| rbac.enabled) {
+                        let role_config =
+                            config.rbac.as_ref().and_then(|rbac| rbac.roles.get(role));
+                        if !role_config.is_some_and(|role| role.undo_permissions.execute) {
+                            anyhow::bail!("policy.webhook.actionRole must name an RBAC role with undoPermissions.execute for {event}");
+                        }
+                    }
+                }
+            }
+        }
     }
     for (name, profile) in &config.profiles {
         if let Some(policy) = &profile.policy {
@@ -1086,6 +1147,38 @@ fn validate_config(config: &McpConfig) -> Result<()> {
                     "capabilityAliases.{}.reversibility.preSnapshot is only valid for reversible and compensable classes",
                     alias
                 );
+            }
+            if contract.pre_undo_check.is_some()
+                && !matches!(
+                    contract.class,
+                    ReversibilityClass::Reversible | ReversibilityClass::Compensable
+                )
+            {
+                anyhow::bail!(
+                    "capabilityAliases.{}.reversibility.preUndoCheck is only valid for reversible and compensable classes",
+                    alias
+                );
+            }
+            if let Some(check) = &contract.pre_undo_check {
+                if check.capability.trim().is_empty() || !check.args.is_object() {
+                    anyhow::bail!("capabilityAliases.{}.reversibility.preUndoCheck requires a capability and object args", alias);
+                }
+            }
+            if contract.test_target.is_some()
+                && !matches!(
+                    contract.class,
+                    ReversibilityClass::Reversible | ReversibilityClass::Compensable
+                )
+            {
+                anyhow::bail!("capabilityAliases.{}.reversibility.testTarget is only valid for reversible and compensable classes", alias);
+            }
+            if let Some(test_target) = &contract.test_target {
+                if test_target.server.trim().is_empty() || !test_target.args.is_object() {
+                    anyhow::bail!("capabilityAliases.{}.reversibility.testTarget requires a server and object args", alias);
+                }
+                if contract.pre_snapshot.is_none() {
+                    anyhow::bail!("capabilityAliases.{}.reversibility.testTarget requires preSnapshot to verify observational equivalence", alias);
+                }
             }
             if let Some(snapshot) = &contract.pre_snapshot {
                 if snapshot.capability.trim().is_empty() || !snapshot.args.is_object() {
@@ -1317,6 +1410,8 @@ mod tests {
                     ttl_secs: None,
                     daily_limit: None,
                     pre_snapshot: None,
+                    pre_undo_check: None,
+                    test_target: None,
                     inverse: None,
                 }),
             },
@@ -1350,6 +1445,8 @@ mod tests {
                     ttl_secs: None,
                     daily_limit: None,
                     pre_snapshot: None,
+                    pre_undo_check: None,
+                    test_target: None,
                     inverse: None,
                 }),
             },
@@ -1391,6 +1488,8 @@ mod tests {
                 ttl_secs: None,
                 daily_limit: None,
                 pre_snapshot: None,
+                pre_undo_check: None,
+                test_target: None,
                 inverse: None,
             }),
         };

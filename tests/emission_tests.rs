@@ -26,6 +26,8 @@ fn delayable_contract(hold_window_secs: u64) -> ReversibilityConfig {
         ttl_secs: None,
         daily_limit: None,
         pre_snapshot: None,
+        pre_undo_check: None,
+        test_target: None,
         inverse: None,
     }
 }

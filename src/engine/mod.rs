@@ -1021,6 +1021,8 @@ impl ControlPlaneHandle {
                                         tenant_id: "default",
                                         profile_id: profile_context_clone.profile_id.as_deref(),
                                     },
+                                    &profile_context_clone,
+                                    &policy_for_undo,
                                 )
                                 .await
                                 {
@@ -1676,6 +1678,13 @@ impl ControlPlaneHandle {
                                 tenant_id: "default",
                                 profile_id: prof_ctx.profile_id.as_deref(),
                             },
+                            &prof_ctx,
+                            &self
+                                .state
+                                .policy
+                                .read()
+                                .await
+                                .merge_with_profile(prof_ctx.profile_policy.as_ref()),
                         )
                         .await
                         {

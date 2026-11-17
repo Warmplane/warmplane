@@ -146,6 +146,9 @@ function renderToolsPlayground(state: any): string {
   const caps = state.capabilities || [];
   const selectedId = state.selectedCapabilityId || (caps.length > 0 ? caps[0].id : null);
   const selectedCap = caps.find((c: any) => c.id === selectedId);
+  const selectedAlias = state.config.capabilityAliases?.[selectedId];
+  const undoTestReady = typeof selectedAlias === 'object' && !!selectedAlias?.reversibility?.testTarget;
+  const undoTestServer = typeof selectedAlias === 'object' ? selectedAlias?.reversibility?.testTarget?.server : undefined;
   const isExecuting = state.isExecutingCapability;
   const capsHidden = state.capabilitiesHiddenByPolicy || 0;
   const activeProfName = state.activeProfile;
@@ -195,8 +198,8 @@ function renderToolsPlayground(state: any): string {
             <button 
               type="button" 
               class="btn" 
-              style="padding: 2px 7px; font-size: 10.5px; font-family: var(--ff-mono); background: ${pillColor}; color: ${textColor}; border: 1px solid ${borderColor}; border-radius: var(--radius-sm);" 
-              title="Click to insert '${escapeHtml(key)}' (${escapeHtml(typeStr)}${escapeHtml(desc)})" 
+              style="padding: 2px 7px; font-size: 10.5px; font-family: var(--ff-mono); background: ${pillColor}; color: ${textColor}; border: 1px solid ${borderColor}; border-radius: var(--radius-sm);"
+              title="Click to insert '${escapeHtml(key)}' (${escapeHtml(typeStr)}${escapeHtml(desc)})"
               onclick="window.app.insertPlaygroundArgKey('${escapeHtml(key)}', '${escapeHtml(typeStr)}', ${escapeHtml(JSON.stringify(def.default ?? null))})"
             >
               + ${escapeHtml(key)} <span style="font-size: 9px; opacity: 0.7;">(${typeStr}${isReq ? ' *' : ''})</span>
@@ -266,6 +269,7 @@ function renderToolsPlayground(state: any): string {
                 Execute Capability
               </button>
             `}
+            ${undoTestReady ? `<button class="btn btn-ghost" data-playground-action="test-undo" data-undo-alias="${escapeHtml(selectedId)}" ${isExecuting ? 'disabled' : ''} title="Runs the configured forward and inverse cycle on ${escapeHtml(undoTestServer)}">Test undo contract</button>` : ''}
           </div>
         </div>
 

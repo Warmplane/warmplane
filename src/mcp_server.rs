@@ -1597,6 +1597,8 @@ mod tests {
             ttl_secs: None,
             daily_limit: None,
             pre_snapshot: None,
+            pre_undo_check: None,
+            test_target: None,
             inverse: None,
         });
         let state = AppState::builder()
@@ -1660,6 +1662,8 @@ mod tests {
                     ttl_secs: None,
                     daily_limit: None,
                     pre_snapshot: None,
+                    pre_undo_check: None,
+                    test_target: None,
                     inverse: None,
                 }),
             },
@@ -1680,6 +1684,8 @@ mod tests {
             ttl_secs: None,
             daily_limit: None,
             pre_snapshot: None,
+            pre_undo_check: None,
+            test_target: None,
             inverse: None,
         });
         let state = AppState::builder()
@@ -1739,6 +1745,8 @@ mod tests {
             ttl_secs: None,
             daily_limit: None,
             pre_snapshot: None,
+            pre_undo_check: None,
+            test_target: None,
             inverse: None,
         });
         let state = AppState::builder()

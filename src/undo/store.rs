@@ -366,6 +366,39 @@ impl UndoLedgerStore {
         Ok(())
     }
 
+    /// Releases a claimed undo entry back to `Armed` when a pre-dispatch safety check blocks it.
+    ///
+    /// # Arguments
+    /// * `undo_id` - Stable undo entry identifier whose claim should be released.
+    ///
+    /// # Errors
+    /// Returns an error if the entry is not executing or the armed transition cannot be persisted.
+    pub async fn release_operator_claim(&self, undo_id: &str) -> Result<()> {
+        let mut guard = self.ledger.lock().await;
+        let entry = guard
+            .entries
+            .iter_mut()
+            .find(|entry| entry.undo_id == undo_id)
+            .context("undo entry not found")?;
+        anyhow::ensure!(
+            entry.status == crate::undo::UndoEntryStatus::Executing,
+            "undo entry is not executing"
+        );
+        let previous = entry.status.clone();
+        entry.status = crate::undo::UndoEntryStatus::Armed;
+        if let Err(error) = self.storage.save(&guard) {
+            if let Some(entry) = guard
+                .entries
+                .iter_mut()
+                .find(|entry| entry.undo_id == undo_id)
+            {
+                entry.status = previous;
+            }
+            return Err(error).context("failed to release undo claim");
+        }
+        Ok(())
+    }
+
     /// Reserves a compensable invocation or reports that operator approval is required.
     pub async fn reserve_compensable(
         &self,
@@ -494,7 +527,10 @@ mod tests {
             reversibility_class: "reversible".to_string(),
             resolved_inverse_capability: "linear.update_issue".to_string(),
             resolved_inverse_args: json!({"id": "ISSUE-1", "priority": "low"}),
+            change_preview: Vec::new(),
             snapshot_artifact_hash: Some("a".repeat(64)),
+            pre_undo_check: None,
+            expected_post_snapshot_hash: None,
             created_at_ms: 100,
             expires_at_ms: 200,
             status: UndoEntryStatus::Armed,
@@ -531,7 +567,10 @@ mod tests {
             reversibility_class: "reversible".to_string(),
             resolved_inverse_capability: "inverse.call".to_string(),
             resolved_inverse_args: json!({"secret": "hidden"}),
+            change_preview: Vec::new(),
             snapshot_artifact_hash: None,
+            pre_undo_check: None,
+            expected_post_snapshot_hash: None,
             created_at_ms: 1,
             expires_at_ms: 10,
             status: UndoEntryStatus::Armed,
@@ -586,7 +625,10 @@ mod tests {
             reversibility_class: "reversible".to_string(),
             resolved_inverse_capability: "mock.restore".to_string(),
             resolved_inverse_args: json!({"value": 0}),
+            change_preview: Vec::new(),
             snapshot_artifact_hash: None,
+            pre_undo_check: None,
+            expected_post_snapshot_hash: None,
             created_at_ms: 100,
             expires_at_ms: 200,
             status: UndoEntryStatus::Armed,
@@ -643,7 +685,10 @@ mod tests {
             reversibility_class: "reversible".to_string(),
             resolved_inverse_capability: "tickets.set_priority".to_string(),
             resolved_inverse_args: json!({"id": "ISSUE-1", "priority": "low"}),
+            change_preview: Vec::new(),
             snapshot_artifact_hash: None,
+            pre_undo_check: None,
+            expected_post_snapshot_hash: None,
             created_at_ms: 100,
             expires_at_ms: 200,
             status: UndoEntryStatus::Armed,
@@ -672,7 +717,10 @@ mod tests {
             reversibility_class: "reversible".to_string(),
             resolved_inverse_capability: "tickets.set_priority".to_string(),
             resolved_inverse_args: json!({"id": "ISSUE-1", "priority": "low"}),
+            change_preview: Vec::new(),
             snapshot_artifact_hash: None,
+            pre_undo_check: None,
+            expected_post_snapshot_hash: None,
             created_at_ms: 100,
             expires_at_ms: 200,
             status: UndoEntryStatus::Armed,

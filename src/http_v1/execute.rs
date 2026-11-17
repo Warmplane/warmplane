@@ -757,6 +757,8 @@ pub async fn handle_call_capability(
                                     tenant_id: &tenant_id_clone,
                                     profile_id: profile_clone.profile_id.as_deref(),
                                 },
+                                &profile_clone,
+                                &policy_clone,
                             )
                             .await
                             {
@@ -1470,6 +1472,8 @@ pub async fn handle_call_capability(
                         tenant_id: &tenant_id,
                         profile_id: prof_ctx.profile_id.as_deref(),
                     },
+                    &prof_ctx,
+                    &effective_policy,
                 )
                 .await
                 {

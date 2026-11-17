@@ -48,7 +48,7 @@ pub struct UndoListFilter {
     pub limit: usize,
 }
 
-/// Safe API representation of one undo entry, excluding inverse arguments.
+/// Safe API representation of one undo entry, excluding inverse arguments and snapshot contents.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct UndoEntrySummary {
     /// Stable entry identifier.
@@ -67,6 +67,9 @@ pub struct UndoEntrySummary {
     pub forward_capability: String,
     /// Inverse capability identifier.
     pub inverse_capability: String,
+    /// Safe field names used by the configured inverse, when available.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub change_preview: Vec<String>,
     /// Hash of the saved pre-state snapshot, when present.
     pub snapshot_artifact_hash: Option<String>,
     /// Creation timestamp in Unix milliseconds.
@@ -88,6 +91,7 @@ impl From<&UndoEntry> for UndoEntrySummary {
             actor_id: entry.actor_id.clone(),
             forward_capability: entry.forward_capability.clone(),
             inverse_capability: entry.resolved_inverse_capability.clone(),
+            change_preview: entry.change_preview.clone(),
             snapshot_artifact_hash: entry.snapshot_artifact_hash.clone(),
             created_at_ms: entry.created_at_ms,
             expires_at_ms: entry.expires_at_ms,
@@ -531,6 +535,16 @@ fn map_result(result: RollbackResult) -> Result<RollbackResult, UndoOperationErr
             "UNDO_WINDOW_EXPIRED",
             "Undo window expired",
             409,
+        )),
+        "UNDO_STATE_DRIFT" => Err(operation_error(
+            "UNDO_STATE_DRIFT",
+            "Upstream state changed after the forward action; the inverse was not dispatched",
+            409,
+        )),
+        "UNDO_STATE_CHECK_FAILED" => Err(operation_error(
+            "UNDO_STATE_CHECK_FAILED",
+            "Upstream state could not be verified; the inverse was not dispatched",
+            503,
         )),
         "UNDO_ALREADY_REVERTED" => Err(operation_error(
             "UNDO_ALREADY_REVERTED",

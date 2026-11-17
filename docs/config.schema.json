@@ -288,7 +288,7 @@
         },
         {
           "if": { "properties": { "class": { "enum": ["delayable", "irreversible"] } }, "required": ["class"] },
-          "then": { "not": { "anyOf": [{ "required": ["preSnapshot"] }, { "required": ["inverse"] }, { "required": ["ttlSecs"] }] } }
+          "then": { "not": { "anyOf": [{ "required": ["preSnapshot"] }, { "required": ["preUndoCheck"] }, { "required": ["inverse"] }, { "required": ["ttlSecs"] }] } }
         }
       ],
       "required": ["class"],
@@ -299,7 +299,7 @@
         "dailyLimit": { "type": "integer", "minimum": 1 },
         "preSnapshot": {
           "type": "object",
-          "required": ["capability"],
+          "required": ["capability", "args"],
           "properties": {
             "capability": { "type": "string", "minLength": 1 },
             "args": { "type": "object" },
@@ -307,9 +307,30 @@
           },
           "additionalProperties": false
         },
+        "preUndoCheck": {
+          "type": "object",
+          "required": ["capability", "args"],
+          "description": "Read the post-execution state before undo and block the inverse when its SHA-256 hash has drifted.",
+          "properties": {
+            "capability": { "type": "string", "minLength": 1 },
+            "args": { "type": "object" },
+            "captureJsonPath": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "testTarget": {
+          "type": "object",
+          "required": ["server", "args"],
+          "description": "Dedicated test MCP server and fixed arguments for an inverse round-trip check. The server must expose the contract's tool names.",
+          "properties": {
+            "server": { "type": "string", "minLength": 1 },
+            "args": { "type": "object" }
+          },
+          "additionalProperties": false
+        },
         "inverse": {
           "type": "object",
-          "required": ["capability"],
+          "required": ["capability", "args"],
           "properties": {
             "capability": { "type": "string", "minLength": 1 },
             "args": { "type": "object" }
@@ -336,7 +357,14 @@
           "items": { "type": "string", "format": "uri" },
           "default": [],
           "description": "Optional allowlist of webhook URLs permitted for test dispatches."
-        }
+        },
+        "events": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional event filter for legacy approval notifications. ChatOps action events require explicit opt-in even when this list is empty."
+        },
+        "callbackUrl": { "type": "string", "format": "uri" },
+        "actionRole": { "type": "string", "minLength": 1, "description": "RBAC role assigned to signed ChatOps action buttons." }
       },
       "additionalProperties": false
     },

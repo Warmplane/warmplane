@@ -47,8 +47,17 @@ pub struct UndoEntry {
     pub resolved_inverse_capability: String,
     /// Arguments resolved for the inverse action.
     pub resolved_inverse_args: Value,
+    /// Redacted inverse argument field names for safe operator previews.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub change_preview: Vec<String>,
     /// Content hash of the pre-execution snapshot, when configured.
     pub snapshot_artifact_hash: Option<String>,
+    /// State-reading contract used to detect external drift before applying the inverse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_undo_check: Option<crate::config::PreSnapshotConfig>,
+    /// Hash of the expected post-execution state for the configured drift check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_post_snapshot_hash: Option<String>,
     /// Unix timestamp in milliseconds when this action was registered.
     pub created_at_ms: u64,
     /// Unix timestamp in milliseconds when the undo window expires.

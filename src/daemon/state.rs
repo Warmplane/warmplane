@@ -44,6 +44,8 @@ pub struct AppState {
     pub operation_registry: crate::operations::OperationRegistry,
     /// Real-time broadcast channel for resource update notifications.
     pub resource_update_tx: tokio::sync::broadcast::Sender<crate::catalog::ResourceUpdateEvent>,
+    /// Real-time invalidation channel for tenant-scoped action capsule lists.
+    pub action_capsule_tx: tokio::sync::broadcast::Sender<()>,
     /// Real-time broadcast channel for MCP tools/list_changed notifications.
     pub tool_list_changed_tx: tokio::sync::broadcast::Sender<()>,
     /// Real-time broadcast channel for MCP resources/list_changed notifications.
@@ -116,6 +118,14 @@ impl AppState {
     pub fn notify_prompts_changed(&self) {
         let _ = self.prompt_list_changed_tx.send(());
     }
+
+    /// Notifies connected operator feeds that their tenant-scoped capsule list may have changed.
+    ///
+    /// The broadcast contains no entry identifier or tenant data. Each client refreshes through
+    /// its authenticated, tenant-scoped REST endpoints.
+    pub fn notify_action_capsules_changed(&self) {
+        let _ = self.action_capsule_tx.send(());
+    }
 }
 
 /// Builder for constructing `AppState` instances (`M-INIT-BUILDER`).
@@ -133,6 +143,7 @@ pub struct AppStateBuilder {
     idempotency_store: Option<Arc<crate::idempotency::IdempotencyStore>>,
     operation_registry: Option<crate::operations::OperationRegistry>,
     resource_update_tx: Option<tokio::sync::broadcast::Sender<crate::catalog::ResourceUpdateEvent>>,
+    action_capsule_tx: Option<tokio::sync::broadcast::Sender<()>>,
     config_path: Option<String>,
     server_configs: Option<SharedServerConfigs>,
     server_statuses: Option<SharedServerStatuses>,
@@ -440,6 +451,9 @@ impl AppStateBuilder {
             operation_registry: self.operation_registry.unwrap_or_default(),
             resource_update_tx: self
                 .resource_update_tx
+                .unwrap_or_else(|| tokio::sync::broadcast::channel(64).0),
+            action_capsule_tx: self
+                .action_capsule_tx
                 .unwrap_or_else(|| tokio::sync::broadcast::channel(64).0),
             tool_list_changed_tx: tokio::sync::broadcast::channel(64).0,
             resource_list_changed_tx: tokio::sync::broadcast::channel(64).0,

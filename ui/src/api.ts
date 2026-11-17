@@ -180,12 +180,32 @@ export interface TaskItem {
     actor_id?: string;
     grant_id?: string;
   };
+  phase?: string;
+  releaseAtMs?: number;
+  cancellable?: boolean;
+  requestId?: string;
 }
 
 export interface ListTasksResponse {
   ok: boolean;
   total: number;
   tasks: TaskItem[];
+}
+
+export interface UndoEntrySummary {
+  undo_id: string;
+  operation_id?: string;
+  work_item_id?: string;
+  tenant_id: string;
+  profile_id?: string;
+  actor_id?: string;
+  forward_capability: string;
+  inverse_capability: string;
+  change_preview?: string[];
+  snapshot_artifact_hash?: string;
+  created_at_ms: number;
+  expires_at_ms: number;
+  status: string;
 }
 
 export interface UpdateTaskRequest {
@@ -336,6 +356,10 @@ export type AliasTargetType = string | {
   summary?: string;
   description?: string;
   passthrough?: boolean;
+  reversibility?: {
+    class: string;
+    testTarget?: { server: string; args?: Record<string, any> };
+  };
 };
 
 export interface McpConfig {
@@ -591,6 +615,32 @@ export class WarmplaneClient {
 
   async listTasks(): Promise<ListTasksResponse> {
     const res = await fetch(`${this.baseUrl}/v1/tasks`);
+    return res.json();
+  }
+
+  async listUndo(): Promise<{ ok: boolean; result?: { entries: UndoEntrySummary[]; total: number }; error?: any }> {
+    const res = await fetch(`${this.baseUrl}/v1/undo`);
+    return res.json();
+  }
+
+  async testUndoContract(alias: string): Promise<{ ok: boolean; result?: any; error?: any }> {
+    const res = await fetch(`${this.baseUrl}/v1/undo/test`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ alias })
+    });
+    return res.json();
+  }
+
+  async executeUndo(id: string): Promise<{ ok: boolean; result?: any; error?: any }> {
+    const res = await fetch(`${this.baseUrl}/v1/undo/${encodeURIComponent(id)}/execute`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    });
+    return res.json();
+  }
+
+  async rollbackWorkItem(id: string): Promise<{ ok: boolean; results?: any[]; error?: any }> {
+    const res = await fetch(`${this.baseUrl}/v1/undo/work-items/${encodeURIComponent(id)}/rollback`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    });
     return res.json();
   }
 

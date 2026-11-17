@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-27
+// Rust guideline compliant 2026-11-16
 
 //! Comprehensive unit and integration test suite for HTTP v1 facade API handlers.
 
@@ -103,7 +103,10 @@ async fn undo_get_conceals_cross_tenant_ids_and_redacts_inverse_arguments() {
             reversibility_class: "reversible".to_string(),
             resolved_inverse_capability: "inverse.call".to_string(),
             resolved_inverse_args: json!({"private": "value"}),
+            change_preview: vec!["priority".to_string()],
             snapshot_artifact_hash: Some("a".repeat(64)),
+            pre_undo_check: None,
+            expected_post_snapshot_hash: None,
             created_at_ms: 1,
             expires_at_ms: 100,
             status: crate::undo::UndoEntryStatus::Armed,
@@ -149,7 +152,132 @@ async fn undo_get_conceals_cross_tenant_ids_and_redacts_inverse_arguments() {
     let serialized = value.to_string();
     assert!(!serialized.contains("resolved_inverse_args"));
     assert!(!serialized.contains("private"));
+    assert!(serialized.contains("priority"));
     assert!(serialized.contains(&"a".repeat(64)));
+}
+
+#[tokio::test]
+async fn undo_contract_test_uses_only_configured_test_target_and_checks_equivalence() {
+    use crate::config::{
+        AliasTarget, InverseConfig, McpConfig, PreSnapshotConfig, ReversibilityClass,
+        ReversibilityConfig, UndoTestTargetConfig,
+    };
+    use crate::daemon::ServerMsg;
+    use axum::body::to_bytes;
+    use serde_json::json;
+    use std::{collections::HashMap, sync::Arc};
+
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.json");
+    let contract = ReversibilityConfig {
+        class: ReversibilityClass::Reversible,
+        hold_window_secs: None,
+        ttl_secs: Some(60),
+        daily_limit: None,
+        pre_snapshot: Some(Box::new(PreSnapshotConfig {
+            capability: "test.get_issue".to_string(),
+            args: json!({"id":"${args.id}"}),
+            capture_json_path: Some("$.priority".to_string()),
+        })),
+        pre_undo_check: None,
+        test_target: Some(Box::new(UndoTestTargetConfig {
+            server: "test-server".to_string(),
+            args: json!({"id":"ISSUE-T"}),
+        })),
+        inverse: Some(Box::new(InverseConfig {
+            capability: "test.set_priority".to_string(),
+            args: json!({"id":"${args.id}","priority":"${snapshot}"}),
+        })),
+    };
+    let config = McpConfig {
+        capability_aliases: HashMap::from([(
+            "tickets.set_priority".to_string(),
+            AliasTarget::Detailed {
+                target: "test.set_priority".to_string(),
+                summary: None,
+                description: None,
+                passthrough: false,
+                reversibility: Some(contract),
+            },
+        )]),
+        ..Default::default()
+    };
+    crate::config::save_config(config_path.to_str().unwrap(), &config).unwrap();
+
+    let forward = crate::daemon::CapabilityMeta::new(
+        "production",
+        "set_priority",
+        "Set priority",
+        "Set priority",
+        json!({"type":"object"}),
+    );
+    let getter = crate::daemon::CapabilityMeta::new(
+        "production",
+        "get_issue",
+        "Get issue",
+        "Get issue",
+        json!({"type":"object"}),
+    );
+    let inverse = crate::daemon::CapabilityMeta::new(
+        "production",
+        "set_priority",
+        "Set priority",
+        "Set priority",
+        json!({"type":"object"}),
+    );
+    let (server_tx, mut server_rx) = tokio::sync::mpsc::channel(8);
+    let live_value = Arc::new(tokio::sync::Mutex::new("low".to_string()));
+    let state = AppState::builder()
+        .config_path(config_path.to_string_lossy().to_string())
+        .servers(HashMap::from([("test-server".to_string(), server_tx)]))
+        .capabilities(HashMap::from([
+            ("test.set_priority".to_string(), forward),
+            ("test.get_issue".to_string(), getter),
+            ("test.inverse_unused".to_string(), inverse),
+        ]))
+        .build();
+    let server_value = live_value.clone();
+    let responder = tokio::spawn(async move {
+        while let Some(ServerMsg::CallTool {
+            name,
+            params,
+            reply,
+            ..
+        }) = server_rx.recv().await
+        {
+            match name.as_str() {
+                "get_issue" => {
+                    let value = server_value.lock().await.clone();
+                    let _ = reply.send(Ok(json!({"priority": value})));
+                }
+                "set_priority" => {
+                    if let Some(priority) =
+                        params.get("priority").and_then(serde_json::Value::as_str)
+                    {
+                        *server_value.lock().await = priority.to_string();
+                    }
+                    let _ = reply.send(Ok(json!({"ok": true})));
+                }
+                _ => break,
+            }
+        }
+    });
+    let response = crate::http_v1::undo_api::handle_test_undo_contract(
+        State(state),
+        axum::extract::Extension(None),
+        None,
+        Json(crate::http_v1::undo_api::UndoContractTestRequest {
+            alias: "tickets.set_priority".to_string(),
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["result"]["observationally_equivalent"], true);
+    assert_eq!(*live_value.lock().await, "low");
+    responder.abort();
 }
 
 #[tokio::test]

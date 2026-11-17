@@ -123,6 +123,8 @@ impl HoldCoordinator {
             .task_registry
             .create_emission_task(params, emission)
             .await?;
+        state.notify_action_capsules_changed();
+        dispatch_held_chatops_action(state, &record);
         self.start_worker(state.clone(), record.clone()).await;
         self.audit_emission(state, &record, crate::audit::AuditEventType::EmissionHeld)
             .await;
@@ -143,6 +145,8 @@ impl HoldCoordinator {
             .attach_emission(task_id, approved_args, emission)
             .await?;
         if let Some(record) = record.as_ref() {
+            state.notify_action_capsules_changed();
+            dispatch_held_chatops_action(state, record);
             self.audit_emission(state, record, crate::audit::AuditEventType::EmissionHeld)
                 .await;
             self.start_worker(state.clone(), record.clone()).await;
@@ -162,6 +166,9 @@ impl HoldCoordinator {
             .task_registry
             .cancel_emission_task(task_id, reason)
             .await?;
+        if result == EmissionCancelResult::Cancelled {
+            state.notify_action_capsules_changed();
+        }
         if matches!(
             result,
             EmissionCancelResult::Cancelled
@@ -324,6 +331,7 @@ impl HoldCoordinator {
         }) else {
             return;
         };
+        state.notify_action_capsules_changed();
         drop(_gate);
 
         let Some(emission) = record.emission.as_ref() else {
@@ -587,6 +595,28 @@ impl HoldCoordinator {
             is_replay: Some(false),
         });
     }
+}
+
+fn dispatch_held_chatops_action(state: &AppState, record: &TaskRecord) {
+    let Some(emission) = record.emission.as_ref() else {
+        return;
+    };
+    crate::approvals::dispatch_signed_action(
+        state.clone(),
+        crate::approvals::SignedActionDispatch {
+            event_type: "emission.held",
+            action: "cancel",
+            target_id: record.task_id.clone(),
+            tenant_id: emission.tenant_id.clone(),
+            expires_at_ms: emission.release_at_ms,
+            capability: record.capability_id.clone(),
+            actor: record
+                .context
+                .as_ref()
+                .and_then(|context| context.actor_id.clone()),
+            profile_id: emission.profile_id.clone(),
+        },
+    );
 }
 
 async fn revalidate(state: &AppState, record: &TaskRecord) -> Result<()> {
