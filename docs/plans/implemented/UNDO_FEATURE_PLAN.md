@@ -1,5 +1,7 @@
 ## Architectural Thesis & Staged Implementation Proposal: Externalized Reversibility and Temporal Composability in Warmplane
 
+> Implementation status as of 2026-11-18. Stages 1–5 and the follow-up UI configuration work are implemented. The stdio → SSE → signed callback → inverse → audit lifecycle has end-to-end regression coverage. This document retains the original proposal. Current configuration, endpoints, and operator behavior are specified in the [User Guide](../USER-GUIDE.md), [OpenAPI](../openapi.yaml), and [configuration schema](../config.schema.json).
+
 **Target Codebase:** `Warmplane/warmplane` (v0.32.0+)
 **Objective:** Replace high-friction Human-in-the-Loop (HITL) approval prompts for non-catastrophic mutations with an out-of-band, runtime-enforced Undo and Hold-Window architecture.
 
