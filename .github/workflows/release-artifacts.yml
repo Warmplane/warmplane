@@ -33,11 +33,11 @@ jobs:
             target: aarch64-unknown-linux-musl
             use_cross: true
             features: ""
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             use_cross: false
             features: "--features semantic-search"
-          - os: macos-14
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             use_cross: false
             features: "--features semantic-search"
