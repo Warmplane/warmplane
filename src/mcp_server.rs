@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-18
 //! MCP server facade interface exposing compact tools/resources/prompts endpoints.
 //!
 //! Provides two server transports:
@@ -18,7 +18,7 @@ use rmcp::{
         GetPromptRequestParams, GetPromptResponse, GetPromptResult, ListResourcesResult,
         ListToolsResult, Prompt, PromptListChangedNotification, ReadResourceRequestParams,
         ReadResourceResponse, ReadResourceResult, Resource, ResourceListChangedNotification,
-        ServerCapabilities, ServerInfo, Tool, ToolListChangedNotification,
+        ServerCapabilities, ServerConfig as McpServerConfig, Tool, ToolListChangedNotification,
     },
     transport::{
         stdio,
@@ -84,8 +84,8 @@ impl FacadeMcpServer {
 }
 
 impl ServerHandler for FacadeMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::default();
+    fn get_info(&self) -> McpServerConfig {
+        let mut info = McpServerConfig::default();
         info.capabilities = ServerCapabilities::builder()
             .enable_tools()
             .enable_tool_list_changed()

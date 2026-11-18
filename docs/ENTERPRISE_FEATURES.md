@@ -4,6 +4,16 @@ This document outlines high-value enterprise features designed to establish Warm
 
 ---
 
+## Implemented undo controls
+
+Capability aliases support delayable, reversible, compensable, and irreversible execution contracts. Delayable actions can be cancelled before dispatch. Reversible and compensable calls register persisted inverses for authorized operators, with optional drift checks and compensable daily limits. Snapshot and drift-check capabilities must be allowed without approval.
+
+Operators configure contracts in the Alias Studio and inspect or execute them through the paginated Action Feed, REST, CLI, and embedded Rust APIs. Work-item rollback runs eligible entries in reverse order. Undo outcomes enter the hash-chained audit trail, and forced expiry requires dedicated authorization and a recorded reason. Contract testing runs against a dedicated test server.
+
+See the [User Guide](USER-GUIDE.md#evaluation-rules) for current configuration and operational behavior. The remaining sections retain the enterprise roadmap context.
+
+---
+
 ## 1. Executive Summary
 
 As enterprises deploy autonomous agents in production environments, unmanaged MCP connectivity introduces significant operational, compliance, and security risks. Warmplane bridges local execution performance with centralized enterprise governance.

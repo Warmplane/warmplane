@@ -377,9 +377,11 @@ The `policy` block enforces global security boundaries, human approval gates, an
 - **Snapshot and Inverse Templates**: Template strings support `${args.path}`, `${result.path}`, and `${snapshot.path}`. An exact placeholder preserves the referenced JSON type; embedded placeholders are rendered as strings. A configured `preSnapshot` runs before the forward call and may select a JSONPath with `captureJsonPath`. Snapshot JSON is stored by SHA-256 content hash under the state directory. `inverse` supplies the compensating capability and arguments.
 - **Undo Contract Testing**: Set `testTarget.server` to a dedicated test MCP server that exposes the same tool names and `testTarget.args` to fixed safe test inputs. The `preSnapshot` is required so Warmplane can compare the final observed state with the original snapshot. Run `warmplane undo test <alias>` or use **Test undo contract** in the Playground. The test command sends both forward and inverse calls only to the configured test server and reports the result without returning state or tool output values.
 - **Drift Protection**: Optional `preUndoCheck` uses the same read contract shape as `preSnapshot`. Warmplane captures the expected post-execution state hash when it registers the inverse, then rereads the state immediately before undo. A mismatch returns `UNDO_STATE_DRIFT`, leaves the entry armed, and does not dispatch the inverse.
+- **Shared Operator State**: Connect agents to the daemon MCP HTTP `/mcp` endpoint when using the Action Feed or operator REST/CLI controls for their actions. A separately launched stdio process owns its own runtime ledger and event bus. Sharing a state directory between processes does not synchronize their live state.
 - **Operator Undo**: `GET /v1/undo` lists tenant-owned entries; `GET /v1/undo/{undo_id}` shows a safe summary; `POST /v1/undo/{undo_id}/execute` runs one inverse; and `POST /v1/undo/work-items/{work_item_id}/rollback` runs eligible entries in reverse order. Responses omit inverse arguments and snapshot contents. Cross-tenant IDs return `404`. With RBAC enabled, configure `undoPermissions` (`list`, `execute`, `rollback`, `forceExpired`) per role. Every expiry override requires the dedicated `forceExpired` permission on the caller's role, `forceExpired: true`, and a non-empty `reason`; the reason is recorded in the audit event. The CLI exposes the same operations under `warmplane undo list|show|run|rollback`; `WARMPLANE_OPERATOR_TOKEN` supplies a bearer token when needed.
 - **Action Feed and ChatOps**: The Control Deck Action Feed shows undo history in pages of 50 with Previous/Next controls and a total count. Live refreshes retain the selected page. Work-item rollback applies to all eligible entries in that work item, including entries on other pages. Held-send cards remain visible independently of undo pagination. The feed refreshes tenant-scoped undo and delayable task lists when it receives `action_capsule` SSE invalidations. Cards show provenance, capability, safe inverse field names, and expiry without snapshot values or inverse arguments. ChatOps action events are opt-in: list `undo.action_available` and/or `emission.held` in `policy.webhook.events`, and configure `secret`/`secretEnv`, `callbackUrl`, and `actionRole`. The configured callback host is accepted only on `/v1/webhooks/actions`; all other routes keep loopback-only Host validation. Buttons carry a token bound to one action, target, tenant, role, and expiry. `/v1/webhooks/actions` acknowledges a valid callback immediately and runs the action in the background; inspect the Action Feed for its resulting state. Force-expired execution is not supported. With RBAC enabled, `actionRole` must have `undoPermissions.execute`.
 - **MCP Agent Self-Undo**: The `undo_execute` tool is hidden and rejected unless the caller's RBAC role sets `allowAgentSelfUndo: true`. When a profile is active, that profile must also set `allowAgentSelfUndo: true`. It accepts an explicit `undo_id` or a `work_item_id` to execute that work item's newest armed inverse. The tool does not accept inverse arguments or snapshot data.
+- **Undo Window and Recovery**: `ttlSecs` defaults to 3,600 seconds. Rollback orders entries newest first and breaks equal timestamps by reverse persisted registration order. Automatic rollback checks expiry at each claim. An inverse interrupted while `executing` remains unavailable for automatic redispatch because its upstream outcome may be unknown. Inspect upstream state and the audit trail before reconciliation.
 - **Compensable Daily Limit**: `dailyLimit` is required for `compensable` contracts and counts invocations over a rolling 24-hour period per tenant, profile, and capability. Once reached, Warmplane routes the invocation through the existing human approval flow.
 - **Reversibility Example**:
 
@@ -1024,6 +1026,10 @@ All HTTP API endpoints return standard JSON response envelopes.
 | `GET` | `/v1/approvals/:id` | Get details and sanitized parameters for an approval ticket. | No |
 | `POST` | `/v1/approvals/:id/approve` | Approve a pending capability execution. | No |
 | `POST` | `/v1/approvals/:id/reject` | Reject a pending capability execution. | No |
+| `GET` | `/v1/undo` | List tenant-owned undo summaries with filters and pagination. | No |
+| `GET` | `/v1/undo/:undo_id` | Inspect one tenant-owned undo summary. | No |
+| `POST` | `/v1/undo/:undo_id/execute` | Execute one inverse and return its audit receipt. | No |
+| `POST` | `/v1/undo/work-items/:work_item_id/rollback` | Roll back the entire work item in reverse order. | No |
 | `POST` | `/v1/undo/test` | Test an inverse contract against its configured test server. | No |
 | `POST` | `/v1/webhooks/actions` | Apply a single-target signed ChatOps Undo or Cancel Send action. | No |
 | `GET` | `/v1/audit/events` | List paginated audit events with filters (`start_time`, `actor_id`, `status`, etc.). | No |
@@ -1365,7 +1371,11 @@ The Control Deck is an embedded, zero-dependency management dashboard served at 
    - Visual allow/deny list rule builder and sensitive payload key redaction management.
 5. **Alias Registry (`#aliases`)**:
    - Capability, resource, and prompt alias mappings for LLM token optimization.
-6. **WORM Audit Log (`#audit`)**:
+   - Tool contract editing for all reversibility classes, keyboard capability suggestions, field validation, retained drafts, and **Test saved contract**.
+   - Alias drafts survive live refreshes and tab switches for the page session.
+6. **Action Feed & Undo (`#undo`)**:
+   - Undo history in pages of 50, held sends, single-action undo, and whole-work-item rollback.
+7. **WORM Audit Log (`#audit`)**:
    - Paginated tamper-evident audit viewer with 1-click cryptographic SHA-256 hash chain verification and export (`JSONL`/`CSV`).
 
 ### 7.2 Health Probes

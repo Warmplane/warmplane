@@ -117,6 +117,13 @@ interface RollbackResult {
   capability: string;
   ok: boolean;
   error: string | null;
+  error_code?: string;
+  output?: unknown;
+  audit_event_id?: string;
+  audit_hash?: string;
+  audit_error?: string;
+  forced_expired: boolean;
+  entry_status?: "armed" | "executing" | "reverted" | "expired" | "failed";
 }
 
 /** Result envelope for a batch call. */
@@ -488,9 +495,13 @@ Task status can be polled with `GET /v1/tasks/{taskId}`. Cancellation can also u
 
 The daemon provides `GET /v1/undo`, `GET /v1/undo/{undo_id}`, `POST /v1/undo/{undo_id}/execute`, and `POST /v1/undo/work-items/{work_item_id}/rollback`. Configure per-role `undoPermissions` in RBAC. Entry summaries may include filtered inverse field names, but omit inverse arguments and snapshot contents; cross-tenant entry IDs return `404`. Setting `forceExpired: true` additionally requires the `forceExpired` permission and a non-empty `reason`; successful execution returns the committed audit event ID and hash.
 
-`GET /v1/resources/updates` also emits named `action_capsule` invalidations with only `{ "refresh": true }`; fetch `/v1/undo` and `/v1/tasks` to update the current tenant's feed. Optional `preUndoCheck` blocks inverse dispatch when the upstream state hash has drifted. ChatOps cards are opt-in through `policy.webhook.events` and submit a target-scoped action token to `/v1/webhooks/actions`; force-expired undo is unavailable through that route.
+`GET /v1/resources/updates` also emits named `action_capsule` invalidations with only `{ "refresh": true }`; fetch `/v1/undo` and `/v1/tasks` to update the current tenant's feed. Internal snapshot and drift-check capabilities must be allowed without approval. A pre-snapshot policy failure prevents the forward call, a post-state capture failure reports inverse registration failure after the effect, and a blocked pre-undo check leaves the entry armed. Optional `preUndoCheck` blocks inverse dispatch when the upstream state hash has drifted. ChatOps cards are opt-in through `policy.webhook.events` and submit a target-scoped action token to `/v1/webhooks/actions`; force-expired undo is unavailable through that route.
 
 `POST /v1/undo/test` accepts `{ "alias": "..." }` for an alias configured with `testTarget.server`, fixed `testTarget.args`, and `preSnapshot`. It runs the cycle against that test server and returns whether the observed state matched its original snapshot, without returning snapshot or tool output values.
+
+Lists use `GET /v1/undo?offset=0&limit=50` and return `{ok, result: {entries, total, offset, limit}}`. The maximum page size is 200. The Action Feed displays pages of 50 and retains the selected page on refresh. Work-item rollback covers eligible entries across pages, with reverse registration order breaking equal creation timestamps. Automatic rollback rechecks expiry at each claim.
+
+ChatOps callbacks acknowledge valid tokens immediately and execute in the background. Inspect the entry or task afterward for completion and drift failures.
 
 ### Configure Alias Reversibility
 

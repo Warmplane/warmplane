@@ -13,6 +13,9 @@ permissions:
   actions: read
   security-events: write
 
+env:
+  SLOP_GATE_VERSION: v0.7.2
+
 jobs:
   index-main:
     if: github.event_name == 'push'
@@ -25,8 +28,12 @@ jobs:
 
       - name: Install slop-gate
         run: |
-          SLOP_GATE_VERSION="v0.3.3"
-          curl -sSLf "https://github.com/mrorigo/slop-gate/releases/download/${SLOP_GATE_VERSION}/slop-gate-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C /usr/local/bin
+          set -euo pipefail
+          archive="slop-gate-x86_64-unknown-linux-gnu.tar.gz"
+          curl -sSLf "https://github.com/mrorigo/slop-gate/releases/download/${SLOP_GATE_VERSION}/${archive}" -o "${archive}"
+          echo "f4e4d2823ec5b8fc554cbec5391854ef4a629f3a163455f4f46ccea2553d83ed  ${archive}" | sha256sum --check
+          tar -xzf "${archive}" -C /usr/local/bin
+          rm "${archive}"
           slop-gate --version
 
       - name: Build baseline index
@@ -36,7 +43,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .slop-gate/index.json
-          key: slop-gate-index-${{ github.sha }}
+          key: slop-gate-index-${{ env.SLOP_GATE_VERSION }}-${{ hashFiles('.slop-gate.toml') }}-${{ github.sha }}
 
   check-pr:
     if: github.event_name == 'pull_request'
@@ -49,8 +56,12 @@ jobs:
 
       - name: Install slop-gate
         run: |
-          SLOP_GATE_VERSION="v0.3.3"
-          curl -sSLf "https://github.com/mrorigo/slop-gate/releases/download/${SLOP_GATE_VERSION}/slop-gate-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C /usr/local/bin
+          set -euo pipefail
+          archive="slop-gate-x86_64-unknown-linux-gnu.tar.gz"
+          curl -sSLf "https://github.com/mrorigo/slop-gate/releases/download/${SLOP_GATE_VERSION}/${archive}" -o "${archive}"
+          echo "f4e4d2823ec5b8fc554cbec5391854ef4a629f3a163455f4f46ccea2553d83ed  ${archive}" | sha256sum --check
+          tar -xzf "${archive}" -C /usr/local/bin
+          rm "${archive}"
           slop-gate --version
 
       - name: Restore baseline index
@@ -58,7 +69,7 @@ jobs:
         id: restore-index
         with:
           path: .slop-gate/index.json
-          key: slop-gate-index-${{ github.event.pull_request.base.sha }}
+          key: slop-gate-index-${{ env.SLOP_GATE_VERSION }}-${{ hashFiles('.slop-gate.toml') }}-${{ github.event.pull_request.base.sha }}
 
       - name: Build missing baseline index
         if: steps.restore-index.outputs.cache-hit != 'true'

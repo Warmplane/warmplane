@@ -288,14 +288,18 @@
         },
         {
           "if": { "properties": { "class": { "enum": ["delayable", "irreversible"] } }, "required": ["class"] },
-          "then": { "not": { "anyOf": [{ "required": ["preSnapshot"] }, { "required": ["preUndoCheck"] }, { "required": ["inverse"] }, { "required": ["ttlSecs"] }] } }
+          "then": { "not": { "anyOf": [{ "required": ["preSnapshot"] }, { "required": ["preUndoCheck"] }, { "required": ["inverse"] }, { "required": ["ttlSecs"] }, { "required": ["testTarget"] }] } }
+        },
+        {
+          "if": { "required": ["testTarget"] },
+          "then": { "required": ["preSnapshot"] }
         }
       ],
       "required": ["class"],
       "properties": {
         "class": { "enum": ["delayable", "reversible", "compensable", "irreversible"] },
         "holdWindowSecs": { "type": "integer", "minimum": 1 },
-        "ttlSecs": { "type": "integer", "minimum": 1 },
+        "ttlSecs": { "type": "integer", "minimum": 1, "default": 3600 },
         "dailyLimit": { "type": "integer", "minimum": 1 },
         "preSnapshot": {
           "type": "object",
