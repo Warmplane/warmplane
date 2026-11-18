@@ -6,7 +6,7 @@
 
 > **The local control plane that keeps Model Context Protocol (MCP) sessions warm with compact capability facades, policy governance, and deterministic execution.**
 > 
-> v0.32.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.33.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 ---
 
@@ -221,9 +221,10 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 ## 🛡️ Core Capabilities Matrix
 
 | Capability | Since | Description |
-| **Bounded Credential Lifetimes & Task Timeout Correctness** | v0.31.0 | Mandatory JWT `exp` enforcement, UTF-8 safe credential handling, sub-second task TTL fix, and rustls 0.23.45 security bump |
-| **Credential, Approval & Policy Boundary Enforcement** | v0.32.0 | Secret redaction for RBAC tokens and server env, fail-closed HITL approval, required webhook signatures, and tenant policy on resource and prompt routes |
 |---|---|---|
+| **Undo, Cancellation & Work-Item Rollback** | v0.33.0 | Opt-in cancellation holds, snapshot and inverse contracts, drift checks, operator undo, and reverse-order rollback across REST, CLI, embedded Rust, and the Control Deck |
+| **Credential, Approval & Policy Boundary Enforcement** | v0.32.0 | Secret redaction for RBAC tokens and server env, fail-closed HITL approval, required webhook signatures, and tenant policy on resource and prompt routes |
+| **Bounded Credential Lifetimes & Task Timeout Correctness** | v0.31.0 | Mandatory JWT `exp` enforcement, UTF-8 safe credential handling, sub-second task TTL fix, and rustls 0.23.45 security bump |
 | **Due-Diligence Security Hardening & Resilience** | v0.30.0 | Constant-time bearer token comparisons, JWT `iss`/`aud`/`nbf` validation, safe client IP extraction, fsync'd audit durability, and race-free state storage |
 | **Configurable MCP Protocol Versions & HTTP Client Attach** | v0.29.0 | Configurable `supportedProtocolVersions`, HTTP transport choice for 1-click client installs, SSRF webhook allowlist, and path traversal guards |
 | **Real-Time MCP `list_changed` & Passthrough Tools** | v0.28.0 | Real-time tool/resource/prompt list change notifications, SEP-1319 `_meta` discovery hints, top-level native tool passthrough, and WORM mutation audit logging |
@@ -255,14 +256,17 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 
 ## Changelog
 
-### Unreleased — Undo and cancellation controls
+### v0.33.0 — Undo, Cancellation & Work-Item Rollback
 
-- Configure delayable, reversible, compensable, and irreversible capability contracts.
-- Capture snapshots, block undo on state drift, and roll back failed batches or entire work items.
-- Operate undo through REST, CLI, embedded Rust, and the Control Deck Action Feed.
-- Edit contracts in the Alias Studio and test them against a dedicated MCP test server.
-- Send signed ChatOps action cards and record undo outcomes in the hash-chained audit log.
+- **Cancellation holds:** Opt-in delayable aliases hold approved calls before upstream submission. Cancel through the operator UI, task API, or operation API. With task persistence enabled, pending holds survive restart and revalidate authorization before release; interrupted dispatches are not automatically resent.
+- **Configured inverses:** Reversible and compensable aliases can capture pre-state, register inverse argument templates, and enforce undo windows. Optional drift checks block an inverse when the observed upstream state changes. Compensable daily limits route excess calls through human approval.
+- **Batch and work-item rollback:** Roll back eligible entries in reverse order, or opt into automatic rollback after a batch failure. Each inverse still passes current tenant, profile, policy, expiry, and applicable approval checks; outcomes remain available per entry.
+- **Operator and agent interfaces:** List, inspect, execute, and roll back undo entries through REST, the CLI, embedded Rust, and the paginated Control Deck Action Feed. MCP agent self-undo requires explicit role and active-profile opt-in. Signed ChatOps Undo and Cancel Send cards are available through configured action events.
+- **Full UI contract configuration:** Configure delayable, reversible, compensable, and irreversible contracts in Facade & Alias Studio, with capability autocomplete, JSON template validation, and draft preservation. Test saved contracts against a dedicated MCP test server with fixed inputs before using them on live state.
+- **Security and reliability:** Hardened atomic state saves with owned temporary files and Unix file permissions; updated MCP and vulnerable transitive dependencies. Fixed UTF-8 truncation in CLI and result formatting, escaped schema values in the Playground, and bounded stdio restart handshakes.
+- **Documentation and maintenance:** Updated user and integrator guides, configuration schema, OpenAPI, and agent skill. Added an interactive undo landing-page showcase, consolidated shared execution and UI logic, and cleared repository-wide Slop Gate findings under the existing policy.
 
+Undo is opt-in per capability alias. Existing aliases keep their current behavior until a reversibility contract is configured. Snapshot and drift-check reads must be permitted without approval. To share live undo state with the operator UI, connect agents to the daemon's `/mcp` endpoint with `mcpHttpServer` enabled; a separate stdio process owns a separate runtime. See the [operator guide](docs/USER-GUIDE.md#evaluation-rules) for configuration, permissions, persistence, and compensation limits.
 
 ### v0.32.0 — Credential, Approval & Policy Boundary Enforcement
 - **Static RBAC Tokens, Profile Secrets & Server Env Are Redacted (`src/config.rs`):** `McpConfig::sanitize_secrets` is the redaction pass applied by `GET /v1/config` and `warmplane config show`. It skipped three fields that carry live credentials. Static RBAC tokens leak worst, because that map is keyed by the secret itself, so reading the config returned every bearer token in the deployment including higher-privilege ones. Per-profile `policy.webhook` secrets and auth headers were skipped the same way, and server `env` blocks are now redacted wholesale since an environment block has no name convention to filter on.
