@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-18
+// Rust guideline compliant 2026-11-18
 
 //! Comprehensive end-to-end integration tests for Warmplane (`M-CANONICAL-DOCS`).
 //!
@@ -659,4 +659,307 @@ async fn test_e2e_server_restart_endpoint() {
     assert_eq!(res_json["server_id"], "restart_test_srv");
 
     server_task.abort();
+}
+
+// This fixture runs in a separate test process so MCP owns real stdin/stdout while the
+// operator HTTP listener shares exactly the same ledger, event bus, and audit worker.
+#[tokio::test]
+#[ignore = "subprocess fixture invoked by test_e2e_undo_stdio_to_signed_callback"]
+async fn undo_lifecycle_fixture() {
+    use rmcp::ServiceExt;
+    use warmplane::{
+        audit::AuditStore,
+        daemon::{AppState, CapabilityMeta, ServerMsg},
+        mcp_server::FacadeMcpServer,
+        undo::{SnapshotStore, UndoLedgerStore},
+    };
+
+    let Ok(directory) = std::env::var("WARMPLANE_UNDO_E2E_DIRECTORY") else {
+        return;
+    };
+    let directory = std::path::PathBuf::from(directory);
+    let config =
+        warmplane::config::load_config(directory.join("config.json").to_string_lossy()).unwrap();
+    let mut forward = CapabilityMeta::new(
+        "mock",
+        "set",
+        "Set priority",
+        "Set priority",
+        json!({"type":"object"}),
+    );
+    forward.reversibility = config.capability_aliases["set-priority"]
+        .reversibility()
+        .cloned();
+    let read = CapabilityMeta::new(
+        "mock",
+        "read",
+        "Read priority",
+        "Read priority",
+        json!({"type":"object"}),
+    );
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+    let state = AppState::builder()
+        .config_path(directory.join("config.json").to_string_lossy().into_owned())
+        .servers(HashMap::from([("mock".to_string(), sender)]))
+        .capabilities(HashMap::from([
+            ("mock.set".to_string(), forward),
+            ("mock.read".to_string(), read),
+        ]))
+        .snapshot_store(SnapshotStore::open(directory.join("artifacts")).unwrap())
+        .undo_ledger(UndoLedgerStore::open(directory.join("undo.json")).unwrap())
+        .audit_store(Arc::new(
+            AuditStore::open_or_create(directory.join("audit.jsonl")).unwrap(),
+        ))
+        .build();
+    let upstream_directory = directory.clone();
+    let upstream = tokio::spawn(async move {
+        let mut priority = json!("low");
+        let mut calls = Vec::new();
+        while let Some(message) = receiver.recv().await {
+            if let ServerMsg::CallTool {
+                name,
+                params,
+                reply,
+                ..
+            } = message
+            {
+                calls.push(json!({"name":name,"args":params}));
+                let output = if name == "read" {
+                    json!({"priority":priority})
+                } else {
+                    priority = params["priority"].clone();
+                    json!({"ok":true})
+                };
+                std::fs::write(
+                    upstream_directory.join("upstream.json"),
+                    json!({"priority":priority,"calls":calls}).to_string(),
+                )
+                .unwrap();
+                let _ = reply.send(Ok(output));
+            }
+        }
+    });
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    std::fs::write(
+        directory.join("port"),
+        listener.local_addr().unwrap().port().to_string(),
+    )
+    .unwrap();
+    let app = build_router(state.clone());
+    let http = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let server = FacadeMcpServer::new(state.clone(), None)
+        .serve(rmcp::transport::stdio())
+        .await
+        .unwrap();
+    server.waiting().await.unwrap();
+    state.audit_handle.shutdown().await;
+    http.abort();
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn test_e2e_undo_stdio_to_signed_callback() {
+    use warmplane::{
+        audit::{AuditEventType, AuditQueryFilter, AuditStore},
+        undo::SnapshotStore,
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let config: McpConfig = serde_json::from_value(json!({
+        "capabilityAliases":{"set-priority":{
+            "target":"mock.set",
+            "reversibility":{
+                "class":"reversible","ttlSecs":60,
+                "preSnapshot":{"capability":"mock.read","args":{},"captureJsonPath":"$.priority"},
+                "preUndoCheck":{"capability":"mock.read","args":{},"captureJsonPath":"$.priority"},
+                "inverse":{"capability":"mock.set","args":{"priority":"${snapshot}"}}
+            }
+        }},
+        "policy":{"webhook":{
+            "url":"http://127.0.0.1:1",
+            "secret":"e2e-action-secret",
+            "callbackUrl":"http://127.0.0.1/v1/webhooks/actions",
+            "actionRole":"operator",
+            "events":["undo.action_available"]
+        }}
+    }))
+    .unwrap();
+    save_config(
+        directory.path().join("config.json").to_string_lossy(),
+        &config,
+    )
+    .unwrap();
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--ignored",
+            "--exact",
+            "undo_lifecycle_fixture",
+            "--nocapture",
+        ])
+        .env("WARMPLANE_UNDO_E2E_DIRECTORY", directory.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let port = timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(port) = std::fs::read_to_string(directory.path().join("port")) {
+                break port;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("fixture HTTP listener should start");
+    let base = format!("http://127.0.0.1:{port}");
+    let client = reqwest::Client::new();
+    let mut events = client
+        .get(format!("{base}/v1/resources/updates"))
+        .send()
+        .await
+        .unwrap()
+        .bytes_stream();
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let stdin = child.stdin.as_mut().unwrap();
+    stdin.write_all(format!("{}\n",json!({
+        "jsonrpc":"2.0","id":1,"method":"initialize",
+        "params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"undo-e2e","version":"1"}}
+    })).as_bytes()).await.unwrap();
+    assert!(read_jsonrpc_until_id(&mut reader, 1).await["result"].is_object());
+    stdin.write_all(format!("{}\n{}\n",
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+            "name":"capability_call","arguments":{"capability_id":"mock.set","args":{"priority":"high"}}
+        }})
+    ).as_bytes()).await.unwrap();
+    let response = read_jsonrpc_until_id(&mut reader, 2).await;
+    assert!(response.get("error").is_none(), "{response}");
+    assert_ne!(response["result"]["isError"], true, "{response}");
+
+    timeout(Duration::from_secs(5), async {
+        let mut buffer = String::new();
+        while let Some(chunk) = events.next().await {
+            buffer.push_str(&String::from_utf8_lossy(&chunk.unwrap()));
+            if buffer.contains("event: action_capsule") && buffer.contains("\"refresh\":true") {
+                return;
+            }
+        }
+        panic!("SSE closed before action invalidation");
+    })
+    .await
+    .expect("forward call should emit action_capsule");
+    let listed: Value = client
+        .get(format!("{base}/v1/undo"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let entries = listed["result"]["entries"]
+        .as_array()
+        .expect("undo entries");
+    assert_eq!(entries.len(), 1);
+    let id = entries[0]["undo_id"].as_str().unwrap();
+    assert_eq!(entries[0]["status"], "armed");
+    let upstream = || -> Value {
+        serde_json::from_slice(&std::fs::read(directory.path().join("upstream.json")).unwrap())
+            .unwrap()
+    };
+    assert_eq!(upstream()["priority"], "high");
+    let ledger: Value =
+        serde_json::from_slice(&std::fs::read(directory.path().join("undo.json")).unwrap())
+            .unwrap();
+    assert!(ledger.to_string().contains(id));
+    let snapshots = SnapshotStore::open(directory.path().join("artifacts")).unwrap();
+    let hash = entries[0]["snapshot_artifact_hash"].as_str().unwrap();
+    assert_eq!(snapshots.get(hash).unwrap(), json!("low"));
+    let token = warmplane::chatops::sign_action_token(
+        "e2e-action-secret",
+        "undo",
+        id,
+        "default",
+        "operator",
+        entries[0]["expires_at_ms"].as_u64().unwrap(),
+    )
+    .unwrap();
+    let callback = format!("{base}/v1/webhooks/actions");
+    let invalid = client
+        .post(&callback)
+        .json(&json!({"action_token":format!("{token}x")}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::UNAUTHORIZED);
+    let calls_before = upstream()["calls"].as_array().unwrap().len();
+    assert_eq!(
+        upstream()["calls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|call| call["name"] == "set")
+            .count(),
+        1
+    );
+    let accepted = client
+        .post(&callback)
+        .json(&json!({"action_token":token}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), StatusCode::OK);
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let entry: Value = client
+                .get(format!("{base}/v1/undo/{id}"))
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            if entry["result"]["status"] == "reverted" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("background inverse should complete");
+    assert_eq!(upstream()["priority"], "low");
+    assert_eq!(
+        upstream()["calls"].as_array().unwrap().len(),
+        calls_before + 3
+    );
+    assert_eq!(
+        upstream()["calls"].as_array().unwrap().last().unwrap()["args"],
+        json!({"priority":"low"})
+    );
+    let replay = client
+        .post(&callback)
+        .json(&json!({"action_token":token}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::NOT_FOUND);
+    drop(child.stdin.take());
+    assert!(timeout(Duration::from_secs(5), child.wait())
+        .await
+        .unwrap()
+        .unwrap()
+        .success());
+    let store = AuditStore::open_or_create(directory.path().join("audit.jsonl")).unwrap();
+    let (audits, count) = store
+        .query(&AuditQueryFilter {
+            event_type: Some(AuditEventType::UndoExecuted),
+            limit: 10,
+            ..Default::default()
+        })
+        .await;
+    assert_eq!(count, 1);
+    assert!(!audits[0].hash.is_empty());
+    assert!(serde_json::to_string(&audits[0]).unwrap().contains(id));
+    assert!(store.verify_chain().await.is_valid);
 }
