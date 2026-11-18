@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-18
 //! Atomic filesystem storage engine for persistent application state.
 //!
 //! Provides thread-safe, crash-safe atomic JSON file persistence using temporary file
@@ -92,6 +92,10 @@ where
 
     /// Atomically saves data to disk by writing to a temporary file and renaming it.
     ///
+    /// Temporary files have independently generated names in the destination directory and are
+    /// automatically removed if writing or persistence fails. On Unix, saved files have mode
+    /// `0o600`, regardless of the destination filename.
+    ///
     /// # Arguments
     /// * `data` - Reference to data structure implementing `Serialize`.
     ///
@@ -112,90 +116,40 @@ where
         let json_bytes = serde_json::to_string_pretty(data)
             .context("Failed to serialize state data to JSON format")?;
 
-        let nonce: u64 = rand::random();
-        let tmp_path = self
-            .path
-            .with_extension(format!("tmp.{}.{}", std::process::id(), nonce));
-
-        let filename = self.path.file_name().and_then(|f| f.to_str()).unwrap_or("");
-        let private_file = filename.contains("oauth")
-            || filename.contains("secret")
-            || filename.contains("token")
-            || filename.contains("undo")
-            || filename.contains("artifact")
-            || filename.contains("task");
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        if private_file {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut tmp_file = options.open(&tmp_path).with_context(|| {
-            format!(
-                "Failed to create temporary state file at {}",
-                tmp_path.display()
-            )
-        })?;
-
-        #[cfg(not(unix))]
-        let _ = private_file;
-        let write_result = (|| -> Result<()> {
-            #[cfg(unix)]
-            if private_file {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600)).with_context(
-                    || {
-                        format!(
-                            "Failed to set private permissions on {}",
-                            tmp_path.display()
-                        )
-                    },
-                )?;
-            }
-            tmp_file
-                .write_all(format!("{}\n", json_bytes).as_bytes())
-                .with_context(|| {
-                    format!(
-                        "Failed to write temporary state file at {}",
-                        tmp_path.display()
-                    )
-                })?;
-            tmp_file.sync_all().with_context(|| {
-                format!(
-                    "Failed to sync temporary state file at {}",
-                    tmp_path.display()
-                )
-            })?;
-            Ok(())
-        })();
-        if let Err(error) = write_result {
-            drop(tmp_file);
-            let _ = fs::remove_file(&tmp_path);
-            return Err(error);
-        }
-        drop(tmp_file);
-
-        fs::rename(&tmp_path, &self.path).with_context(|| {
-            // Attempt cleanup of temp file if rename fails
-            let _ = fs::remove_file(&tmp_path);
-            format!(
-                "Failed to atomically replace target state file {} with {}",
-                self.path.display(),
-                tmp_path.display()
-            )
-        })?;
-
-        if let Some(parent) = self
+        let parent = self
             .path
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
-        {
-            #[cfg(unix)]
-            fs::File::open(parent)
-                .and_then(|directory| directory.sync_all())
-                .with_context(|| format!("Failed to sync state directory {}", parent.display()))?;
-        }
+            .unwrap_or_else(|| Path::new("."));
+        // Keep the temporary file beside the destination for an atomic rename. Its generated
+        // basename is independent of the configured target, and ownership handles cleanup.
+        let mut temporary = tempfile::NamedTempFile::new_in(parent).with_context(|| {
+            format!(
+                "Failed to create temporary state file in {}",
+                parent.display()
+            )
+        })?;
+        temporary
+            .write_all(format!("{}\n", json_bytes).as_bytes())
+            .context("Failed to write temporary state file")?;
+        temporary
+            .as_file()
+            .sync_all()
+            .context("Failed to sync temporary state file")?;
+        temporary
+            .persist(&self.path)
+            .map_err(|error| error.error)
+            .with_context(|| {
+                format!(
+                    "Failed to atomically replace state file {}",
+                    self.path.display()
+                )
+            })?;
+
+        #[cfg(unix)]
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .with_context(|| format!("Failed to sync state directory {}", parent.display()))?;
 
         debug!(path = %self.path.display(), "atomically saved persistent state");
         Ok(())
@@ -363,6 +317,61 @@ mod tests {
 
         let loaded_after_remove = store.load_or_default(default_state.clone()).unwrap();
         assert_eq!(loaded_after_remove, default_state);
+    }
+
+    #[test]
+    fn failed_atomic_replace_cleans_temporary_file_and_preserves_destination() {
+        let directory = tempdir().unwrap();
+        let destination = directory.path().join("occupied.json");
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("original"), b"unchanged").unwrap();
+        let store = AtomicFile::<SampleState>::new(&destination);
+        let error = store
+            .save(&SampleState {
+                counter: 1,
+                tags: vec![],
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("atomically replace"));
+        assert_eq!(
+            fs::read(destination.join("original")).unwrap(),
+            b"unchanged"
+        );
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_replace_keeps_arbitrary_filenames_private_and_replaces_symlinks() {
+        use std::os::unix::{fs::symlink, fs::PermissionsExt};
+
+        let directory = tempdir().unwrap();
+        let original = directory.path().join("outside.json");
+        fs::write(&original, b"untouched").unwrap();
+        let destination = directory.path().join("customer-state.json");
+        symlink(&original, &destination).unwrap();
+        let store = AtomicFile::<SampleState>::new(&destination);
+        let initial = SampleState {
+            counter: 1,
+            tags: vec!["first".to_string()],
+        };
+        store.save(&initial).unwrap();
+        assert_eq!(fs::read(&original).unwrap(), b"untouched");
+        assert!(!fs::symlink_metadata(&destination)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            fs::metadata(&destination).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let updated = SampleState {
+            counter: 2,
+            tags: vec![],
+        };
+        store.save(&updated).unwrap();
+        assert_eq!(store.load_opt().unwrap(), Some(updated));
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
     }
 
     #[test]

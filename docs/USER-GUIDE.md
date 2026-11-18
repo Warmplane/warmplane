@@ -414,7 +414,7 @@ The `policy` block enforces global security boundaries, human approval gates, an
     }
   }
   ```
-- **Crash-Safe Persistence**: Pending approval tickets and decisions are atomically stored to disk (`AtomicFile`), ensuring unexpired tickets and timeout schedules survive daemon restarts.
+- **Crash-Safe Persistence**: Atomic JSON state saves use independently named temporary files in the destination directory, clean up failed writes, and create files with Unix mode `0600` regardless of the filename. Pending approval tickets and decisions are atomically stored to disk (`AtomicFile`), ensuring unexpired tickets and timeout schedules survive daemon restarts.
 - **Default Permissiveness**: If `allow` is empty or omitted, all non-denied items are permitted.
 - **Data Redaction**: Fields matching keys in `redactKeys` are masked in logs, trace spans, and webhook payloads.
 - **Webhook HMAC Signing**: Outbound webhook requests are signed with HMAC-SHA256 in the `X-Warmplane-Signature-256` header using `secret` or `secretEnv`.
