@@ -492,6 +492,38 @@ The daemon provides `GET /v1/undo`, `GET /v1/undo/{undo_id}`, `POST /v1/undo/{un
 
 `POST /v1/undo/test` accepts `{ "alias": "..." }` for an alias configured with `testTarget.server`, fixed `testTarget.args`, and `preSnapshot`. It runs the cycle against that test server and returns whether the observed state matched its original snapshot, without returning snapshot or tool output values.
 
+### Configure Alias Reversibility
+
+Reversibility contracts are attached to capability aliases. They can be edited in the Control Deck's **Facade & Alias Studio** or through `POST /v1/config/alias`:
+
+```json
+{
+  "kind": "tool",
+  "alias": "issue.update",
+  "target": "issues.update",
+  "reversibility": {
+    "class": "reversible",
+    "ttlSecs": 86400,
+    "preSnapshot": {
+      "capability": "issues.read",
+      "args": {"id": "${args.id}"},
+      "captureJsonPath": "$.priority"
+    },
+    "preUndoCheck": {
+      "capability": "issues.read",
+      "args": {"id": "${args.id}"},
+      "captureJsonPath": "$.priority"
+    },
+    "inverse": {
+      "capability": "issues.update",
+      "args": {"id": "${args.id}", "priority": "${snapshot}"}
+    }
+  }
+}
+```
+
+When updating an existing alias, omitting `reversibility` preserves its current contract; sending `"reversibility": null` removes it. The daemon validates class-specific fields and argument object shapes before saving.
+
 If task persistence is disabled, held emissions remain in memory and are lost when the daemon exits. Configure persistent state to recover them after restart.
 
 ### 3. Context distillation — limit large outputs

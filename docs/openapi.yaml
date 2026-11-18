@@ -1334,6 +1334,129 @@ components:
           type: string
         target:
           type: [string, "null"]
+          description: Canonical target. Omit or set null to remove the alias.
+        summary:
+          type: [string, "null"]
+        description:
+          type: [string, "null"]
+        passthrough:
+          type: [boolean, "null"]
+        reversibility:
+          description: Omitted preserves the existing capability contract; null clears it; an object replaces it.
+          oneOf:
+            - $ref: "#/components/schemas/ReversibilityConfig"
+            - type: "null"
+    ReversibilityConfig:
+      type: object
+      required: [class]
+      properties:
+        class:
+          type: string
+          enum: [delayable, reversible, compensable, irreversible]
+        holdWindowSecs:
+          type: integer
+          minimum: 1
+          description: Delayable hold duration in seconds.
+        ttlSecs:
+          type: integer
+          minimum: 1
+          description: Lifetime of a registered undo action in seconds.
+        dailyLimit:
+          type: integer
+          minimum: 1
+          description: Required rolling daily limit for compensable calls.
+        preSnapshot:
+          $ref: "#/components/schemas/UndoReadConfig"
+        preUndoCheck:
+          $ref: "#/components/schemas/UndoReadConfig"
+        testTarget:
+          type: object
+          required: [server, args]
+          properties:
+            server:
+              type: string
+              minLength: 1
+            args:
+              type: object
+          additionalProperties: false
+        inverse:
+          $ref: "#/components/schemas/UndoInverseConfig"
+      allOf:
+        - if:
+            properties:
+              class: { enum: [reversible, compensable] }
+            required: [class]
+          then:
+            required: [inverse]
+        - if:
+            properties:
+              class: { const: compensable }
+            required: [class]
+          then:
+            required: [dailyLimit]
+        - if:
+            properties:
+              class: { not: { const: delayable } }
+            required: [class]
+          then:
+            not: { required: [holdWindowSecs] }
+        - if:
+            properties:
+              class: { not: { const: compensable } }
+            required: [class]
+          then:
+            not: { required: [dailyLimit] }
+        - if:
+            properties:
+              class: { enum: [delayable, irreversible] }
+            required: [class]
+          then:
+            not:
+              anyOf:
+                - { required: [ttlSecs] }
+                - { required: [preSnapshot] }
+                - { required: [preUndoCheck] }
+                - { required: [testTarget] }
+                - { required: [inverse] }
+        - if:
+            properties:
+              class: { not: { enum: [reversible, compensable] } }
+            required: [class]
+          then:
+            not:
+              anyOf:
+                - { required: [ttlSecs] }
+                - { required: [preSnapshot] }
+                - { required: [preUndoCheck] }
+                - { required: [testTarget] }
+                - { required: [inverse] }
+        - if:
+            required: [testTarget]
+          then:
+            required: [preSnapshot]
+      additionalProperties: false
+    UndoReadConfig:
+      type: object
+      required: [capability, args]
+      properties:
+        capability:
+          type: string
+          minLength: 1
+        args:
+          type: object
+        captureJsonPath:
+          type: string
+      additionalProperties: false
+    UndoInverseConfig:
+      type: object
+      required: [capability, args]
+      properties:
+        capability:
+          type: string
+          minLength: 1
+        args:
+          type: object
+      additionalProperties: false
     WebhookConfig:
       type: object
       required: [url]

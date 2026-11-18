@@ -351,15 +351,41 @@ export interface ProfileConfig {
   policy?: PolicyConfig;
 }
 
+export type ReversibilityClass = 'delayable' | 'reversible' | 'compensable' | 'irreversible';
+
+export interface UndoReadConfig {
+  capability: string;
+  args: Record<string, unknown>;
+  captureJsonPath?: string;
+}
+
+export interface UndoInverseConfig {
+  capability: string;
+  args: Record<string, unknown>;
+}
+
+export interface UndoTestTargetConfig {
+  server: string;
+  args: Record<string, unknown>;
+}
+
+export interface ReversibilityConfig {
+  class: ReversibilityClass;
+  holdWindowSecs?: number;
+  ttlSecs?: number;
+  dailyLimit?: number;
+  preSnapshot?: UndoReadConfig;
+  preUndoCheck?: UndoReadConfig;
+  testTarget?: UndoTestTargetConfig;
+  inverse?: UndoInverseConfig;
+}
+
 export type AliasTargetType = string | {
   target: string;
   summary?: string;
   description?: string;
   passthrough?: boolean;
-  reversibility?: {
-    class: string;
-    testTarget?: { server: string; args?: Record<string, any> };
-  };
+  reversibility?: ReversibilityConfig;
 };
 
 export interface McpConfig {
@@ -690,11 +716,19 @@ export class WarmplaneClient {
     return res.json();
   }
 
-  async updateAlias(kind: string, alias: string, target?: string, summary?: string, description?: string, passthrough?: boolean): Promise<{ ok: boolean; error?: string }> {
+  async updateAlias(
+    kind: string,
+    alias: string,
+    target?: string,
+    summary?: string,
+    description?: string,
+    passthrough?: boolean,
+    reversibility?: ReversibilityConfig | null,
+  ): Promise<{ ok: boolean; error?: string }> {
     const res = await fetch(`${this.baseUrl}/v1/config/alias`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind, alias, target, summary, description, passthrough })
+      body: JSON.stringify({ kind, alias, target, summary, description, passthrough, reversibility })
     });
     return res.json();
   }

@@ -482,7 +482,7 @@ enum UndoExecutionTarget {
 }
 
 enum UndoExecutionResponse {
-    Entry(RollbackResult),
+    Entry(Box<RollbackResult>),
     WorkItem(Vec<RollbackResult>),
 }
 
@@ -502,7 +502,7 @@ async fn execute_undo_http(
                 request.reason.as_deref(),
             )
             .await
-            .map(UndoExecutionResponse::Entry),
+            .map(|result| UndoExecutionResponse::Entry(Box::new(result))),
         UndoExecutionTarget::WorkItem(work_item_id) => handle
             .rollback_work_item(
                 &work_item_id,

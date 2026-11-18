@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-17
 
 //! Comprehensive unit and integration test suite for HTTP v1 facade API handlers.
 
@@ -14,15 +14,15 @@ use crate::{
         },
         config_api::{
             handle_delete_profile, handle_get_config, handle_get_ecosystem_sources,
-            handle_reload_config, handle_upsert_profile, handle_upsert_server,
+            handle_reload_config, handle_update_alias, handle_upsert_profile, handle_upsert_server,
         },
         execute::handle_call_capability,
         helpers::redact_value,
         types::{
             ApproveTicketRequest, CallCapabilityRequest, CatalogEventsQuery, CompletionRequest,
             GetPromptRequest, ReadResourceRequest, RejectTicketRequest, RespondSamplingRequest,
-            SamplingListQuery, SamplingRequest, SearchCapabilitiesRequest, UpsertProfileRequest,
-            UpsertServerRequest,
+            ReversibilityUpdate, SamplingListQuery, SamplingRequest, SearchCapabilitiesRequest,
+            UpdateAliasRequest, UpsertProfileRequest, UpsertServerRequest,
         },
         ui::handle_ui_dashboard,
     },
@@ -992,6 +992,176 @@ async fn test_ui_and_config_rest_api() {
     assert_eq!(reload_res.status(), StatusCode::OK);
 
     let _ = std::fs::remove_dir_all(temp_dir);
+}
+
+#[tokio::test]
+async fn capability_alias_reversibility_can_be_saved_preserved_and_cleared() {
+    use crate::config::{
+        InverseConfig, PreSnapshotConfig, ReversibilityClass, ReversibilityConfig,
+        UndoTestTargetConfig,
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.json");
+    let config_path = config_path.to_string_lossy().into_owned();
+    let state = AppState::builder().config_path(config_path.clone()).build();
+    let contract = ReversibilityConfig {
+        class: ReversibilityClass::Reversible,
+        hold_window_secs: None,
+        ttl_secs: Some(3_600),
+        daily_limit: None,
+        pre_snapshot: Some(Box::new(PreSnapshotConfig {
+            capability: "issues.read".to_string(),
+            args: json!({"id": "${args.id}"}),
+            capture_json_path: Some("$.priority".to_string()),
+        })),
+        pre_undo_check: Some(Box::new(PreSnapshotConfig {
+            capability: "issues.read".to_string(),
+            args: json!({"id": "${args.id}"}),
+            capture_json_path: Some("$.priority".to_string()),
+        })),
+        test_target: Some(Box::new(UndoTestTargetConfig {
+            server: "issues-test".to_string(),
+            args: json!({"id": "TEST-1"}),
+        })),
+        inverse: Some(Box::new(InverseConfig {
+            capability: "issues.update".to_string(),
+            args: json!({"id": "${args.id}", "priority": "${snapshot}"}),
+        })),
+    };
+
+    let create = handle_update_alias(
+        State(state.clone()),
+        Json(UpdateAliasRequest {
+            kind: "tool".to_string(),
+            alias: "issue.update".to_string(),
+            target: Some("issues.update".to_string()),
+            summary: None,
+            description: None,
+            passthrough: None,
+            reversibility: ReversibilityUpdate::Set(contract.clone()),
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(create.status(), StatusCode::OK);
+    let saved = crate::config::load_or_default_config(&config_path).unwrap();
+    assert_eq!(
+        saved.capability_aliases["issue.update"].reversibility(),
+        Some(&contract)
+    );
+
+    let edit_without_contract = handle_update_alias(
+        State(state.clone()),
+        Json(UpdateAliasRequest {
+            kind: "tool".to_string(),
+            alias: "issue.update".to_string(),
+            target: Some("issues.update_v2".to_string()),
+            summary: Some("Update an issue".to_string()),
+            description: None,
+            passthrough: None,
+            reversibility: ReversibilityUpdate::Preserve,
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(edit_without_contract.status(), StatusCode::OK);
+    let saved = crate::config::load_or_default_config(&config_path).unwrap();
+    assert_eq!(
+        saved.capability_aliases["issue.update"].reversibility(),
+        Some(&contract)
+    );
+
+    let clear = handle_update_alias(
+        State(state.clone()),
+        Json(UpdateAliasRequest {
+            kind: "tool".to_string(),
+            alias: "issue.update".to_string(),
+            target: Some("issues.update_v2".to_string()),
+            summary: None,
+            description: None,
+            passthrough: None,
+            reversibility: ReversibilityUpdate::Clear,
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(clear.status(), StatusCode::OK);
+    let saved = crate::config::load_or_default_config(&config_path).unwrap();
+    assert_eq!(
+        saved.capability_aliases["issue.update"].reversibility(),
+        None
+    );
+
+    let invalid_contract = ReversibilityConfig {
+        class: ReversibilityClass::Reversible,
+        hold_window_secs: None,
+        ttl_secs: None,
+        daily_limit: None,
+        pre_snapshot: None,
+        pre_undo_check: None,
+        test_target: None,
+        inverse: None,
+    };
+    let invalid = handle_update_alias(
+        State(state),
+        Json(UpdateAliasRequest {
+            kind: "tool".to_string(),
+            alias: "issue.update".to_string(),
+            target: Some("issues.update_v2".to_string()),
+            summary: None,
+            description: None,
+            passthrough: None,
+            reversibility: ReversibilityUpdate::Set(invalid_contract),
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    let saved = crate::config::load_or_default_config(&config_path).unwrap();
+    assert_eq!(
+        saved.capability_aliases["issue.update"].reversibility(),
+        None
+    );
+}
+
+#[test]
+fn alias_update_deserialization_distinguishes_omitted_and_null_reversibility() {
+    use crate::config::ReversibilityClass;
+
+    let base = json!({"kind": "tool", "alias": "a", "target": "server.tool"});
+    let omitted: UpdateAliasRequest = serde_json::from_value(base.clone()).unwrap();
+    assert!(matches!(
+        omitted.reversibility,
+        ReversibilityUpdate::Preserve
+    ));
+
+    let cleared: UpdateAliasRequest = serde_json::from_value(
+        json!({"kind": "tool", "alias": "a", "target": "server.tool", "reversibility": null}),
+    )
+    .unwrap();
+    assert!(matches!(cleared.reversibility, ReversibilityUpdate::Clear));
+
+    let replaced: UpdateAliasRequest = serde_json::from_value(json!({
+        "kind": "tool",
+        "alias": "a",
+        "target": "server.tool",
+        "reversibility": {"class": "irreversible"}
+    }))
+    .unwrap();
+    assert_eq!(
+        replaced.reversibility,
+        ReversibilityUpdate::Set(crate::config::ReversibilityConfig {
+            class: ReversibilityClass::Irreversible,
+            hold_window_secs: None,
+            ttl_secs: None,
+            daily_limit: None,
+            pre_snapshot: None,
+            pre_undo_check: None,
+            test_target: None,
+            inverse: None,
+        })
+    );
 }
 
 #[tokio::test]

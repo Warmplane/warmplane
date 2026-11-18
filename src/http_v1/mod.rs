@@ -52,9 +52,9 @@ pub use tasks_api::{handle_cancel_task, handle_get_task, handle_list_tasks, hand
 pub use types::{
     error_envelope, ApproveTicketRequest, CallCapabilityRequest, CatalogEventsQuery,
     CatalogEventsResponse, CompletionRequest, GetPromptRequest, ImportConfigRequest,
-    ReadResourceRequest, RejectTicketRequest, RespondSamplingRequest, SamplingListQuery,
-    SamplingRequest, SearchCapabilitiesRequest, UpdateAliasRequest, UpsertProfileRequest,
-    UpsertServerRequest,
+    ReadResourceRequest, RejectTicketRequest, RespondSamplingRequest, ReversibilityUpdate,
+    SamplingListQuery, SamplingRequest, SearchCapabilitiesRequest, UpdateAliasRequest,
+    UpsertProfileRequest, UpsertServerRequest,
 };
 pub use ui::handle_ui_dashboard;
 pub use undo_api::{
