@@ -1,14 +1,18 @@
 import { escapeHtml } from './escape';
 import { store } from './state';
 import { api } from './api';
+import { ReversibilityConfig } from './api';
 import { renderOverview } from './components/overview';
 import { renderServers } from './components/servers';
 import { renderPlayground, generateSampleArgsFromSchema } from './components/playground';
 import { renderTasks } from './components/tasks';
+import { renderUndoFeed } from './components/undo';
 import { renderApprovals } from './components/approvals';
 import { renderAudit } from './components/audit';
 import { renderPolicy } from './components/policy';
-import { renderAliases } from './components/aliases';
+import { getSavedAlias, renderAliasList, renderAliases } from './components/aliases';
+import type { AliasKind, AliasTestStatus } from './components/aliases';
+import { bindCapabilityAutocomplete, closeCapabilitySuggestions } from './components/capability-autocomplete';
 import { renderProfiles } from './components/profiles';
 import { renderSecrets } from './components/secrets';
 import { SERVER_TEMPLATES, ServerTemplate, findTemplateForServer } from './templates';
@@ -26,14 +30,47 @@ class WarmplaneApp {
 
     await this.refreshData();
     this.initSSE();
+    this.bindUndoFeedActions();
     this.render();
 
     store.subscribe(() => {
       this.render();
     });
+    window.setInterval(() => {
+      if (store.getState().activeTab === 'undo') this.render();
+    }, 1000);
   }
 
   private auditSearchTimeout: any = null;
+
+  private bindUndoFeedActions() {
+    const mainEl = document.getElementById('app-main');
+    if (!mainEl) return;
+    mainEl.addEventListener('click', event => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const button = target.closest<HTMLButtonElement>('[data-undo-action], [data-playground-action]');
+      if (!button || !mainEl.contains(button)) return;
+      if (button.dataset.playgroundAction === 'test-undo' && button.dataset.undoAlias) {
+        void this.testUndoContract(button.dataset.undoAlias);
+        return;
+      }
+      const action = button.dataset.undoAction;
+      const targetId = button.dataset.undoTarget;
+      if (action === 'previous' || action === 'next') {
+        const state = store.getState();
+        if (!state.undoLoading) void this.refreshUndo(Math.max(0, state.undoOffset + (action === 'next' ? 50 : -50)));
+      } else if (action === 'refresh') {
+        void this.refreshUndo();
+      } else if (action === 'cancel-task' && targetId) {
+        void this.cancelHeldTask(targetId);
+      } else if (action === 'rollback' && targetId) {
+        void this.rollbackWorkItem(targetId);
+      } else if (action === 'execute' && targetId) {
+        void this.executeUndo(targetId);
+      }
+    });
+  }
 
   async refreshData() {
     try {
@@ -137,6 +174,8 @@ class WarmplaneApp {
           tasks: tasksRes.tasks
         });
       }
+
+      await this.refreshUndo();
 
       if (auditEventsRes && Array.isArray(auditEventsRes.events)) {
         store.setState({
@@ -301,12 +340,87 @@ class WarmplaneApp {
         store.addEventLog('SSE', '/v1/resources/updates', 'UPDATED', '0.1ms');
         this.refreshData();
       };
+      sse.addEventListener('action_capsule', () => {
+        this.refreshUndo();
+        this.refreshTasks();
+      });
+      sse.addEventListener('error', () => {
+        if (store.getState().activeTab === 'undo') this.refreshUndo();
+      });
     } catch (e) {
       console.warn('SSE connection unavailable');
     }
   }
 
-  switchTab(tab: 'overview' | 'servers' | 'playground' | 'tasks' | 'approvals' | 'audit' | 'policy' | 'secrets' | 'aliases' | 'profiles') {
+  private undoRequestGeneration = 0;
+
+  async refreshUndo(offset = store.getState().undoOffset) {
+    const generation = ++this.undoRequestGeneration;
+    const changingPage = offset !== store.getState().undoOffset;
+    store.setState({
+      undoLoading: true,
+      undoOffset: offset,
+      ...(changingPage ? { undoEntries: [] } : {}),
+    });
+    try {
+      let response = await api.listUndo(offset, 50);
+      if (generation !== this.undoRequestGeneration) return;
+      if (response.ok && response.result && offset > 0 && offset >= response.result.total) {
+        offset = Math.max(0, Math.floor((response.result.total - 1) / 50) * 50);
+        response = await api.listUndo(offset, 50);
+        if (generation !== this.undoRequestGeneration) return;
+      }
+      if (response.ok && response.result && Array.isArray(response.result.entries)) {
+        store.setState({
+          undoEntries: response.result.entries,
+          undoOffset: offset,
+          undoTotal: response.result.total,
+          undoLoading: false,
+          undoError: null,
+        });
+      } else {
+        store.setState({ undoLoading: false, undoError: response.error?.message || response.error?.code || 'Undo entries could not be loaded.' });
+      }
+    } catch (error: any) {
+      if (generation === this.undoRequestGeneration) {
+        store.setState({ undoLoading: false, undoError: error?.message || 'Undo entries could not be loaded.' });
+      }
+    }
+  }
+
+  async executeUndo(undoId: string) {
+    if (!confirm('Run the configured inverse for this action?')) return;
+    const response = await api.executeUndo(undoId);
+    if (!response.ok) alert(`Undo failed: ${response.error?.message || response.error?.code || 'Request failed'}`);
+    await this.refreshUndo();
+  }
+
+  async rollbackWorkItem(workItemId: string) {
+    if (!confirm('Run configured inverses for this work item in reverse order?')) return;
+    const response = await api.rollbackWorkItem(workItemId);
+    if (!response.ok) alert(`Rollback incomplete: ${response.error?.message || response.error?.code || 'One or more inverses failed'}`);
+    await this.refreshUndo();
+  }
+
+  async cancelHeldTask(taskId: string) {
+    if (!confirm('Cancel this send before it is released?')) return;
+    const response = await api.cancelTask(taskId, 'Cancelled from Control Deck Action Feed');
+    if (!response.ok) alert(`Cancellation failed: ${response.error?.message || response.error?.code || 'Request failed'}`);
+    await this.refreshTasks();
+  }
+
+  async testUndoContract(alias: string) {
+    if (!confirm(`Run the configured forward and inverse cycle on the test server for '${alias}'?`)) return;
+    const response = await api.testUndoContract(alias);
+    const result = response.result;
+    if (response.ok && result?.observationally_equivalent) {
+      alert(`Undo contract passed on ${result.test_server}. The observed state matches its snapshot.`);
+    } else {
+      alert(`Undo contract failed: ${result?.error_code || response.error?.message || 'state did not return to its snapshot'}`);
+    }
+  }
+
+  switchTab(tab: 'overview' | 'servers' | 'playground' | 'tasks' | 'undo' | 'approvals' | 'audit' | 'policy' | 'secrets' | 'aliases' | 'profiles') {
     store.setState({ activeTab: tab });
     this.refreshData();
   }
@@ -343,6 +457,7 @@ class WarmplaneApp {
       servers: 'Server Hub & Connections',
       playground: 'MCP Capability Playground',
       tasks: 'SEP-2663 Tasks & HITL Review',
+      undo: 'Action Feed & Undo',
       approvals: 'SEP-2663 Tasks & HITL Review',
       audit: 'WORM Audit & Compliance Ledger',
       policy: 'Security Governance & Redaction',
@@ -369,6 +484,9 @@ class WarmplaneApp {
       case 'approvals':
         mainEl.innerHTML = renderTasks(state);
         break;
+      case 'undo':
+        mainEl.innerHTML = renderUndoFeed(state);
+        break;
       case 'audit':
         mainEl.innerHTML = renderAudit();
         break;
@@ -379,7 +497,7 @@ class WarmplaneApp {
         mainEl.innerHTML = renderSecrets();
         break;
       case 'aliases':
-        mainEl.innerHTML = renderAliases();
+        this.renderAliasStudio(mainEl);
         break;
       case 'profiles':
         mainEl.innerHTML = renderProfiles();
@@ -2406,58 +2524,95 @@ class WarmplaneApp {
     }
   }
 
-  // Alias Actions
-  handleAliasTargetInput(val: string) {
-    const dropdown = document.getElementById('alias-suggestions-dropdown');
-    if (!dropdown) return;
-    const query = (val || '').trim().toLowerCase();
-    if (query.length < 2) {
-      dropdown.style.display = 'none';
-      return;
+  private aliasStudio?: HTMLDivElement;
+  private aliasListMarkup = '';
+  private aliasSaving = false;
+  private aliasTests = new Map<string, AliasTestStatus>();
+
+  private renderAliasStudio(main: HTMLElement) {
+    if (!this.aliasStudio) {
+      const studio = document.createElement('div');
+      studio.innerHTML = renderAliases();
+      const form = studio.querySelector<HTMLFormElement>('#alias-form');
+      if (!form) return;
+      bindCapabilityAutocomplete(form);
+      form.addEventListener('submit', event => {
+        event.preventDefault();
+        void this.createAlias();
+      });
+      form.addEventListener('focusout', event => this.validateAliasField(event));
+      form.addEventListener('input', event => this.validateAliasField(event, true));
+      form.addEventListener('change', event => this.validateAliasField(event, true));
+      studio.addEventListener('click', event => this.handleAliasRowAction(event));
+      this.aliasStudio = studio;
     }
-
-    const state = store.getState();
-    const matches = state.capabilities.filter(c =>
-      c.id.toLowerCase().includes(query) ||
-      (c.summary && c.summary.toLowerCase().includes(query)) ||
-      (c.description && c.description.toLowerCase().includes(query)) ||
-      (c.server && c.server.toLowerCase().includes(query))
-    ).slice(0, 8);
-
-    if (matches.length === 0) {
-      dropdown.style.display = 'none';
-      return;
+    if (this.aliasStudio.parentElement !== main) {
+      main.replaceChildren(this.aliasStudio);
+      this.aliasStudio.querySelectorAll<HTMLInputElement>('[role="combobox"]').forEach(closeCapabilitySuggestions);
     }
-
-    dropdown.innerHTML = matches.map(c => `
-      <div style="padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; transition: background 0.1s;"
-           onmouseover="this.style.background='var(--surface-hover)'"
-           onmouseout="this.style.background='transparent'"
-           onmousedown="window.app.selectAliasSuggestion('${escapeHtml(c.id)}')">
-        <div>
-          <div style="font-weight: 700; color: var(--text-main);">${escapeHtml(c.id)}</div>
-          <div style="font-size: 10.5px; color: var(--text-dim); margin-top: 2px;">${escapeHtml(c.summary || c.description || '')}</div>
-        </div>
-        <span style="font-size: 10px; color: var(--cyan-400);">${escapeHtml(c.server || 'local')}</span>
-      </div>
-    `).join('');
-    dropdown.style.display = 'block';
+    this.refreshAliasList();
   }
 
-  selectAliasSuggestion(id: string) {
-    const input = document.getElementById('alias-target') as HTMLInputElement | null;
-    if (input) {
-      input.value = id;
+  private refreshAliasList() {
+    const list = this.aliasStudio?.querySelector('#alias-list');
+    if (!list) return;
+    const markup = renderAliasList(this.aliasTests);
+    if (markup === this.aliasListMarkup && list.hasChildNodes()) return;
+    this.aliasListMarkup = markup;
+    const focused = document.activeElement;
+    const action = focused instanceof HTMLButtonElement && list.contains(focused) ? focused.dataset : undefined;
+    list.innerHTML = markup;
+    if (action) {
+      [...list.querySelectorAll<HTMLButtonElement>('[data-alias-action]')].find(button =>
+        button.dataset.aliasAction === action.aliasAction &&
+        button.dataset.aliasKind === action.aliasKind &&
+        button.dataset.aliasName === action.aliasName
+      )?.focus({ preventScroll: true });
     }
-    this.hideAliasDropdown();
   }
 
-  hideAliasDropdown() {
-    const dropdown = document.getElementById('alias-suggestions-dropdown');
-    if (dropdown) dropdown.style.display = 'none';
+  private handleAliasRowAction(event: MouseEvent) {
+    if (!(event.target instanceof Element)) return;
+    const button = event.target.closest<HTMLButtonElement>('[data-alias-action]');
+    if (!button) return;
+    const { aliasAction, aliasKind, aliasName } = button.dataset;
+    if (aliasName === undefined || (aliasKind !== 'tool' && aliasKind !== 'resource' && aliasKind !== 'prompt')) return;
+    if (aliasAction === 'test') {
+      void this.testSavedAlias(aliasName);
+    } else if (!this.aliasSaving && aliasAction === 'edit') {
+      this.startEditAlias(aliasKind, aliasName);
+    } else if (!this.aliasSaving && aliasAction === 'delete') {
+      void this.deleteAlias(aliasKind, aliasName);
+    }
   }
 
-  startEditAlias(kind: string, name: string, target: string, summary: string = '', passthrough: boolean = false) {
+  private async testSavedAlias(name: string) {
+    if (this.aliasTests.get(name)?.running) return;
+    const alias = getSavedAlias('tool', name);
+    const server = typeof alias === 'object' ? alias.reversibility?.testTarget?.server : undefined;
+    if (!server || !confirm(`Run the saved contract for "${name}" on test server "${server}"?`)) return;
+
+    const savedAlias = JSON.stringify(alias);
+    this.aliasTests.set(name, { savedAlias, running: true, message: `Running on ${server}…` });
+    this.refreshAliasList();
+    try {
+      const { ok, result, error } = await api.testUndoContract(name);
+      const passed = ok && result?.observationally_equivalent;
+      const message = passed
+        ? `Passed on ${result.test_server}. The final state matched the snapshot.`
+        : `Test failed. ${error?.message || result?.error_code || 'The final state did not match the snapshot.'}`;
+      this.aliasTests.set(name, { savedAlias, running: false, message, failed: !passed });
+    } catch {
+      this.aliasTests.set(name, { savedAlias, running: false, message: 'Could not run the test. Check the connection and try again.', failed: true });
+    }
+    this.refreshAliasList();
+  }
+
+  private startEditAlias(kind: AliasKind, name: string) {
+    const alias = getSavedAlias(kind, name);
+    if (alias === undefined) return;
+    const details = typeof alias === 'object' ? alias : undefined;
+    this.resetAliasForm();
     const kindSelect = document.getElementById('alias-kind') as HTMLSelectElement;
     const nameInput = document.getElementById('alias-name') as HTMLInputElement;
     const targetInput = document.getElementById('alias-target') as HTMLInputElement;
@@ -2466,26 +2621,29 @@ class WarmplaneApp {
     const ptContainer = document.getElementById('alias-passthrough-container');
     const titleEl = document.getElementById('alias-form-title');
     const saveBtn = document.getElementById('alias-save-btn');
-    const cancelBtn = document.getElementById('alias-cancel-btn');
 
     if (kindSelect) kindSelect.value = kind;
     if (nameInput) nameInput.value = name;
-    if (targetInput) targetInput.value = target;
-    if (summaryInput) summaryInput.value = summary;
-    if (ptCheckbox) ptCheckbox.checked = passthrough;
+    if (targetInput) targetInput.value = typeof alias === 'string' ? alias : alias.target;
+    if (summaryInput) summaryInput.value = details?.summary ?? '';
+    if (ptCheckbox) ptCheckbox.checked = !!details?.passthrough;
     if (ptContainer) ptContainer.style.display = kind === 'tool' ? 'flex' : 'none';
+    const reversibilityEditor = document.getElementById('reversibility-editor');
+    if (reversibilityEditor) reversibilityEditor.hidden = kind !== 'tool';
+    this.loadReversibilityEditor(kind === 'tool' ? details?.reversibility : undefined);
+    this.showAliasFormError('');
 
     if (titleEl) {
-      titleEl.innerHTML = `✏️ EDIT ALIAS: <span style="color: var(--amber-400); font-family: var(--ff-mono);">${name}</span>`;
+      titleEl.textContent = `Edit alias ${name}`;
     }
-    if (saveBtn) saveBtn.textContent = '✓ Update';
-    if (cancelBtn) cancelBtn.style.display = 'inline-block';
+    if (saveBtn) saveBtn.textContent = 'Update';
 
     nameInput?.focus();
     nameInput?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
   resetAliasForm() {
+    if (this.aliasSaving) return;
     const kindSelect = document.getElementById('alias-kind') as HTMLSelectElement;
     const nameInput = document.getElementById('alias-name') as HTMLInputElement;
     const targetInput = document.getElementById('alias-target') as HTMLInputElement;
@@ -2494,7 +2652,6 @@ class WarmplaneApp {
     const ptContainer = document.getElementById('alias-passthrough-container');
     const titleEl = document.getElementById('alias-form-title');
     const saveBtn = document.getElementById('alias-save-btn');
-    const cancelBtn = document.getElementById('alias-cancel-btn');
 
     if (kindSelect) kindSelect.value = 'tool';
     if (nameInput) nameInput.value = '';
@@ -2504,19 +2661,284 @@ class WarmplaneApp {
     if (ptContainer) ptContainer.style.display = 'flex';
 
     if (titleEl) titleEl.textContent = 'Create New Alias';
-    if (saveBtn) saveBtn.textContent = '+ Save';
-    if (cancelBtn) cancelBtn.style.display = 'none';
+    if (saveBtn) saveBtn.textContent = 'Save';
+    const reversibilityEditor = document.getElementById('reversibility-editor');
+    if (reversibilityEditor) reversibilityEditor.hidden = false;
+    this.loadReversibilityEditor(undefined);
+    this.clearAliasFieldErrors();
+    document.querySelectorAll<HTMLInputElement>('#alias-form [role="combobox"]').forEach(closeCapabilitySuggestions);
+    this.showAliasFormError('');
   }
 
-  async createAlias() {
+  updateAliasKind(kind: string) {
+    const passthrough = document.getElementById('alias-passthrough-container');
+    if (passthrough) passthrough.style.display = kind === 'tool' ? 'flex' : 'none';
+    const editor = document.getElementById('reversibility-editor');
+    if (editor) editor.hidden = kind !== 'tool';
+    this.clearAliasFieldErrors(true);
+  }
+
+  updateReversibilityEditor() {
+    const classSelect = document.getElementById('reversibility-class') as HTMLSelectElement | null;
+    if (!classSelect) return;
+    const previous = classSelect.dataset.previousClass || '';
+    const current = classSelect.value;
+    if (previous !== current) {
+      if (previous === 'delayable' && current !== 'delayable') this.setInputValue('hold-window-secs', '');
+      if (previous === 'compensable' && current !== 'compensable') this.setInputValue('daily-limit', '');
+      const wasUndoClass = previous === 'reversible' || previous === 'compensable';
+      const isUndoClass = current === 'reversible' || current === 'compensable';
+      if (wasUndoClass && !isUndoClass) this.clearUndoContractFields();
+      classSelect.dataset.previousClass = current;
+    }
+
+    document.querySelectorAll<HTMLElement>('[data-reversibility-class]').forEach(section => {
+      const classes = (section.dataset.reversibilityClass || '').split(' ');
+      section.hidden = !classes.includes(current);
+    });
+    this.setOptionalSectionVisibility('pre-snapshot');
+    this.setOptionalSectionVisibility('pre-undo-check');
+    this.setOptionalSectionVisibility('test-target');
+    this.clearAliasFieldErrors(true);
+    this.refreshAliasDependencyError();
+
+    const help = document.getElementById('reversibility-class-help');
+    if (help) {
+      const descriptions: Record<string, string> = {
+        '': 'No reversibility contract is configured for this capability.',
+        delayable: 'Hold the forward call before dispatch so it can be cancelled.',
+        reversible: 'Capture prior state and register an inverse that restores it.',
+        compensable: 'Register a compensating action and limit its daily use.',
+        irreversible: 'Mark this capability as having no configured inverse.',
+      };
+      help.textContent = descriptions[current] || descriptions[''];
+    }
+  }
+
+  private loadReversibilityEditor(contract?: ReversibilityConfig) {
+    const classSelect = document.getElementById('reversibility-class') as HTMLSelectElement | null;
+    if (!classSelect) return;
+    classSelect.value = contract?.class || '';
+    classSelect.dataset.previousClass = classSelect.value;
+    this.setInputValue('hold-window-secs', contract?.holdWindowSecs?.toString() || '');
+    this.setInputValue('ttl-secs', contract?.ttlSecs?.toString() || '');
+    this.setInputValue('daily-limit', contract?.dailyLimit?.toString() || '');
+    this.setInputValue('inverse-capability', contract?.inverse?.capability || '');
+    this.setJsonInput('inverse-args', contract?.inverse?.args);
+    this.setCheckbox('pre-snapshot-enabled', !!contract?.preSnapshot);
+    this.setInputValue('pre-snapshot-capability', contract?.preSnapshot?.capability || '');
+    this.setJsonInput('pre-snapshot-args', contract?.preSnapshot?.args);
+    this.setInputValue('pre-snapshot-capture-json-path', contract?.preSnapshot?.captureJsonPath || '');
+    this.setCheckbox('pre-undo-check-enabled', !!contract?.preUndoCheck);
+    this.setInputValue('pre-undo-check-capability', contract?.preUndoCheck?.capability || '');
+    this.setJsonInput('pre-undo-check-args', contract?.preUndoCheck?.args);
+    this.setInputValue('pre-undo-check-capture-json-path', contract?.preUndoCheck?.captureJsonPath || '');
+    this.setCheckbox('test-target-enabled', !!contract?.testTarget);
+    this.setInputValue('test-target-server', contract?.testTarget?.server || '');
+    this.setJsonInput('test-target-args', contract?.testTarget?.args);
+    this.updateReversibilityEditor();
+  }
+
+  private clearUndoContractFields() {
+    ['ttl-secs', 'inverse-capability', 'inverse-args', 'pre-snapshot-capability',
+      'pre-snapshot-args', 'pre-snapshot-capture-json-path', 'pre-undo-check-capability',
+      'pre-undo-check-args', 'pre-undo-check-capture-json-path', 'test-target-server',
+      'test-target-args'].forEach(id => this.setInputValue(id, ''));
+    ['pre-snapshot-enabled', 'pre-undo-check-enabled', 'test-target-enabled']
+      .forEach(id => this.setCheckbox(id, false));
+  }
+
+  private setOptionalSectionVisibility(section: string) {
+    const enabled = document.getElementById(`${section}-enabled`) as HTMLInputElement | null;
+    const fields = document.querySelector<HTMLElement>(`[data-optional-field="${section}"]`);
+    if (fields) fields.hidden = !enabled?.checked;
+  }
+
+  private setInputValue(id: string, value: string) {
+    const input = document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null;
+    if (input) input.value = value;
+  }
+
+  private setCheckbox(id: string, checked: boolean) {
+    const input = document.getElementById(id) as HTMLInputElement | null;
+    if (input) input.checked = checked;
+  }
+
+  private setJsonInput(id: string, value?: Record<string, unknown>) {
+    this.setInputValue(id, value ? JSON.stringify(value, null, 2) : '');
+  }
+
+  private showAliasFormError(message: string) {
+    const error = this.aliasStudio?.querySelector<HTMLElement>('#alias-form-error');
+    if (!error) return;
+    error.textContent = message;
+    error.hidden = !message;
+  }
+
+  private updateAliasFieldError(field: HTMLElement, message?: string) {
+    const id = `${field.id}-error`;
+    const anchor = field.closest('.capability-autocomplete')
+      ?? (field.id === 'test-target-enabled' ? field.closest('label') : null)
+      ?? field;
+    let error = anchor.nextElementSibling;
+    if (!message) {
+      if (error?.id === id) error.remove();
+      field.removeAttribute('aria-invalid');
+      this.setAliasErrorDescription(field, id, false);
+      return;
+    }
+    if (error?.id !== id) {
+      error = document.createElement('span');
+      error.id = id;
+      error.className = 'alias-field-error';
+      anchor.after(error);
+    }
+    error.textContent = message;
+    field.setAttribute('aria-invalid', 'true');
+    this.setAliasErrorDescription(field, id, true);
+  }
+
+  private setAliasErrorDescription(field: HTMLElement, id: string, invalid: boolean) {
+    const descriptions = (field.getAttribute('aria-describedby') || '').split(/\s+/)
+      .filter(description => description && description !== id);
+    if (invalid) descriptions.push(id);
+    if (descriptions.length) field.setAttribute('aria-describedby', descriptions.join(' '));
+    else field.removeAttribute('aria-describedby');
+  }
+
+  private clearAliasFieldErrors(hiddenOnly = false) {
+    this.aliasStudio?.querySelectorAll<HTMLElement>('#alias-form [aria-invalid]').forEach(field => {
+      if (!hiddenOnly || field.closest('[hidden]')) this.updateAliasFieldError(field);
+    });
+  }
+
+  private validateAliasField(event: Event, onlyInvalid = false) {
+    const field = event.target;
+    if (this.aliasSaving || !(field instanceof HTMLElement) || !field.id || field.closest('[hidden]')) return;
+    if (onlyInvalid && !field.hasAttribute('aria-invalid')) return;
+    this.updateAliasFieldError(field, this.readAliasFields().errors.get(field.id));
+  }
+
+  private refreshAliasDependencyError() {
+    const field = document.getElementById('test-target-enabled');
+    if (field?.hasAttribute('aria-invalid')) {
+      this.updateAliasFieldError(field, this.readAliasFields().errors.get(field.id));
+    }
+  }
+
+  private readAliasFields(): { contract: ReversibilityConfig | null | undefined; errors: Map<string, string> } {
+    const errors = new Map<string, string>();
+    const required = (id: string, label: string) => {
+      const value = (document.getElementById(id) as HTMLInputElement | null)?.value.trim();
+      if (!value) errors.set(id, `${label} is required.`);
+      return value || undefined;
+    };
+    required('alias-name', 'Public alias');
+    required('alias-target', 'Canonical target');
+    if ((document.getElementById('alias-kind') as HTMLSelectElement).value !== 'tool') {
+      return { contract: undefined, errors };
+    }
+    const className = (document.getElementById('reversibility-class') as HTMLSelectElement | null)?.value || '';
+    if (!className) return { contract: null, errors };
+    const readPositiveInteger = (id: string, label: string, required: boolean): number | undefined => {
+      const input = document.getElementById(id) as HTMLInputElement | null;
+      const raw = input?.value.trim() || '';
+      if (input?.validity.badInput) {
+        errors.set(id, `${label} must be a positive whole number.`);
+        return undefined;
+      }
+      if (!raw) {
+        if (required) errors.set(id, `${label} is required.`);
+        return undefined;
+      }
+      const value = Number(raw);
+      if (!Number.isSafeInteger(value) || value < 1) {
+        errors.set(id, `${label} must be a positive whole number.`);
+        return undefined;
+      }
+      return value;
+    };
+    const readJsonObject = (id: string, label: string): Record<string, unknown> | undefined => {
+      const raw = (document.getElementById(id) as HTMLTextAreaElement | null)?.value.trim() || '';
+      if (!raw) {
+        errors.set(id, `${label} is required and must be a JSON object.`);
+        return undefined;
+      }
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          errors.set(id, `${label} must be a JSON object.`);
+          return undefined;
+        }
+        return parsed as Record<string, unknown>;
+      } catch {
+        errors.set(id, `${label} contains invalid JSON.`);
+        return undefined;
+      }
+    };
+    if (className === 'delayable') {
+      const holdWindowSecs = readPositiveInteger('hold-window-secs', 'Hold window', false);
+      return { contract: { class: className, holdWindowSecs }, errors };
+    }
+    if (className === 'irreversible') return { contract: { class: className }, errors };
+
+    const inverseCapability = required('inverse-capability', 'Inverse capability');
+    const inverseArgs = readJsonObject('inverse-args', 'Inverse arguments');
+    const ttlSecs = readPositiveInteger('ttl-secs', 'Undo window', false);
+    const dailyLimit = className === 'compensable'
+      ? readPositiveInteger('daily-limit', 'Daily limit', true)
+      : undefined;
+    const contract: ReversibilityConfig = {
+      class: className as ReversibilityConfig['class'],
+      ...(ttlSecs === undefined ? {} : { ttlSecs }),
+      ...(dailyLimit === undefined ? {} : { dailyLimit }),
+      ...(inverseCapability && inverseArgs ? { inverse: { capability: inverseCapability, args: inverseArgs } } : {}),
+    };
+
+    const readConfig = (prefix: 'pre-snapshot' | 'pre-undo-check'): ReversibilityConfig['preSnapshot'] => {
+      const enabled = (document.getElementById(`${prefix}-enabled`) as HTMLInputElement | null)?.checked;
+      if (!enabled) return undefined;
+      const capability = required(`${prefix}-capability`, prefix === 'pre-snapshot' ? 'Snapshot capability' : 'Drift-check capability');
+      const args = readJsonObject(`${prefix}-args`, prefix === 'pre-snapshot' ? 'Snapshot arguments' : 'Drift-check arguments');
+      const captureJsonPath = (document.getElementById(`${prefix}-capture-json-path`) as HTMLInputElement | null)?.value.trim() || undefined;
+      return capability && args ? { capability, args, ...(captureJsonPath ? { captureJsonPath } : {}) } : undefined;
+    };
+    const preSnapshot = readConfig('pre-snapshot');
+    const preUndoCheck = readConfig('pre-undo-check');
+    if (preSnapshot) contract.preSnapshot = preSnapshot;
+    if (preUndoCheck) contract.preUndoCheck = preUndoCheck;
+
+    if ((document.getElementById('test-target-enabled') as HTMLInputElement | null)?.checked) {
+      const server = required('test-target-server', 'Test server');
+      const args = readJsonObject('test-target-args', 'Test arguments');
+      if (!(document.getElementById('pre-snapshot-enabled') as HTMLInputElement).checked) {
+        errors.set('test-target-enabled', 'Enable and configure a pre-call snapshot to test this contract.');
+      }
+      if (server && args) contract.testTarget = { server, args };
+    }
+
+    return { contract, errors };
+  }
+
+  private async createAlias() {
+    const form = document.getElementById('alias-form') as HTMLFormElement | null;
+    if (!form || this.aliasSaving) return;
     const kind = (document.getElementById('alias-kind') as HTMLSelectElement)?.value;
     const name = (document.getElementById('alias-name') as HTMLInputElement)?.value.trim();
     const target = (document.getElementById('alias-target') as HTMLInputElement)?.value.trim();
     const summary = (document.getElementById('alias-summary') as HTMLInputElement)?.value.trim() || undefined;
     const passthrough = (document.getElementById('alias-passthrough') as HTMLInputElement)?.checked || false;
 
-    if (!name || !target) {
-      alert('Please provide both alias name and canonical target');
+    this.showAliasFormError('');
+
+    const { contract, errors } = this.readAliasFields();
+    this.clearAliasFieldErrors();
+    if (errors.size) {
+      const invalidFields = [...form.elements].filter((field): field is HTMLElement =>
+        field instanceof HTMLElement && errors.has(field.id)
+      );
+      invalidFields.forEach(field => this.updateAliasFieldError(field, errors.get(field.id)));
+      invalidFields[0]?.focus();
       return;
     }
 
@@ -2526,15 +2948,46 @@ class WarmplaneApp {
       if (!proceed) return;
     }
 
-    await api.updateAlias(kind, name, target, summary, undefined, passthrough);
-    this.resetAliasForm();
+    const saved = getSavedAlias(kind as AliasKind, name);
+    const description = typeof saved === 'object' ? saved.description : undefined;
+    const saveButton = form.querySelector<HTMLButtonElement>('#alias-save-btn');
+    const saveLabel = saveButton?.textContent ?? 'Save';
+    form.querySelectorAll<HTMLInputElement>('[role="combobox"]').forEach(closeCapabilitySuggestions);
+    this.aliasSaving = true;
+    form.inert = true;
+    form.setAttribute('aria-busy', 'true');
+    if (saveButton) saveButton.textContent = 'Saving…';
+    try {
+      const result = await api.updateAlias(kind, name, target, summary, description, passthrough, contract);
+      if (!result.ok) {
+        this.showAliasFormError(result.error || 'Alias configuration could not be saved.');
+        return;
+      }
+    } catch (error: any) {
+      this.showAliasFormError(error?.message || 'Alias configuration could not be saved.');
+      return;
+    } finally {
+      this.aliasSaving = false;
+      form.inert = false;
+      form.removeAttribute('aria-busy');
+      if (saveButton) saveButton.textContent = saveLabel;
+    }
+    if (form.isConnected) this.resetAliasForm();
+    else this.aliasStudio = undefined;
     await this.refreshData();
   }
 
-  async deleteAlias(kind: string, name: string) {
-    await api.updateAlias(kind, name, undefined);
-    this.resetAliasForm();
-    await this.refreshData();
+  private async deleteAlias(kind: AliasKind, name: string) {
+    try {
+      const result = await api.updateAlias(kind, name);
+      if (!result.ok) {
+        this.showAliasFormError(result.error || 'Alias could not be deleted.');
+        return;
+      }
+      await this.refreshData();
+    } catch {
+      this.showAliasFormError('Alias could not be deleted. Check the connection and try again.');
+    }
   }
 
   async reloadFromDisk() {

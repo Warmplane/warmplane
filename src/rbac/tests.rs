@@ -37,6 +37,8 @@ fn sample_rbac_config() -> RbacConfig {
             deny: vec![],
             require_approval: vec![],
             redact_keys: vec![],
+            undo_permissions: Default::default(),
+            allow_agent_self_undo: false,
         },
     );
     roles.insert(
@@ -47,6 +49,8 @@ fn sample_rbac_config() -> RbacConfig {
             deny: vec!["*.write_*".to_string(), "docker.*".to_string()],
             require_approval: vec!["db.query_large".to_string()],
             redact_keys: vec!["ssn".to_string(), "password".to_string()],
+            undo_permissions: Default::default(),
+            allow_agent_self_undo: false,
         },
     );
 
@@ -116,6 +120,34 @@ fn test_rbac_default_role_fallback() {
     let anon_ctx = engine.authenticate(None, &base_policy).unwrap();
     assert_eq!(anon_ctx.role, "anonymous");
     assert_eq!(anon_ctx.tenant_id, "default");
+}
+
+#[test]
+fn test_rbac_reload_revalidates_tokens_and_roles_for_in_flight_provenance() {
+    let engine = RbacEngine::new(Some(sample_rbac_config()));
+    let context = engine
+        .authenticate(Some("admin_key_123"), &Policy::default())
+        .unwrap();
+    assert!(engine.recognizes_provenance(
+        &context.tenant_id,
+        &context.role,
+        context.actor_id.as_deref(),
+        context.grant_id.as_deref(),
+    ));
+
+    let mut reloaded = sample_rbac_config();
+    reloaded.tokens.remove("admin_key_123");
+    engine.reload(Some(reloaded));
+
+    assert!(!engine.recognizes_provenance(
+        &context.tenant_id,
+        &context.role,
+        context.actor_id.as_deref(),
+        context.grant_id.as_deref(),
+    ));
+    assert!(engine
+        .authenticate(Some("admin_key_123"), &Policy::default())
+        .is_err());
 }
 
 #[test]

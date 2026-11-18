@@ -33,7 +33,7 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           # Keep generated ui/dist output reproducible across local builds and CI.
-          bun-version: "1.4.0"
+          bun-version: "1.4.4"
 
       - name: Build and Typecheck Web UI
         working-directory: ui

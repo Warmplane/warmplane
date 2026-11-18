@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-13
+// Rust guideline compliant 2026-11-18
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -193,10 +193,7 @@ impl HybridSearchEngine {
                 } else {
                     "read"
                 };
-                if !filter.modes.is_empty() && !filter.modes.contains(&mode.to_string()) {
-                    return false;
-                }
-                true
+                filter.modes.is_empty() || filter.modes.contains(&mode.to_string())
             })
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();

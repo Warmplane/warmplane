@@ -180,12 +180,32 @@ export interface TaskItem {
     actor_id?: string;
     grant_id?: string;
   };
+  phase?: string;
+  releaseAtMs?: number;
+  cancellable?: boolean;
+  requestId?: string;
 }
 
 export interface ListTasksResponse {
   ok: boolean;
   total: number;
   tasks: TaskItem[];
+}
+
+export interface UndoEntrySummary {
+  undo_id: string;
+  operation_id?: string;
+  work_item_id?: string;
+  tenant_id: string;
+  profile_id?: string;
+  actor_id?: string;
+  forward_capability: string;
+  inverse_capability: string;
+  change_preview?: string[];
+  snapshot_artifact_hash?: string;
+  created_at_ms: number;
+  expires_at_ms: number;
+  status: string;
 }
 
 export interface UpdateTaskRequest {
@@ -331,11 +351,41 @@ export interface ProfileConfig {
   policy?: PolicyConfig;
 }
 
+export type ReversibilityClass = 'delayable' | 'reversible' | 'compensable' | 'irreversible';
+
+export interface UndoReadConfig {
+  capability: string;
+  args: Record<string, unknown>;
+  captureJsonPath?: string;
+}
+
+export interface UndoInverseConfig {
+  capability: string;
+  args: Record<string, unknown>;
+}
+
+export interface UndoTestTargetConfig {
+  server: string;
+  args: Record<string, unknown>;
+}
+
+export interface ReversibilityConfig {
+  class: ReversibilityClass;
+  holdWindowSecs?: number;
+  ttlSecs?: number;
+  dailyLimit?: number;
+  preSnapshot?: UndoReadConfig;
+  preUndoCheck?: UndoReadConfig;
+  testTarget?: UndoTestTargetConfig;
+  inverse?: UndoInverseConfig;
+}
+
 export type AliasTargetType = string | {
   target: string;
   summary?: string;
   description?: string;
   passthrough?: boolean;
+  reversibility?: ReversibilityConfig;
 };
 
 export interface McpConfig {
@@ -594,6 +644,32 @@ export class WarmplaneClient {
     return res.json();
   }
 
+  async listUndo(offset = 0, limit = 50): Promise<{ ok: boolean; result?: { entries: UndoEntrySummary[]; total: number; offset: number; limit: number }; error?: any }> {
+    const res = await fetch(`${this.baseUrl}/v1/undo?offset=${offset}&limit=${limit}`);
+    return res.json();
+  }
+
+  async testUndoContract(alias: string): Promise<{ ok: boolean; result?: any; error?: any }> {
+    const res = await fetch(`${this.baseUrl}/v1/undo/test`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ alias })
+    });
+    return res.json();
+  }
+
+  async executeUndo(id: string): Promise<{ ok: boolean; result?: any; error?: any }> {
+    const res = await fetch(`${this.baseUrl}/v1/undo/${encodeURIComponent(id)}/execute`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    });
+    return res.json();
+  }
+
+  async rollbackWorkItem(id: string): Promise<{ ok: boolean; results?: any[]; error?: any }> {
+    const res = await fetch(`${this.baseUrl}/v1/undo/work-items/${encodeURIComponent(id)}/rollback`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    });
+    return res.json();
+  }
+
   async getTask(id: string): Promise<{ ok: boolean; resultType?: string; task?: TaskItem; error?: any }> {
     const res = await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(id)}`);
     return res.json();
@@ -640,11 +716,19 @@ export class WarmplaneClient {
     return res.json();
   }
 
-  async updateAlias(kind: string, alias: string, target?: string, summary?: string, description?: string, passthrough?: boolean): Promise<{ ok: boolean; error?: string }> {
+  async updateAlias(
+    kind: string,
+    alias: string,
+    target?: string,
+    summary?: string,
+    description?: string,
+    passthrough?: boolean,
+    reversibility?: ReversibilityConfig | null,
+  ): Promise<{ ok: boolean; error?: string }> {
     const res = await fetch(`${this.baseUrl}/v1/config/alias`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind, alias, target, summary, description, passthrough })
+      body: JSON.stringify({ kind, alias, target, summary, description, passthrough, reversibility })
     });
     return res.json();
   }

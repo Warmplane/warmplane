@@ -104,6 +104,21 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SuccessEnvelope"
+        "202":
+          description: Delayable execution accepted as a task receipt
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, resultType, task]
+                properties:
+                  ok:
+                    type: boolean
+                  resultType:
+                    type: string
+                    const: task
+                  task:
+                    $ref: "#/components/schemas/TaskResponse"
         "400":
           description: Invalid request
           content:
@@ -279,11 +294,11 @@ paths:
                 $ref: "#/components/schemas/ErrorEnvelope"
   /v1/resources/updates:
     get:
-      summary: Real-time resource update SSE feed
+      summary: Real-time resource and action capsule invalidation SSE feed
       operationId: resourceUpdates
       responses:
         "200":
-          description: SSE event stream
+          description: SSE stream. Named action_capsule events contain only {"refresh":true}; clients fetch tenant-scoped details from REST.
           content:
             text/event-stream:
               schema:
@@ -617,6 +632,7 @@ paths:
           name: event_type
           schema:
             type: string
+            description: Includes emission_held and emission_cancelled for delayable task lifecycle events
         - in: query
           name: limit
           schema:
@@ -673,6 +689,268 @@ paths:
       responses:
         "200":
           description: Streamed audit log file
+  /v1/undo:
+    get:
+      summary: List tenant-owned undo entries
+      operationId: listUndoEntries
+      parameters:
+        - in: query
+          name: work_item_id
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string, enum: [armed, executing, reverted, expired, failed] }
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, default: 0 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: Tenant-owned entries in reverse creation order, with reverse registration order breaking ties.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, result]
+                properties:
+                  ok: { type: boolean }
+                  result:
+                    $ref: "#/components/schemas/UndoListResponse"
+        "403": { description: Role lacks undo list permission }
+  /v1/undo/test:
+    post:
+      summary: Test an inverse contract on its configured test server
+      operationId: testUndoContract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [alias]
+              properties:
+                alias: { type: string }
+              additionalProperties: false
+      responses:
+        "200": { description: Forward and inverse completed and state matched the original snapshot }
+        "400": { description: Alias lacks an explicit testTarget or preSnapshot contract }
+        "403": { description: Role is not authorized or policy denies the contract }
+        "409": { description: Inverse failed or state did not return to its snapshot }
+        "502": { description: Forward, inverse, snapshot, or verification call failed }
+  /v1/undo/{undo_id}:
+    get:
+      summary: Show one tenant-owned undo entry
+      operationId: getUndoEntry
+      parameters:
+        - in: path
+          name: undo_id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Safe undo summary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, result]
+                properties:
+                  ok: { type: boolean }
+                  result:
+                    $ref: "#/components/schemas/UndoEntrySummary"
+        "404": { description: Entry is missing or belongs to another tenant }
+  /v1/undo/{undo_id}/execute:
+    post:
+      summary: Execute one undo entry
+      operationId: executeUndoEntry
+      parameters:
+        - in: path
+          name: undo_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                forceExpired: { type: boolean, default: false }
+                reason: { type: string }
+              additionalProperties: false
+      responses:
+        "200":
+          description: Inverse outcome and committed audit receipt
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, result]
+                properties:
+                  ok: { type: boolean }
+                  result:
+                    $ref: "#/components/schemas/RollbackResult"
+        "502": { description: Inverse execution failed }
+        "503": { description: Undo storage unavailable or audit persistence failed }
+        "404": { description: Entry is missing or belongs to another tenant }
+        "409": { description: Entry is expired or not executable }
+        "403": { description: Role lacks required permission }
+  /v1/undo/work-items/{work_item_id}/rollback:
+    post:
+      summary: Roll back eligible entries for a work item in reverse order
+      operationId: rollbackWorkItem
+      parameters:
+        - in: path
+          name: work_item_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                forceExpired: { type: boolean, default: false }
+                reason: { type: string }
+              additionalProperties: false
+      responses:
+        "200":
+          description: Per-entry rollback outcomes across the entire work item. Check each result even when HTTP status is 200.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, results]
+                properties:
+                  ok: { type: boolean }
+                  results:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RollbackResult"
+        "404": { description: Work item belongs to another tenant }
+        "503": { description: Undo storage unavailable or an audit event could not be committed }
+        "403": { description: Role lacks rollback permission }
+  /v1/webhooks/actions:
+    post:
+      summary: Apply one signed ChatOps Undo or Cancel Send action
+      operationId: applyChatOpsAction
+      description: The action_token is bound to one target, tenant, action, configured role, and expiry. Valid requests are acknowledged immediately and execute in the background. Inspect the entry or task for completion and drift failures.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action_token]
+              properties:
+                action_token: { type: string }
+              additionalProperties: true
+      responses:
+        "200": { description: Signed action accepted for background execution }
+        "401": { description: Missing, invalid, or expired action token }
+        "403": { description: Configured role is not authorized }
+        "404": { description: Target is unavailable to the token }
+        "409": { description: Cancellation lost the race to dispatch }
+  /v1/tasks:
+    get:
+      summary: List tasks visible to the current tenant and profile
+      operationId: listTasks
+      responses:
+        "200":
+          description: Visible task receipts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, total, tasks]
+                properties:
+                  ok:
+                    type: boolean
+                  total:
+                    type: integer
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TaskResponse"
+  /v1/tasks/{id}:
+    get:
+      summary: Get a task receipt
+      operationId: getTask
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task receipt
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  task:
+                    $ref: "#/components/schemas/TaskResponse"
+        "404":
+          description: Task not found or not visible to this caller
+  /v1/tasks/{id}/update:
+    post:
+      summary: Submit input responses to a suspended task
+      operationId: updateTask
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [inputResponses]
+              properties:
+                inputResponses:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "200":
+          description: Task input accepted
+        "400":
+          description: Task is not waiting for input
+  /v1/tasks/{id}/cancel:
+    post:
+      summary: Cancel a task or pending emission
+      operationId: cancelTask
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: [string, "null"]
+      responses:
+        "200":
+          description: Task cancelled; repeated emission cancellation is idempotent
+        "409":
+          description: Emission dispatch was already claimed and may have reached the upstream server
+        "404":
+          description: Task not found or not visible to this caller
   /v1/operations/{id}/cancel:
     post:
       summary: Cancel in-flight operation
@@ -697,6 +975,8 @@ paths:
                     type: string
                   cancelled:
                     type: boolean
+        "409":
+          description: Emission dispatch has already started
 components:
   schemas:
     CapabilityListItem:
@@ -892,6 +1172,10 @@ components:
         request_state:
           type: [string, "null"]
           description: MRTR opaque state string
+        async_task:
+          type: boolean
+          default: false
+          description: Return a task receipt immediately, including for delayable hold windows
     ReadResourceRequest:
       type: object
       required: [resource_id]
@@ -992,6 +1276,46 @@ components:
           type: [string, "null"]
         grant_id:
           type: [string, "null"]
+    TaskResponse:
+      type: object
+      required: [taskId, status, createdAt, lastUpdatedAt, createdAtEpochSecs]
+      properties:
+        taskId:
+          type: string
+        status:
+          type: string
+          enum: [working, input_required, completed, failed, cancelled]
+        statusMessage:
+          type: [string, "null"]
+        capabilityId:
+          type: [string, "null"]
+        serverId:
+          type: [string, "null"]
+        requestId:
+          type: [string, "null"]
+        phase:
+          type: [string, "null"]
+          enum: [pending_emission, dispatching, null]
+        releaseAtMs:
+          type: [integer, "null"]
+          description: Absolute Unix deadline in milliseconds for a held emission
+        cancellable:
+          type: [boolean, "null"]
+          description: Whether cancellation can still prevent upstream submission
+        createdAt:
+          type: string
+        lastUpdatedAt:
+          type: string
+        createdAtEpochSecs:
+          type: integer
+        expiresAtEpochSecs:
+          type: [integer, "null"]
+        ttlMs:
+          type: [integer, "null"]
+        pollIntervalMs:
+          type: [integer, "null"]
+        result: {}
+        error: {}
     RetryMetadata:
       type: object
       required: [classification, upstream_execution_state]
@@ -1056,6 +1380,171 @@ components:
           type: string
         target:
           type: [string, "null"]
+          description: Canonical target. Omit or set null to remove the alias.
+        summary:
+          type: [string, "null"]
+        description:
+          type: [string, "null"]
+        passthrough:
+          type: [boolean, "null"]
+        reversibility:
+          description: Omitted preserves the existing capability contract; null clears it; an object replaces it.
+          oneOf:
+            - $ref: "#/components/schemas/ReversibilityConfig"
+            - type: "null"
+    UndoEntrySummary:
+      type: object
+      required: [undo_id, tenant_id, forward_capability, inverse_capability, created_at_ms, expires_at_ms, status]
+      description: Safe summary excluding snapshot values and resolved inverse arguments.
+      properties:
+        undo_id: { type: string }
+        tenant_id: { type: string }
+        operation_id: { type: [string, "null"] }
+        work_item_id: { type: [string, "null"] }
+        profile_id: { type: [string, "null"] }
+        actor_id: { type: [string, "null"] }
+        forward_capability: { type: string }
+        inverse_capability: { type: string }
+        change_preview:
+          type: array
+          items: { type: string }
+        snapshot_artifact_hash: { type: [string, "null"] }
+        created_at_ms: { type: integer }
+        expires_at_ms: { type: integer }
+        status:
+          type: string
+          enum: [armed, executing, reverted, expired, failed]
+    UndoListResponse:
+      type: object
+      required: [entries, total, offset, limit]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/UndoEntrySummary"
+        total: { type: integer, minimum: 0 }
+        offset: { type: integer, minimum: 0 }
+        limit: { type: integer, minimum: 1, maximum: 200 }
+    RollbackResult:
+      type: object
+      required: [undo_id, operation_id, capability, ok, error, forced_expired]
+      properties:
+        undo_id: { type: string }
+        operation_id: { type: [string, "null"] }
+        capability: { type: string }
+        ok: { type: boolean }
+        error: { type: [string, "null"] }
+        error_code: { type: string }
+        output: {}
+        audit_event_id: { type: string }
+        audit_hash: { type: string }
+        audit_error:
+          type: string
+          description: Audit persistence failure, independent of the upstream inverse outcome.
+        forced_expired: { type: boolean }
+        entry_status:
+          type: string
+          enum: [armed, executing, reverted, expired, failed]
+    ReversibilityConfig:
+      type: object
+      required: [class]
+      properties:
+        class:
+          type: string
+          enum: [delayable, reversible, compensable, irreversible]
+        holdWindowSecs:
+          type: integer
+          minimum: 1
+          description: Delayable hold duration in seconds.
+        ttlSecs:
+          type: integer
+          minimum: 1
+          default: 3600
+          description: Lifetime of a registered undo action in seconds.
+        dailyLimit:
+          type: integer
+          minimum: 1
+          description: Required rolling daily limit for compensable calls.
+        preSnapshot:
+          $ref: "#/components/schemas/UndoReadConfig"
+        preUndoCheck:
+          $ref: "#/components/schemas/UndoReadConfig"
+        testTarget:
+          type: object
+          required: [server, args]
+          properties:
+            server:
+              type: string
+              minLength: 1
+            args:
+              type: object
+          additionalProperties: false
+        inverse:
+          $ref: "#/components/schemas/UndoInverseConfig"
+      allOf:
+        - if:
+            properties:
+              class: { enum: [reversible, compensable] }
+            required: [class]
+          then:
+            required: [inverse]
+        - if:
+            properties:
+              class: { const: compensable }
+            required: [class]
+          then:
+            required: [dailyLimit]
+        - if:
+            properties:
+              class: { not: { const: delayable } }
+            required: [class]
+          then:
+            not: { required: [holdWindowSecs] }
+        - if:
+            properties:
+              class: { not: { const: compensable } }
+            required: [class]
+          then:
+            not: { required: [dailyLimit] }
+        - if:
+            properties:
+              class: { enum: [delayable, irreversible] }
+            required: [class]
+          then:
+            not:
+              anyOf:
+                - { required: [ttlSecs] }
+                - { required: [preSnapshot] }
+                - { required: [preUndoCheck] }
+                - { required: [testTarget] }
+                - { required: [inverse] }
+        - if:
+            required: [testTarget]
+          then:
+            required: [preSnapshot]
+      additionalProperties: false
+    UndoReadConfig:
+      type: object
+      required: [capability, args]
+      properties:
+        capability:
+          type: string
+          minLength: 1
+        args:
+          type: object
+        captureJsonPath:
+          type: string
+      additionalProperties: false
+    UndoInverseConfig:
+      type: object
+      required: [capability, args]
+      properties:
+        capability:
+          type: string
+          minLength: 1
+        args:
+          type: object
+      additionalProperties: false
     WebhookConfig:
       type: object
       required: [url]
@@ -1064,14 +1553,23 @@ components:
           type: string
         secret:
           type: [string, "null"]
-        secret_env:
+        secretEnv:
           type: [string, "null"]
-        auth_header:
+        authHeader:
           type: [string, "null"]
         headers:
           type: object
           additionalProperties:
             type: string
+        events:
+          type: array
+          items: { type: string }
+          description: ChatOps action events must be explicitly listed to enable buttons, including when this list is empty.
+        callbackUrl:
+          type: string
+          format: uri
+        actionRole:
+          type: string
     PolicyConfig:
       type: object
       properties:
@@ -1083,16 +1581,19 @@ components:
           type: array
           items:
             type: string
-        require_approval:
+        requireApproval:
           type: array
           items:
             type: string
-        approval_timeout_secs:
+        approvalTimeoutSecs:
           type: integer
-        redact_keys:
+        redactKeys:
           type: array
           items:
             type: string
+        holdWindowSecs:
+          type: integer
+          minimum: 1
         webhook:
           $ref: "#/components/schemas/WebhookConfig"
     ApprovalStatus:
@@ -1209,7 +1710,8 @@ components:
           properties:
             code:
               type: string
-              enum:
+              description: Machine-readable failure code. Examples are illustrative and additional codes may be returned.
+              examples:
                 - TOOL_NOT_FOUND
                 - RESOURCE_NOT_FOUND
                 - PROMPT_NOT_FOUND
@@ -1224,6 +1726,14 @@ components:
                 - CIRCUIT_OPEN
                 - OPERATION_CANCELLED
                 - INTERNAL_ERROR
+                - PRE_SNAPSHOT_FAILED
+                - UNDO_STATE_DRIFT
+                - UNDO_STATE_CHECK_FAILED
+                - UNDO_WINDOW_EXPIRED
+                - UNDO_PERSISTENCE_FAILED
+                - AUDIT_PERSISTENCE_FAILED
+                - EMISSION_DISPATCHING
+                - EMISSION_OUTCOME_UNKNOWN
             message:
               type: string
             retryable:
@@ -1280,6 +1790,10 @@ components:
             $ref: "#/components/schemas/BatchStep"
         request_id:
           type: [string, "null"]
+        autoRollbackOnFailure:
+          type: boolean
+          default: false
+          description: Stop at the first failed step and attempt eligible inverses in reverse order.
         context:
           $ref: "#/components/schemas/RequestContext"
     BatchStepResult:
@@ -1311,6 +1825,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/BatchStepResult"
+        rollback_results:
+          type: array
+          items:
+            $ref: "#/components/schemas/RollbackResult"
         total_duration_us:
           type: integer
     IdempotencyRecord:

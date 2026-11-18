@@ -179,6 +179,8 @@ pub struct ProfileContext {
     pub allowed_servers: Option<std::collections::HashSet<String>>,
     /// Optional security policy rules specific to this profile constellation.
     pub profile_policy: Option<crate::daemon::Policy>,
+    /// Whether this profile opts into the protected MCP self-undo tool.
+    pub allow_agent_self_undo: bool,
 }
 
 impl ProfileContext {
@@ -188,6 +190,7 @@ impl ProfileContext {
             profile_id: None,
             allowed_servers: None,
             profile_policy: None,
+            allow_agent_self_undo: false,
         }
     }
 
@@ -201,6 +204,7 @@ impl ProfileContext {
             profile_id: Some(profile_id.into()),
             allowed_servers: Some(set),
             profile_policy: None,
+            allow_agent_self_undo: false,
         }
     }
 
@@ -215,7 +219,14 @@ impl ProfileContext {
             profile_id: Some(profile_id.into()),
             allowed_servers: Some(set),
             profile_policy: policy,
+            allow_agent_self_undo: false,
         }
+    }
+
+    /// Sets whether the selected profile explicitly opts into MCP self-undo.
+    pub fn with_agent_self_undo(mut self, enabled: bool) -> Self {
+        self.allow_agent_self_undo = enabled;
+        self
     }
 
     /// Returns `true` if the given upstream server is allowed in this profile constellation.

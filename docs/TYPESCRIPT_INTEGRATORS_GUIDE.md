@@ -103,6 +103,51 @@ interface BatchStep {
   continue_on_error?: boolean;
 }
 
+/** Request body for a chained batch call. */
+interface BatchCallRequest {
+  steps: BatchStep[];
+  request_id?: string;
+  autoRollbackOnFailure?: boolean;
+}
+
+/** Outcome reported for one inverse attempt during automatic rollback. */
+interface RollbackResult {
+  undo_id: string;
+  operation_id: string | null;
+  capability: string;
+  ok: boolean;
+  error: string | null;
+  error_code?: string;
+  output?: unknown;
+  audit_event_id?: string;
+  audit_hash?: string;
+  audit_error?: string;
+  forced_expired: boolean;
+  entry_status?: "armed" | "executing" | "reverted" | "expired" | "failed";
+}
+
+/** Result envelope for a batch call. */
+interface BatchCallResponse {
+  ok: boolean;
+  request_id: string | null;
+  trace_id: string;
+  results: Array<Record<string, unknown>>;
+  total_duration_us: number;
+  rollback_results: RollbackResult[];
+}
+
+/** Task receipt returned for asynchronous execution and held emissions. */
+interface TaskReceipt {
+  taskId: string;
+  status: "working" | "input_required" | "completed" | "failed" | "cancelled";
+  requestId?: string;
+  phase?: "pending_emission" | "dispatching";
+  releaseAtMs?: number;
+  cancellable?: boolean;
+  result?: unknown;
+  error?: unknown;
+}
+
 /** Context distillation options for limiting tool output. */
 interface DistillOptions {
   /** JSONPath selector (e.g. `$.items[*].name`). */
@@ -208,6 +253,10 @@ class WarmplaneClient {
    *
    * Optionally pass an `idempotencyKey` for safe retries of mutating
    * operations.
+   * Reversible and compensable behavior is configured on the daemon's
+   * capability alias; it does not require extra request fields. When a
+   * compensable daily limit is reached, the daemon routes the call through
+   * its existing approval flow.
    */
   async callTool(
     capabilityId: string,
@@ -252,10 +301,17 @@ class WarmplaneClient {
    * Executes a chained batch of tool steps in a single round-trip.
    *
    * Steps can reference outputs from earlier steps using `$step_id.field`
-   * variable interpolation syntax.
+   * variable interpolation syntax. Configured reversible and compensable
+   * contracts are applied to each successful step by the daemon.
    */
-  async batchCall(steps: BatchStep[]): Promise<unknown> {
-    return this.postJson("/v1/tools/batch_call", { steps });
+  async batchCall(
+    steps: BatchStep[],
+    autoRollbackOnFailure = false,
+  ): Promise<BatchCallResponse> {
+    return this.postJson("/v1/tools/batch_call", {
+      steps,
+      autoRollbackOnFailure,
+    });
   }
 
   // ------------------------------------------------------------------
@@ -405,6 +461,81 @@ const result = await wp.callTool("filesystem.read_file", {
 });
 console.log("Result:", JSON.stringify(result.data, null, 2));
 ```
+
+### Delayable Emissions
+
+For a delayable alias, send `async_task: true` to receive a task receipt without waiting for the hold window. A synchronous request waits only when the configured hold is shorter than `toolTimeoutMs`; otherwise it also returns a task. Duration precedence is profile policy, alias `holdWindowSecs`, global policy, then 30 seconds. Approval runs before the countdown and approved argument edits are preserved.
+
+```typescript
+const response = await fetch("http://127.0.0.1:9090/v1/tools/call", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    capability_id: "mail.send",
+    args: { to: "person@example.com", body: "Hello" },
+    async_task: true,
+  }),
+});
+const body = await response.json();
+const task = body.task as TaskReceipt;
+console.log(task.phase, task.releaseAtMs, task.cancellable);
+
+const cancelled = await fetch(
+  `http://127.0.0.1:9090/v1/tasks/${encodeURIComponent(task.taskId)}/cancel`,
+  { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+);
+if (cancelled.status === 409) {
+  // Dispatch has been claimed; the upstream outcome may be pending.
+}
+```
+
+Task status can be polled with `GET /v1/tasks/{taskId}`. Cancellation can also use `POST /v1/operations/{requestId}/cancel`; it succeeds only before dispatch claim. Pending holds resume after restart and policy/profile revalidation. A task recovered in `dispatching` fails with `EMISSION_OUTCOME_UNKNOWN` and is not resent automatically. Batch steps wait for held results within the shared 60-second batch budget.
+
+### Operator Undo
+
+The daemon provides `GET /v1/undo`, `GET /v1/undo/{undo_id}`, `POST /v1/undo/{undo_id}/execute`, and `POST /v1/undo/work-items/{work_item_id}/rollback`. Configure per-role `undoPermissions` in RBAC. Entry summaries may include filtered inverse field names, but omit inverse arguments and snapshot contents; cross-tenant entry IDs return `404`. Setting `forceExpired: true` additionally requires the `forceExpired` permission and a non-empty `reason`; successful execution returns the committed audit event ID and hash.
+
+`GET /v1/resources/updates` also emits named `action_capsule` invalidations with only `{ "refresh": true }`; fetch `/v1/undo` and `/v1/tasks` to update the current tenant's feed. Internal snapshot and drift-check capabilities must be allowed without approval. A pre-snapshot policy failure prevents the forward call, a post-state capture failure reports inverse registration failure after the effect, and a blocked pre-undo check leaves the entry armed. Optional `preUndoCheck` blocks inverse dispatch when the upstream state hash has drifted. ChatOps cards are opt-in through `policy.webhook.events` and submit a target-scoped action token to `/v1/webhooks/actions`; force-expired undo is unavailable through that route.
+
+`POST /v1/undo/test` accepts `{ "alias": "..." }` for an alias configured with `testTarget.server`, fixed `testTarget.args`, and `preSnapshot`. It runs the cycle against that test server and returns whether the observed state matched its original snapshot, without returning snapshot or tool output values.
+
+Lists use `GET /v1/undo?offset=0&limit=50` and return `{ok, result: {entries, total, offset, limit}}`. The maximum page size is 200. The Action Feed displays pages of 50 and retains the selected page on refresh. Work-item rollback covers eligible entries across pages, with reverse registration order breaking equal creation timestamps. Automatic rollback rechecks expiry at each claim.
+
+ChatOps callbacks acknowledge valid tokens immediately and execute in the background. Inspect the entry or task afterward for completion and drift failures.
+
+### Configure Alias Reversibility
+
+Reversibility contracts are attached to capability aliases. They can be edited in the Control Deck's **Facade & Alias Studio** or through `POST /v1/config/alias`:
+
+```json
+{
+  "kind": "tool",
+  "alias": "issue.update",
+  "target": "issues.update",
+  "reversibility": {
+    "class": "reversible",
+    "ttlSecs": 86400,
+    "preSnapshot": {
+      "capability": "issues.read",
+      "args": {"id": "${args.id}"},
+      "captureJsonPath": "$.priority"
+    },
+    "preUndoCheck": {
+      "capability": "issues.read",
+      "args": {"id": "${args.id}"},
+      "captureJsonPath": "$.priority"
+    },
+    "inverse": {
+      "capability": "issues.update",
+      "args": {"id": "${args.id}", "priority": "${snapshot}"}
+    }
+  }
+}
+```
+
+When updating an existing alias, omitting `reversibility` preserves its current contract; sending `"reversibility": null` removes it. The daemon validates class-specific fields and argument object shapes before saving.
+
+If task persistence is disabled, held emissions remain in memory and are lost when the daemon exits. Configure persistent state to recover them after restart.
 
 ### 3. Context distillation — limit large outputs
 

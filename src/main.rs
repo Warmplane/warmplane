@@ -371,6 +371,9 @@ async fn main() -> Result<()> {
         Commands::Tasks { command } => {
             cli_config::handle_task_command(command).await?;
         }
+        Commands::Undo { command } => {
+            cli_config::handle_undo_command(command).await?;
+        }
         Commands::Idempotency { command } => {
             cli_config::handle_idempotency_command(command).await?;
         }

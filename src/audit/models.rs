@@ -1,5 +1,4 @@
-// Rust guideline compliant 2026-08-15
-
+// Rust guideline compliant 2026-11-16
 //! Canonical data models for the WORM audit trail logging system.
 //!
 //! Adheres to `M-CANONICAL-DOCS` with comprehensive docstrings and serialization formats.
@@ -28,6 +27,16 @@ pub enum AuditEventType {
     SamplingCall,
     /// Resource read or prompt fetch event.
     ResourceAccess,
+    /// A delayable emission was accepted and is waiting for its release deadline.
+    EmissionHeld,
+    /// A pending delayable emission was cancelled before dispatch.
+    EmissionCancelled,
+    /// An inverse action completed successfully.
+    UndoExecuted,
+    /// An inverse action failed or was blocked.
+    UndoFailed,
+    /// An operator authorized execution after an undo window expired.
+    UndoForceAuthorized,
 }
 
 /// Execution or disposition status for an audit event.

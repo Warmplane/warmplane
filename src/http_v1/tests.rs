@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-27
+// Rust guideline compliant 2026-11-17
 
 //! Comprehensive unit and integration test suite for HTTP v1 facade API handlers.
 
@@ -14,15 +14,15 @@ use crate::{
         },
         config_api::{
             handle_delete_profile, handle_get_config, handle_get_ecosystem_sources,
-            handle_reload_config, handle_upsert_profile, handle_upsert_server,
+            handle_reload_config, handle_update_alias, handle_upsert_profile, handle_upsert_server,
         },
         execute::handle_call_capability,
         helpers::redact_value,
         types::{
             ApproveTicketRequest, CallCapabilityRequest, CatalogEventsQuery, CompletionRequest,
             GetPromptRequest, ReadResourceRequest, RejectTicketRequest, RespondSamplingRequest,
-            SamplingListQuery, SamplingRequest, SearchCapabilitiesRequest, UpsertProfileRequest,
-            UpsertServerRequest,
+            ReversibilityUpdate, SamplingListQuery, SamplingRequest, SearchCapabilitiesRequest,
+            UpdateAliasRequest, UpsertProfileRequest, UpsertServerRequest,
         },
         ui::handle_ui_dashboard,
     },
@@ -84,6 +84,200 @@ async fn test_completion_endpoint() {
         .await
         .into_response();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn undo_get_conceals_cross_tenant_ids_and_redacts_inverse_arguments() {
+    let directory = tempfile::tempdir().unwrap();
+    let ledger = crate::undo::UndoLedgerStore::open(directory.path().join("undo.json")).unwrap();
+    ledger
+        .register(crate::undo::UndoEntry {
+            undo_id: "undo-owned".to_string(),
+            operation_id: None,
+            work_item_id: None,
+            batch_id: None,
+            tenant_id: "tenant-a".to_string(),
+            profile_id: None,
+            actor_id: None,
+            forward_capability: "forward.call".to_string(),
+            reversibility_class: "reversible".to_string(),
+            resolved_inverse_capability: "inverse.call".to_string(),
+            resolved_inverse_args: json!({"private": "value"}),
+            change_preview: vec!["priority".to_string()],
+            snapshot_artifact_hash: Some("a".repeat(64)),
+            pre_undo_check: None,
+            expected_post_snapshot_hash: None,
+            created_at_ms: 1,
+            expires_at_ms: 100,
+            status: crate::undo::UndoEntryStatus::Armed,
+        })
+        .await
+        .unwrap();
+    let state = AppState::builder().undo_ledger(ledger).build();
+    let response = crate::http_v1::undo_api::handle_get_undo(
+        State(state.clone()),
+        Path("undo-owned".to_string()),
+        axum::extract::Extension(Some(crate::rbac::TenantContext {
+            tenant_id: "tenant-b".to_string(),
+            role: "operator".to_string(),
+            actor_id: None,
+            grant_id: None,
+            grant_expires_at_epoch_secs: None,
+            effective_policy: crate::daemon::Policy::default(),
+        })),
+        None,
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = crate::http_v1::undo_api::handle_get_undo(
+        State(state),
+        Path("undo-owned".to_string()),
+        axum::extract::Extension(Some(crate::rbac::TenantContext {
+            tenant_id: "tenant-a".to_string(),
+            role: "operator".to_string(),
+            actor_id: None,
+            grant_id: None,
+            grant_expires_at_epoch_secs: None,
+            effective_policy: crate::daemon::Policy::default(),
+        })),
+        None,
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: Value = serde_json::from_slice(&body).unwrap();
+    let serialized = value.to_string();
+    assert!(!serialized.contains("resolved_inverse_args"));
+    assert!(!serialized.contains("private"));
+    assert!(serialized.contains("priority"));
+    assert!(serialized.contains(&"a".repeat(64)));
+}
+
+#[tokio::test]
+async fn undo_contract_test_uses_only_configured_test_target_and_checks_equivalence() {
+    use crate::config::{
+        AliasTarget, InverseConfig, McpConfig, PreSnapshotConfig, ReversibilityClass,
+        ReversibilityConfig, UndoTestTargetConfig,
+    };
+    use crate::daemon::ServerMsg;
+    use axum::body::to_bytes;
+    use serde_json::json;
+    use std::{collections::HashMap, sync::Arc};
+
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.json");
+    let contract = ReversibilityConfig {
+        class: ReversibilityClass::Reversible,
+        hold_window_secs: None,
+        ttl_secs: Some(60),
+        daily_limit: None,
+        pre_snapshot: Some(Box::new(PreSnapshotConfig {
+            capability: "test.get_issue".to_string(),
+            args: json!({"id":"${args.id}"}),
+            capture_json_path: Some("$.priority".to_string()),
+        })),
+        pre_undo_check: None,
+        test_target: Some(Box::new(UndoTestTargetConfig {
+            server: "test-server".to_string(),
+            args: json!({"id":"ISSUE-T"}),
+        })),
+        inverse: Some(Box::new(InverseConfig {
+            capability: "test.set_priority".to_string(),
+            args: json!({"id":"${args.id}","priority":"${snapshot}"}),
+        })),
+    };
+    let config = McpConfig {
+        capability_aliases: HashMap::from([(
+            "tickets.set_priority".to_string(),
+            AliasTarget::Detailed {
+                target: "test.set_priority".to_string(),
+                summary: None,
+                description: None,
+                passthrough: false,
+                reversibility: Some(contract),
+            },
+        )]),
+        ..Default::default()
+    };
+    crate::config::save_config(config_path.to_str().unwrap(), &config).unwrap();
+
+    let forward = crate::daemon::CapabilityMeta::new(
+        "production",
+        "set_priority",
+        "Set priority",
+        "Set priority",
+        json!({"type":"object"}),
+    );
+    let getter = crate::daemon::CapabilityMeta::new(
+        "production",
+        "get_issue",
+        "Get issue",
+        "Get issue",
+        json!({"type":"object"}),
+    );
+    let inverse = crate::daemon::CapabilityMeta::new(
+        "production",
+        "set_priority",
+        "Set priority",
+        "Set priority",
+        json!({"type":"object"}),
+    );
+    let (server_tx, mut server_rx) = tokio::sync::mpsc::channel(8);
+    let live_value = Arc::new(tokio::sync::Mutex::new("low".to_string()));
+    let state = AppState::builder()
+        .config_path(config_path.to_string_lossy().to_string())
+        .servers(HashMap::from([("test-server".to_string(), server_tx)]))
+        .capabilities(HashMap::from([
+            ("test.set_priority".to_string(), forward),
+            ("test.get_issue".to_string(), getter),
+            ("test.inverse_unused".to_string(), inverse),
+        ]))
+        .build();
+    let server_value = live_value.clone();
+    let responder = tokio::spawn(async move {
+        while let Some(ServerMsg::CallTool {
+            name,
+            params,
+            reply,
+            ..
+        }) = server_rx.recv().await
+        {
+            match name.as_str() {
+                "get_issue" => {
+                    let value = server_value.lock().await.clone();
+                    let _ = reply.send(Ok(json!({"priority": value})));
+                }
+                "set_priority" => {
+                    if let Some(priority) =
+                        params.get("priority").and_then(serde_json::Value::as_str)
+                    {
+                        *server_value.lock().await = priority.to_string();
+                    }
+                    let _ = reply.send(Ok(json!({"ok": true})));
+                }
+                _ => break,
+            }
+        }
+    });
+    let response = crate::http_v1::undo_api::handle_test_undo_contract(
+        State(state),
+        axum::extract::Extension(None),
+        None,
+        Json(crate::http_v1::undo_api::UndoContractTestRequest {
+            alias: "tickets.set_priority".to_string(),
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["result"]["observationally_equivalent"], true);
+    assert_eq!(*live_value.lock().await, "low");
+    responder.abort();
 }
 
 #[tokio::test]
@@ -801,6 +995,207 @@ async fn test_ui_and_config_rest_api() {
 }
 
 #[tokio::test]
+async fn capability_alias_reversibility_can_be_saved_preserved_and_cleared() {
+    use crate::config::{
+        InverseConfig, PreSnapshotConfig, ReversibilityClass, ReversibilityConfig,
+        UndoTestTargetConfig,
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.json");
+    let config_path = config_path.to_string_lossy().into_owned();
+    let state = AppState::builder().config_path(config_path.clone()).build();
+    let contract = ReversibilityConfig {
+        class: ReversibilityClass::Reversible,
+        hold_window_secs: None,
+        ttl_secs: Some(3_600),
+        daily_limit: None,
+        pre_snapshot: Some(Box::new(PreSnapshotConfig {
+            capability: "issues.read".to_string(),
+            args: json!({"id": "${args.id}"}),
+            capture_json_path: Some("$.priority".to_string()),
+        })),
+        pre_undo_check: Some(Box::new(PreSnapshotConfig {
+            capability: "issues.read".to_string(),
+            args: json!({"id": "${args.id}"}),
+            capture_json_path: Some("$.priority".to_string()),
+        })),
+        test_target: Some(Box::new(UndoTestTargetConfig {
+            server: "issues-test".to_string(),
+            args: json!({"id": "TEST-1"}),
+        })),
+        inverse: Some(Box::new(InverseConfig {
+            capability: "issues.update".to_string(),
+            args: json!({"id": "${args.id}", "priority": "${snapshot}"}),
+        })),
+    };
+
+    let create = handle_update_alias(
+        State(state.clone()),
+        Json(UpdateAliasRequest {
+            kind: "tool".to_string(),
+            alias: "issue.update".to_string(),
+            target: Some("issues.update".to_string()),
+            summary: None,
+            description: None,
+            passthrough: None,
+            reversibility: ReversibilityUpdate::Set(contract.clone()),
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(create.status(), StatusCode::OK);
+    let saved = crate::config::load_or_default_config(&config_path).unwrap();
+    assert_eq!(
+        saved.capability_aliases["issue.update"].reversibility(),
+        Some(&contract)
+    );
+
+    for kind in ["resource", "prompt"] {
+        for summary in [None, Some("Updated summary".to_string())] {
+            let response = handle_update_alias(
+                State(state.clone()),
+                Json(UpdateAliasRequest {
+                    kind: kind.to_string(),
+                    alias: "issue.update".to_string(),
+                    target: Some("shared.target".to_string()),
+                    summary,
+                    description: None,
+                    passthrough: None,
+                    reversibility: ReversibilityUpdate::Preserve,
+                }),
+            )
+            .await
+            .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            let saved = crate::config::load_or_default_config(&config_path).unwrap();
+            let alias = if kind == "resource" {
+                &saved.resource_aliases["issue.update"]
+            } else {
+                &saved.prompt_aliases["issue.update"]
+            };
+            assert!(alias.reversibility().is_none());
+            assert_eq!(
+                saved.capability_aliases["issue.update"].reversibility(),
+                Some(&contract)
+            );
+        }
+    }
+
+    let edit_without_contract = handle_update_alias(
+        State(state.clone()),
+        Json(UpdateAliasRequest {
+            kind: "tool".to_string(),
+            alias: "issue.update".to_string(),
+            target: Some("issues.update_v2".to_string()),
+            summary: Some("Update an issue".to_string()),
+            description: None,
+            passthrough: None,
+            reversibility: ReversibilityUpdate::Preserve,
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(edit_without_contract.status(), StatusCode::OK);
+    let saved = crate::config::load_or_default_config(&config_path).unwrap();
+    assert_eq!(
+        saved.capability_aliases["issue.update"].reversibility(),
+        Some(&contract)
+    );
+
+    let clear = handle_update_alias(
+        State(state.clone()),
+        Json(UpdateAliasRequest {
+            kind: "tool".to_string(),
+            alias: "issue.update".to_string(),
+            target: Some("issues.update_v2".to_string()),
+            summary: None,
+            description: None,
+            passthrough: None,
+            reversibility: ReversibilityUpdate::Clear,
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(clear.status(), StatusCode::OK);
+    let saved = crate::config::load_or_default_config(&config_path).unwrap();
+    assert_eq!(
+        saved.capability_aliases["issue.update"].reversibility(),
+        None
+    );
+
+    let invalid_contract = ReversibilityConfig {
+        class: ReversibilityClass::Reversible,
+        hold_window_secs: None,
+        ttl_secs: None,
+        daily_limit: None,
+        pre_snapshot: None,
+        pre_undo_check: None,
+        test_target: None,
+        inverse: None,
+    };
+    let invalid = handle_update_alias(
+        State(state),
+        Json(UpdateAliasRequest {
+            kind: "tool".to_string(),
+            alias: "issue.update".to_string(),
+            target: Some("issues.update_v2".to_string()),
+            summary: None,
+            description: None,
+            passthrough: None,
+            reversibility: ReversibilityUpdate::Set(invalid_contract),
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    let saved = crate::config::load_or_default_config(&config_path).unwrap();
+    assert_eq!(
+        saved.capability_aliases["issue.update"].reversibility(),
+        None
+    );
+}
+
+#[test]
+fn alias_update_deserialization_distinguishes_omitted_and_null_reversibility() {
+    use crate::config::ReversibilityClass;
+
+    let base = json!({"kind": "tool", "alias": "a", "target": "server.tool"});
+    let omitted: UpdateAliasRequest = serde_json::from_value(base.clone()).unwrap();
+    assert!(matches!(
+        omitted.reversibility,
+        ReversibilityUpdate::Preserve
+    ));
+
+    let cleared: UpdateAliasRequest = serde_json::from_value(
+        json!({"kind": "tool", "alias": "a", "target": "server.tool", "reversibility": null}),
+    )
+    .unwrap();
+    assert!(matches!(cleared.reversibility, ReversibilityUpdate::Clear));
+
+    let replaced: UpdateAliasRequest = serde_json::from_value(json!({
+        "kind": "tool",
+        "alias": "a",
+        "target": "server.tool",
+        "reversibility": {"class": "irreversible"}
+    }))
+    .unwrap();
+    assert_eq!(
+        replaced.reversibility,
+        ReversibilityUpdate::Set(crate::config::ReversibilityConfig {
+            class: ReversibilityClass::Irreversible,
+            hold_window_secs: None,
+            ttl_secs: None,
+            daily_limit: None,
+            pre_snapshot: None,
+            pre_undo_check: None,
+            test_target: None,
+            inverse: None,
+        })
+    );
+}
+
+#[tokio::test]
 async fn test_get_config_sanitizes_secrets() {
     use crate::config::{
         AuditConfig, AuthConfig, McpConfig, PolicyConfig, ServerConfig, SiemConfig,
@@ -905,6 +1300,7 @@ async fn test_hitl_approval_flow_and_endpoints() {
         redact_keys: vec![],
         require_approval: vec!["docker.run*".to_string()],
         approval_timeout_secs: 10,
+        hold_window_secs: None,
         webhook: None,
     };
 
@@ -1058,6 +1454,7 @@ async fn test_hitl_rejection_returns_structured_envelope() {
         redact_keys: vec![],
         require_approval: vec!["db.drop*".to_string()],
         approval_timeout_secs: 5,
+        hold_window_secs: None,
         webhook: None,
     };
 
@@ -1470,6 +1867,7 @@ async fn test_ui_config_profiles_crud() {
             servers: vec!["s1".to_string()],
             description: Some("Developer tools".to_string()),
             policy: None,
+            allow_agent_self_undo: false,
         }),
     )
     .await
@@ -1493,6 +1891,7 @@ async fn test_ui_config_profiles_crud() {
             servers: vec!["nonexistent_srv".to_string()],
             description: None,
             policy: None,
+            allow_agent_self_undo: false,
         }),
     )
     .await

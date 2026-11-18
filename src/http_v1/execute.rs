@@ -1,7 +1,7 @@
-// Rust guideline compliant 2026-08-27
-
+// Rust guideline compliant 2026-11-16
 //! Capability tool execution handlers, cancellation, rate limiting, and HITL approval workflow.
 
+use anyhow::Context;
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -29,7 +29,10 @@ pub async fn handle_call_capability(
     headers: HeaderMap,
     Json(payload): Json<CallCapabilityRequest>,
 ) -> impl IntoResponse {
-    let prof_ctx = prof_ext.map(|e| e.0).unwrap_or_default();
+    let prof_ctx = prof_ext
+        .as_ref()
+        .map(|extension| extension.0.clone())
+        .unwrap_or_default();
     let start_time = std::time::Instant::now();
     state.total_tool_calls.fetch_add(1, Ordering::Relaxed);
     let trace_id = next_trace_id();
@@ -69,6 +72,57 @@ pub async fn handle_call_capability(
     } else {
         crate::idempotency::RetryMetadata::unsafe_op
     };
+
+    if let Some(key) = idempotency_key.as_deref() {
+        if let Some(task) = state.task_registry.find_by_idempotency_key(key).await {
+            if task.emission.is_some() {
+                let tenant = req_ext
+                    .0
+                    .as_ref()
+                    .map(|context| context.tenant_id.as_str())
+                    .unwrap_or("default");
+                let default_role = state.rbac_engine.default_role();
+                let role = req_ext
+                    .0
+                    .as_ref()
+                    .map(|context| context.role.as_str())
+                    .unwrap_or(default_role.as_str());
+                let profile = prof_ext
+                    .as_ref()
+                    .and_then(|extension| extension.0.profile_id.as_deref());
+                if !state
+                    .hold_coordinator
+                    .can_access_task(&state, &task, tenant, role, profile)
+                    .await
+                {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(error_envelope(
+                            trace_id,
+                            Some(request_id),
+                            Some(req_context),
+                            retry_base("not_started"),
+                            "POLICY_DENIED",
+                            "Held task is not accessible to this caller",
+                            false,
+                        )),
+                    )
+                        .into_response();
+                }
+                let status = if matches!(
+                    task.status,
+                    crate::tasks::TaskStatus::Completed
+                        | crate::tasks::TaskStatus::Failed
+                        | crate::tasks::TaskStatus::Cancelled
+                ) {
+                    StatusCode::OK
+                } else {
+                    StatusCode::ACCEPTED
+                };
+                return (status, Json(json!({"ok": true, "resultType": "task", "task": crate::tasks::TaskResponse::from(&task), "request_id": request_id, "trace_id": trace_id}))).into_response();
+            }
+        }
+    }
 
     if let Some(ref key) = idempotency_key {
         match state
@@ -141,7 +195,7 @@ pub async fn handle_call_capability(
             .into_response();
     }
 
-    let (requires_approval, approval_timeout_secs, webhook_cfg, redact_keys) = {
+    let (mut requires_approval, approval_timeout_secs, webhook_cfg, redact_keys, effective_policy) = {
         let base_pol = state.policy.read().await;
         let pol = req_ext
             .0
@@ -198,10 +252,11 @@ pub async fn handle_call_capability(
             pol.approval_timeout_secs,
             pol.webhook.clone(),
             pol.redact_keys.clone(),
+            pol,
         )
     };
 
-    let (server_id, tool_name) = {
+    let (server_id, tool_name, reversibility) = {
         let caps_guard = state.capabilities.read().await;
         let Some(meta) = caps_guard.get(&payload.capability_id) else {
             state.operation_registry.unregister(&request_id).await;
@@ -246,8 +301,88 @@ pub async fn handle_call_capability(
                 .into_response();
         }
 
-        (meta.server.clone(), meta.tool.clone())
+        (
+            meta.server.clone(),
+            meta.tool.clone(),
+            meta.reversibility.clone(),
+        )
     };
+
+    let tenant_id = req_ext
+        .0
+        .as_ref()
+        .map(|ctx| ctx.tenant_id.as_str())
+        .unwrap_or("default")
+        .to_string();
+    let caller_role = req_ext
+        .0
+        .as_ref()
+        .map(|context| context.role.clone())
+        .unwrap_or_else(|| state.rbac_engine.default_role().to_string());
+    let caller_grant_expires_at_epoch_secs = req_ext
+        .0
+        .as_ref()
+        .and_then(|context| context.grant_expires_at_epoch_secs);
+    let mut compensable_reserved = false;
+    if let Some(contract) = reversibility
+        .as_ref()
+        .filter(|contract| contract.class == crate::config::ReversibilityClass::Compensable)
+    {
+        if state.undo_ledger.is_none() {
+            state.operation_registry.unregister(&request_id).await;
+            if let Some(ref key) = idempotency_key {
+                state.idempotency_store.remove(key).await;
+            }
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    retry_base("not_started"),
+                    "UNDO_STORAGE_UNAVAILABLE",
+                    "Persistent undo storage is unavailable",
+                    false,
+                )),
+            )
+                .into_response();
+        }
+        if !requires_approval {
+            match crate::engine::undo::reserve_compensable(
+                &state,
+                contract,
+                &payload.capability_id,
+                &tenant_id,
+                prof_ctx.profile_id.as_deref(),
+                idempotency_key.as_deref(),
+                false,
+            )
+            .await
+            {
+                Ok(true) => compensable_reserved = true,
+                Ok(false) => requires_approval = true,
+                Err(error) => {
+                    state.operation_registry.unregister(&request_id).await;
+                    if let Some(ref key) = idempotency_key {
+                        state.idempotency_store.remove(key).await;
+                    }
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(error_envelope(
+                            trace_id,
+                            Some(request_id),
+                            Some(req_context),
+                            retry_base("not_started"),
+                            "COMPENSABLE_LIMIT_STORAGE_FAILED",
+                            error.to_string(),
+                            true,
+                        )),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    }
 
     let mut effective_args = payload.args.clone();
 
@@ -343,6 +478,15 @@ pub async fn handle_call_capability(
             let input_responses_clone = payload.input_responses.clone();
             let request_state_clone = payload.request_state.clone();
             let idempotency_key_clone = idempotency_key.clone();
+            let reversibility_clone = reversibility.clone();
+            let profile_clone = prof_ctx.clone();
+            let policy_clone = effective_policy.clone();
+            let tenant_id_clone = tenant_id.clone();
+            let caller_role_clone = caller_role.clone();
+            let caller_grant_expires_at_epoch_secs_clone = caller_grant_expires_at_epoch_secs;
+            let context_clone = req_context.clone();
+            let capability_clone = payload.capability_id.clone();
+            let reserved_clone = compensable_reserved;
 
             tokio::spawn(async move {
                 let mut worker_args = effective_args_clone;
@@ -386,6 +530,157 @@ pub async fn handle_call_capability(
                         }
                     }
                 }
+
+                if !reserved_clone {
+                    if let Some(contract) = reversibility_clone.as_ref().filter(|contract| {
+                        contract.class == crate::config::ReversibilityClass::Compensable
+                    }) {
+                        match crate::engine::undo::reserve_compensable(
+                            &state_clone,
+                            contract,
+                            &capability_clone,
+                            &tenant_id_clone,
+                            profile_clone.profile_id.as_deref(),
+                            idempotency_key_clone.as_deref(),
+                            true,
+                        )
+                        .await
+                        {
+                            Ok(true) => {}
+                            Ok(false) | Err(_) => {
+                                let _ = state_clone.task_registry.fail_task(
+                                    &task_id_clone,
+                                    serde_json::json!({"code": "COMPENSABLE_LIMIT_STORAGE_FAILED"}),
+                                    Some("Could not reserve compensable invocation".to_string()),
+                                ).await;
+                                if let Some(ref key) = idempotency_key_clone {
+                                    state_clone.idempotency_store.remove(key).await;
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                if let Some(contract) = reversibility_clone.as_ref().filter(|contract| {
+                    contract.class == crate::config::ReversibilityClass::Delayable
+                }) {
+                    let global_window = state_clone.policy.read().await.hold_window_secs;
+                    let profile_window = profile_clone
+                        .profile_policy
+                        .as_ref()
+                        .and_then(|profile_policy| profile_policy.hold_window_secs);
+                    let hold_secs = crate::emissions::effective_hold_window_secs(
+                        contract,
+                        profile_window,
+                        global_window,
+                    )
+                    .unwrap_or(30);
+                    let emission = match crate::emissions::release_deadline_ms(hold_secs) {
+                        Ok(release_at_ms) => crate::tasks::EmissionRecord {
+                            phase: crate::tasks::EmissionPhase::PendingEmission,
+                            release_at_ms,
+                            cancellable: true,
+                            tool_name: tool_name_clone.clone(),
+                            input_responses: input_responses_clone.clone(),
+                            request_state: request_state_clone.clone(),
+                            profile_id: profile_clone.profile_id.clone(),
+                            tenant_id: tenant_id_clone.clone(),
+                            role: caller_role_clone.clone(),
+                            authorization_expires_at_epoch_secs:
+                                caller_grant_expires_at_epoch_secs_clone,
+                            approval_completed: true,
+                            batch_id: None,
+                            step_id: None,
+                        },
+                        Err(error) => {
+                            let _ = state_clone
+                                .task_registry
+                                .fail_task(
+                                    &task_id_clone,
+                                    serde_json::json!({"code": "INVALID_HOLD_WINDOW"}),
+                                    Some(error.to_string()),
+                                )
+                                .await;
+                            return;
+                        }
+                    };
+                    match state_clone
+                        .hold_coordinator
+                        .queue_existing(&state_clone, &task_id_clone, worker_args.clone(), emission)
+                        .await
+                    {
+                        Ok(Some(_)) | Ok(None) => return,
+                        Err(error) => {
+                            let _ = state_clone
+                                .task_registry
+                                .fail_task(
+                                    &task_id_clone,
+                                    serde_json::json!({"code": "EMISSION_PERSISTENCE_FAILED"}),
+                                    Some(error.to_string()),
+                                )
+                                .await;
+                            if let Some(key) = idempotency_key_clone.as_deref() {
+                                state_clone.idempotency_store.remove(key).await;
+                            }
+                            return;
+                        }
+                    }
+                }
+
+                let (snapshot, snapshot_hash) = if let Some(contract) = reversibility_clone.as_ref()
+                {
+                    if matches!(
+                        contract.class,
+                        crate::config::ReversibilityClass::Reversible
+                            | crate::config::ReversibilityClass::Compensable
+                    ) && state_clone.undo_ledger.is_none()
+                    {
+                        let _ = state_clone
+                            .task_registry
+                            .fail_task(
+                                &task_id_clone,
+                                serde_json::json!({"code": "UNDO_STORAGE_UNAVAILABLE"}),
+                                Some("Persistent undo storage is unavailable".to_string()),
+                            )
+                            .await;
+                        if let Some(ref key) = idempotency_key_clone {
+                            state_clone.idempotency_store.remove(key).await;
+                        }
+                        return;
+                    }
+                    if let Some(pre_snapshot) = &contract.pre_snapshot {
+                        match crate::engine::undo::capture_pre_snapshot(
+                            &state_clone,
+                            pre_snapshot,
+                            &worker_args,
+                            &profile_clone,
+                            &policy_clone,
+                        )
+                        .await
+                        {
+                            Ok(value) => value,
+                            Err(error) => {
+                                let _ = state_clone
+                                    .task_registry
+                                    .fail_task(
+                                        &task_id_clone,
+                                        serde_json::json!({"code": "PRE_SNAPSHOT_FAILED"}),
+                                        Some(error.to_string()),
+                                    )
+                                    .await;
+                                if let Some(ref key) = idempotency_key_clone {
+                                    state_clone.idempotency_store.remove(key).await;
+                                }
+                                return;
+                            }
+                        }
+                    } else {
+                        (Value::Null, None)
+                    }
+                } else {
+                    (Value::Null, None)
+                };
 
                 let tx = {
                     let servers_guard = state_clone.servers.read().await;
@@ -447,6 +742,52 @@ pub async fn handle_call_capability(
                             .circuit_breakers
                             .record_success(&server_id_clone)
                             .await;
+                        if let Some(contract) = reversibility_clone.as_ref() {
+                            if let Err(error) = crate::engine::undo::register_inverse(
+                                &state_clone,
+                                contract,
+                                crate::engine::undo::ForwardCall {
+                                    capability: &capability_clone,
+                                    args: &worker_args,
+                                    result: &data,
+                                    snapshot: &snapshot,
+                                    snapshot_hash,
+                                    context: &context_clone,
+                                    batch_id: None,
+                                    tenant_id: &tenant_id_clone,
+                                    profile_id: profile_clone.profile_id.as_deref(),
+                                },
+                                &profile_clone,
+                                &policy_clone,
+                            )
+                            .await
+                            {
+                                let _ = state_clone
+                                    .task_registry
+                                    .fail_task(
+                                        &task_id_clone,
+                                        serde_json::json!({"code": "UNDO_REGISTRATION_FAILED"}),
+                                        Some(error.to_string()),
+                                    )
+                                    .await;
+                                if let Some(ref key) = idempotency_key_clone {
+                                    let failed_response = crate::http_v1::types::error_envelope(
+                                        trace_id_clone.clone(),
+                                        Some(req_id_clone.clone()),
+                                        Some(req_ctx_clone.clone()),
+                                        retry_base("completed"),
+                                        "UNDO_REGISTRATION_FAILED",
+                                        format!("Forward call succeeded but inverse registration failed: {error}"),
+                                        false,
+                                    );
+                                    state_clone
+                                        .idempotency_store
+                                        .complete(key, failed_response)
+                                        .await;
+                                }
+                                return;
+                            }
+                        }
                         let distilled_data =
                             crate::context_filter::distill_value(data, &distill_opts);
                         let _ = state_clone
@@ -676,6 +1017,308 @@ pub async fn handle_call_capability(
         }
     }
 
+    if requires_approval && !compensable_reserved {
+        if let Some(contract) = reversibility
+            .as_ref()
+            .filter(|contract| contract.class == crate::config::ReversibilityClass::Compensable)
+        {
+            if let Err(error) = crate::engine::undo::reserve_compensable(
+                &state,
+                contract,
+                &payload.capability_id,
+                &tenant_id,
+                prof_ctx.profile_id.as_deref(),
+                idempotency_key.as_deref(),
+                true,
+            )
+            .await
+            {
+                state.operation_registry.unregister(&request_id).await;
+                if let Some(ref key) = idempotency_key {
+                    state.idempotency_store.remove(key).await;
+                }
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(error_envelope(
+                        trace_id,
+                        Some(request_id),
+                        Some(req_context),
+                        retry_base("not_started"),
+                        "COMPENSABLE_LIMIT_STORAGE_FAILED",
+                        error.to_string(),
+                        true,
+                    )),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    if let Some(contract) = reversibility
+        .as_ref()
+        .filter(|contract| contract.class == crate::config::ReversibilityClass::Delayable)
+    {
+        let global_window = state.policy.read().await.hold_window_secs;
+        let profile_window = prof_ctx
+            .profile_policy
+            .as_ref()
+            .and_then(|profile_policy| profile_policy.hold_window_secs);
+        let hold_secs =
+            crate::emissions::effective_hold_window_secs(contract, profile_window, global_window)
+                .unwrap_or(30);
+        let hold_ms = match hold_secs.checked_mul(1_000) {
+            Some(value) => value,
+            None => {
+                state.operation_registry.unregister(&request_id).await;
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(error_envelope(
+                        trace_id,
+                        Some(request_id),
+                        Some(req_context),
+                        retry_base("not_started"),
+                        "INVALID_HOLD_WINDOW",
+                        "Hold window overflows milliseconds",
+                        false,
+                    )),
+                )
+                    .into_response();
+            }
+        };
+        let release_at_ms = match crate::emissions::release_deadline_ms(hold_secs) {
+            Ok(deadline) => deadline,
+            Err(error) => {
+                state.operation_registry.unregister(&request_id).await;
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(error_envelope(
+                        trace_id,
+                        Some(request_id),
+                        Some(req_context),
+                        retry_base("not_started"),
+                        "INVALID_HOLD_WINDOW",
+                        error.to_string(),
+                        false,
+                    )),
+                )
+                    .into_response();
+            }
+        };
+        let emission = crate::tasks::EmissionRecord {
+            phase: crate::tasks::EmissionPhase::PendingEmission,
+            release_at_ms,
+            cancellable: true,
+            tool_name: tool_name.clone(),
+            input_responses: payload.input_responses.clone(),
+            request_state: payload.request_state.clone(),
+            profile_id: prof_ctx.profile_id.clone(),
+            tenant_id: tenant_id.clone(),
+            role: caller_role.clone(),
+            authorization_expires_at_epoch_secs: caller_grant_expires_at_epoch_secs,
+            approval_completed: requires_approval,
+            batch_id: None,
+            step_id: None,
+        };
+        let existing_task = state
+            .task_registry
+            .list_tasks()
+            .await
+            .into_iter()
+            .find(|task| {
+                task.request_id.as_deref() == Some(request_id.as_str()) && task.emission.is_none()
+            });
+        let accepted = if let Some(existing) = existing_task {
+            state
+                .hold_coordinator
+                .queue_existing(&state, &existing.task_id, effective_args.clone(), emission)
+                .await
+                .context("failed to persist approved emission")
+        } else {
+            state
+                .hold_coordinator
+                .accept(
+                    &state,
+                    crate::tasks::CreateTaskParams {
+                        capability_id: payload.capability_id.clone(),
+                        server_id: server_id.clone(),
+                        args: effective_args.clone(),
+                        request_id: Some(request_id.clone()),
+                        context: Some(req_context.clone()),
+                        idempotency_key: idempotency_key.clone(),
+                        initial_status: crate::tasks::TaskStatus::Working,
+                        status_message: Some(
+                            "Waiting for the emission release deadline".to_string(),
+                        ),
+                        input_requests: None,
+                        ttl_ms: None,
+                        poll_interval_ms: Some(1_000),
+                    },
+                    emission,
+                )
+                .await
+                .map(Some)
+        };
+        let task = match accepted {
+            Ok(Some(task)) => task,
+            Ok(None) => {
+                state.operation_registry.unregister(&request_id).await;
+                return (
+                    StatusCode::CONFLICT,
+                    Json(error_envelope(
+                        trace_id,
+                        Some(request_id),
+                        Some(req_context),
+                        retry_base("not_started"),
+                        "EMISSION_TASK_STATE_INVALID",
+                        "Could not attach the approved emission to its task",
+                        false,
+                    )),
+                )
+                    .into_response();
+            }
+            Err(error) => {
+                state.operation_registry.unregister(&request_id).await;
+                if let Some(key) = idempotency_key.as_deref() {
+                    state.idempotency_store.remove(key).await;
+                }
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(error_envelope(
+                        trace_id,
+                        Some(request_id),
+                        Some(req_context),
+                        retry_base("not_started"),
+                        "EMISSION_PERSISTENCE_FAILED",
+                        error.to_string(),
+                        true,
+                    )),
+                )
+                    .into_response();
+            }
+        };
+        state.operation_registry.unregister(&request_id).await;
+        let prefer_async = payload.async_task
+            || headers
+                .get("prefer")
+                .and_then(|header| header.to_str().ok())
+                .is_some_and(|value| value.to_ascii_lowercase().contains("respond-async"));
+        if !prefer_async && hold_ms < state.tool_timeout_ms {
+            let wait =
+                std::time::Duration::from_millis(hold_ms.saturating_add(state.tool_timeout_ms));
+            if let Some(finished) = state
+                .hold_coordinator
+                .wait_for_terminal(&state, &task.task_id, wait)
+                .await
+            {
+                match finished.status {
+                    crate::tasks::TaskStatus::Completed => {
+                        let data = finished.result.unwrap_or(Value::Null);
+                        return (StatusCode::OK, Json(json!({"ok": true, "request_id": request_id, "context": req_context, "trace_id": trace_id, "data": data, "error": null, "retry": retry_base("completed")}))).into_response();
+                    }
+                    crate::tasks::TaskStatus::Failed | crate::tasks::TaskStatus::Cancelled => {
+                        let code = finished
+                            .error
+                            .as_ref()
+                            .and_then(|error| error.get("code"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("EMISSION_FAILED");
+                        let message = finished
+                            .status_message
+                            .unwrap_or_else(|| "Held emission did not complete".to_string());
+                        return (
+                            StatusCode::BAD_GATEWAY,
+                            Json(error_envelope(
+                                trace_id,
+                                Some(request_id),
+                                Some(req_context),
+                                retry_base("completed"),
+                                code,
+                                message,
+                                false,
+                            )),
+                        )
+                            .into_response();
+                    }
+                    _ => {}
+                }
+            }
+        }
+        return (
+            StatusCode::ACCEPTED,
+            Json(json!({
+                "ok": true,
+                "resultType": "task",
+                "task": crate::tasks::TaskResponse::from(&task),
+                "request_id": request_id,
+                "trace_id": trace_id,
+            })),
+        )
+            .into_response();
+    }
+
+    let (snapshot, snapshot_hash) = if let Some(contract) = reversibility.as_ref() {
+        if matches!(
+            contract.class,
+            crate::config::ReversibilityClass::Reversible
+                | crate::config::ReversibilityClass::Compensable
+        ) && state.undo_ledger.is_none()
+        {
+            state.operation_registry.unregister(&request_id).await;
+            if let Some(ref key) = idempotency_key {
+                state.idempotency_store.remove(key).await;
+            }
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(error_envelope(
+                    trace_id,
+                    Some(request_id),
+                    Some(req_context),
+                    retry_base("not_started"),
+                    "UNDO_STORAGE_UNAVAILABLE",
+                    "Persistent undo storage is unavailable",
+                    false,
+                )),
+            )
+                .into_response();
+        }
+        if let Some(pre_snapshot) = &contract.pre_snapshot {
+            match crate::engine::undo::capture_pre_snapshot(
+                &state,
+                pre_snapshot,
+                &effective_args,
+                &prof_ctx,
+                &effective_policy,
+            )
+            .await
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    state.operation_registry.unregister(&request_id).await;
+                    if let Some(ref key) = idempotency_key {
+                        state.idempotency_store.remove(key).await;
+                    }
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        Json(error_envelope(
+                            trace_id,
+                            Some(request_id),
+                            Some(req_context),
+                            retry_base("not_started"),
+                            "PRE_SNAPSHOT_FAILED",
+                            error.to_string(),
+                            true,
+                        )),
+                    )
+                        .into_response();
+                }
+            }
+        } else {
+            (Value::Null, None)
+        }
+    } else {
+        (Value::Null, None)
+    };
+
     let tx = {
         let servers_guard = state.servers.read().await;
         let Some(tx) = servers_guard.get(&server_id).cloned() else {
@@ -759,7 +1402,7 @@ pub async fn handle_call_capability(
     if tx
         .send(ServerMsg::CallTool {
             name: tool_name,
-            params: effective_args,
+            params: effective_args.clone(),
             input_responses: payload.input_responses,
             request_state: payload.request_state,
             reply: reply_tx,
@@ -814,6 +1457,57 @@ pub async fn handle_call_capability(
     match result {
         Ok(Ok(data)) => {
             state.circuit_breakers.record_success(&server_id).await;
+            if let Some(contract) = reversibility.as_ref() {
+                if let Err(error) = crate::engine::undo::register_inverse(
+                    &state,
+                    contract,
+                    crate::engine::undo::ForwardCall {
+                        capability: &payload.capability_id,
+                        args: &effective_args,
+                        result: &data,
+                        snapshot: &snapshot,
+                        snapshot_hash,
+                        context: &req_context,
+                        batch_id: None,
+                        tenant_id: &tenant_id,
+                        profile_id: prof_ctx.profile_id.as_deref(),
+                    },
+                    &prof_ctx,
+                    &effective_policy,
+                )
+                .await
+                {
+                    if let Some(ref key) = idempotency_key {
+                        let failed_response = error_envelope(
+                            trace_id.clone(),
+                            Some(request_id.clone()),
+                            Some(req_context.clone()),
+                            retry_base("completed"),
+                            "UNDO_REGISTRATION_FAILED",
+                            format!(
+                                "Forward call succeeded but inverse registration failed: {error}"
+                            ),
+                            false,
+                        );
+                        state.idempotency_store.complete(key, failed_response).await;
+                    }
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(error_envelope(
+                            trace_id,
+                            Some(request_id),
+                            Some(req_context),
+                            retry_base("unknown"),
+                            "UNDO_REGISTRATION_FAILED",
+                            format!(
+                                "Forward call succeeded but inverse registration failed: {error}"
+                            ),
+                            false,
+                        )),
+                    )
+                        .into_response();
+                }
+            }
             let redacted_output = redact_value(data.clone(), &redact_keys);
             info!(
                 trace_id = %trace_id,
@@ -982,8 +1676,116 @@ pub async fn handle_call_capability(
 pub async fn handle_cancel_operation(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
+    prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
 ) -> impl IntoResponse {
+    if let Some(task) = state
+        .task_registry
+        .list_tasks()
+        .await
+        .into_iter()
+        .find(|task| task.request_id.as_deref() == Some(id.as_str()) && task.emission.is_some())
+    {
+        let tenant_id = req_ext
+            .0
+            .as_ref()
+            .map(|context| context.tenant_id.as_str())
+            .unwrap_or("default");
+        let default_role = state.rbac_engine.default_role();
+        let role = req_ext
+            .0
+            .as_ref()
+            .map(|context| context.role.as_str())
+            .unwrap_or(default_role.as_str());
+        let profile_id = prof_ext
+            .as_ref()
+            .and_then(|extension| extension.0.profile_id.as_deref());
+        if !state
+            .hold_coordinator
+            .can_access_task(&state, &task, tenant_id, role, profile_id)
+            .await
+        {
+            return (StatusCode::NOT_FOUND, Json(json!({"ok": false, "request_id": id, "cancelled": false, "error": {"code": "NOT_FOUND", "message": "Operation not found"}}))).into_response();
+        }
+        match state
+            .hold_coordinator
+            .cancel(
+                &state,
+                &task.task_id,
+                Some("Operation cancelled by caller".to_string()),
+            )
+            .await
+        {
+            Ok(crate::tasks::EmissionCancelResult::Cancelled)
+            | Ok(crate::tasks::EmissionCancelResult::AlreadyCancelled) => {
+                let _ = state.operation_registry.cancel(&id).await;
+                return (StatusCode::OK, Json(json!({"ok": true, "request_id": id, "cancelled": true, "task_id": task.task_id}))).into_response();
+            }
+            Ok(crate::tasks::EmissionCancelResult::TooLate) => {
+                return (StatusCode::CONFLICT, Json(json!({"ok": false, "request_id": id, "cancelled": false, "error": {"code": "EMISSION_DISPATCHING", "message": "Emission dispatch has already started and may have reached the upstream server"}}))).into_response();
+            }
+            Ok(crate::tasks::EmissionCancelResult::NotEmission) => {}
+            Err(error) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"ok": false, "request_id": id, "cancelled": false, "error": {"code": "TASK_CANCEL_FAILED", "message": error.to_string()}}))).into_response();
+            }
+        }
+    }
     let cancelled = state.operation_registry.cancel(&id).await;
+    if cancelled {
+        if let Some(task) = state
+            .task_registry
+            .list_tasks()
+            .await
+            .into_iter()
+            .find(|task| task.request_id.as_deref() == Some(id.as_str()) && task.emission.is_some())
+        {
+            let tenant_id = req_ext
+                .0
+                .as_ref()
+                .map(|context| context.tenant_id.as_str())
+                .unwrap_or("default");
+            let default_role = state.rbac_engine.default_role();
+            let role = req_ext
+                .0
+                .as_ref()
+                .map(|context| context.role.as_str())
+                .unwrap_or(default_role.as_str());
+            let profile_id = prof_ext
+                .as_ref()
+                .and_then(|extension| extension.0.profile_id.as_deref());
+            if !state
+                .hold_coordinator
+                .can_access_task(&state, &task, tenant_id, role, profile_id)
+                .await
+            {
+                return (StatusCode::NOT_FOUND, Json(json!({"ok": false, "request_id": id, "cancelled": false, "error": {"code": "NOT_FOUND", "message": "Operation not found"}}))).into_response();
+            }
+            match state
+                .hold_coordinator
+                .cancel(
+                    &state,
+                    &task.task_id,
+                    Some("Operation cancelled by caller".to_string()),
+                )
+                .await
+            {
+                Ok(
+                    crate::tasks::EmissionCancelResult::Cancelled
+                    | crate::tasks::EmissionCancelResult::AlreadyCancelled,
+                ) => {
+                    let _ = state.operation_registry.cancel(&id).await;
+                    return (StatusCode::OK, Json(json!({"ok": true, "request_id": id, "cancelled": true, "task_id": task.task_id}))).into_response();
+                }
+                Ok(crate::tasks::EmissionCancelResult::TooLate) => {
+                    return (StatusCode::CONFLICT, Json(json!({"ok": false, "request_id": id, "cancelled": false, "error": {"code": "EMISSION_DISPATCHING", "message": "Emission dispatch has already started and may have reached the upstream server"}}))).into_response();
+                }
+                Ok(crate::tasks::EmissionCancelResult::NotEmission) => {}
+                Err(error) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"ok": false, "request_id": id, "cancelled": false, "error": {"code": "TASK_CANCEL_FAILED", "message": error.to_string()}}))).into_response();
+                }
+            }
+        }
+    }
     if !cancelled {
         return (
             StatusCode::NOT_FOUND,
@@ -1041,17 +1843,38 @@ pub async fn handle_batch_call_capabilities(
         .map(|ctx| ctx.effective_policy.clone())
         .unwrap_or_else(|| base_pol.clone())
         .merge_with_profile(prof_ctx.profile_policy.as_ref());
+    let cancellation_token = state.operation_registry.register(&request_id).await;
 
-    let response = crate::batch_executor::execute_batch(
+    let default_role = state.rbac_engine.default_role();
+    let response = crate::batch_executor::execute_batch_for_tenant_with_rollback(
         &state,
         payload.steps,
         trace_id,
-        Some(request_id),
+        Some(request_id.clone()),
         Some(req_context),
-        &pol,
-        &prof_ctx,
+        crate::batch_executor::BatchExecutionScope {
+            policy: &pol,
+            profile: &prof_ctx,
+            tenant_id: req_ext
+                .0
+                .as_ref()
+                .map(|ctx| ctx.tenant_id.as_str())
+                .unwrap_or("default"),
+            role: req_ext
+                .0
+                .as_ref()
+                .map(|ctx| ctx.role.as_str())
+                .unwrap_or(default_role.as_str()),
+            authorization_expires_at_epoch_secs: req_ext
+                .0
+                .as_ref()
+                .and_then(|ctx| ctx.grant_expires_at_epoch_secs),
+            cancellation_token,
+        },
+        payload.auto_rollback_on_failure,
     )
     .await;
+    state.operation_registry.unregister(&request_id).await;
 
     (StatusCode::OK, Json(response)).into_response()
 }

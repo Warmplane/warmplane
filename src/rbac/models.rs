@@ -1,5 +1,4 @@
-// Rust guideline compliant 2026-08-19
-
+// Rust guideline compliant 2026-11-16
 //! Data models and configuration schema for Multi-Tenant Role-Based Access Control (RBAC).
 
 use serde::{Deserialize, Serialize};
@@ -140,6 +139,40 @@ pub struct RolePolicyConfig {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub redact_keys: Vec<String>,
+    /// Explicit permissions for the out-of-band undo operator API.
+    #[serde(
+        default,
+        rename = "undoPermissions",
+        skip_serializing_if = "UndoPermissions::is_empty"
+    )]
+    pub undo_permissions: UndoPermissions,
+    /// Allows this role to expose self-undo through an explicitly opted-in MCP profile.
+    #[serde(default, rename = "allowAgentSelfUndo")]
+    pub allow_agent_self_undo: bool,
+}
+
+/// Role-level permissions for listing and executing undo actions.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Default)]
+pub struct UndoPermissions {
+    /// Allows listing and viewing tenant-owned undo entries.
+    #[serde(default)]
+    pub list: bool,
+    /// Allows executing one tenant-owned undo entry.
+    #[serde(default)]
+    pub execute: bool,
+    /// Allows rolling back a tenant-owned work item.
+    #[serde(default)]
+    pub rollback: bool,
+    /// Allows overriding an expired undo window.
+    #[serde(default, rename = "forceExpired")]
+    pub force_expired: bool,
+}
+
+impl UndoPermissions {
+    /// Returns whether every undo permission is disabled.
+    pub fn is_empty(&self) -> bool {
+        !self.list && !self.execute && !self.rollback && !self.force_expired
+    }
 }
 
 /// Verified tenant caller context attached to HTTP request extensions.
@@ -153,6 +186,8 @@ pub struct TenantContext {
     pub actor_id: Option<String>,
     /// Optional grant or token identifier.
     pub grant_id: Option<String>,
+    /// Optional verified Unix expiry time for a JWT-authenticated grant.
+    pub grant_expires_at_epoch_secs: Option<u64>,
     /// Effective policy computed for this role.
     pub effective_policy: crate::daemon::Policy,
 }
@@ -165,6 +200,7 @@ impl TenantContext {
             role: default_role.to_string(),
             actor_id: None,
             grant_id: None,
+            grant_expires_at_epoch_secs: None,
             effective_policy: base_policy.clone(),
         }
     }

@@ -24,6 +24,18 @@ Warmplane is a local control plane and reverse proxy for AI tool calling. It mai
 
 ---
 
+## Undo and cancellation
+
+Capability aliases can declare a cancellation hold or a snapshot/inverse contract. Operators can undo an action or roll back a work item, with policy, tenant, expiry, and audit checks applied to execution. Configure contracts in **Facade & Alias Studio** and inspect actions in **Action Feed & Undo**, including paginated history.
+
+Use `warmplane undo list`, `warmplane undo run <undo-id>`, `warmplane undo rollback <work-item-id>`, and `warmplane undo test <alias>`. Contract testing requires a dedicated test server and fixed test arguments. Snapshot and drift-check capabilities must be permitted without approval.
+
+For agent execution and the operator UI to share live undo state, run the daemon with `mcpHttpServer` enabled and connect agents to its `/mcp` endpoint. A separately launched `warmplane mcp-server` owns its own runtime state.
+
+See the [undo configuration and operator guide](docs/USER-GUIDE.md#evaluation-rules) and [REST specification](docs/openapi.yaml).
+
+---
+
 ## 🚀 Quick Start
 
 ### 1. Installation
@@ -242,6 +254,15 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 ---
 
 ## Changelog
+
+### Unreleased — Undo and cancellation controls
+
+- Configure delayable, reversible, compensable, and irreversible capability contracts.
+- Capture snapshots, block undo on state drift, and roll back failed batches or entire work items.
+- Operate undo through REST, CLI, embedded Rust, and the Control Deck Action Feed.
+- Edit contracts in the Alias Studio and test them against a dedicated MCP test server.
+- Send signed ChatOps action cards and record undo outcomes in the hash-chained audit log.
+
 
 ### v0.32.0 — Credential, Approval & Policy Boundary Enforcement
 - **Static RBAC Tokens, Profile Secrets & Server Env Are Redacted (`src/config.rs`):** `McpConfig::sanitize_secrets` is the redaction pass applied by `GET /v1/config` and `warmplane config show`. It skipped three fields that carry live credentials. Static RBAC tokens leak worst, because that map is keyed by the secret itself, so reading the config returned every bearer token in the deployment including higher-privilege ones. Per-profile `policy.webhook` secrets and auth headers were skipped the same way, and server `env` blocks are now redacted wholesale since an environment block has no name convention to filter on.

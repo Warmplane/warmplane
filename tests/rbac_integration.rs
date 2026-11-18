@@ -57,6 +57,8 @@ fn create_test_rbac_state() -> AppState {
             deny: vec![],
             require_approval: vec![],
             redact_keys: vec![],
+            undo_permissions: Default::default(),
+            allow_agent_self_undo: false,
         },
     );
     roles.insert(
@@ -72,6 +74,8 @@ fn create_test_rbac_state() -> AppState {
             deny: vec!["*.delete_*".to_string(), "docker.*".to_string()],
             require_approval: vec!["db.query_large".to_string()],
             redact_keys: vec!["password".to_string(), "ssn".to_string()],
+            undo_permissions: Default::default(),
+            allow_agent_self_undo: false,
         },
     );
     roles.insert(
@@ -82,6 +86,8 @@ fn create_test_rbac_state() -> AppState {
             deny: vec!["*".to_string()],
             require_approval: vec![],
             redact_keys: vec![],
+            undo_permissions: Default::default(),
+            allow_agent_self_undo: false,
         },
     );
 

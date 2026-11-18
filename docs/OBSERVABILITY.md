@@ -200,3 +200,12 @@ When debugging a failed capability execution:
 - **Secret Management**: Store upstream credentials in environment variables (`tokenEnv`, `passwordEnv`, `secretEnv`).
 - **Localhost Binding**: Keep the daemon bound to `127.0.0.1` unless fronted by an authenticated reverse proxy or API gateway.
 - **Webhook Security**: Always verify the `X-Warmplane-Signature-256` HMAC signature on receiving webhook endpoints.
+
+
+## Undo and held-emission observability
+
+The audit event types `emission_held` and `emission_cancelled` record hold lifecycle outcomes. `undo_executed` records successful inverses, `undo_failed` records blocked or failed inverses, and `undo_force_authorized` records authorization to force expiry before dispatch. Audit records include action identifiers and safe metadata, with snapshot contents and resolved inverse arguments omitted from undo outcome events.
+
+Undo execution results carry `audit_event_id`, `audit_hash`, and a separate `audit_error`. An upstream inverse can succeed while audit persistence fails, so inspect both the execution outcome and audit receipt before deciding whether to retry. REST returns HTTP 503 for audit persistence failure.
+
+The SSE `action_capsule` event contains only `{"refresh":true}`. It invalidates the visible action lists. Fetch the current tenant's undo page and task list through REST to obtain current state. Pending signed ChatOps callbacks return an immediate acknowledgment, and their final outcomes appear in the ledger and audit log.

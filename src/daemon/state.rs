@@ -1,5 +1,4 @@
-// Rust guideline compliant 2026-08-15
-
+// Rust guideline compliant 2026-11-16
 //! Shared daemon application state and builder implementations (`M-INIT-BUILDER`).
 
 use std::{collections::HashMap, sync::Arc};
@@ -45,6 +44,8 @@ pub struct AppState {
     pub operation_registry: crate::operations::OperationRegistry,
     /// Real-time broadcast channel for resource update notifications.
     pub resource_update_tx: tokio::sync::broadcast::Sender<crate::catalog::ResourceUpdateEvent>,
+    /// Real-time invalidation channel for tenant-scoped action capsule lists.
+    pub action_capsule_tx: tokio::sync::broadcast::Sender<()>,
     /// Real-time broadcast channel for MCP tools/list_changed notifications.
     pub tool_list_changed_tx: tokio::sync::broadcast::Sender<()>,
     /// Real-time broadcast channel for MCP resources/list_changed notifications.
@@ -73,6 +74,12 @@ pub struct AppState {
     pub approval_registry: crate::approvals::ApprovalRegistry,
     /// SEP-2663 task management registry.
     pub task_registry: crate::tasks::TaskRegistry,
+    /// Shared coordinator for durable delayable emission holds.
+    pub hold_coordinator: crate::emissions::HoldCoordinator,
+    /// Persistent store for content-addressed pre-state snapshots, when enabled.
+    pub snapshot_store: Option<crate::undo::SnapshotStore>,
+    /// Persistent ledger of armed inverse actions, when state persistence is enabled.
+    pub undo_ledger: Option<crate::undo::UndoLedgerStore>,
     /// Append-only WORM audit store.
     pub audit_store: crate::audit::SharedAuditStore,
     /// Non-blocking async audit event dispatcher handle.
@@ -111,6 +118,14 @@ impl AppState {
     pub fn notify_prompts_changed(&self) {
         let _ = self.prompt_list_changed_tx.send(());
     }
+
+    /// Notifies connected operator feeds that their tenant-scoped capsule list may have changed.
+    ///
+    /// The broadcast contains no entry identifier or tenant data. Each client refreshes through
+    /// its authenticated, tenant-scoped REST endpoints.
+    pub fn notify_action_capsules_changed(&self) {
+        let _ = self.action_capsule_tx.send(());
+    }
 }
 
 /// Builder for constructing `AppState` instances (`M-INIT-BUILDER`).
@@ -128,6 +143,7 @@ pub struct AppStateBuilder {
     idempotency_store: Option<Arc<crate::idempotency::IdempotencyStore>>,
     operation_registry: Option<crate::operations::OperationRegistry>,
     resource_update_tx: Option<tokio::sync::broadcast::Sender<crate::catalog::ResourceUpdateEvent>>,
+    action_capsule_tx: Option<tokio::sync::broadcast::Sender<()>>,
     config_path: Option<String>,
     server_configs: Option<SharedServerConfigs>,
     server_statuses: Option<SharedServerStatuses>,
@@ -135,6 +151,9 @@ pub struct AppStateBuilder {
     oauth_registry: Option<crate::oauth2::OAuthRegistry>,
     approval_registry: Option<crate::approvals::ApprovalRegistry>,
     task_registry: Option<crate::tasks::TaskRegistry>,
+    hold_coordinator: Option<crate::emissions::HoldCoordinator>,
+    snapshot_store: Option<crate::undo::SnapshotStore>,
+    undo_ledger: Option<crate::undo::UndoLedgerStore>,
     sampling_registry: Option<crate::sampling::SamplingRegistry>,
     audit_store: Option<crate::audit::SharedAuditStore>,
     audit_handle: Option<crate::audit::AuditHandle>,
@@ -322,6 +341,36 @@ impl AppStateBuilder {
         self
     }
 
+    /// Sets the shared delayable emission coordinator.
+    pub fn hold_coordinator(mut self, coordinator: crate::emissions::HoldCoordinator) -> Self {
+        self.hold_coordinator = Some(coordinator);
+        self
+    }
+
+    /// Sets the content-addressed snapshot store.
+    pub fn snapshot_store(mut self, store: crate::undo::SnapshotStore) -> Self {
+        self.snapshot_store = Some(store);
+        self
+    }
+
+    /// Sets an optional content-addressed snapshot store.
+    pub fn snapshot_store_opt(mut self, store: Option<crate::undo::SnapshotStore>) -> Self {
+        self.snapshot_store = store;
+        self
+    }
+
+    /// Sets the persistent undo ledger store.
+    pub fn undo_ledger(mut self, store: crate::undo::UndoLedgerStore) -> Self {
+        self.undo_ledger = Some(store);
+        self
+    }
+
+    /// Sets an optional persistent undo ledger store.
+    pub fn undo_ledger_opt(mut self, store: Option<crate::undo::UndoLedgerStore>) -> Self {
+        self.undo_ledger = store;
+        self
+    }
+
     /// Sets MCP sampling delegation registry.
     pub fn sampling_registry(mut self, registry: crate::sampling::SamplingRegistry) -> Self {
         self.sampling_registry = Some(registry);
@@ -403,6 +452,9 @@ impl AppStateBuilder {
             resource_update_tx: self
                 .resource_update_tx
                 .unwrap_or_else(|| tokio::sync::broadcast::channel(64).0),
+            action_capsule_tx: self
+                .action_capsule_tx
+                .unwrap_or_else(|| tokio::sync::broadcast::channel(64).0),
             tool_list_changed_tx: tokio::sync::broadcast::channel(64).0,
             resource_list_changed_tx: tokio::sync::broadcast::channel(64).0,
             prompt_list_changed_tx: tokio::sync::broadcast::channel(64).0,
@@ -417,6 +469,9 @@ impl AppStateBuilder {
             oauth_registry: self.oauth_registry.unwrap_or_default(),
             approval_registry: self.approval_registry.unwrap_or_default(),
             task_registry: self.task_registry.unwrap_or_default(),
+            hold_coordinator: self.hold_coordinator.unwrap_or_default(),
+            snapshot_store: self.snapshot_store,
+            undo_ledger: self.undo_ledger,
             sampling_registry: self.sampling_registry.unwrap_or_default(),
             audit_store,
             audit_handle,

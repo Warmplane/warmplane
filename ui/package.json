@@ -3,6 +3,7 @@
   "version": "0.32.0",
   "type": "module",
   "private": true,
+  "packageManager": "bun@1.4.4",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "bun build ./src/main.ts --outfile=./dist/bundle.js --minify && bun run ./build.ts"

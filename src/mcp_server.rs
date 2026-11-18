@@ -1,5 +1,4 @@
-// Rust guideline compliant 2026-09-13
-
+// Rust guideline compliant 2026-11-18
 //! MCP server facade interface exposing compact tools/resources/prompts endpoints.
 //!
 //! Provides two server transports:
@@ -19,7 +18,7 @@ use rmcp::{
         GetPromptRequestParams, GetPromptResponse, GetPromptResult, ListResourcesResult,
         ListToolsResult, Prompt, PromptListChangedNotification, ReadResourceRequestParams,
         ReadResourceResponse, ReadResourceResult, Resource, ResourceListChangedNotification,
-        ServerCapabilities, ServerInfo, Tool, ToolListChangedNotification,
+        ServerCapabilities, ServerConfig as McpServerConfig, Tool, ToolListChangedNotification,
     },
     transport::{
         stdio,
@@ -49,6 +48,7 @@ const TOOL_PROMPT_GET: &str = "prompt_get";
 const TOOL_TASK_GET: &str = "task_get";
 const TOOL_TASK_UPDATE: &str = "task_update";
 const TOOL_TASK_CANCEL: &str = "task_cancel";
+const TOOL_UNDO_EXECUTE: &str = "undo_execute";
 const TOOL_COMPLETION_COMPLETE: &str = "completion_complete";
 const TOOL_SUBSCRIPTIONS_LISTEN: &str = "subscriptions_listen";
 
@@ -84,8 +84,8 @@ impl FacadeMcpServer {
 }
 
 impl ServerHandler for FacadeMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::default();
+    fn get_info(&self) -> McpServerConfig {
+        let mut info = McpServerConfig::default();
         info.capabilities = ServerCapabilities::builder()
             .enable_tools()
             .enable_tool_list_changed()
@@ -123,6 +123,13 @@ impl ServerHandler for FacadeMcpServer {
     ) -> std::result::Result<ListToolsResult, McpError> {
         let mut tools = facade_tools();
         let prof_ctx = self.profile_context().await;
+        if self.agent_self_undo_enabled(&prof_ctx).await {
+            tools.push(Tool::new(
+                TOOL_UNDO_EXECUTE,
+                "Execute the newest armed undo for one of this agent's work items",
+                schema_object(json!({"type":"object","properties":{"undo_id":{"type":"string","description":"Explicit undo entry identifier"},"work_item_id":{"type":"string","description":"Execute the newest armed inverse for this work item"}},"anyOf":[{"required":["undo_id"]},{"required":["work_item_id"]}],"additionalProperties":false})),
+            ));
+        }
         let caps_guard = self.state.capabilities.read().await;
 
         if let Ok(config) = crate::config::load_or_default_config(&self.state.config_path) {
@@ -192,6 +199,63 @@ impl ServerHandler for FacadeMcpServer {
         let args = request.arguments.unwrap_or_default();
 
         let output = match request.name.as_ref() {
+            TOOL_UNDO_EXECUTE => {
+                let profile = self.profile_context().await;
+                if !self.agent_self_undo_enabled(&profile).await {
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "Agent self-undo is disabled for this role or profile",
+                        )),
+                    ));
+                }
+                let undo_id = args.get("undo_id").and_then(Value::as_str);
+                let work_item_id = args.get("work_item_id").and_then(Value::as_str);
+                if undo_id.is_none() && work_item_id.is_none() {
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "Provide 'undo_id' or 'work_item_id'",
+                        )),
+                    ));
+                };
+                let role = self.state.rbac_engine.default_role();
+                let policy = self
+                    .state
+                    .policy
+                    .read()
+                    .await
+                    .clone()
+                    .merge_with_profile(profile.profile_policy.as_ref());
+                let access = crate::undo::UndoAccessContext {
+                    tenant_id: "default".to_string(),
+                    role,
+                    actor_id: None,
+                    request_context: Default::default(),
+                    policy,
+                    profile,
+                    grant_expires_at_epoch_secs: None,
+                    trace_id: next_trace_id(),
+                };
+                let handle = crate::engine::ControlPlaneHandle::new(self.state.clone());
+                let result = if let Some(work_item_id) = work_item_id {
+                    handle
+                        .execute_agent_self_undo_for_work_item(work_item_id, &access)
+                        .await
+                } else if let Some(undo_id) = undo_id {
+                    handle.execute_agent_self_undo(undo_id, &access).await
+                } else {
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "Provide 'undo_id' or 'work_item_id'",
+                        )),
+                    ));
+                };
+                match result {
+                    Ok(result) => serde_json::to_value(result).map_err(|error| error.to_string()),
+                    Err(error) => {
+                        Ok(json!({"ok":false,"error":{"code":error.code,"message":error.message}}))
+                    }
+                }
+            }
             TOOL_CAPABILITIES_LIST => self.list_capabilities_value().await,
             TOOL_CAPABILITY_SEARCH => {
                 let query = args
@@ -447,6 +511,24 @@ impl ServerHandler for FacadeMcpServer {
                     ));
                 };
                 if let Some(record) = self.state.task_registry.get_task(task_id).await {
+                    if !self
+                        .state
+                        .hold_coordinator
+                        .can_access_task(
+                            &self.state,
+                            &record,
+                            "default",
+                            &self.state.rbac_engine.default_role(),
+                            self.profile.as_deref(),
+                        )
+                        .await
+                    {
+                        return Ok(CallToolResponse::Complete(
+                            CallToolResult::structured_error(invalid_args(
+                                "Task is not accessible to this profile",
+                            )),
+                        ));
+                    }
                     let resp = crate::tasks::TaskResponse::from(&record);
                     Ok(json!({
                         "ok": true,
@@ -523,79 +605,15 @@ impl ServerHandler for FacadeMcpServer {
                     .get("reason")
                     .and_then(Value::as_str)
                     .map(ToString::to_string);
-
-                match self.state.task_registry.cancel_task(task_id, reason).await {
-                    Ok(true) => Ok(json!({
-                        "ok": true,
-                        "resultType": "complete",
-                        "message": format!("Task '{}' cancelled", task_id),
-                    })),
-                    Ok(false) => Ok(json!({
-                        "ok": false,
-                        "error": {
-                            "code": "TASK_NOT_CANCELLABLE",
-                            "message": format!("Task '{}' is already completed, cancelled, or not found", task_id),
-                        }
-                    })),
-                    Err(e) => Ok(json!({
-                        "ok": false,
-                        "error": {
-                            "code": "TASK_CANCEL_FAILED",
-                            "message": e.to_string(),
-                        }
-                    })),
-                }
+                Ok(self.cancel_task_value(task_id, reason).await)
             }
             _ => {
                 let tool_name = request.name.as_ref();
-                let mut target_id = None;
-
-                let caps_guard = self.state.capabilities.read().await;
-
-                // 1. Direct match on registered capability
-                if caps_guard.contains_key(tool_name) {
-                    target_id = Some(tool_name.to_string());
-                } else if let Ok(config) =
-                    crate::config::load_or_default_config(&self.state.config_path)
-                {
-                    // 2. Check alias definitions (exact alias name or sanitized alias name)
-                    for (alias_k, alias_target) in &config.capability_aliases {
-                        let sanitized: String = alias_k
-                            .chars()
-                            .map(|c| {
-                                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                                    c
-                                } else {
-                                    '_'
-                                }
-                            })
-                            .take(64)
-                            .collect();
-
-                        if alias_k == tool_name || sanitized == tool_name {
-                            // If alias_k itself was registered as the capability ID, use it;
-                            // otherwise resolve to the upstream target ID.
-                            if caps_guard.contains_key(alias_k) {
-                                target_id = Some(alias_k.clone());
-                            } else {
-                                target_id = Some(alias_target.target().to_string());
-                            }
-                            break;
-                        }
-                    }
-                }
-                drop(caps_guard);
-
-                if let Some(target) = target_id {
-                    self.call_capability_value(
-                        target,
-                        serde_json::Value::Object(args),
-                        None,
-                        None,
-                        None,
-                        None,
-                    )
+                if let Some(result) = self
+                    .call_passthrough_value(tool_name, serde_json::Value::Object(args))
                     .await
+                {
+                    result
                 } else {
                     return Err(McpError::invalid_params(
                         format!("Unknown tool '{}'.", request.name),
@@ -759,6 +777,13 @@ impl ServerHandler for FacadeMcpServer {
 }
 
 impl FacadeMcpServer {
+    async fn agent_self_undo_enabled(&self, profile: &crate::context::ProfileContext) -> bool {
+        self.state
+            .rbac_engine
+            .allows_agent_self_undo(&self.state.rbac_engine.default_role())
+            && (profile.profile_id.is_none() || profile.allow_agent_self_undo)
+    }
+
     async fn profile_context(&self) -> crate::context::ProfileContext {
         if let Some(ref prof_id) = self.profile {
             let profiles_guard = self.state.profiles.read().await;
@@ -771,7 +796,8 @@ impl FacadeMcpServer {
                     prof_id.clone(),
                     prof_cfg.servers.clone(),
                     prof_policy,
-                );
+                )
+                .with_agent_self_undo(prof_cfg.allow_agent_self_undo);
             }
         }
         crate::context::ProfileContext::unrestricted()
@@ -828,6 +854,76 @@ impl FacadeMcpServer {
         crate::engine::ControlPlaneHandle::new(self.state.clone())
     }
 
+    async fn cancel_task_value(&self, task_id: &str, reason: Option<String>) -> Value {
+        if let Some(record) = self.state.task_registry.get_task(task_id).await {
+            if !self
+                .state
+                .hold_coordinator
+                .can_access_task(
+                    &self.state,
+                    &record,
+                    "default",
+                    &self.state.rbac_engine.default_role(),
+                    self.profile.as_deref(),
+                )
+                .await
+            {
+                return json!({"ok": false, "error": {"code": "TASK_NOT_FOUND", "message": "Task was not found"}});
+            }
+        }
+
+        match self
+            .state
+            .hold_coordinator
+            .cancel(&self.state, task_id, reason.clone())
+            .await
+        {
+            Ok(crate::tasks::EmissionCancelResult::Cancelled)
+            | Ok(crate::tasks::EmissionCancelResult::AlreadyCancelled) => json!({
+                "ok": true,
+                "resultType": "complete",
+                "message": format!("Task '{}' cancelled", task_id),
+            }),
+            Ok(crate::tasks::EmissionCancelResult::TooLate) => json!({
+                "ok": false,
+                "error": {
+                    "code": "EMISSION_DISPATCHING",
+                    "message": "Emission dispatch has already started and may have reached the upstream server",
+                }
+            }),
+            Ok(crate::tasks::EmissionCancelResult::NotEmission) => {
+                match self.state.task_registry.cancel_task(task_id, reason).await {
+                    Ok(true) => json!({
+                        "ok": true,
+                        "resultType": "complete",
+                        "message": format!("Task '{}' cancelled", task_id),
+                    }),
+                    Ok(false) => json!({
+                        "ok": false,
+                        "error": {
+                            "code": "TASK_NOT_CANCELLABLE",
+                            "message": format!("Task '{}' is already completed, cancelled, or not found", task_id),
+                        }
+                    }),
+                    Err(error) => json!({
+                        "ok": false,
+                        "error": {
+                            "code": "TASK_CANCEL_FAILED",
+                            "message": error.to_string(),
+                        }
+                    }),
+                }
+            }
+            Err(error) => json!({
+                "ok": false,
+                "error": {
+                    "code": "TASK_CANCEL_FAILED",
+                    "message": error.to_string(),
+                }
+            }),
+        }
+    }
+
     async fn call_capability_value(
         &self,
         capability_id: String,
@@ -845,6 +941,7 @@ impl FacadeMcpServer {
             request_state,
             profile: self.profile.clone(),
             async_task: false,
+            suppress_undo_registration: false,
         };
 
         let env = self
@@ -852,6 +949,57 @@ impl FacadeMcpServer {
             .call_capability(&capability_id, args, opts)
             .await;
         serde_json::to_value(env).map_err(|e| e.to_string())
+    }
+
+    async fn call_passthrough_value(
+        &self,
+        tool_name: &str,
+        args: Value,
+    ) -> Option<std::result::Result<Value, String>> {
+        let caps_guard = self.state.capabilities.read().await;
+        let mut target_id = caps_guard
+            .contains_key(tool_name)
+            .then(|| tool_name.to_string());
+        if target_id.is_none() {
+            if let Ok(config) = crate::config::load_or_default_config(&self.state.config_path) {
+                for (alias, alias_target) in &config.capability_aliases {
+                    if !alias_target.is_passthrough() {
+                        continue;
+                    }
+                    let sanitized: String = alias
+                        .chars()
+                        .map(|character| {
+                            if character.is_ascii_alphanumeric()
+                                || character == '_'
+                                || character == '-'
+                            {
+                                character
+                            } else {
+                                '_'
+                            }
+                        })
+                        .take(64)
+                        .collect();
+                    if alias == tool_name || sanitized == tool_name {
+                        target_id = Some(if caps_guard.contains_key(alias) {
+                            alias.clone()
+                        } else {
+                            alias_target.target().to_string()
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+        drop(caps_guard);
+
+        match target_id {
+            Some(target) => Some(
+                self.call_capability_value(target, args, None, None, None, None)
+                    .await,
+            ),
+            None => None,
+        }
     }
 
     async fn list_resources_value(&self) -> std::result::Result<Value, String> {
@@ -1396,6 +1544,269 @@ pub async fn run_mcp_http_server(
 mod tests {
     use super::{facade_tools, invalid_args};
 
+    #[tokio::test]
+    async fn mcp_self_undo_requires_role_and_active_profile_opt_in() {
+        let rbac = crate::rbac::RbacConfig {
+            enabled: true,
+            default_role: "agent".to_string(),
+            roles: std::collections::HashMap::from([(
+                "agent".to_string(),
+                crate::rbac::RolePolicyConfig {
+                    allow_agent_self_undo: true,
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        let state = crate::daemon::AppState::builder()
+            .rbac_engine(crate::rbac::RbacEngine::new(Some(rbac)))
+            .build();
+        let facade = super::FacadeMcpServer::new(state, None);
+        let disabled_profile = crate::context::ProfileContext::scoped("coding", ["repo"]);
+        assert!(!facade.agent_self_undo_enabled(&disabled_profile).await);
+        let enabled_profile = disabled_profile.with_agent_self_undo(true);
+        assert!(facade.agent_self_undo_enabled(&enabled_profile).await);
+        assert!(
+            facade
+                .agent_self_undo_enabled(&crate::context::ProfileContext::unrestricted())
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_facade_call_uses_the_delayable_hold_before_upstream_dispatch() {
+        use crate::{
+            config::{ReversibilityClass, ReversibilityConfig},
+            daemon::{AppState, CapabilityMeta, ServerMsg},
+        };
+        use serde_json::json;
+        use std::{collections::HashMap, time::Duration};
+        use tokio::sync::mpsc;
+
+        let (server_tx, mut upstream) = mpsc::channel(8);
+        let mut capability = CapabilityMeta::new(
+            "mail",
+            "send",
+            "Send",
+            "Send a message",
+            json!({"type": "object"}),
+        );
+        capability.reversibility = Some(ReversibilityConfig {
+            class: ReversibilityClass::Delayable,
+            hold_window_secs: Some(1),
+            ttl_secs: None,
+            daily_limit: None,
+            pre_snapshot: None,
+            pre_undo_check: None,
+            test_target: None,
+            inverse: None,
+        });
+        let state = AppState::builder()
+            .servers(HashMap::from([("mail".to_string(), server_tx)]))
+            .capabilities(HashMap::from([("mail.send".to_string(), capability)]))
+            .tool_timeout_ms(2_000)
+            .build();
+        let facade = super::FacadeMcpServer::new(state, None);
+        let call = tokio::spawn(async move {
+            facade
+                .call_capability_value(
+                    "mail.send".to_string(),
+                    json!({"to": "person@example.com"}),
+                    Some("mcp-delayable-call".to_string()),
+                    None,
+                    None,
+                    None,
+                )
+                .await
+        });
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(upstream.try_recv().is_err());
+        let Some(ServerMsg::CallTool { reply, .. }) =
+            tokio::time::timeout(Duration::from_secs(2), upstream.recv())
+                .await
+                .unwrap()
+        else {
+            panic!("MCP facade should dispatch after the configured hold");
+        };
+        reply.send(Ok(json!({"sent": true}))).unwrap();
+        let response = call.await.unwrap().unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["data"], json!({"sent": true}));
+        assert!(upstream.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn mcp_passthrough_alias_uses_the_delayable_hold() {
+        use crate::{
+            config::{AliasTarget, McpConfig, ReversibilityClass, ReversibilityConfig},
+            daemon::{AppState, CapabilityMeta, ServerMsg},
+        };
+        use serde_json::json;
+        use std::{collections::HashMap, time::Duration};
+        use tokio::sync::mpsc;
+
+        let directory = tempfile::tempdir().unwrap();
+        let config_path = directory.path().join("config.json");
+        let mut config = McpConfig::default();
+        config.capability_aliases.insert(
+            "send_mail".to_string(),
+            AliasTarget::Detailed {
+                target: "mail.send".to_string(),
+                summary: None,
+                description: None,
+                passthrough: true,
+                reversibility: Some(ReversibilityConfig {
+                    class: ReversibilityClass::Delayable,
+                    hold_window_secs: Some(1),
+                    ttl_secs: None,
+                    daily_limit: None,
+                    pre_snapshot: None,
+                    pre_undo_check: None,
+                    test_target: None,
+                    inverse: None,
+                }),
+            },
+        );
+        crate::config::save_config(config_path.to_str().unwrap(), &config).unwrap();
+
+        let (server_tx, mut upstream) = mpsc::channel(8);
+        let mut capability = CapabilityMeta::new(
+            "mail",
+            "send",
+            "Send",
+            "Send a message",
+            json!({"type": "object"}),
+        );
+        capability.reversibility = Some(ReversibilityConfig {
+            class: ReversibilityClass::Delayable,
+            hold_window_secs: Some(1),
+            ttl_secs: None,
+            daily_limit: None,
+            pre_snapshot: None,
+            pre_undo_check: None,
+            test_target: None,
+            inverse: None,
+        });
+        let state = AppState::builder()
+            .config_path(config_path.to_string_lossy().into_owned())
+            .servers(HashMap::from([("mail".to_string(), server_tx)]))
+            .capabilities(HashMap::from([("mail.send".to_string(), capability)]))
+            .tool_timeout_ms(2_000)
+            .build();
+        let facade = super::FacadeMcpServer::new(state, None);
+        let call = tokio::spawn(async move {
+            facade
+                .call_passthrough_value("send_mail", json!({"to": "person@example.com"}))
+                .await
+                .expect("passthrough alias should resolve")
+        });
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(upstream.try_recv().is_err());
+        let Some(ServerMsg::CallTool { name, reply, .. }) =
+            tokio::time::timeout(Duration::from_secs(2), upstream.recv())
+                .await
+                .unwrap()
+        else {
+            panic!("passthrough emission should dispatch after the configured hold");
+        };
+        assert_eq!(name, "send");
+        reply.send(Ok(json!({"sent": true}))).unwrap();
+        let response = call.await.unwrap().unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["data"], json!({"sent": true}));
+        assert!(upstream.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn mcp_task_cancel_routes_through_the_hold_coordinator() {
+        use crate::{
+            config::{ReversibilityClass, ReversibilityConfig},
+            daemon::{AppState, CapabilityMeta},
+            emissions::release_deadline_ms,
+            tasks::{CreateTaskParams, EmissionPhase, EmissionRecord, TaskStatus},
+        };
+        use serde_json::json;
+        use std::{collections::HashMap, time::Duration};
+        use tokio::sync::mpsc;
+
+        let (server_tx, mut upstream) = mpsc::channel(8);
+        let mut capability = CapabilityMeta::new(
+            "mail",
+            "send",
+            "Send",
+            "Send a message",
+            json!({"type": "object"}),
+        );
+        capability.reversibility = Some(ReversibilityConfig {
+            class: ReversibilityClass::Delayable,
+            hold_window_secs: Some(2),
+            ttl_secs: None,
+            daily_limit: None,
+            pre_snapshot: None,
+            pre_undo_check: None,
+            test_target: None,
+            inverse: None,
+        });
+        let state = AppState::builder()
+            .servers(HashMap::from([("mail".to_string(), server_tx)]))
+            .capabilities(HashMap::from([("mail.send".to_string(), capability)]))
+            .build();
+        let task = state
+            .hold_coordinator
+            .accept(
+                &state,
+                CreateTaskParams {
+                    capability_id: "mail.send".to_string(),
+                    server_id: "mail".to_string(),
+                    args: json!({"to": "person@example.com"}),
+                    request_id: Some("mcp-cancel-request".to_string()),
+                    context: None,
+                    idempotency_key: None,
+                    initial_status: TaskStatus::Working,
+                    status_message: Some("waiting".to_string()),
+                    input_requests: None,
+                    ttl_ms: None,
+                    poll_interval_ms: None,
+                },
+                EmissionRecord {
+                    phase: EmissionPhase::PendingEmission,
+                    release_at_ms: release_deadline_ms(2).unwrap(),
+                    cancellable: true,
+                    tool_name: "send".to_string(),
+                    input_responses: None,
+                    request_state: None,
+                    profile_id: None,
+                    tenant_id: "default".to_string(),
+                    role: "anonymous".to_string(),
+                    authorization_expires_at_epoch_secs: None,
+                    approval_completed: false,
+                    batch_id: None,
+                    step_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        let facade = super::FacadeMcpServer::new(state.clone(), None);
+
+        let response = facade
+            .cancel_task_value(&task.task_id, Some("operator cancel".to_string()))
+            .await;
+        assert_eq!(response["ok"], true);
+        assert_eq!(
+            state
+                .task_registry
+                .get_task(&task.task_id)
+                .await
+                .unwrap()
+                .status,
+            TaskStatus::Cancelled
+        );
+        tokio::time::sleep(Duration::from_millis(2_100)).await;
+        assert!(upstream.try_recv().is_err());
+    }
+
     #[test]
     fn facade_tools_include_all_lightweight_operations() {
         let names = facade_tools()
@@ -1508,6 +1919,7 @@ mod tests {
                 servers: vec!["sqlite".to_string()],
                 description: None,
                 policy: None,
+                allow_agent_self_undo: false,
             },
         );
 

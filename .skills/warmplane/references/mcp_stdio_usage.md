@@ -1,7 +1,7 @@
 # Native MCP Client Integration Reference
 
 > **Note on Process Execution**: When configuring `warmplane mcp-server` via `command`, your client launches Warmplane directly as an independent child process over standard I/O (`stdin`/`stdout`). You do **not** need `warmplane daemon` running in the background.
-> Alternatively, if you run `warmplane daemon` 24/7 with `mcpHttpServer` enabled, you can connect your client to the daemon's Streamable HTTP/SSE endpoint (`http://127.0.0.1:9191/sse`).
+> Alternatively, if you run `warmplane daemon` 24/7 with `mcpHttpServer` enabled, you can connect your client to the daemon's Streamable HTTP/SSE endpoint (`http://127.0.0.1:9191/mcp`).
 
 ## 1. Client Configurations (Stdio Child Process)
 
@@ -69,3 +69,10 @@ Execute namespaced tool `<server>.<tool>` via standard MCP `tools/call`:
 - `capability_describe`: `{"id": "postgres.query"}`
 - `capabilities_batch_call`: Sequential execution steps with output reference interpolation
 - `task_get` / `task_update` / `task_cancel`: Inspect and resume HITL tasks
+
+
+## Undo and operator controls
+
+Capability aliases apply their configured reversibility contracts to MCP tool calls. `capabilities_batch_call` accepts `autoRollbackOnFailure: true` for automatic rollback. The `undo_execute` tool is hidden by default. With RBAC enabled, its role must opt in using `allowAgentSelfUndo`; an active profile must also opt in. It accepts either `undo_id` or `work_item_id` to undo the newest armed entry.
+
+For a shared Action Feed and operator REST/CLI controls, connect agents to the daemon's configured MCP HTTP `/mcp` endpoint. A standalone stdio process owns a separate in-memory ledger and event bus. Running separate processes against the same state files does not synchronize their live state.

@@ -7,7 +7,6 @@ This guide explains two approaches to integrating Warmplane in Rust:
 
 
 ---
-
 ## 1. In-Process Integration (`EmbeddedWarmplane`)
 
 For lowest latency, zero network hops, and single-binary deployment, import `warmplane` directly as a library crate.
@@ -61,6 +60,30 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+---
+
+### Delayable Emissions
+
+Embedded `call_capability` calls and `batch_call` steps honor delayable alias contracts. Required HITL approval resolves before the hold timer starts; operator-modified arguments are the payload that will be dispatched. For an asynchronous receipt, set `ExecutionOptions::with_async_task(true)`. The returned envelope data contains a `TaskResponse` with `phase`, `releaseAtMs`, `cancellable`, and `requestId`. Cancel through `ControlPlaneHandle::cancel_task`; a `false`/error outcome means dispatch has already been claimed or the task is not cancellable. A dropped call future does not cancel an accepted hold. Pending holds resume after daemon restart following current policy, profile, capability, and server checks. A recovered `dispatching` task fails with `EMISSION_OUTCOME_UNKNOWN` and is never automatically resent.
+
+The duration precedence is profile policy, alias `holdWindowSecs`, global policy, then 30 seconds. Synchronous calls wait only when the hold is shorter than `toolTimeoutMs`; otherwise they return the receipt. Batch steps await their result and count hold time against the 60-second batch budget.
+
+If the embedded host uses an in-memory `TaskRegistry` without task persistence, held emissions work while that process is running but are lost on process exit. Configure persistent task state when restart recovery is required.
+
+---
+
+### Reversible and Compensable Calls
+
+The embedded API uses the same alias reversibility contracts as the daemon. Configure a detailed entry in `capabilityAliases` with `reversibility.class: "reversible"` or `"compensable"`, an optional policy-allowed `preSnapshot`, and an `inverse` template. On a successful forward call or batch step, Warmplane captures configured pre-state and persists an `Armed` inverse in the state directory. Compensable calls require `dailyLimit`; exceeding it enters the existing approval flow. Persistent state must remain enabled for these contracts, since the engine fails closed if the undo ledger or snapshot store is unavailable. See the [user guide reversibility example](USER-GUIDE.md#evaluation-rules) and [configuration schema reference](../.skills/warmplane/references/configuration_schema.md).
+
+An optional `preUndoCheck` stores a hash of the expected post-execution state. Both operator and automatic rollback paths reread that state immediately before inverse dispatch; mismatch or read failure prevents dispatch, and a drifted entry remains armed for review. The Control Deck emits only action-list invalidations over SSE; clients retrieve safe entries through the tenant-scoped undo API.
+
+Internal snapshot and drift-check reads must be allowed without approval under the effective policy. An approval-gated pre-snapshot blocks the forward call. A blocked post-state capture reports inverse registration failure after the forward effect. A blocked drift check leaves the entry armed. Equal creation timestamps are ordered by reverse persisted registration order, including after restart. Automatic rollback checks expiry separately for each claim.
+
+For contract verification, set `testTarget.server` to a dedicated MCP test server exposing the contract tool names and provide fixed `testTarget.args`. `preSnapshot` is required. `warmplane undo test <alias>` and the Playground or Alias Studio **Test saved contract** action execute the full forward/inverse cycle only against that test server, then compare the resulting snapshot value with the original. The result excludes state and tool output values.
+
+No special `ControlPlaneHandle` method is required for forward calls: call `call_capability` or `batch_call` as usual. HTTP batch requests can set `autoRollbackOnFailure: true` to stop on the first failed step and attempt eligible inverses in reverse order. The `ControlPlaneHandle` also exposes `list_undo_entries`, `get_undo_entry`, `execute_undo`, and `rollback_work_item` for authorized operator workflows. Listing returns safe summaries with `total`, `offset`, and `limit` (default 50, maximum 200). Execution returns per-entry outcomes and audit receipts; force-expired execution requires a separate role permission and reason. See the Operator Undo guidance in the [user guide](USER-GUIDE.md).
 
 ---
 

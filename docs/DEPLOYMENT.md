@@ -147,3 +147,12 @@ Before production rollout:
 3. Correlate structured logs for same trace/context fields.
 4. Classify failure as policy, transport, timeout, or upstream application error.
 5. Apply runbook action (config fix, timeout tuning, upstream remediation).
+
+
+## Undo state and operator deployment
+
+Run the daemon with `mcpHttpServer` enabled and connect agents to its `/mcp` endpoint when using REST, CLI, or Control Deck undo controls. The agent and operator surfaces then share one runtime ledger, event bus, and audit worker. Separately launched stdio processes own separate runtime state. Use one owning process per state directory.
+
+Keep persistent state enabled for reversible and compensable contracts. Atomic JSON state saves create private Unix files with mode `0600` for every filename and use independently named temporary files with automatic failure cleanup. The state directory contains `undo_ledger.json` and content-addressed snapshot artifacts, which can contain sensitive upstream state. Include them with the associated audit log in the deployment's backup and access-control policy. Configured pre-snapshot or inverse storage failure blocks execution or reports registration failure after the forward effect.
+
+Pending held emissions are recovered and revalidated on restart. Emissions interrupted in `dispatching` fail with `EMISSION_OUTCOME_UNKNOWN`. Undo entries interrupted in `executing` remain unavailable for automatic redispatch because the upstream outcome may be unknown. Reconcile upstream state before taking further action.

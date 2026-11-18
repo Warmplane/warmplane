@@ -19,7 +19,9 @@
             "properties": {
               "target": { "type": "string" },
               "summary": { "type": "string" },
-              "description": { "type": "string" }
+              "description": { "type": "string" },
+              "passthrough": { "type": "boolean" },
+              "reversibility": { "$ref": "#/$defs/reversibilityConfig" }
             },
             "additionalProperties": false
           }
@@ -89,11 +91,51 @@
           "type": "integer",
           "minimum": 1
         },
+        "holdWindowSecs": { "type": "integer", "minimum": 1 },
         "webhook": {
           "$ref": "#/$defs/webhookConfig"
         }
       },
       "additionalProperties": false
+    },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "servers": { "type": "array", "items": { "type": "string" } },
+          "description": { "type": "string" },
+          "policy": { "$ref": "#/$defs/policyConfig" },
+          "allowAgentSelfUndo": { "type": "boolean", "default": false }
+        },
+        "additionalProperties": false
+      }
+    },
+    "rbac": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "defaultRole": { "type": "string" },
+        "roles": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "undoPermissions": {
+                "type": "object",
+                "properties": {
+                  "list": { "type": "boolean" },
+                  "execute": { "type": "boolean" },
+                  "rollback": { "type": "boolean" },
+                  "forceExpired": { "type": "boolean" }
+                },
+                "additionalProperties": false
+              },
+              "allowAgentSelfUndo": { "type": "boolean", "default": false }
+            }
+          }
+        }
+      }
     },
     "audit": {
       "type": "object",
@@ -212,6 +254,96 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "policyConfig": {
+      "type": "object",
+      "properties": {
+        "allow": { "type": "array", "items": { "type": "string" } },
+        "deny": { "type": "array", "items": { "type": "string" } },
+        "redactKeys": { "type": "array", "items": { "type": "string" } },
+        "requireApproval": { "type": "array", "items": { "type": "string" } },
+        "approvalTimeoutSecs": { "type": "integer", "minimum": 1 },
+        "holdWindowSecs": { "type": "integer", "minimum": 1 },
+        "webhook": { "$ref": "#/$defs/webhookConfig" }
+      },
+      "additionalProperties": false
+    },
+    "reversibilityConfig": {
+      "type": "object",
+      "allOf": [
+        {
+          "if": { "properties": { "class": { "enum": ["reversible", "compensable"] } }, "required": ["class"] },
+          "then": { "required": ["inverse"] }
+        },
+        {
+          "if": { "properties": { "class": { "const": "compensable" } }, "required": ["class"] },
+          "then": { "required": ["dailyLimit"] }
+        },
+        {
+          "if": { "properties": { "class": { "not": { "const": "delayable" } } }, "required": ["class"] },
+          "then": { "not": { "required": ["holdWindowSecs"] } }
+        },
+        {
+          "if": { "properties": { "class": { "not": { "const": "compensable" } } }, "required": ["class"] },
+          "then": { "not": { "required": ["dailyLimit"] } }
+        },
+        {
+          "if": { "properties": { "class": { "enum": ["delayable", "irreversible"] } }, "required": ["class"] },
+          "then": { "not": { "anyOf": [{ "required": ["preSnapshot"] }, { "required": ["preUndoCheck"] }, { "required": ["inverse"] }, { "required": ["ttlSecs"] }, { "required": ["testTarget"] }] } }
+        },
+        {
+          "if": { "required": ["testTarget"] },
+          "then": { "required": ["preSnapshot"] }
+        }
+      ],
+      "required": ["class"],
+      "properties": {
+        "class": { "enum": ["delayable", "reversible", "compensable", "irreversible"] },
+        "holdWindowSecs": { "type": "integer", "minimum": 1 },
+        "ttlSecs": { "type": "integer", "minimum": 1, "default": 3600 },
+        "dailyLimit": { "type": "integer", "minimum": 1 },
+        "preSnapshot": {
+          "type": "object",
+          "required": ["capability", "args"],
+          "properties": {
+            "capability": { "type": "string", "minLength": 1 },
+            "args": { "type": "object" },
+            "captureJsonPath": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "preUndoCheck": {
+          "type": "object",
+          "required": ["capability", "args"],
+          "description": "Read the post-execution state before undo and block the inverse when its SHA-256 hash has drifted.",
+          "properties": {
+            "capability": { "type": "string", "minLength": 1 },
+            "args": { "type": "object" },
+            "captureJsonPath": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "testTarget": {
+          "type": "object",
+          "required": ["server", "args"],
+          "description": "Dedicated test MCP server and fixed arguments for an inverse round-trip check. The server must expose the contract's tool names.",
+          "properties": {
+            "server": { "type": "string", "minLength": 1 },
+            "args": { "type": "object" }
+          },
+          "additionalProperties": false
+        },
+        "inverse": {
+          "type": "object",
+          "required": ["capability", "args"],
+          "properties": {
+            "capability": { "type": "string", "minLength": 1 },
+            "args": { "type": "object" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "webhookConfig": {
       "type": "object",
       "required": ["url"],
@@ -229,7 +361,14 @@
           "items": { "type": "string", "format": "uri" },
           "default": [],
           "description": "Optional allowlist of webhook URLs permitted for test dispatches."
-        }
+        },
+        "events": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional event filter for legacy approval notifications. ChatOps action events require explicit opt-in even when this list is empty."
+        },
+        "callbackUrl": { "type": "string", "format": "uri" },
+        "actionRole": { "type": "string", "minLength": 1, "description": "RBAC role assigned to signed ChatOps action buttons." }
       },
       "additionalProperties": false
     },

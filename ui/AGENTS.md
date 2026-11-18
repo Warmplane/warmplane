@@ -46,6 +46,8 @@ Always use the established design tokens and CSS utility classes:
 
 Whenever changes are made to files in `ui/`:
 
+Use Bun 1.4.4, matching `packageManager` and the CI/release workflows, so committed bundles reproduce the same minifier output.
+
 1. **Rebuild UI Bundle:**
    ```bash
    cd ui && bun run build && bun run ./build.ts

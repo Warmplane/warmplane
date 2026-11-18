@@ -51,6 +51,7 @@ async fn test_tasks_lifecycle_and_hitl_integration() {
         redact_keys: vec!["card_number".to_string()],
         require_approval: vec!["payments.*".to_string()],
         approval_timeout_secs: Some(30),
+        hold_window_secs: None,
         webhook: None,
     };
 
@@ -93,16 +94,21 @@ async fn test_tasks_lifecycle_and_hitl_integration() {
     assert!(body_json["task"]["inputRequests"]["hitl_approval"].is_object());
 
     // 2. Poll tasks/get endpoint
-    let get_resp = handle_get_task(State(state.clone()), axum::extract::Path(task_id.clone()))
-        .await
-        .into_response();
+    let get_resp = handle_get_task(
+        State(state.clone()),
+        axum::extract::Path(task_id.clone()),
+        axum::Extension(None),
+        None,
+    )
+    .await
+    .into_response();
     assert_eq!(get_resp.status(), StatusCode::OK);
     let get_bytes = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
     let get_json: Value = serde_json::from_slice(&get_bytes).unwrap();
     assert_eq!(get_json["task"]["status"], "input_required");
 
     // 3. List tasks
-    let list_resp = handle_list_tasks(State(state.clone()))
+    let list_resp = handle_list_tasks(State(state.clone()), axum::Extension(None), None)
         .await
         .into_response();
     let list_bytes = to_bytes(list_resp.into_body(), usize::MAX).await.unwrap();
@@ -148,9 +154,14 @@ async fn test_tasks_lifecycle_and_hitl_integration() {
     // 6. Give worker a moment to process reply and verify completed state
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let final_get = handle_get_task(State(state.clone()), axum::extract::Path(task_id.clone()))
-        .await
-        .into_response();
+    let final_get = handle_get_task(
+        State(state.clone()),
+        axum::extract::Path(task_id.clone()),
+        axum::Extension(None),
+        None,
+    )
+    .await
+    .into_response();
     let final_bytes = to_bytes(final_get.into_body(), usize::MAX).await.unwrap();
     let final_json: Value = serde_json::from_slice(&final_bytes).unwrap();
     assert_eq!(final_json["task"]["status"], "completed");
@@ -181,6 +192,8 @@ async fn test_task_cancellation() {
     let cancel_resp = handle_cancel_task(
         State(state.clone()),
         axum::extract::Path(task.task_id.clone()),
+        axum::Extension(None),
+        None,
         Json(warmplane::http_v1::tasks_api::CancelTaskRequest {
             reason: Some("User requested cancellation".to_string()),
         }),
@@ -189,9 +202,14 @@ async fn test_task_cancellation() {
     .into_response();
     assert_eq!(cancel_resp.status(), StatusCode::OK);
 
-    let get_resp = handle_get_task(State(state), axum::extract::Path(task.task_id))
-        .await
-        .into_response();
+    let get_resp = handle_get_task(
+        State(state),
+        axum::extract::Path(task.task_id),
+        axum::Extension(None),
+        None,
+    )
+    .await
+    .into_response();
     let get_bytes = to_bytes(get_resp.into_body(), usize::MAX).await.unwrap();
     let get_json: Value = serde_json::from_slice(&get_bytes).unwrap();
     assert_eq!(get_json["task"]["status"], "cancelled");

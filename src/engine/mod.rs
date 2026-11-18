@@ -1,12 +1,13 @@
-// Rust guideline compliant 2026-08-27
-
+// Rust guideline compliant 2026-11-16
 //! Embedded Warmplane engine interface and ControlPlaneHandle implementation (`M-CANONICAL-DOCS`).
 //!
 //! Provides direct Rust callable APIs without HTTP or transport serialization overhead:
 //! - [`EmbeddedWarmplane`]: In-process entry point to boot and supervise upstream MCP sessions.
 //! - [`ControlPlaneHandle`]: Cloneable, `Send + Sync` handle to query catalogs, invoke capabilities, and run batches.
 
+pub mod interpolation;
 pub mod types;
+pub(crate) mod undo;
 
 use anyhow::Result;
 use serde_json::Value;
@@ -104,7 +105,8 @@ impl ControlPlaneHandle {
                     prof_id.to_string(),
                     prof_cfg.servers.clone(),
                     prof_policy,
-                );
+                )
+                .with_agent_self_undo(prof_cfg.allow_agent_self_undo);
             }
         }
         ProfileContext::unrestricted()
@@ -127,6 +129,138 @@ impl ControlPlaneHandle {
             total_tool_calls: self.state.total_tool_calls.load(Ordering::Relaxed),
             total_tool_duration_us: self.state.total_tool_duration_us.load(Ordering::Relaxed),
         }
+    }
+
+    /// Lists safe summaries of undo entries available to an authorized caller.
+    ///
+    /// Inverse arguments and snapshot contents are not included in list responses. Tenant
+    /// ownership is always taken from `access`, never from the filter.
+    ///
+    /// # Arguments
+    /// * `filter` - Optional status/work-item filters and pagination.
+    /// * `access` - Trusted tenant, role, policy, profile, and caller context.
+    ///
+    /// # Returns
+    /// A tenant-scoped page and the total number of matching entries.
+    ///
+    /// # Errors
+    /// Returns an authorization or persistent-storage error.
+    pub async fn list_undo_entries(
+        &self,
+        filter: crate::undo::UndoListFilter,
+        access: &crate::undo::UndoAccessContext,
+    ) -> Result<crate::undo::UndoListResponse, crate::undo::UndoOperationError> {
+        crate::undo::list_undo_entries(&self.state, access, filter).await
+    }
+
+    /// Returns safe details for one undo entry belonging to the caller's tenant.
+    ///
+    /// # Arguments
+    /// * `undo_id` - Stable undo-entry identifier.
+    /// * `access` - Trusted tenant and role context.
+    ///
+    /// # Returns
+    /// A safe summary without inverse arguments or snapshot contents.
+    ///
+    /// # Errors
+    /// Returns not-found for missing or cross-tenant entries, or an authorization error.
+    pub async fn get_undo_entry(
+        &self,
+        undo_id: &str,
+        access: &crate::undo::UndoAccessContext,
+    ) -> Result<crate::undo::UndoEntrySummary, crate::undo::UndoOperationError> {
+        crate::undo::get_undo_entry(&self.state, access, undo_id).await
+    }
+
+    /// Executes one authorized undo entry and returns its inverse output and audit receipt.
+    ///
+    /// # Arguments
+    /// * `undo_id` - Stable undo-entry identifier.
+    /// * `access` - Trusted tenant, policy, profile, and operator context.
+    /// * `force_expired` - Whether the authorized caller explicitly overrides expiration.
+    /// * `force_reason` - Required audit reason when `force_expired` is true.
+    ///
+    /// # Returns
+    /// Per-entry execution outcome, sanitized inverse output, and committed audit receipt.
+    ///
+    /// # Errors
+    /// Returns authorization, expiry, state-conflict, or storage errors.
+    pub async fn execute_undo(
+        &self,
+        undo_id: &str,
+        access: &crate::undo::UndoAccessContext,
+        force_expired: bool,
+        force_reason: Option<&str>,
+    ) -> Result<crate::undo::RollbackResult, crate::undo::UndoOperationError> {
+        crate::undo::execute_undo(&self.state, access, undo_id, force_expired, force_reason).await
+    }
+
+    /// Rolls back all eligible entries for a work item in LIFO order.
+    ///
+    /// # Arguments
+    /// * `work_item_id` - Work-item fiber to unwind.
+    /// * `access` - Trusted tenant, policy, profile, and operator context.
+    /// * `force_expired` - Whether the authorized caller overrides expired entries.
+    /// * `force_reason` - Required audit reason when `force_expired` is true.
+    ///
+    /// # Returns
+    /// One structured outcome per selected undo entry.
+    ///
+    /// # Errors
+    /// Returns authorization or persistent-storage errors.
+    pub async fn rollback_work_item(
+        &self,
+        work_item_id: &str,
+        access: &crate::undo::UndoAccessContext,
+        force_expired: bool,
+        force_reason: Option<&str>,
+    ) -> Result<Vec<crate::undo::RollbackResult>, crate::undo::UndoOperationError> {
+        crate::undo::rollback_work_item(
+            &self.state,
+            access,
+            work_item_id,
+            force_expired,
+            force_reason,
+        )
+        .await
+    }
+
+    /// Executes an undo requested by an opted-in MCP agent.
+    ///
+    /// # Arguments
+    /// * `undo_id` - Stable undo-entry identifier.
+    /// * `access` - Trusted role, profile, tenant, and actor context.
+    ///
+    /// # Returns
+    /// The inverse execution result and committed audit receipt.
+    ///
+    /// # Errors
+    /// Returns policy, ownership, expiry, or storage errors.
+    pub async fn execute_agent_self_undo(
+        &self,
+        undo_id: &str,
+        access: &crate::undo::UndoAccessContext,
+    ) -> Result<crate::undo::RollbackResult, crate::undo::UndoOperationError> {
+        crate::undo::execute_agent_self_undo(&self.state, access, undo_id).await
+    }
+
+    /// Executes the newest armed undo entry for an opted-in MCP agent's work item.
+    ///
+    /// # Arguments
+    /// * `work_item_id` - Work-item fiber associated with the agent's current turn.
+    /// * `access` - Trusted role, profile, tenant, and caller context.
+    ///
+    /// # Returns
+    /// The inverse execution result and committed audit receipt.
+    ///
+    /// # Errors
+    /// Returns policy, ownership, expiry, or storage errors.
+    pub async fn execute_agent_self_undo_for_work_item(
+        &self,
+        work_item_id: &str,
+        access: &crate::undo::UndoAccessContext,
+    ) -> Result<crate::undo::RollbackResult, crate::undo::UndoOperationError> {
+        crate::undo::execute_agent_self_undo_for_work_item(&self.state, access, work_item_id).await
     }
 
     /// Lists registered capabilities, optionally filtered by a named profile constellation.
@@ -271,6 +405,7 @@ impl ControlPlaneHandle {
             .clone()
             .unwrap_or_else(|| trace_id.clone());
         let req_ctx = options.context.clone().unwrap_or_default();
+        let suppress_undo_registration = options.suppress_undo_registration;
         let explicit_key = options.idempotency_key.clone();
         let idempotency_key = explicit_key.or_else(|| {
             if args.is_object() {
@@ -290,6 +425,56 @@ impl ControlPlaneHandle {
         } else {
             RetryMetadata::unsafe_op
         };
+
+        if let Some(key) = idempotency_key.as_deref() {
+            if let Some(task) = self.state.task_registry.find_by_idempotency_key(key).await {
+                if task.emission.is_some() {
+                    if !self
+                        .state
+                        .hold_coordinator
+                        .can_access_task(
+                            &self.state,
+                            &task,
+                            "default",
+                            &self.state.rbac_engine.default_role(),
+                            prof_ctx.profile_id.as_deref(),
+                        )
+                        .await
+                    {
+                        return Envelope::failure(
+                            trace_id,
+                            Some(req_id),
+                            Some(req_ctx),
+                            WarmplaneError::new(
+                                "POLICY_DENIED",
+                                "Held task is not accessible to this caller",
+                                false,
+                            ),
+                            retry_base("not_started"),
+                        );
+                    }
+                    return Envelope::success(
+                        trace_id,
+                        Some(req_id),
+                        Some(req_ctx),
+                        serde_json::to_value(crate::tasks::TaskResponse::from(&task))
+                            .unwrap_or_default(),
+                        retry_base(
+                            if matches!(
+                                task.status,
+                                crate::tasks::TaskStatus::Completed
+                                    | crate::tasks::TaskStatus::Failed
+                                    | crate::tasks::TaskStatus::Cancelled
+                            ) {
+                                "completed"
+                            } else {
+                                "in_progress"
+                            },
+                        ),
+                    );
+                }
+            }
+        }
 
         // Check Idempotency Store
         if let Some(ref key) = idempotency_key {
@@ -346,7 +531,7 @@ impl ControlPlaneHandle {
             );
         }
 
-        let (requires_approval, approval_timeout_secs, webhook_cfg, redact_keys) = {
+        let (mut requires_approval, approval_timeout_secs, webhook_cfg, redact_keys) = {
             let pol = self.state.policy.read().await;
             if !pol.allows(capability_id) {
                 if let Some(ref key) = idempotency_key {
@@ -372,7 +557,7 @@ impl ControlPlaneHandle {
             )
         };
 
-        let (server_id, tool_name) = {
+        let (server_id, tool_name, reversibility) = {
             let caps_guard = self.state.capabilities.read().await;
             let Some(meta) = caps_guard.get(capability_id) else {
                 if let Some(ref key) = idempotency_key {
@@ -411,8 +596,67 @@ impl ControlPlaneHandle {
                 );
             }
 
-            (meta.server.clone(), meta.tool.clone())
+            (
+                meta.server.clone(),
+                meta.tool.clone(),
+                meta.reversibility.clone(),
+            )
         };
+
+        let mut compensable_reserved = false;
+        if let Some(contract) = reversibility
+            .as_ref()
+            .filter(|contract| contract.class == crate::config::ReversibilityClass::Compensable)
+        {
+            if self.state.undo_ledger.is_none() {
+                if let Some(ref key) = idempotency_key {
+                    self.state.idempotency_store.remove(key).await;
+                }
+                return Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "UNDO_STORAGE_UNAVAILABLE",
+                        "Persistent usage storage is required for compensable capabilities",
+                        false,
+                    ),
+                    retry_base("not_started"),
+                );
+            }
+            if !requires_approval {
+                match undo::reserve_compensable(
+                    &self.state,
+                    contract,
+                    capability_id,
+                    "default",
+                    prof_ctx.profile_id.as_deref(),
+                    idempotency_key.as_deref(),
+                    false,
+                )
+                .await
+                {
+                    Ok(true) => compensable_reserved = true,
+                    Ok(false) => requires_approval = true,
+                    Err(error) => {
+                        if let Some(ref key) = idempotency_key {
+                            self.state.idempotency_store.remove(key).await;
+                        }
+                        return Envelope::failure(
+                            trace_id,
+                            Some(req_id),
+                            Some(req_ctx),
+                            WarmplaneError::new(
+                                "COMPENSABLE_LIMIT_STORAGE_FAILED",
+                                error.to_string(),
+                                true,
+                            ),
+                            retry_base("not_started"),
+                        );
+                    }
+                }
+            }
+        }
 
         let mut effective_args = args.clone();
 
@@ -478,6 +722,15 @@ impl ControlPlaneHandle {
             let trace_id_clone = trace_id.clone();
             let req_id_clone = req_id.clone();
             let req_ctx_clone = req_ctx.clone();
+            let reversibility_clone = reversibility.clone();
+            let profile_context_clone = prof_ctx.clone();
+            let capability_id_clone = capability_id.to_string();
+            let compensable_reserved_clone = compensable_reserved;
+            let suppress_undo_registration_clone = suppress_undo_registration;
+            let policy_for_undo = {
+                let policy = self.state.policy.read().await;
+                policy.merge_with_profile(prof_ctx.profile_policy.as_ref())
+            };
 
             tokio::spawn(async move {
                 let mut worker_args = args_clone.clone();
@@ -525,6 +778,170 @@ impl ControlPlaneHandle {
                         }
                     }
                 }
+
+                if !compensable_reserved_clone {
+                    if let Some(contract) = reversibility_clone.as_ref().filter(|contract| {
+                        contract.class == crate::config::ReversibilityClass::Compensable
+                    }) {
+                        match undo::reserve_compensable(
+                            &handle.state,
+                            contract,
+                            &capability_id_clone,
+                            "default",
+                            profile_context_clone.profile_id.as_deref(),
+                            idempotency_key_clone.as_deref(),
+                            true,
+                        )
+                        .await
+                        {
+                            Ok(true) => {}
+                            Ok(false) | Err(_) => {
+                                let _ = handle
+                                    .state
+                                    .task_registry
+                                    .fail_task(
+                                        &task_id_clone,
+                                        serde_json::json!({"code": "COMPENSABLE_LIMIT_STORAGE_FAILED"}),
+                                        Some("Could not reserve compensable invocation".to_string()),
+                                    )
+                                    .await;
+                                if let Some(ref key) = idempotency_key_clone {
+                                    handle.state.idempotency_store.remove(key).await;
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                if let Some(contract) = reversibility_clone.as_ref().filter(|contract| {
+                    contract.class == crate::config::ReversibilityClass::Delayable
+                }) {
+                    let global_window = handle.state.policy.read().await.hold_window_secs;
+                    let profile_window = profile_context_clone
+                        .profile_policy
+                        .as_ref()
+                        .and_then(|profile_policy| profile_policy.hold_window_secs);
+                    let hold_secs = crate::emissions::effective_hold_window_secs(
+                        contract,
+                        profile_window,
+                        global_window,
+                    )
+                    .unwrap_or(30);
+                    let emission = crate::tasks::EmissionRecord {
+                        phase: crate::tasks::EmissionPhase::PendingEmission,
+                        release_at_ms: match crate::emissions::release_deadline_ms(hold_secs) {
+                            Ok(deadline) => deadline,
+                            Err(error) => {
+                                let _ = handle
+                                    .state
+                                    .task_registry
+                                    .fail_task(
+                                        &task_id_clone,
+                                        serde_json::json!({"code": "INVALID_HOLD_WINDOW"}),
+                                        Some(error.to_string()),
+                                    )
+                                    .await;
+                                return;
+                            }
+                        },
+                        cancellable: true,
+                        tool_name: tool_name_clone.clone(),
+                        input_responses: options.input_responses.clone(),
+                        request_state: options.request_state.clone(),
+                        profile_id: profile_context_clone.profile_id.clone(),
+                        tenant_id: "default".to_string(),
+                        role: handle.state.rbac_engine.default_role().to_string(),
+                        authorization_expires_at_epoch_secs: None,
+                        approval_completed: requires_approval,
+                        batch_id: None,
+                        step_id: None,
+                    };
+                    match handle
+                        .state
+                        .hold_coordinator
+                        .queue_existing(
+                            &handle.state,
+                            &task_id_clone,
+                            worker_args.clone(),
+                            emission,
+                        )
+                        .await
+                    {
+                        Ok(Some(_)) => return,
+                        Ok(None) => return,
+                        Err(error) => {
+                            let _ = handle
+                                .state
+                                .task_registry
+                                .fail_task(
+                                    &task_id_clone,
+                                    serde_json::json!({"code": "EMISSION_PERSISTENCE_FAILED"}),
+                                    Some(error.to_string()),
+                                )
+                                .await;
+                            if let Some(key) = idempotency_key_clone.as_deref() {
+                                handle.state.idempotency_store.remove(key).await;
+                            }
+                            return;
+                        }
+                    }
+                }
+
+                let (snapshot, snapshot_hash) = if let Some(contract) = &reversibility_clone {
+                    if matches!(
+                        contract.class,
+                        crate::config::ReversibilityClass::Reversible
+                            | crate::config::ReversibilityClass::Compensable
+                    ) && handle.state.undo_ledger.is_none()
+                    {
+                        let _ = handle
+                            .state
+                            .task_registry
+                            .fail_task(
+                                &task_id_clone,
+                                serde_json::json!({"code": "UNDO_STORAGE_UNAVAILABLE"}),
+                                Some("Persistent undo ledger is unavailable".to_string()),
+                            )
+                            .await;
+                        if let Some(ref key) = idempotency_key_clone {
+                            handle.state.idempotency_store.remove(key).await;
+                        }
+                        return;
+                    }
+                    if let Some(pre_snapshot) = &contract.pre_snapshot {
+                        match undo::capture_pre_snapshot(
+                            &handle.state,
+                            pre_snapshot,
+                            &worker_args,
+                            &profile_context_clone,
+                            &policy_for_undo,
+                        )
+                        .await
+                        {
+                            Ok(snapshot) => snapshot,
+                            Err(error) => {
+                                let _ = handle
+                                    .state
+                                    .task_registry
+                                    .fail_task(
+                                        &task_id_clone,
+                                        serde_json::json!({"code": "PRE_SNAPSHOT_FAILED"}),
+                                        Some(error.to_string()),
+                                    )
+                                    .await;
+                                if let Some(ref key) = idempotency_key_clone {
+                                    handle.state.idempotency_store.remove(key).await;
+                                }
+                                return;
+                            }
+                        }
+                    } else {
+                        (Value::Null, None)
+                    }
+                } else {
+                    (Value::Null, None)
+                };
 
                 let tx = {
                     let servers_guard = handle.state.servers.read().await;
@@ -588,6 +1005,63 @@ impl ControlPlaneHandle {
                             .circuit_breakers
                             .record_success(&server_id_clone)
                             .await;
+                        if !suppress_undo_registration_clone {
+                            if let Some(contract) = &reversibility_clone {
+                                if let Err(error) = undo::register_inverse(
+                                    &handle.state,
+                                    contract,
+                                    undo::ForwardCall {
+                                        capability: &capability_id_clone,
+                                        args: &worker_args,
+                                        result: &data,
+                                        snapshot: &snapshot,
+                                        snapshot_hash,
+                                        context: &req_ctx_clone,
+                                        batch_id: None,
+                                        tenant_id: "default",
+                                        profile_id: profile_context_clone.profile_id.as_deref(),
+                                    },
+                                    &profile_context_clone,
+                                    &policy_for_undo,
+                                )
+                                .await
+                                {
+                                    let message = format!(
+                                        "Forward call succeeded but inverse registration failed: {error}"
+                                    );
+                                    let _ = handle
+                                        .state
+                                        .task_registry
+                                        .fail_task(
+                                            &task_id_clone,
+                                            serde_json::json!({"code": "UNDO_REGISTRATION_FAILED"}),
+                                            Some(message.clone()),
+                                        )
+                                        .await;
+                                    let env: Envelope<Value> = Envelope::failure(
+                                        trace_id_clone.clone(),
+                                        Some(req_id_clone.clone()),
+                                        Some(req_ctx_clone.clone()),
+                                        WarmplaneError::new(
+                                            "UNDO_REGISTRATION_FAILED",
+                                            message,
+                                            false,
+                                        ),
+                                        retry_base("completed"),
+                                    );
+                                    if let Some(ref key) = idempotency_key_clone {
+                                        if let Ok(value) = serde_json::to_value(&env) {
+                                            handle
+                                                .state
+                                                .idempotency_store
+                                                .complete(key, value)
+                                                .await;
+                                        }
+                                    }
+                                    return;
+                                }
+                            }
+                        }
                         let distilled_data = distill_value(data, &distill_opts);
                         let _ = handle
                             .state
@@ -811,6 +1285,211 @@ impl ControlPlaneHandle {
             None
         };
 
+        if !compensable_reserved {
+            if let Some(contract) = reversibility
+                .as_ref()
+                .filter(|contract| contract.class == crate::config::ReversibilityClass::Compensable)
+            {
+                match undo::reserve_compensable(
+                    &self.state,
+                    contract,
+                    capability_id,
+                    "default",
+                    prof_ctx.profile_id.as_deref(),
+                    idempotency_key.as_deref(),
+                    true,
+                )
+                .await
+                {
+                    Ok(true) => {}
+                    Ok(false) | Err(_) => {
+                        if let Some(ref key) = idempotency_key {
+                            self.state.idempotency_store.remove(key).await;
+                        }
+                        return Envelope::failure(
+                            trace_id,
+                            Some(req_id),
+                            Some(req_ctx),
+                            WarmplaneError::new(
+                                "COMPENSABLE_LIMIT_STORAGE_FAILED",
+                                "Could not reserve compensable invocation",
+                                true,
+                            ),
+                            retry_base("not_started"),
+                        );
+                    }
+                }
+            }
+        }
+
+        if let Some(contract) = reversibility
+            .as_ref()
+            .filter(|contract| contract.class == crate::config::ReversibilityClass::Delayable)
+        {
+            let global_window = self.state.policy.read().await.hold_window_secs;
+            let profile_window = prof_ctx
+                .profile_policy
+                .as_ref()
+                .and_then(|profile_policy| profile_policy.hold_window_secs);
+            let hold_secs = crate::emissions::effective_hold_window_secs(
+                contract,
+                profile_window,
+                global_window,
+            )
+            .unwrap_or(30);
+            let hold_ms = match hold_secs.checked_mul(1_000) {
+                Some(value) => value,
+                None => {
+                    return Envelope::failure(
+                        trace_id,
+                        Some(req_id),
+                        Some(req_ctx),
+                        WarmplaneError::new(
+                            "INVALID_HOLD_WINDOW",
+                            "Hold window overflows milliseconds",
+                            false,
+                        ),
+                        retry_base("not_started"),
+                    );
+                }
+            };
+            let release_at_ms = match crate::emissions::release_deadline_ms(hold_secs) {
+                Ok(deadline) => deadline,
+                Err(error) => {
+                    return Envelope::failure(
+                        trace_id,
+                        Some(req_id),
+                        Some(req_ctx),
+                        WarmplaneError::new("INVALID_HOLD_WINDOW", error.to_string(), false),
+                        retry_base("not_started"),
+                    );
+                }
+            };
+            let emission = crate::tasks::EmissionRecord {
+                phase: crate::tasks::EmissionPhase::PendingEmission,
+                release_at_ms,
+                cancellable: true,
+                tool_name: tool_name.clone(),
+                input_responses: options.input_responses.clone(),
+                request_state: options.request_state.clone(),
+                profile_id: prof_ctx.profile_id.clone(),
+                tenant_id: "default".to_string(),
+                role: self.state.rbac_engine.default_role().to_string(),
+                authorization_expires_at_epoch_secs: None,
+                approval_completed: requires_approval,
+                batch_id: None,
+                step_id: None,
+            };
+            let task = if let Some(existing) = task_record.as_ref() {
+                self.state
+                    .hold_coordinator
+                    .queue_existing(
+                        &self.state,
+                        &existing.task_id,
+                        effective_args.clone(),
+                        emission,
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+            } else {
+                self.state
+                    .hold_coordinator
+                    .accept(
+                        &self.state,
+                        crate::tasks::CreateTaskParams {
+                            capability_id: capability_id.to_string(),
+                            server_id: server_id.clone(),
+                            args: effective_args.clone(),
+                            request_id: Some(req_id.clone()),
+                            context: Some(req_ctx.clone()),
+                            idempotency_key: idempotency_key.clone(),
+                            initial_status: crate::tasks::TaskStatus::Working,
+                            status_message: Some(
+                                "Waiting for the emission release deadline".to_string(),
+                            ),
+                            input_requests: None,
+                            ttl_ms: None,
+                            poll_interval_ms: Some(1_000),
+                        },
+                        emission,
+                    )
+                    .await
+                    .ok()
+            };
+            let Some(task) = task else {
+                return Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "EMISSION_PERSISTENCE_FAILED",
+                        "Could not persist held emission",
+                        true,
+                    ),
+                    retry_base("not_started"),
+                );
+            };
+            if hold_ms < self.state.tool_timeout_ms {
+                let wait = std::time::Duration::from_millis(
+                    hold_ms.saturating_add(self.state.tool_timeout_ms),
+                );
+                if let Some(finished) = self
+                    .state
+                    .hold_coordinator
+                    .wait_for_terminal(&self.state, &task.task_id, wait)
+                    .await
+                {
+                    match finished.status {
+                        crate::tasks::TaskStatus::Completed => {
+                            let env = Envelope::success(
+                                trace_id,
+                                Some(req_id),
+                                Some(req_ctx),
+                                finished.result.unwrap_or(Value::Null),
+                                retry_base("completed"),
+                            );
+                            if let Some(key) = idempotency_key.as_deref() {
+                                if let Ok(value) = serde_json::to_value(&env) {
+                                    self.state.idempotency_store.complete(key, value).await;
+                                }
+                            }
+                            return env;
+                        }
+                        crate::tasks::TaskStatus::Failed | crate::tasks::TaskStatus::Cancelled => {
+                            return Envelope::failure(
+                                trace_id,
+                                Some(req_id),
+                                Some(req_ctx),
+                                WarmplaneError::new(
+                                    finished
+                                        .error
+                                        .as_ref()
+                                        .and_then(|error| error.get("code"))
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("EMISSION_FAILED"),
+                                    finished.status_message.unwrap_or_else(|| {
+                                        "Held emission did not complete".to_string()
+                                    }),
+                                    false,
+                                ),
+                                retry_base("completed"),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let receipt = crate::tasks::TaskResponse::from(&task);
+            return Envelope::success(
+                trace_id,
+                Some(req_id),
+                Some(req_ctx),
+                serde_json::to_value(receipt).unwrap_or_default(),
+                retry_base("in_progress"),
+            );
+        }
+
         let tx = {
             let servers_guard = self.state.servers.read().await;
             let Some(tx) = servers_guard.get(&server_id).cloned() else {
@@ -873,13 +1552,71 @@ impl ControlPlaneHandle {
             );
         }
 
+        let (snapshot, snapshot_hash) = if let Some(contract) = &reversibility {
+            if matches!(
+                contract.class,
+                crate::config::ReversibilityClass::Reversible
+                    | crate::config::ReversibilityClass::Compensable
+            ) && self.state.undo_ledger.is_none()
+            {
+                if let Some(ref key) = idempotency_key {
+                    self.state.idempotency_store.remove(key).await;
+                }
+                return Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    WarmplaneError::new(
+                        "UNDO_STORAGE_UNAVAILABLE",
+                        "Persistent undo ledger is required for reversible capabilities",
+                        false,
+                    ),
+                    retry_base("not_started"),
+                );
+            }
+            if let Some(pre_snapshot) = &contract.pre_snapshot {
+                match undo::capture_pre_snapshot(
+                    &self.state,
+                    pre_snapshot,
+                    &effective_args,
+                    &prof_ctx,
+                    &self
+                        .state
+                        .policy
+                        .read()
+                        .await
+                        .merge_with_profile(prof_ctx.profile_policy.as_ref()),
+                )
+                .await
+                {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        if let Some(ref key) = idempotency_key {
+                            self.state.idempotency_store.remove(key).await;
+                        }
+                        return Envelope::failure(
+                            trace_id,
+                            Some(req_id),
+                            Some(req_ctx),
+                            WarmplaneError::new("PRE_SNAPSHOT_FAILED", error.to_string(), true),
+                            retry_base("not_started"),
+                        );
+                    }
+                }
+            } else {
+                (Value::Null, None)
+            }
+        } else {
+            (Value::Null, None)
+        };
+
         let distill_opts = DistillationOptions::from_args(Some(&args));
         let (reply_tx, reply_rx) = oneshot::channel();
 
         if tx
             .send(ServerMsg::CallTool {
                 name: tool_name,
-                params: effective_args,
+                params: effective_args.clone(),
                 input_responses: options.input_responses,
                 request_state: options.request_state,
                 reply: reply_tx,
@@ -925,6 +1662,57 @@ impl ControlPlaneHandle {
                     .total_tool_duration_us
                     .fetch_add(elapsed_us, Ordering::Relaxed);
 
+                if !suppress_undo_registration {
+                    if let Some(contract) = &reversibility {
+                        if let Err(error) = undo::register_inverse(
+                            &self.state,
+                            contract,
+                            undo::ForwardCall {
+                                capability: capability_id,
+                                args: &effective_args,
+                                result: &data,
+                                snapshot: &snapshot,
+                                snapshot_hash,
+                                context: &req_ctx,
+                                batch_id: None,
+                                tenant_id: "default",
+                                profile_id: prof_ctx.profile_id.as_deref(),
+                            },
+                            &prof_ctx,
+                            &self
+                                .state
+                                .policy
+                                .read()
+                                .await
+                                .merge_with_profile(prof_ctx.profile_policy.as_ref()),
+                        )
+                        .await
+                        {
+                            if let Some(ref rec) = task_record {
+                                let _ = self
+                                    .state
+                                    .task_registry
+                                    .fail_task(
+                                        &rec.task_id,
+                                        serde_json::json!({"code": "UNDO_REGISTRATION_FAILED"}),
+                                        Some(error.to_string()),
+                                    )
+                                    .await;
+                            }
+                            return Envelope::failure(
+                                trace_id,
+                                Some(req_id),
+                                Some(req_ctx),
+                                WarmplaneError::new(
+                                    "UNDO_REGISTRATION_FAILED",
+                                    format!("Forward call succeeded but inverse registration failed: {error}"),
+                                    false,
+                                ),
+                                retry_base("completed"),
+                            );
+                        }
+                    }
+                }
                 let distilled_data = distill_value(data, &distill_opts);
                 if let Some(ref rec) = task_record {
                     let _ = self
@@ -1046,7 +1834,12 @@ impl ControlPlaneHandle {
     ) -> BatchCallResponse {
         let trace_id = next_trace_id();
         let prof_ctx = self.resolve_profile_context(profile).await;
-        let policy = self.state.policy.read().await.clone();
+        let policy = self
+            .state
+            .policy
+            .read()
+            .await
+            .merge_with_profile(prof_ctx.profile_policy.as_ref());
 
         execute_batch(
             &self.state,
@@ -1448,6 +2241,46 @@ impl ControlPlaneHandle {
     /// An [`Envelope`] indicating whether the task was cancelled.
     pub async fn cancel_task(&self, task_id: &str, reason: Option<String>) -> Envelope<bool> {
         let trace_id = next_trace_id();
+        match self
+            .state
+            .hold_coordinator
+            .cancel(&self.state, task_id, reason.clone())
+            .await
+        {
+            Ok(crate::tasks::EmissionCancelResult::Cancelled)
+            | Ok(crate::tasks::EmissionCancelResult::AlreadyCancelled) => {
+                return Envelope::success(
+                    trace_id,
+                    None,
+                    None,
+                    true,
+                    RetryMetadata::safe("completed"),
+                );
+            }
+            Ok(crate::tasks::EmissionCancelResult::TooLate) => {
+                return Envelope::failure(
+                    trace_id,
+                    None,
+                    None,
+                    WarmplaneError::new(
+                        "EMISSION_DISPATCHING",
+                        "Emission dispatch has already started and may have reached the upstream server",
+                        false,
+                    ),
+                    RetryMetadata::safe("not_started"),
+                );
+            }
+            Ok(crate::tasks::EmissionCancelResult::NotEmission) => {}
+            Err(error) => {
+                return Envelope::failure(
+                    trace_id,
+                    None,
+                    None,
+                    WarmplaneError::new("TASK_CANCEL_FAILED", error.to_string(), false),
+                    RetryMetadata::safe("not_started"),
+                );
+            }
+        }
         match self.state.task_registry.cancel_task(task_id, reason).await {
             Ok(true) => {
                 Envelope::success(trace_id, None, None, true, RetryMetadata::safe("completed"))

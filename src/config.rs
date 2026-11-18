@@ -1,5 +1,4 @@
-// Rust guideline compliant 2026-08-27
-
+// Rust guideline compliant 2026-11-16
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, io::ErrorKind, path::PathBuf};
@@ -200,7 +199,132 @@ pub enum AliasTarget {
         /// Expose this alias directly as a top-level native tool in tools/list
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         passthrough: bool,
+        /// Optional execution reversibility contract.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reversibility: Option<ReversibilityConfig>,
     },
+}
+
+/// Execution reversibility behavior configured for an alias.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub struct ReversibilityConfig {
+    /// Reversibility class supported by this configuration.
+    #[serde(rename = "class")]
+    pub class: ReversibilityClass,
+    /// Cancellation hold duration in seconds for delayable emissions.
+    #[serde(
+        default,
+        rename = "holdWindowSecs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hold_window_secs: Option<u64>,
+    /// Maximum lifetime of a registered inverse action, in seconds.
+    #[serde(default, rename = "ttlSecs", skip_serializing_if = "Option::is_none")]
+    pub ttl_secs: Option<u64>,
+    /// Maximum calls for a compensable capability in a rolling day.
+    #[serde(
+        default,
+        rename = "dailyLimit",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub daily_limit: Option<u64>,
+    /// Read operation used to capture the pre-mutation state.
+    #[serde(
+        default,
+        rename = "preSnapshot",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pre_snapshot: Option<Box<PreSnapshotConfig>>,
+    /// Read operation used to verify the post-execution state before applying an inverse.
+    #[serde(
+        default,
+        rename = "preUndoCheck",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pre_undo_check: Option<Box<PreSnapshotConfig>>,
+    /// Explicit non-production target and arguments used by the undo contract test command.
+    #[serde(
+        default,
+        rename = "testTarget",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub test_target: Option<Box<UndoTestTargetConfig>>,
+    /// Inverse operation to register after a successful forward call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inverse: Option<Box<InverseConfig>>,
+}
+
+/// Upstream target reserved for an observational undo contract test.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub struct UndoTestTargetConfig {
+    /// Dedicated test server identifier that exposes the contract's tool names.
+    pub server: String,
+    /// Fixed, non-production arguments used for the test cycle.
+    #[serde(default)]
+    pub args: serde_json::Value,
+}
+
+/// Configuration for reading and distilling a pre-mutation snapshot.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub struct PreSnapshotConfig {
+    /// Capability used to read the current state.
+    pub capability: String,
+    /// Arguments passed to the read capability.
+    #[serde(default)]
+    pub args: serde_json::Value,
+    /// Optional JSONPath selecting the snapshot value to persist.
+    #[serde(
+        default,
+        rename = "captureJsonPath",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub capture_json_path: Option<String>,
+}
+
+/// Inverse capability and its argument template.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub struct InverseConfig {
+    /// Capability used to reverse the forward operation.
+    pub capability: String,
+    /// JSON argument template supporting `${args...}`, `${result...}`, and `${snapshot...}` references.
+    #[serde(default)]
+    pub args: serde_json::Value,
+}
+
+/// Reversibility behavior classes.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReversibilityClass {
+    /// Delay dispatch so an operator can cancel an outbound emission.
+    Delayable,
+    /// An operation with an inverse that restores captured pre-state.
+    Reversible,
+    /// An operation whose inverse compensates for its effect.
+    Compensable,
+    /// An operation with no configured inverse.
+    Irreversible,
+}
+
+/// Resolves a canonical capability's delayable hold duration from profile policy, alias, and global policy.
+pub fn resolve_hold_window_secs(
+    aliases: &HashMap<String, AliasTarget>,
+    canonical_target: &str,
+    profile_window_secs: Option<u64>,
+    global_window_secs: Option<u64>,
+) -> Option<u64> {
+    let contract = aliases
+        .values()
+        .find(|alias| alias.target() == canonical_target)
+        .and_then(AliasTarget::reversibility)?;
+    if contract.class != ReversibilityClass::Delayable {
+        return None;
+    }
+    Some(
+        profile_window_secs
+            .or(contract.hold_window_secs)
+            .or(global_window_secs)
+            .unwrap_or(30),
+    )
 }
 
 impl AliasTarget {
@@ -235,6 +359,14 @@ impl AliasTarget {
             Self::Detailed { passthrough, .. } => *passthrough,
         }
     }
+
+    /// Returns the optional reversibility contract configured on this alias.
+    pub fn reversibility(&self) -> Option<&ReversibilityConfig> {
+        match self {
+            Self::Simple(_) => None,
+            Self::Detailed { reversibility, .. } => reversibility.as_ref(),
+        }
+    }
 }
 
 impl From<&str> for AliasTarget {
@@ -260,6 +392,9 @@ pub struct ProfileConfig {
     /// Optional per-profile security and governance policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<PolicyConfig>,
+    /// Allows an opted-in MCP role to invoke undo for its own work.
+    #[serde(default, rename = "allowAgentSelfUndo")]
+    pub allow_agent_self_undo: bool,
 }
 
 /// Persistent runtime state configuration.
@@ -393,7 +528,7 @@ pub struct WebhookConfig {
     /// Optional payload format (generic, slack, discord, teams).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<crate::chatops::WebhookFormat>,
-    /// Subscribed event types (defaults to `["approval.requested"]`).
+    /// Optional event filter for legacy approval notifications and explicitly enabled action events.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<String>,
     /// Public callback URL for interactive action buttons.
@@ -404,6 +539,13 @@ pub struct WebhookConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub callback_url: Option<String>,
+    /// RBAC role used for actions initiated by signed ChatOps buttons.
+    #[serde(
+        default,
+        rename = "actionRole",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub action_role: Option<String>,
     /// Optional custom HTTP headers map.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headers: Option<HashMap<String, String>>,
@@ -472,6 +614,14 @@ pub struct PolicyConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub approval_timeout_secs: Option<u64>,
+    /// Default hold window in seconds for delayable capabilities.
+    #[serde(
+        default,
+        rename = "holdWindowSecs",
+        alias = "hold_window_secs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hold_window_secs: Option<u64>,
     /// Outbound webhook configuration for dispatching approval events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook: Option<WebhookConfig>,
@@ -871,6 +1021,190 @@ pub fn resolve_client_port(
 }
 
 fn validate_config(config: &McpConfig) -> Result<()> {
+    fn validate_hold_window(value: Option<u64>, context: &str) -> Result<()> {
+        if let Some(seconds) = value {
+            if seconds == 0 || seconds.checked_mul(1000).is_none() {
+                anyhow::bail!(
+                    "{} must be between 1 and {} seconds",
+                    context,
+                    u64::MAX / 1000
+                );
+            }
+        }
+        Ok(())
+    }
+
+    if let Some(policy) = &config.policy {
+        validate_hold_window(policy.hold_window_secs, "policy.holdWindowSecs")?;
+        if let Some(webhook) = &policy.webhook {
+            for event in ["undo.action_available", "emission.held"] {
+                if webhook.events.iter().any(|configured| configured == event) {
+                    if webhook.secret.is_none() && webhook.secret_env.is_none() {
+                        anyhow::bail!("policy.webhook.secret or secretEnv is required when subscribing to {event}");
+                    }
+                    if webhook.callback_url.as_deref().is_none_or(str::is_empty) {
+                        anyhow::bail!(
+                            "policy.webhook.callbackUrl is required when subscribing to {event}"
+                        );
+                    }
+                    let role = webhook
+                        .action_role
+                        .as_deref()
+                        .filter(|role| !role.trim().is_empty())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "policy.webhook.actionRole is required when subscribing to {event}"
+                            )
+                        })?;
+                    if config.rbac.as_ref().is_some_and(|rbac| rbac.enabled) {
+                        let role_config =
+                            config.rbac.as_ref().and_then(|rbac| rbac.roles.get(role));
+                        if !role_config.is_some_and(|role| role.undo_permissions.execute) {
+                            anyhow::bail!("policy.webhook.actionRole must name an RBAC role with undoPermissions.execute for {event}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (name, profile) in &config.profiles {
+        if let Some(policy) = &profile.policy {
+            validate_hold_window(
+                policy.hold_window_secs,
+                &format!("profiles.{}.policy.holdWindowSecs", name),
+            )?;
+        }
+    }
+    for (alias, target) in &config.capability_aliases {
+        if let Some(contract) = target.reversibility() {
+            validate_hold_window(
+                contract.hold_window_secs,
+                &format!("capabilityAliases.{}.reversibility.holdWindowSecs", alias),
+            )?;
+            validate_hold_window(
+                contract.ttl_secs,
+                &format!("capabilityAliases.{}.reversibility.ttlSecs", alias),
+            )?;
+            if contract.daily_limit == Some(0) {
+                anyhow::bail!(
+                    "capabilityAliases.{}.reversibility.dailyLimit must be greater than zero",
+                    alias
+                );
+            }
+            if contract.hold_window_secs.is_some()
+                && contract.class != ReversibilityClass::Delayable
+            {
+                anyhow::bail!(
+                    "capabilityAliases.{}.reversibility.holdWindowSecs is only valid for delayable class",
+                    alias
+                );
+            }
+            if contract.daily_limit.is_some() && contract.class != ReversibilityClass::Compensable {
+                anyhow::bail!(
+                    "capabilityAliases.{}.reversibility.dailyLimit is only valid for compensable class",
+                    alias
+                );
+            }
+            if contract.ttl_secs.is_some()
+                && !matches!(
+                    contract.class,
+                    ReversibilityClass::Reversible | ReversibilityClass::Compensable
+                )
+            {
+                anyhow::bail!(
+                    "capabilityAliases.{}.reversibility.ttlSecs is only valid for reversible and compensable classes",
+                    alias
+                );
+            }
+            if matches!(
+                contract.class,
+                ReversibilityClass::Reversible | ReversibilityClass::Compensable
+            ) && contract.inverse.is_none()
+            {
+                anyhow::bail!("capabilityAliases.{}.reversibility.inverse is required for reversible and compensable classes", alias);
+            }
+            if contract.inverse.is_some()
+                && !matches!(
+                    contract.class,
+                    ReversibilityClass::Reversible | ReversibilityClass::Compensable
+                )
+            {
+                anyhow::bail!(
+                    "capabilityAliases.{}.reversibility.inverse is only valid for reversible and compensable classes",
+                    alias
+                );
+            }
+            if contract.class == ReversibilityClass::Compensable && contract.daily_limit.is_none() {
+                anyhow::bail!("capabilityAliases.{}.reversibility.dailyLimit is required for compensable class", alias);
+            }
+            if contract.pre_snapshot.is_some()
+                && !matches!(
+                    contract.class,
+                    ReversibilityClass::Reversible | ReversibilityClass::Compensable
+                )
+            {
+                anyhow::bail!(
+                    "capabilityAliases.{}.reversibility.preSnapshot is only valid for reversible and compensable classes",
+                    alias
+                );
+            }
+            if contract.pre_undo_check.is_some()
+                && !matches!(
+                    contract.class,
+                    ReversibilityClass::Reversible | ReversibilityClass::Compensable
+                )
+            {
+                anyhow::bail!(
+                    "capabilityAliases.{}.reversibility.preUndoCheck is only valid for reversible and compensable classes",
+                    alias
+                );
+            }
+            if let Some(check) = &contract.pre_undo_check {
+                if check.capability.trim().is_empty() || !check.args.is_object() {
+                    anyhow::bail!("capabilityAliases.{}.reversibility.preUndoCheck requires a capability and object args", alias);
+                }
+            }
+            if contract.test_target.is_some()
+                && !matches!(
+                    contract.class,
+                    ReversibilityClass::Reversible | ReversibilityClass::Compensable
+                )
+            {
+                anyhow::bail!("capabilityAliases.{}.reversibility.testTarget is only valid for reversible and compensable classes", alias);
+            }
+            if let Some(test_target) = &contract.test_target {
+                if test_target.server.trim().is_empty() || !test_target.args.is_object() {
+                    anyhow::bail!("capabilityAliases.{}.reversibility.testTarget requires a server and object args", alias);
+                }
+                if contract.pre_snapshot.is_none() {
+                    anyhow::bail!("capabilityAliases.{}.reversibility.testTarget requires preSnapshot to verify observational equivalence", alias);
+                }
+            }
+            if let Some(snapshot) = &contract.pre_snapshot {
+                if snapshot.capability.trim().is_empty() || !snapshot.args.is_object() {
+                    anyhow::bail!("capabilityAliases.{}.reversibility.preSnapshot requires a capability and object args", alias);
+                }
+            }
+            if let Some(inverse) = &contract.inverse {
+                if inverse.capability.trim().is_empty() || !inverse.args.is_object() {
+                    anyhow::bail!("capabilityAliases.{}.reversibility.inverse requires a capability and object args", alias);
+                }
+            }
+        }
+    }
+    let mut contracts = HashMap::new();
+    for (alias, target) in &config.capability_aliases {
+        if let Some(contract) = target.reversibility() {
+            match contracts.insert(target.target(), contract) {
+                Some(existing) if existing != contract => anyhow::bail!(
+                    "Capability aliases targeting '{}' define conflicting reversibility contracts (including '{}')",
+                    target.target(), alias
+                ),
+                _ => {}
+            }
+        }
+    }
+
     for (server_id, server) in &config.mcp_servers {
         let has_command = server
             .command
@@ -1061,6 +1395,130 @@ mod tests {
     use super::{validate_config, AuthConfig, McpConfig, ServerConfig};
     use std::collections::HashMap;
 
+    #[test]
+    fn delayable_alias_hold_window_uses_global_policy_then_default() {
+        let aliases = HashMap::from([(
+            "mail.send".to_string(),
+            super::AliasTarget::Detailed {
+                target: "gmail.send".to_string(),
+                summary: None,
+                description: None,
+                passthrough: false,
+                reversibility: Some(super::ReversibilityConfig {
+                    class: super::ReversibilityClass::Delayable,
+                    hold_window_secs: None,
+                    ttl_secs: None,
+                    daily_limit: None,
+                    pre_snapshot: None,
+                    pre_undo_check: None,
+                    test_target: None,
+                    inverse: None,
+                }),
+            },
+        )]);
+        assert_eq!(
+            super::resolve_hold_window_secs(&aliases, "gmail.send", None, Some(12)),
+            Some(12)
+        );
+        assert_eq!(
+            super::resolve_hold_window_secs(&aliases, "gmail.send", None, None),
+            Some(30)
+        );
+        assert_eq!(
+            super::resolve_hold_window_secs(&HashMap::new(), "gmail.send", None, Some(12)),
+            None
+        );
+    }
+
+    #[test]
+    fn alias_hold_window_overrides_global_policy_and_profile_overrides_alias() {
+        let aliases = HashMap::from([(
+            "mail.send".to_string(),
+            super::AliasTarget::Detailed {
+                target: "gmail.send".to_string(),
+                summary: None,
+                description: None,
+                passthrough: false,
+                reversibility: Some(super::ReversibilityConfig {
+                    class: super::ReversibilityClass::Delayable,
+                    hold_window_secs: Some(7),
+                    ttl_secs: None,
+                    daily_limit: None,
+                    pre_snapshot: None,
+                    pre_undo_check: None,
+                    test_target: None,
+                    inverse: None,
+                }),
+            },
+        )]);
+        assert_eq!(
+            super::resolve_hold_window_secs(&aliases, "gmail.send", None, Some(12)),
+            Some(7)
+        );
+        assert_eq!(
+            super::resolve_hold_window_secs(&aliases, "gmail.send", Some(4), Some(12)),
+            Some(4)
+        );
+        assert_eq!(
+            super::resolve_hold_window_secs(&aliases, "gmail.send", None, None),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn config_rejects_zero_hold_window_and_conflicting_target_contracts() {
+        let mut config = McpConfig {
+            policy: Some(super::PolicyConfig {
+                hold_window_secs: Some(0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(validate_config(&config).is_err());
+
+        config.policy = None;
+        let contract = |seconds| super::AliasTarget::Detailed {
+            target: "mail.send".to_string(),
+            summary: None,
+            description: None,
+            passthrough: false,
+            reversibility: Some(super::ReversibilityConfig {
+                class: super::ReversibilityClass::Delayable,
+                hold_window_secs: Some(seconds),
+                ttl_secs: None,
+                daily_limit: None,
+                pre_snapshot: None,
+                pre_undo_check: None,
+                test_target: None,
+                inverse: None,
+            }),
+        };
+        config
+            .capability_aliases
+            .insert("send_one".to_string(), contract(5));
+        config
+            .capability_aliases
+            .insert("send_two".to_string(), contract(9));
+        assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn delayable_alias_contract_deserializes_and_round_trips() {
+        let value = serde_json::json!({
+            "target": "gmail.send",
+            "reversibility": {"class": "delayable", "holdWindowSecs": 4}
+        });
+        let alias: super::AliasTarget = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(alias.reversibility().unwrap().hold_window_secs, Some(4));
+        assert_eq!(serde_json::to_value(alias).unwrap(), value);
+        let reversible: super::ReversibilityConfig = serde_json::from_value(serde_json::json!({
+            "class": "reversible",
+            "inverse": {"capability": "tickets.set_priority", "args": {}}
+        }))
+        .unwrap();
+        assert_eq!(reversible.class, super::ReversibilityClass::Reversible);
+    }
+
     fn empty_server() -> ServerConfig {
         ServerConfig {
             command: None,
@@ -1225,6 +1683,7 @@ mod tests {
                 servers: vec!["srv_a".to_string()],
                 description: Some("test profile".to_string()),
                 policy: None,
+                allow_agent_self_undo: false,
             },
         );
 
@@ -1242,6 +1701,7 @@ mod tests {
                 servers: vec!["srv_c".to_string()],
                 description: None,
                 policy: None,
+                allow_agent_self_undo: false,
             },
         );
         let bad_config = McpConfig {

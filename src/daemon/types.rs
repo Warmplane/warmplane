@@ -77,6 +77,8 @@ pub struct CapabilityMeta {
     pub tags: Vec<String>,
     /// Usage examples.
     pub examples: Vec<Value>,
+    /// Optional reversibility behavior inherited from a capability alias.
+    pub reversibility: Option<crate::config::ReversibilityConfig>,
 }
 
 impl CapabilityMeta {
@@ -98,6 +100,7 @@ impl CapabilityMeta {
             signature: None,
             input_schema,
             examples: Vec::new(),
+            reversibility: None,
         }
     }
 

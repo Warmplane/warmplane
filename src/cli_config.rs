@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-14
+// Rust guideline compliant 2026-11-16
 
 //! Handlers for `warmplane server` and `warmplane config` CLI commands.
 
@@ -689,18 +689,33 @@ fn handle_alias_command(cmd: AliasCommands) -> Result<()> {
             config,
         } => {
             let mut mcp_config = load_or_default_config(&config)?;
-            let alias_target = if summary.is_some() || description.is_some() || passthrough {
+            let kind_lower = kind.to_lowercase();
+            let reversibility = if matches!(kind_lower.as_str(), "tool" | "capability" | "cap") {
+                mcp_config
+                    .capability_aliases
+                    .get(&alias)
+                    .and_then(crate::config::AliasTarget::reversibility)
+                    .cloned()
+            } else {
+                None
+            };
+            let alias_target = if summary.is_some()
+                || description.is_some()
+                || passthrough
+                || reversibility.is_some()
+            {
                 crate::config::AliasTarget::Detailed {
                     target: target.clone(),
                     summary,
                     description,
                     passthrough,
+                    reversibility,
                 }
             } else {
                 crate::config::AliasTarget::Simple(target.clone())
             };
 
-            match kind.to_lowercase().as_str() {
+            match kind_lower.as_str() {
                 "tool" | "capability" | "cap" => {
                     if passthrough {
                         let has_invalid_chars = alias
@@ -1534,6 +1549,120 @@ pub async fn handle_task_command(cmd: crate::models::TaskCommands) -> Result<()>
     Ok(())
 }
 
+/// Handles persisted undo inspection and operator actions.
+pub async fn handle_undo_command(cmd: crate::models::UndoCommands) -> Result<()> {
+    use crate::models::UndoCommands;
+    let (port, config, method, path, body) = match cmd {
+        UndoCommands::Test {
+            alias,
+            port,
+            config,
+        } => (
+            port,
+            config,
+            reqwest::Method::POST,
+            "/v1/undo/test".to_string(),
+            Some(serde_json::json!({"alias": alias})),
+        ),
+        UndoCommands::List {
+            work_item_id,
+            status,
+            offset,
+            limit,
+            port,
+            config,
+        } => {
+            let mut query = vec![format!("offset={offset}"), format!("limit={limit}")];
+            if let Some(value) = work_item_id {
+                query.push(format!("work_item_id={}", encode_query_component(&value)));
+            }
+            if let Some(value) = status {
+                query.push(format!("status={}", encode_query_component(&value)));
+            }
+            (
+                port,
+                config,
+                reqwest::Method::GET,
+                format!("/v1/undo?{}", query.join("&")),
+                None,
+            )
+        }
+        UndoCommands::Show { id, port, config } => (
+            port,
+            config,
+            reqwest::Method::GET,
+            format!("/v1/undo/{}", encode_query_component(&id)),
+            None,
+        ),
+        UndoCommands::Run {
+            id,
+            force_expired,
+            reason,
+            port,
+            config,
+        } => (
+            port,
+            config,
+            reqwest::Method::POST,
+            format!("/v1/undo/{}/execute", encode_query_component(&id)),
+            Some(serde_json::json!({"forceExpired": force_expired, "reason": reason})),
+        ),
+        UndoCommands::Rollback {
+            work_item_id,
+            force_expired,
+            reason,
+            port,
+            config,
+        } => (
+            port,
+            config,
+            reqwest::Method::POST,
+            format!(
+                "/v1/undo/work-items/{}/rollback",
+                encode_query_component(&work_item_id)
+            ),
+            Some(serde_json::json!({"forceExpired": force_expired, "reason": reason})),
+        ),
+    };
+    let resolved_port = resolve_client_port(port, &config)?;
+    let config_data = load_or_default_config(&config)?;
+    let token = std::env::var("WARMPLANE_OPERATOR_TOKEN")
+        .ok()
+        .or(config_data.auth_token);
+    let client = reqwest::Client::new();
+    let mut request = client.request(method, format!("http://127.0.0.1:{resolved_port}{path}"));
+    if let Some(token) = token {
+        request = request.bearer_auth(token);
+    }
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let response = request
+        .send()
+        .await
+        .with_context(|| format!("Could not reach daemon at 127.0.0.1:{resolved_port}"))?;
+    let status = response.status();
+    let payload = response.text().await?;
+    println!("{payload}");
+    if !status.is_success() {
+        anyhow::bail!("Undo request failed with HTTP {status}");
+    }
+    Ok(())
+}
+
+fn encode_query_component(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+                char::from(byte).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1570,6 +1699,38 @@ mod tests {
             .get("git-commit")
             .unwrap()
             .is_passthrough());
+
+        let mut cfg = load_config(&cfg_str).unwrap();
+        if let Some(crate::config::AliasTarget::Detailed { reversibility, .. }) =
+            cfg.capability_aliases.get_mut("git-commit")
+        {
+            *reversibility = Some(crate::config::ReversibilityConfig {
+                class: crate::config::ReversibilityClass::Delayable,
+                hold_window_secs: Some(12),
+                ttl_secs: None,
+                daily_limit: None,
+                pre_snapshot: None,
+                pre_undo_check: None,
+                test_target: None,
+                inverse: None,
+            });
+        }
+        crate::config::save_config(&cfg_str, &cfg).unwrap();
+
+        handle_alias_command(AliasCommands::Set {
+            kind: "tool".to_string(),
+            alias: "git-commit".to_string(),
+            target: "github.create_commit_v2".to_string(),
+            summary: None,
+            description: None,
+            passthrough: false,
+            config: cfg_str.clone(),
+        })
+        .unwrap();
+        let cfg = load_config(&cfg_str).unwrap();
+        let updated = cfg.capability_aliases.get("git-commit").unwrap();
+        assert_eq!(updated.target(), "github.create_commit_v2");
+        assert_eq!(updated.reversibility().unwrap().hold_window_secs, Some(12));
 
         handle_alias_command(AliasCommands::Remove {
             kind: "tool".to_string(),

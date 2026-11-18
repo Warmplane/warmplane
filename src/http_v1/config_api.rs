@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-27
+// Rust guideline compliant 2026-11-18
 
 //! Configuration and control deck REST API handlers for server management, ecosystem import, aliases, and policies.
 
@@ -455,19 +455,51 @@ pub async fn handle_update_alias(
     };
 
     let kind_lower = payload.kind.to_lowercase();
+    if !matches!(
+        &payload.reversibility,
+        crate::http_v1::types::ReversibilityUpdate::Preserve
+    ) && !matches!(kind_lower.as_str(), "tool" | "capability" | "cap")
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "ok": false,
+                "error": "Reversibility contracts are supported only for capability aliases"
+            })),
+        )
+            .into_response();
+    }
     if let Some(ref target) = payload.target {
         let passthrough = payload.passthrough.unwrap_or(false);
-        let alias_target =
-            if payload.summary.is_some() || payload.description.is_some() || passthrough {
-                crate::config::AliasTarget::Detailed {
-                    target: target.clone(),
-                    summary: payload.summary.clone(),
-                    description: payload.description.clone(),
-                    passthrough,
-                }
-            } else {
-                crate::config::AliasTarget::Simple(target.clone())
-            };
+        let reversibility = match &payload.reversibility {
+            crate::http_v1::types::ReversibilityUpdate::Preserve
+                if matches!(kind_lower.as_str(), "tool" | "capability" | "cap") =>
+            {
+                config
+                    .capability_aliases
+                    .get(&payload.alias)
+                    .and_then(crate::config::AliasTarget::reversibility)
+                    .cloned()
+            }
+            crate::http_v1::types::ReversibilityUpdate::Preserve
+            | crate::http_v1::types::ReversibilityUpdate::Clear => None,
+            crate::http_v1::types::ReversibilityUpdate::Set(contract) => Some(contract.clone()),
+        };
+        let alias_target = if payload.summary.is_some()
+            || payload.description.is_some()
+            || passthrough
+            || reversibility.is_some()
+        {
+            crate::config::AliasTarget::Detailed {
+                target: target.clone(),
+                summary: payload.summary.clone(),
+                description: payload.description.clone(),
+                passthrough,
+                reversibility,
+            }
+        } else {
+            crate::config::AliasTarget::Simple(target.clone())
+        };
 
         match kind_lower.as_str() {
             "tool" | "capability" | "cap" => {
@@ -534,6 +566,13 @@ pub async fn handle_update_alias(
             "alias": payload.alias,
             "target": payload.target,
             "passthrough": payload.passthrough,
+            "reversibility_class": match &payload.reversibility {
+                crate::http_v1::types::ReversibilityUpdate::Set(contract) => {
+                    Some(&contract.class)
+                }
+                crate::http_v1::types::ReversibilityUpdate::Preserve
+                | crate::http_v1::types::ReversibilityUpdate::Clear => None,
+            },
         })),
         sanitized_response: Some(serde_json::json!({ "status": "updated" })),
         execution_latency_us: None,
@@ -647,6 +686,7 @@ pub async fn handle_upsert_profile(
         servers: payload.servers.clone(),
         description: payload.description.clone(),
         policy: payload.policy.clone(),
+        allow_agent_self_undo: payload.allow_agent_self_undo,
     };
 
     config

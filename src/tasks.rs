@@ -1,11 +1,10 @@
-// Rust guideline compliant 2026-08-24
-
+// Rust guideline compliant 2026-11-16
 //! MCP SEP-2663 Tasks Extension State Machine and Registry (`M-CANONICAL-DOCS`).
 //!
 //! Provides asynchronous task management, durable lifecycle transitions,
 //! cooperative cancellation, input request resolution (MRTR), and disk persistence.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -31,6 +30,54 @@ pub enum TaskStatus {
     Cancelled,
     /// The request failed due to a JSON-RPC error during execution.
     Failed,
+}
+
+/// Dispatch phase for a task holding a delayable emission.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EmissionPhase {
+    /// The accepted call is waiting for its cancellation deadline.
+    PendingEmission,
+    /// Dispatch was durably claimed and may have reached the upstream server.
+    Dispatching,
+}
+
+/// Persisted execution details needed to resume an accepted held emission.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EmissionRecord {
+    /// Current pre-dispatch or dispatching phase.
+    pub phase: EmissionPhase,
+    /// Absolute Unix deadline in milliseconds.
+    pub release_at_ms: u64,
+    /// Whether cancellation can still prevent dispatch.
+    pub cancellable: bool,
+    /// Resolved upstream tool name.
+    pub tool_name: String,
+    /// Multi-roundtrip client input responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_responses: Option<BTreeMap<String, Value>>,
+    /// Multi-roundtrip upstream request state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_state: Option<String>,
+    /// Profile used when the call was accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
+    /// Authenticated tenant used when the call was accepted.
+    pub tenant_id: String,
+    /// Authenticated role used when the call was accepted.
+    pub role: String,
+    /// Verified JWT expiry bound carried for release-time revalidation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization_expires_at_epoch_secs: Option<u64>,
+    /// Whether required approval completed before the hold was accepted.
+    #[serde(default)]
+    pub approval_completed: bool,
+    /// Parent batch request identifier, when this task represents a batch step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>,
+    /// Batch step identifier, when this task represents a batch step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_id: Option<String>,
 }
 
 /// Durable internal record of a Task.
@@ -82,6 +129,9 @@ pub struct TaskRecord {
     /// Suggested polling interval in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub poll_interval_ms: Option<u64>,
+    /// Delayable emission metadata, absent for ordinary tasks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emission: Option<EmissionRecord>,
 }
 
 /// Wire representation of a Task for `tasks/get` and `CreateTaskResult`.
@@ -114,6 +164,18 @@ pub struct TaskResponse {
     pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<Value>,
+    /// Request identifier used to correlate operation cancellation.
+    #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// Current delayable emission phase.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<EmissionPhase>,
+    /// Absolute Unix dispatch deadline in milliseconds.
+    #[serde(rename = "releaseAtMs", skip_serializing_if = "Option::is_none")]
+    pub release_at_ms: Option<u64>,
+    /// Whether cancellation can still prevent upstream dispatch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancellable: Option<bool>,
 }
 
 /// Converts a task lifetime in milliseconds to whole seconds, rounding up.
@@ -163,6 +225,19 @@ impl From<&TaskRecord> for TaskResponse {
             },
             result: record.result.clone(),
             error: record.error.clone(),
+            request_id: record.request_id.clone(),
+            phase: record
+                .emission
+                .as_ref()
+                .map(|emission| emission.phase.clone()),
+            release_at_ms: record
+                .emission
+                .as_ref()
+                .map(|emission| emission.release_at_ms),
+            cancellable: record
+                .emission
+                .as_ref()
+                .map(|emission| emission.cancellable),
         }
     }
 }
@@ -185,6 +260,19 @@ pub struct CreateTaskParams {
 
 type TaskWaitSender = oneshot::Sender<BTreeMap<String, Value>>;
 type TaskWaitReceiver = oneshot::Receiver<BTreeMap<String, Value>>;
+
+/// Result of attempting to cancel a held emission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EmissionCancelResult {
+    /// Cancellation was persisted and will prevent dispatch.
+    Cancelled,
+    /// The emission had already been cancelled.
+    AlreadyCancelled,
+    /// Dispatch was durably claimed, so prevention can no longer be promised.
+    TooLate,
+    /// No held emission exists for the requested task.
+    NotEmission,
+}
 
 /// Global registry managing active and persisted tasks.
 #[derive(Clone, Default)]
@@ -215,7 +303,10 @@ impl TaskRegistry {
 
         let mut expired_any = false;
         for record in loaded.values_mut() {
-            if record.status == TaskStatus::Working || record.status == TaskStatus::InputRequired {
+            if record.emission.is_none()
+                && (record.status == TaskStatus::Working
+                    || record.status == TaskStatus::InputRequired)
+            {
                 if let Some(ttl_ms) = record.ttl_ms {
                     let ttl_secs = ttl_ms_to_secs_ceil(ttl_ms);
                     if now_secs >= record.created_at_epoch_secs + ttl_secs {
@@ -256,8 +347,7 @@ impl TaskRegistry {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let iso_time = format_iso_time(now);
-        let suffix: u32 = rand::random::<u32>() % 9000 + 1000;
-        let task_id = format!("task-{}-{}", now_secs, suffix);
+        let task_id = format!("task-{}-{:032x}", now_secs, rand::random::<u128>());
 
         let (tx, rx) = if params.initial_status == TaskStatus::InputRequired {
             let (tx, rx) = oneshot::channel();
@@ -266,12 +356,7 @@ impl TaskRegistry {
             (None, None)
         };
 
-        if let Some(channel) = tx {
-            let mut channels = self.wait_channels.write().await;
-            channels.insert(task_id.clone(), channel);
-        }
-
-        let record = TaskRecord {
+        let mut record = TaskRecord {
             task_id: task_id.clone(),
             status: params.initial_status,
             status_message: params.status_message,
@@ -290,22 +375,197 @@ impl TaskRegistry {
             created_at_epoch_secs: now_secs,
             ttl_ms: params.ttl_ms.or(Some(300_000)), // default 5m TTL
             poll_interval_ms: params.poll_interval_ms.or(Some(1_000)),
+            emission: None,
         };
 
-        {
-            let mut guard = self.tasks.write().await;
-            guard.insert(task_id, record.clone());
+        let mut guard = self.tasks.write().await;
+        while guard.contains_key(&record.task_id) {
+            record.task_id = format!("task-{}-{:032x}", now_secs, rand::random::<u128>());
+        }
+        guard.insert(record.task_id.clone(), record.clone());
+        drop(guard);
+
+        if let Some(channel) = tx {
+            let mut channels = self.wait_channels.write().await;
+            channels.insert(record.task_id.clone(), channel);
         }
 
         self.sync_to_disk().await;
         (record, rx)
     }
 
+    /// Creates and durably stores a held emission before returning its task record.
+    pub async fn create_emission_task(
+        &self,
+        params: CreateTaskParams,
+        emission: EmissionRecord,
+    ) -> Result<TaskRecord> {
+        let now = SystemTime::now();
+        let now_secs = now
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        let iso_time = format_iso_time(now);
+        let mut guard = self.tasks.write().await;
+        let task_id = loop {
+            let candidate = format!("task-{now_secs}-{:032x}", rand::random::<u128>());
+            if !guard.contains_key(&candidate) {
+                break candidate;
+            }
+        };
+        let record = TaskRecord {
+            task_id: task_id.clone(),
+            status: params.initial_status,
+            status_message: params.status_message,
+            capability_id: params.capability_id,
+            server_id: params.server_id,
+            args: params.args,
+            request_id: params.request_id,
+            context: params.context,
+            idempotency_key: params.idempotency_key,
+            input_requests: params.input_requests.unwrap_or_default(),
+            input_responses: BTreeMap::new(),
+            result: None,
+            error: None,
+            created_at: iso_time.clone(),
+            last_updated_at: iso_time,
+            created_at_epoch_secs: now_secs,
+            ttl_ms: params.ttl_ms,
+            poll_interval_ms: params.poll_interval_ms.or(Some(1_000)),
+            emission: Some(emission),
+        };
+        guard.insert(task_id.clone(), record.clone());
+        if let Some(storage) = &self.storage {
+            if let Err(error) = storage.save(&guard) {
+                guard.remove(&task_id);
+                return Err(error).context("failed to persist accepted emission task");
+            }
+        }
+        Ok(record)
+    }
+
+    /// Durably claims a pending emission for dispatch, preventing later cancellation.
+    pub async fn claim_emission_dispatch(&self, task_id: &str) -> Result<Option<TaskRecord>> {
+        let mut guard = self.tasks.write().await;
+        let Some(record) = guard.get_mut(task_id) else {
+            return Ok(None);
+        };
+        if matches!(
+            record.status,
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+        ) {
+            return Ok(None);
+        }
+        let Some(emission) = record.emission.as_ref() else {
+            return Ok(None);
+        };
+        if emission.phase != EmissionPhase::PendingEmission || !emission.cancellable {
+            return Ok(None);
+        }
+        let previous = record.clone();
+        let Some(emission) = record.emission.as_mut() else {
+            return Ok(None);
+        };
+        emission.phase = EmissionPhase::Dispatching;
+        emission.cancellable = false;
+        record.status = TaskStatus::Working;
+        record.status_message = Some("Emission dispatch has started".to_string());
+        record.last_updated_at = format_iso_time(SystemTime::now());
+        if let Some(storage) = &self.storage {
+            if let Err(error) = storage.save(&guard) {
+                guard.insert(task_id.to_string(), previous);
+                return Err(error).context("failed to persist emission dispatch claim");
+            }
+        }
+        self.wait_channels.write().await.remove(task_id);
+        Ok(guard.get(task_id).cloned())
+    }
+
+    /// Attaches a held-emission payload to a task already created for approval.
+    pub async fn attach_emission(
+        &self,
+        task_id: &str,
+        approved_args: Value,
+        emission: EmissionRecord,
+    ) -> Result<Option<TaskRecord>> {
+        let mut guard = self.tasks.write().await;
+        let Some(record) = guard.get_mut(task_id) else {
+            return Ok(None);
+        };
+        if matches!(
+            record.status,
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+        ) {
+            return Ok(None);
+        }
+        let previous = record.clone();
+        record.args = approved_args;
+        record.status = TaskStatus::Working;
+        record.status_message = Some("Waiting for the emission release deadline".to_string());
+        record.ttl_ms = None;
+        record.last_updated_at = format_iso_time(SystemTime::now());
+        record.emission = Some(emission);
+        if let Some(storage) = &self.storage {
+            if let Err(error) = storage.save(&guard) {
+                guard.insert(task_id.to_string(), previous);
+                return Err(error).context("failed to persist approved emission task");
+            }
+        }
+        self.wait_channels.write().await.remove(task_id);
+        Ok(guard.get(task_id).cloned())
+    }
+
+    /// Cancels a held emission only while it remains pending and cancellable.
+    pub async fn cancel_emission_task(
+        &self,
+        task_id: &str,
+        reason: Option<String>,
+    ) -> Result<EmissionCancelResult> {
+        let mut guard = self.tasks.write().await;
+        let Some(record) = guard.get_mut(task_id) else {
+            return Ok(EmissionCancelResult::NotEmission);
+        };
+        let Some(emission) = record.emission.as_ref() else {
+            return Ok(EmissionCancelResult::NotEmission);
+        };
+        match record.status {
+            TaskStatus::Cancelled => return Ok(EmissionCancelResult::AlreadyCancelled),
+            TaskStatus::Completed | TaskStatus::Failed => {
+                return Ok(EmissionCancelResult::NotEmission)
+            }
+            TaskStatus::Working | TaskStatus::InputRequired => {}
+        }
+        match emission.phase {
+            EmissionPhase::PendingEmission if emission.cancellable => {}
+            EmissionPhase::PendingEmission | EmissionPhase::Dispatching => {
+                return Ok(EmissionCancelResult::TooLate)
+            }
+        }
+        let previous = record.clone();
+        if let Some(emission) = record.emission.as_mut() {
+            emission.cancellable = false;
+        }
+        record.status = TaskStatus::Cancelled;
+        record.status_message =
+            reason.or_else(|| Some("Emission cancelled before dispatch".to_string()));
+        record.last_updated_at = format_iso_time(SystemTime::now());
+        if let Some(storage) = &self.storage {
+            if let Err(error) = storage.save(&guard) {
+                guard.insert(task_id.to_string(), previous);
+                return Err(error).context("failed to persist emission cancellation");
+            }
+        }
+        Ok(EmissionCancelResult::Cancelled)
+    }
+
     /// Retrieves a task by its task ID, checking for TTL expiry.
     pub async fn get_task(&self, task_id: &str) -> Option<TaskRecord> {
         let mut guard = self.tasks.write().await;
         if let Some(record) = guard.get_mut(task_id) {
-            if record.status == TaskStatus::Working || record.status == TaskStatus::InputRequired {
+            if record.emission.is_none()
+                && (record.status == TaskStatus::Working
+                    || record.status == TaskStatus::InputRequired)
+            {
                 if let Some(ttl_ms) = record.ttl_ms {
                     let now_secs = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
@@ -406,17 +666,32 @@ impl TaskRegistry {
     pub async fn complete_task(&self, task_id: &str, result: Value) -> Result<()> {
         let mut guard = self.tasks.write().await;
         if let Some(record) = guard.get_mut(task_id) {
+            if matches!(
+                record.status,
+                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+            ) {
+                return Ok(());
+            }
+            let previous = record.clone();
+            if let Some(emission) = record.emission.as_mut() {
+                emission.cancellable = false;
+            }
             record.status = TaskStatus::Completed;
             record.status_message = Some("Execution completed successfully".to_string());
             record.result = Some(result);
             record.last_updated_at = format_iso_time(SystemTime::now());
+            if let Some(storage) = &self.storage {
+                if let Err(error) = storage.save(&guard) {
+                    guard.insert(task_id.to_string(), previous);
+                    return Err(error).context("failed to persist completed task");
+                }
+            }
         }
 
         let mut channels = self.wait_channels.write().await;
         channels.remove(task_id);
 
         drop(guard);
-        self.sync_to_disk().await;
         Ok(())
     }
 
@@ -429,17 +704,32 @@ impl TaskRegistry {
     ) -> Result<()> {
         let mut guard = self.tasks.write().await;
         if let Some(record) = guard.get_mut(task_id) {
+            if matches!(
+                record.status,
+                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+            ) {
+                return Ok(());
+            }
+            let previous = record.clone();
+            if let Some(emission) = record.emission.as_mut() {
+                emission.cancellable = false;
+            }
             record.status = TaskStatus::Failed;
             record.status_message = message.or_else(|| Some("Execution failed".to_string()));
             record.error = Some(error);
             record.last_updated_at = format_iso_time(SystemTime::now());
+            if let Some(storage) = &self.storage {
+                if let Err(error) = storage.save(&guard) {
+                    guard.insert(task_id.to_string(), previous);
+                    return Err(error).context("failed to persist failed task");
+                }
+            }
         }
 
         let mut channels = self.wait_channels.write().await;
         channels.remove(task_id);
 
         drop(guard);
-        self.sync_to_disk().await;
         Ok(())
     }
 }
@@ -558,5 +848,193 @@ mod tests {
         let final_task = registry.get_task(&task.task_id).await.unwrap();
         assert_eq!(final_task.status, TaskStatus::Completed);
         assert_eq!(final_task.result.unwrap(), json!({"rows": [1, 2, 3]}));
+    }
+
+    #[tokio::test]
+    async fn emission_cancellation_wins_before_dispatch_and_is_idempotent() {
+        let registry = TaskRegistry::new();
+        let record = registry
+            .create_emission_task(
+                CreateTaskParams {
+                    capability_id: "mail.send".to_string(),
+                    server_id: "mail".to_string(),
+                    args: json!({"to": "person@example.com"}),
+                    request_id: Some("request-emission-1".to_string()),
+                    context: None,
+                    idempotency_key: Some("emission-key-1".to_string()),
+                    initial_status: TaskStatus::Working,
+                    status_message: Some("Waiting to dispatch".to_string()),
+                    input_requests: None,
+                    ttl_ms: None,
+                    poll_interval_ms: Some(100),
+                },
+                EmissionRecord {
+                    phase: EmissionPhase::PendingEmission,
+                    release_at_ms: 2_000,
+                    cancellable: true,
+                    tool_name: "send_message".to_string(),
+                    input_responses: None,
+                    request_state: None,
+                    profile_id: None,
+                    tenant_id: "tenant-a".to_string(),
+                    role: "operator".to_string(),
+                    authorization_expires_at_epoch_secs: None,
+                    approval_completed: false,
+                    batch_id: None,
+                    step_id: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let receipt = TaskResponse::from(&record);
+        assert_eq!(receipt.request_id.as_deref(), Some("request-emission-1"));
+        assert_eq!(receipt.phase, Some(EmissionPhase::PendingEmission));
+        assert_eq!(receipt.release_at_ms, Some(2_000));
+        assert_eq!(receipt.cancellable, Some(true));
+        assert_eq!(
+            registry
+                .cancel_emission_task(&record.task_id, None)
+                .await
+                .unwrap(),
+            EmissionCancelResult::Cancelled
+        );
+        assert_eq!(
+            registry
+                .cancel_emission_task(&record.task_id, None)
+                .await
+                .unwrap(),
+            EmissionCancelResult::AlreadyCancelled
+        );
+        assert_eq!(
+            registry.get_task(&record.task_id).await.unwrap().status,
+            TaskStatus::Cancelled
+        );
+        assert!(registry
+            .claim_emission_dispatch(&record.task_id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn dispatch_claim_makes_cancellation_too_late_and_terminal_status_sticks() {
+        let registry = TaskRegistry::new();
+        let record = registry
+            .create_emission_task(
+                CreateTaskParams {
+                    capability_id: "mail.send".to_string(),
+                    server_id: "mail".to_string(),
+                    args: json!({}),
+                    request_id: None,
+                    context: None,
+                    idempotency_key: None,
+                    initial_status: TaskStatus::Working,
+                    status_message: None,
+                    input_requests: None,
+                    ttl_ms: None,
+                    poll_interval_ms: None,
+                },
+                EmissionRecord {
+                    phase: EmissionPhase::PendingEmission,
+                    release_at_ms: 2_000,
+                    cancellable: true,
+                    tool_name: "send_message".to_string(),
+                    input_responses: None,
+                    request_state: None,
+                    profile_id: None,
+                    tenant_id: "tenant-a".to_string(),
+                    role: "operator".to_string(),
+                    authorization_expires_at_epoch_secs: None,
+                    approval_completed: false,
+                    batch_id: None,
+                    step_id: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let claimed = registry
+            .claim_emission_dispatch(&record.task_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(claimed.emission.unwrap().phase, EmissionPhase::Dispatching);
+        assert_eq!(
+            registry
+                .cancel_emission_task(&record.task_id, None)
+                .await
+                .unwrap(),
+            EmissionCancelResult::TooLate
+        );
+        registry
+            .cancel_task(&record.task_id, Some("legacy cancellation".to_string()))
+            .await
+            .unwrap();
+        registry
+            .complete_task(&record.task_id, json!({"sent": true}))
+            .await
+            .unwrap();
+        assert_eq!(
+            registry.get_task(&record.task_id).await.unwrap().status,
+            TaskStatus::Cancelled
+        );
+    }
+
+    #[tokio::test]
+    async fn emission_phase_transitions_survive_registry_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("tasks.json");
+        let registry = TaskRegistry::open_or_create(&path).unwrap();
+        let record = registry
+            .create_emission_task(
+                CreateTaskParams {
+                    capability_id: "mail.send".to_string(),
+                    server_id: "mail".to_string(),
+                    args: json!({"body": "private"}),
+                    request_id: Some("request-persisted".to_string()),
+                    context: None,
+                    idempotency_key: None,
+                    initial_status: TaskStatus::Working,
+                    status_message: None,
+                    input_requests: None,
+                    ttl_ms: None,
+                    poll_interval_ms: None,
+                },
+                EmissionRecord {
+                    phase: EmissionPhase::PendingEmission,
+                    release_at_ms: 4_000,
+                    cancellable: true,
+                    tool_name: "send_message".to_string(),
+                    input_responses: None,
+                    request_state: None,
+                    profile_id: Some("mail-profile".to_string()),
+                    tenant_id: "tenant-a".to_string(),
+                    role: "operator".to_string(),
+                    authorization_expires_at_epoch_secs: None,
+                    approval_completed: false,
+                    batch_id: Some("batch-1".to_string()),
+                    step_id: Some("send".to_string()),
+                },
+            )
+            .await
+            .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        registry
+            .claim_emission_dispatch(&record.task_id)
+            .await
+            .unwrap();
+        let reopened = TaskRegistry::open_or_create(&path).unwrap();
+        let loaded = reopened.get_task(&record.task_id).await.unwrap();
+        assert_eq!(loaded.emission.unwrap().phase, EmissionPhase::Dispatching);
+        assert_eq!(loaded.args, json!({"body": "private"}));
     }
 }

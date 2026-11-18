@@ -93,6 +93,7 @@ async fn test_mcp_list_changed_notifications_and_discovery_hint() {
             summary: Some("Search live docs".to_string()),
             description: None,
             passthrough: true,
+            reversibility: None,
         },
     );
     save_config(&config_path, &updated_config).unwrap();

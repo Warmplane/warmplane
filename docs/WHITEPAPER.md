@@ -141,6 +141,11 @@ Warmplane consists of five major components:
    - Enforces allow/deny patterns across capability types.
    - Evaluates Human-in-the-Loop (HITL) approval rules (`requireApproval`) and manages suspension states with crash-safe atomic disk persistence (`AtomicFile`), auto-expiring timeouts across daemon restarts.
    - Applies payload redaction keys in logs and trace spans.
+   - Holds delayable emissions in a shared durable task coordinator after required approval. Cancellation and durable dispatch claim share one transition gate; pending emissions resume after authorization revalidation, while interrupted dispatches fail as `EMISSION_OUTCOME_UNKNOWN` and are never automatically resent. Batch execution waits for held step results within its existing budget.
+   - When task persistence is disabled, holds remain in memory for the current process and cannot be recovered after restart.
+   - Executes declared reversible and compensable contracts with policy-checked pre-state reads, SHA-256 content-addressed snapshot artifacts, and an atomically persisted undo ledger. Compensable invocation limits are scoped by tenant, profile, and capability and escalate through HITL.
+   - Blocks internal snapshot and drift-check reads requiring approval. Rollback preserves reverse registration order for equal timestamps and rechecks automatic-rollback expiry per claim.
+   - Exposes tenant-scoped undo controls to authorized REST, CLI, and embedded Rust operators. MCP self-undo is hidden by default and requires both RBAC role and active-profile opt-in; expiry overrides require elevated permission, a reason, and a committed authorization audit event before inverse dispatch.
    - Standardizes response envelopes with **Request Context** (`operation_id`, `actor_id`, `grant_id`, `work_item_id`) and **Retry Governance** (`safe|unsafe|idempotent` classification).
    - In-flight **Context Distillation & Truncation** (`_jsonpath`, `_limit_lines`, `_truncate_bytes`) reducing agent context token consumption.
    - Multi-step **Chained Batch Execution** (`POST /v1/tools/batch_call`, `capabilities_batch_call`) with `$step.field` reference interpolation.
@@ -153,13 +158,15 @@ Warmplane consists of five major components:
 5. **WORM Audit & SIEM Subsystem**
    - Implements append-only storage with linear SHA-256 cryptographic hash chaining ($\text{hash}_i = \text{SHA256}(\text{prev\_hash}_i \mathbin{\Vert} \text{canonical\_payload}_i)$).
    - Guarantees non-repudiable audit trails across tool invocations, HITL decisions, policy violations, and configuration mutations.
+   - Commits expiry-override authorization events before dispatch and returns committed hash receipts for completed inverse actions.
    - Houses an asynchronous background batching queue with automatic SIEM dispatchers (Splunk HEC, HTTP Webhooks).
    - Exposes mathematical integrity verification (`/v1/audit/verify`) and streaming exports (`/v1/audit/export`).
 
 6. **1-Click AI Client Sync and Native Secrets Vault**
    - **Ecosystem Integration Adapter**: Automated discovery and bidirectional proxy injection across Claude Desktop, OpenCode, Claude Code CLI, Cursor, Zed, Windsurf, and Roo Code / Cline with multi-dialect support (`StandardMcpServers`, OpenCode `mcp`, Zed `context_servers`).
    - **Native OS Keychain Vault**: Secure OS-level credential storage with dynamic runtime URI resolution (`keychain://`, `op://`, `env://`).
-   - **Actionable ChatOps**: Bidirectional webhook approval cards for Slack (Block Kit), Discord (Embeds), and Microsoft Teams (Adaptive Cards) signed with HMAC-SHA256.
+   - **Actionable ChatOps**: Bidirectional approval and action cards for Slack (Block Kit), Discord (Embeds), and Microsoft Teams (Adaptive Cards). Undo and hold-cancellation buttons use target-, tenant-, role-, action-, and expiry-bound HMAC tokens; action events require explicit webhook subscription.
+   - **Drift-aware recovery**: Optional post-state hashes stop an inverse when an external writer changed the resource after the forward operation. The inverse stays armed for operator review. Contract tests execute only against an explicitly configured test server and compare the final state to the captured pre-state.
 
 7. **Access Modes & Execution Topologies**
    - **MCP Stdio Server Mode (`mcp-server`)**: Self-contained child process spawned directly by desktop AI clients communicating over standard I/O (no daemon dependency).

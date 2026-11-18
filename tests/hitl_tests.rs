@@ -49,6 +49,7 @@ async fn test_hitl_end_to_end_wildcard_matching_and_approval() {
         redact_keys: vec!["token".to_string()],
         require_approval: vec!["kubernetes.delete_*".to_string()],
         approval_timeout_secs: Some(15),
+        hold_window_secs: None,
         webhook: None,
     };
 

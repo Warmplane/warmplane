@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-27
+// Rust guideline compliant 2026-11-17
 
 //! Request and response data transfer objects and envelope constructors for HTTP v1 facade API.
 
@@ -199,6 +199,31 @@ pub struct ImportConfigRequest {
     pub overwrite: Option<bool>,
 }
 
+/// Controls how an alias update changes its reversibility contract.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum ReversibilityUpdate {
+    /// Preserve the current contract. This is selected when the request omits the field.
+    #[default]
+    Preserve,
+    /// Remove the current contract. This is selected when the request sends `null`.
+    Clear,
+    /// Replace the current contract with this value.
+    Set(crate::config::ReversibilityConfig),
+}
+
+impl<'de> Deserialize<'de> for ReversibilityUpdate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Option::<crate::config::ReversibilityConfig>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(contract) => Self::Set(contract),
+            None => Self::Clear,
+        })
+    }
+}
+
 /// Request payload for updating alias mappings.
 #[derive(Deserialize, Debug, Clone)]
 pub struct UpdateAliasRequest {
@@ -217,6 +242,9 @@ pub struct UpdateAliasRequest {
     /// Whether to expose this alias directly as a native tool in tools/list.
     #[serde(default)]
     pub passthrough: Option<bool>,
+    /// Reversibility update for capability aliases.
+    #[serde(default)]
+    pub reversibility: ReversibilityUpdate,
 }
 
 /// Request body for creating or updating a server profile constellation.
@@ -232,6 +260,9 @@ pub struct UpsertProfileRequest {
     /// Optional per-profile security and governance policy.
     #[serde(default)]
     pub policy: Option<crate::config::PolicyConfig>,
+    /// Explicitly opts this profile into the protected MCP self-undo tool.
+    #[serde(default, rename = "allowAgentSelfUndo")]
+    pub allow_agent_self_undo: bool,
 }
 
 /// Request body for approving a pending capability execution.

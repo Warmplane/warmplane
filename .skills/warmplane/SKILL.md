@@ -50,10 +50,22 @@ If an upstream process crashes or reports `Circuit: OPEN`:
 - CLI: `warmplane server restart <server-id>`
 - REST: `POST http://127.0.0.1:9090/v1/config/servers/{server_id}/restart`
 
+### W4: Hold and Cancel Delayable Emissions
+For aliases configured with `reversibility.class: "delayable"`, Warmplane starts the hold after any required approval. The duration precedence is profile policy, alias `holdWindowSecs`, global policy, then 30 seconds. Async calls return a task receipt (`phase`, `releaseAtMs`, `cancellable`); synchronous calls wait only when the hold is shorter than `toolTimeoutMs`. Cancel with `/v1/tasks/{taskId}/cancel`, `/v1/operations/{requestId}/cancel`, MCP `tasks/cancel`, or the embedded `ControlPlaneHandle::cancel_task` API. A `409 EMISSION_DISPATCHING` means dispatch was durably claimed. Pending calls resume after restart and policy/profile revalidation; calls recovered in `dispatching` fail as `EMISSION_OUTCOME_UNKNOWN` and are never automatically resent. Batch steps wait for the held result within the batch budget.
+
+When task persistence is disabled, accepted holds exist only in memory and are lost when the process exits. Persistent state is required for restart recovery.
+
+For operators and agents to share live undo state, use the daemon with `mcpHttpServer` enabled and connect agents to `/mcp`. Separate stdio processes own separate runtime state.
+
+### W5: Inspect and Run Undo Entries
+Operators can list and inspect safe undo summaries with `GET /v1/undo` and `GET /v1/undo/{undo_id}`, execute an entry with `POST /v1/undo/{undo_id}/execute`, or unwind a work item in reverse order with `POST /v1/undo/work-items/{work_item_id}/rollback`. Configure role `undoPermissions` for these operations. Expired entries require the dedicated `forceExpired` permission and a non-empty reason, which is included in the committed audit event. MCP `undo_execute` is exposed only when both the RBAC role and active profile opt in with `allowAgentSelfUndo`; agents can target a known `undo_id` or the newest armed entry for a `work_item_id`.
+
+The Control Deck Action Feed provides Previous/Next navigation through undo history in pages of 50 and retains the selected page on live refresh. Work-item rollback includes eligible entries on other pages. Internal snapshot and drift-check capabilities must be allowed without approval by the effective policy. The feed consumes `action_capsule` invalidations from `/v1/resources/updates` and refreshes tenant-scoped undo and task lists from REST. SSE invalidations contain no tenant or action data. Feed cards show filtered inverse field names, but omit inverse arguments and snapshot contents. An optional `preUndoCheck` reads and hashes the expected post-execution state before dispatch; drift blocks the inverse and leaves the entry armed for review. Configure all four reversibility classes and their class-specific fields in **Facade & Alias Studio**; JSON argument templates must be objects. Configure `reversibility.testTarget.server` as a dedicated MCP test server and fixed `args`; `preSnapshot` is required. `warmplane undo test <alias>` and the Control Deck (via the Playground or **Test saved contract** in the Alias Studio) run the saved forward/inverse cycle against that server and compare the final state to the original snapshot. Signed ChatOps Undo and Cancel Send cards are sent only when the corresponding event is explicitly listed in `policy.webhook.events`; configure `secret`/`secretEnv`, `callbackUrl`, and `actionRole`. The `/v1/webhooks/actions` token is target-, tenant-, role-, action-, and expiry-bound. ChatOps cannot force an expired undo.
+
 ## 4. Reference Map
 - [Setup & Install Guide](./references/setup_and_installation.md): Binaries, package managers, and verification.
 - [MCP Stdio Usage](./references/mcp_stdio_usage.md): 1-Click client config for 17 IDEs/agents and stdio tools.
 - [HTTP REST API](./references/http_rest_api.md): Complete `/v1/...` endpoint reference.
 - [CLI Cheatsheet](./references/cli_cheatsheet.md): Shell commands for daemon, 1-click sync, and vault.
-- [Configuration Schema](./references/configuration_schema.md): `mcp_servers.json` spec, dynamic secrets (`keychain://`, `op://`, `env://`), profiles, and resilience.
+- [Configuration Schema](./references/configuration_schema.md): `mcp_servers.json` spec, dynamic secrets (`keychain://`, `op://`, `env://`), profiles, resilience, and reversibility contracts.
 - [Troubleshooting](./references/error_resolution.md): Circuit breakers, policy denials, and cascade cleanup.

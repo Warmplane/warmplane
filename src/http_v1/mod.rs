@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-15
+// Rust guideline compliant 2026-11-16
 
 //! HTTP v1 facade API handlers for capabilities, resources, prompts, events, operations, and control deck.
 
@@ -11,6 +11,7 @@ pub mod helpers;
 pub mod tasks_api;
 pub mod types;
 pub mod ui;
+pub mod undo_api;
 pub mod webhooks_api;
 
 #[cfg(test)]
@@ -51,9 +52,12 @@ pub use tasks_api::{handle_cancel_task, handle_get_task, handle_list_tasks, hand
 pub use types::{
     error_envelope, ApproveTicketRequest, CallCapabilityRequest, CatalogEventsQuery,
     CatalogEventsResponse, CompletionRequest, GetPromptRequest, ImportConfigRequest,
-    ReadResourceRequest, RejectTicketRequest, RespondSamplingRequest, SamplingListQuery,
-    SamplingRequest, SearchCapabilitiesRequest, UpdateAliasRequest, UpsertProfileRequest,
-    UpsertServerRequest,
+    ReadResourceRequest, RejectTicketRequest, RespondSamplingRequest, ReversibilityUpdate,
+    SamplingListQuery, SamplingRequest, SearchCapabilitiesRequest, UpdateAliasRequest,
+    UpsertProfileRequest, UpsertServerRequest,
 };
 pub use ui::handle_ui_dashboard;
-pub use webhooks_api::{handle_test_webhook, handle_webhook_callback};
+pub use undo_api::{
+    handle_execute_undo, handle_get_undo, handle_list_undo, handle_test_undo_contract,
+};
+pub use webhooks_api::{handle_test_webhook, handle_webhook_action, handle_webhook_callback};
