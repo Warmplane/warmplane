@@ -4,11 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Warmplane — The Hot Local Control Plane for MCP Sessions</title>
-  <meta name="description" content="Warmplane keeps MCP sessions warm. A Rust-native local control plane that cuts token overhead by up to 96%, with persistent sessions, hybrid vector search, fine-grained RBAC policy governance, and deterministic execution envelopes.">
-  <meta name="keywords" content="MCP, Model Context Protocol, control plane, AI agents, tool calling, Rust, token efficiency, enterprise, vector search, SSE">
+  <meta name="description" content="Warmplane keeps MCP sessions warm. A Rust-native local control plane that cuts token overhead by up to 96%, with persistent sessions, policy governance, cancellation windows, and configured undo contracts.">
+  <meta name="keywords" content="MCP, Model Context Protocol, control plane, AI agents, tool calling, Rust, token efficiency, enterprise, vector search, SSE, undo, rollback, cancellation">
   <meta name="author" content="Warmplane">
   <meta property="og:title" content="Warmplane — The Hot Local Control Plane for MCP Sessions">
-  <meta property="og:description" content="Cut AI agent token costs by up to 96%. Persistent MCP sessions, hybrid BM25/vector search, policy governance, and deterministic execution envelopes.">
+  <meta property="og:description" content="Cut AI agent token costs by up to 96%. Persistent MCP sessions, cancellation windows, snapshot-backed undo, and policy-governed work-item rollback.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://warmplane.github.io/warmplane/">
   <link rel="canonical" href="https://warmplane.github.io/warmplane/">
@@ -1239,6 +1239,132 @@
       .nav-heat-dot { animation: none; }
     }
 
+    /* Undo showcase uses the landing page's existing amber, surface, and type tokens. */
+    [hidden] { display: none !important; }
+    :focus-visible { outline: 2px solid var(--amber-300); outline-offset: 5px; }
+    section[id] { scroll-margin-top: 100px; }
+    .nav-links { gap: clamp(0.5rem, 1.6vw, 1.5rem); }
+    .nav-links a { letter-spacing: 0.025em; }
+    .nav-wrapper { gap: var(--sp-4); flex-wrap: wrap; }
+    .nav-actions, .logo { flex-shrink: 0; }
+    .undo-hero-link { display: inline-flex; align-items: center; gap: var(--sp-4); color: var(--amber-300); margin-top: var(--sp-6); font-family: var(--ff-mono); font-size: var(--fs-sm); }
+    .undo-hero-link:hover, .undo-text-link:hover { text-decoration: underline; text-underline-offset: 5px; }
+    .hero-eyebrow { flex-wrap: wrap; }
+    .hero-eyebrow .version-badge { white-space: normal; text-align: left; }
+    .undo-intro { display: grid; grid-template-columns: 1.2fr 1fr; gap: var(--sp-12); align-items: end; margin-bottom: var(--sp-8); }
+    .undo-intro .section-heading, .undo-intro .section-desc { margin-bottom: 0; }
+    .undo-intro em, .undo-workflow em { color: var(--amber-300); font-weight: 400; }
+    .undo-demo { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--surface); }
+    .undo-demo-header { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-4); padding: var(--sp-4) var(--sp-6); border-bottom: 1px solid var(--border-subtle); background: var(--surface-alt); }
+    .undo-demo-label, .undo-reset, .undo-eyebrow, .undo-feed-heading, .undo-state { font-family: var(--ff-mono); font-size: var(--fs-xs); }
+    .undo-demo-label { display: flex; align-items: center; gap: var(--sp-3); color: var(--text-muted); }
+    .undo-demo-dot { width: 6px; height: 6px; background: var(--amber-300); border-radius: 50%; flex-shrink: 0; }
+    .undo-reset { color: var(--text); padding: var(--sp-2); white-space: nowrap; }
+    .undo-reset:hover { color: var(--amber-300); }
+    .undo-scenarios { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--border); }
+    .undo-scenario { padding: var(--sp-4) var(--sp-6); text-align: left; color: var(--text-muted); font-size: var(--fs-sm); border-right: 1px solid var(--border-subtle); border-bottom: 2px solid transparent; transition: background var(--transition-fast), color var(--transition-fast); }
+    .undo-scenario:last-child { border-right: 0; }
+    .undo-scenario span { color: var(--text-muted); font-family: var(--ff-mono); font-size: var(--fs-xs); margin-right: var(--sp-2); }
+    .undo-scenario:hover { background: var(--surface-hover); color: var(--text); }
+    .undo-scenario[aria-pressed="true"] { color: var(--amber-300); background: oklch(70% 0.18 55 / 0.07); border-bottom-color: var(--accent); }
+    .undo-demo-body { display: grid; grid-template-columns: 1fr 1fr; }
+    .undo-story { padding: var(--sp-8); border-right: 1px solid var(--border); }
+    .undo-eyebrow { display: block; color: var(--amber-300); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: var(--sp-3); }
+    .undo-story h3 { font-family: var(--ff-display); font-weight: 400; font-size: var(--fs-xl); line-height: 1.15; margin-bottom: var(--sp-4); max-width: 16ch; }
+    .undo-story > p { color: var(--text-muted); font-size: var(--fs-sm); max-width: 46ch; }
+    .undo-timeline { list-style: none; margin-top: var(--sp-8); }
+    .undo-timeline li { display: flex; gap: var(--sp-4); position: relative; padding-bottom: var(--sp-6); }
+    .undo-timeline li:not(:last-child)::before { content: ''; position: absolute; width: 1px; background: var(--border); top: 30px; bottom: 0; left: 14px; }
+    .undo-timeline li:last-child { padding-bottom: 0; }
+    .undo-step-index { display: grid; place-items: center; width: 29px; height: 29px; border: 1px solid var(--border); border-radius: 50%; color: var(--text-muted); font-family: var(--ff-mono); font-size: var(--fs-xs); flex-shrink: 0; background: var(--surface); }
+    .undo-timeline strong { display: block; font-size: var(--fs-sm); font-weight: 600; margin-top: 2px; }
+    .undo-timeline small { display: block; color: var(--text-muted); font-size: var(--fs-xs); margin-top: var(--sp-1); }
+    .undo-timeline .step-done .undo-step-index { color: var(--green-glow); border-color: oklch(78% 0.18 145 / 0.4); }
+    .undo-timeline .step-active .undo-step-index { color: var(--amber-300); border-color: var(--accent); }
+    .undo-feed { min-width: 0; padding: var(--sp-8); background: var(--n-0); }
+    .undo-feed-heading { display: flex; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-2); color: var(--text); margin-bottom: var(--sp-6); }
+    .undo-feed-context { color: var(--text-muted); }
+    .undo-record { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--sp-6); background: var(--surface); margin-bottom: var(--sp-3); }
+    .undo-state { display: inline-block; color: var(--amber-300); padding: 3px 8px; border: 1px solid var(--border); border-radius: 4px; margin-bottom: var(--sp-4); font-size: 0.7rem; letter-spacing: 0.05em; }
+    .undo-state.is-done { color: var(--green-glow); }
+    .undo-state.is-blocked { color: var(--cyan-glow); }
+    .undo-record h4 { font-family: var(--ff-mono); font-size: var(--fs-sm); font-weight: 500; overflow-wrap: anywhere; margin-bottom: var(--sp-4); }
+    .undo-record dl { font-size: var(--fs-xs); }
+    .undo-record dl > div { display: flex; justify-content: space-between; gap: var(--sp-4); margin-bottom: var(--sp-2); }
+    .undo-record dt { color: var(--text-muted); }
+    .undo-record dd { color: var(--text-muted); font-family: var(--ff-mono); text-align: right; overflow-wrap: anywhere; }
+    .undo-record p { color: var(--text-muted); font-size: var(--fs-xs); margin-top: var(--sp-4); }
+    .undo-record progress { display: block; width: 100%; height: 5px; margin-top: var(--sp-6); accent-color: var(--accent); border: 0; }
+    .undo-record progress::-webkit-progress-bar { background: var(--n-200); border-radius: 4px; }
+    .undo-record progress::-webkit-progress-value { background: var(--accent); border-radius: 4px; }
+    .undo-record progress::-moz-progress-bar { background: var(--accent); }
+    .undo-demo-actions { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-top: var(--sp-6); }
+    .undo-demo-actions .btn { white-space: normal; }
+    .btn:disabled { cursor: default; opacity: 0.5; transform: none; box-shadow: none; }
+    .undo-demo-status { color: var(--text-muted); font-size: var(--fs-xs); margin-top: var(--sp-4); min-height: 3em; }
+    .undo-boundaries { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-8); margin-top: var(--sp-8); }
+    .undo-boundaries article { border-top: 1px solid var(--border); padding-top: var(--sp-6); }
+    .undo-boundaries h3 { font-size: var(--fs-md); font-weight: 500; margin-bottom: var(--sp-3); }
+    .undo-boundaries p, .undo-note { font-size: var(--fs-sm); color: var(--text-muted); }
+    .undo-note { margin: var(--sp-4) 0; }
+    .undo-note code { color: var(--text); overflow-wrap: anywhere; }
+    .undo-setup { display: grid; grid-template-columns: 0.9fr 1.1fr; gap: var(--sp-16); margin-top: var(--sp-16); align-items: start; }
+    .undo-workflow h3 { font-family: var(--ff-display); font-size: var(--fs-2xl); font-weight: 400; line-height: 1.08; margin-bottom: var(--sp-8); }
+    .undo-workflow ol { padding-left: 1.2rem; color: var(--text-muted); font-size: var(--fs-sm); }
+    .undo-workflow li { padding-left: var(--sp-2); margin-bottom: var(--sp-6); }
+    .undo-workflow li::marker { color: var(--accent); font-family: var(--ff-mono); }
+    .undo-workflow strong { color: var(--text); font-weight: 500; }
+    .undo-workflow .btn { margin-top: var(--sp-4); }
+    .undo-contract { min-width: 0; }
+    .undo-contract .code-block-header { flex-wrap: wrap; gap: var(--sp-2); }
+    .undo-contract pre { font-size: 0.76rem; line-height: 1.65; padding: var(--sp-6); }
+    .undo-cli { padding: var(--sp-6); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); margin-top: var(--sp-6); }
+    .undo-cli pre { padding: 0; overflow-x: auto; }
+    .undo-text-link { display: inline-block; color: var(--amber-300); font-family: var(--ff-mono); font-size: var(--fs-xs); margin-top: var(--sp-4); }
+    .bento-undo { border-color: var(--accent-muted); }
+    button.pg-item { width: 100%; text-align: left; gap: var(--sp-3); border: 0; border-left: 3px solid transparent; }
+    .demo-tabs { overflow-x: auto; }
+    .demo-tab { flex-shrink: 0; }
+    .demo-header { gap: var(--sp-4); }
+    .window-dots { flex-shrink: 0; }
+    .demo-tabs { min-width: 0; }
+    .demo-tab:focus-visible, .pg-item:focus-visible { outline-offset: -3px; }
+    .undo-contract .code-block-lang { color: var(--text-muted); }
+    .footer-links { flex-wrap: wrap; row-gap: var(--sp-3); }
+    .btn-code { max-width: 100%; white-space: normal; }
+    .btn-code span { min-width: 0; overflow-wrap: anywhere; text-align: left; }
+    .btn-code svg, .pg-tag { flex-shrink: 0; }
+    .playground-sidebar { min-width: 0; }
+    .pg-item > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+    @media (max-width: 1100px) {
+      .nav-links { order: 3; width: 100%; justify-content: center; }
+      .nav-wrapper { row-gap: var(--sp-3); }
+      section[id] { scroll-margin-top: 145px; }
+    }
+    @media (max-width: 960px) {
+      .undo-intro, .undo-demo-body, .undo-setup { grid-template-columns: 1fr; gap: var(--sp-8); }
+      .undo-demo-body { gap: 0; }
+      .undo-story { border-right: 0; border-bottom: 1px solid var(--border); }
+      .undo-story h3 { max-width: none; }
+      .undo-boundaries { grid-template-columns: 1fr; gap: var(--sp-6); }
+    }
+    @media (max-width: 640px) {
+      .undo-scenarios { grid-template-columns: 1fr; }
+      .undo-scenario { border-right: 0; border-bottom: 1px solid var(--border-subtle); padding: var(--sp-3) var(--sp-4); }
+      .undo-scenario[aria-pressed="true"] { border-bottom: 1px solid var(--accent); }
+      .undo-demo-header { align-items: flex-start; padding: var(--sp-4); }
+      .undo-demo-label { font-size: 0.67rem; }
+      .undo-story, .undo-feed { padding: var(--sp-6); }
+      .undo-record { padding: var(--sp-4); }
+      .nav-actions .version-badge { display: none; }
+      .undo-contract pre { font-size: 0.68rem; padding: var(--sp-4); }
+      section[id] { scroll-margin-top: 95px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+
     /* Responsive Breakdown */
     @media (max-width: 960px) {
       .hero-stats { grid-template-columns: repeat(2, 1fr); }
@@ -1277,6 +1403,7 @@
       <ul class="nav-links">
         <li><a href="#why">Why</a></li>
         <li><a href="#architecture">Architecture</a></li>
+        <li><a href="#undo">Undo</a></li>
         <li><a href="#capabilities">Capabilities</a></li>
         <li><a href="#savings">Savings</a></li>
         <li><a href="#playground">Spec</a></li>
@@ -1296,7 +1423,7 @@
     <div class="hero-content">
       <div class="hero-eyebrow">
         <span>Open Source · Rust-Native Runtime</span>
-        <span class="version-badge">v0.32.0 · Credential, Approval &amp; Policy Boundary Enforcement</span>
+        <span class="version-badge">Cancellation windows · Snapshot-backed undo · Work-item rollback</span>
       </div>
 
       <h1 class="hero-title">
@@ -1304,7 +1431,7 @@
       </h1>
 
       <p class="hero-subtitle">
-        Warmplane is the <strong>local control plane</strong> that multiplexes upstream Model Context Protocol (MCP) servers behind one hot, policyable runtime. Cut token overhead by up to <strong>96%</strong> with lazy capability indexes, Multi Round-Trip Requests (MRTR), hybrid vector search, fine-grained RBAC governance, and deterministic execution envelopes.
+        Keep MCP sessions warm, cut discovery token overhead by up to <strong>96%</strong>, and govern agent actions. Warmplane brings persistent connections, policy controls, <strong>cancellation windows and configured undo contracts</strong> to one local runtime.
       </p>
 
       <div class="hero-cta">
@@ -1315,6 +1442,7 @@
         <a href="https://github.com/Warmplane/warmplane" class="btn btn-primary" target="_blank" rel="noopener">View on GitHub</a>
         <a href="https://github.com/Warmplane/warmplane/blob/main/docs/USER-GUIDE.md" class="btn btn-ghost" target="_blank" rel="noopener">Read User Guide →</a>
       </div>
+      <a class="undo-hero-link" href="#undo">Give agent actions an undo path <span aria-hidden="true">↓</span></a>
     </div>
 
     <!-- KPIs -->
@@ -1347,10 +1475,10 @@
           <div class="dot dot-yellow"></div>
           <div class="dot dot-green"></div>
         </div>
-        <div class="demo-tabs">
-          <button class="demo-tab active" onclick="switchDemoTab('flow', this)">Architecture Flow</button>
-          <button class="demo-tab" onclick="switchDemoTab('config', this)">mcp_servers.json</button>
-          <button class="demo-tab" onclick="switchDemoTab('envelope', this)">Response Envelope</button>
+        <div class="demo-tabs" role="tablist" aria-label="Architecture examples">
+          <button type="button" class="demo-tab active" id="tab-control-flow" role="tab" aria-selected="true" aria-controls="tab-flow" tabindex="0" data-tab-target="tab-flow">Architecture Flow</button>
+          <button type="button" class="demo-tab" id="tab-control-config" role="tab" aria-selected="false" aria-controls="tab-config" tabindex="-1" data-tab-target="tab-config">mcp_servers.json</button>
+          <button type="button" class="demo-tab" id="tab-control-envelope" role="tab" aria-selected="false" aria-controls="tab-envelope" tabindex="-1" data-tab-target="tab-envelope">Response Envelope</button>
         </div>
       </div>
 
@@ -1364,7 +1492,7 @@
             <div class="flow-arrow">↓</div>
             <div class="flow-node" style="border-color: var(--accent);">
               <div class="node-title">Warmplane Runtime</div>
-              <div class="node-desc">Policy • Hybrid Search • Idempotency • ETag</div>
+              <div class="node-desc">Policy • Hybrid Search • Idempotency • Undo</div>
             </div>
             <div class="flow-arrow">↓</div>
             <div class="flow-node">
@@ -1375,24 +1503,25 @@
         </div>
 
         <div class="demo-pane-right">
-          <div id="tab-flow" class="code-output">
+          <div id="tab-flow" role="tabpanel" aria-labelledby="tab-control-flow" tabindex="0" class="code-output">
 <span class="code-comment">// High-Performance Local Control Plane</span>
 Warmplane manages the lifecycle of upstream MCP servers.
 - Maintains warm sub-process stdio & HTTP/SSE sessions
 - Eliminates startup penalties on tool invocations
 - SEP-2663 Tasks Extension (`io.modelcontextprotocol/tasks`)
 - Unified Human-in-the-Loop (HITL) approval state machine
+- Cancellation holds, configured inverses & work-item rollback
 - Enforces fine-grained RBAC allow/deny rules & key redaction
 - Exposes BM25 + ONNX vector embedding hybrid search
 - Embedded Rust engine (`EmbeddedWarmplane`, `ControlPlaneHandle`)
 - Provides standardized execution envelopes & OTLP tracing
           </div>
 
-          <div id="tab-config" class="code-output" style="display:none;">
+          <div id="tab-config" role="tabpanel" aria-labelledby="tab-control-config" tabindex="0" class="code-output" style="display:none;">
 {
   <span class="code-key">"port"</span>: <span class="code-num">9090</span>,
   <span class="code-key">"capabilityAliases"</span>: { 
-    <span class="code-key">"sqlite.read_query"</span>: <span class="code-str">"db.query"</span> 
+    <span class="code-key">"db.query"</span>: <span class="code-str">"sqlite.read_query"</span>
   },
   <span class="code-key">"policy"</span>: {
     <span class="code-key">"allow"</span>: [<span class="code-str">"db.*"</span>, <span class="code-str">"fs.*"</span>],
@@ -1408,7 +1537,7 @@ Warmplane manages the lifecycle of upstream MCP servers.
 }
           </div>
 
-          <div id="tab-envelope" class="code-output" style="display:none;">
+          <div id="tab-envelope" role="tabpanel" aria-labelledby="tab-control-envelope" tabindex="0" class="code-output" style="display:none;">
 {
   <span class="code-key">"request_id"</span>: <span class="code-str">"req_984372a"</span>,
   <span class="code-key">"status"</span>: <span class="code-str">"success"</span>,
@@ -1428,10 +1557,116 @@ Warmplane manages the lifecycle of upstream MCP servers.
 
   <hr class="divider">
 
+
+  <!-- Undo and Cancellation Showcase -->
+  <section class="section undo-section" id="undo" aria-labelledby="undo-heading">
+    <div class="section-inner">
+      <div class="section-label reveal">01 — A Way Back</div>
+      <div class="undo-intro reveal">
+        <h2 class="section-heading" id="undo-heading">Give agent actions<br>an <em>undo path.</em></h2>
+        <p class="section-desc">Hold a send before it leaves. Restore state through a configured inverse. Roll back eligible actions across a work item—with policy checks and an audit trail.</p>
+      </div>
+
+      <div class="undo-demo reveal" id="undo-demo">
+        <div class="undo-demo-header">
+          <span class="undo-demo-label"><span class="undo-demo-dot" aria-hidden="true"></span> Illustrative demo · No upstream calls</span>
+          <button class="undo-reset" type="button" data-undo-action="reset" data-undo-controls hidden>Reset demo ↺</button>
+        </div>
+        <div class="undo-scenarios" role="group" aria-label="Choose an undo demo scenario" data-undo-controls hidden>
+          <button type="button" class="undo-scenario" data-undo-scenario="hold" aria-pressed="true"><span>01</span> Cancel a held send</button>
+          <button type="button" class="undo-scenario" data-undo-scenario="inverse" aria-pressed="false"><span>02</span> Undo an issue update</button>
+          <button type="button" class="undo-scenario" data-undo-scenario="rollback" aria-pressed="false"><span>03</span> Roll back a work item</button>
+        </div>
+        <div class="undo-demo-body">
+          <div class="undo-story">
+            <span class="undo-eyebrow" id="undo-demo-kicker">Before dispatch</span>
+            <h3 id="undo-demo-title">A moment to change your mind.</h3>
+            <p id="undo-demo-description">A delayable contract holds an approved send before submitting it upstream. Cancel while the hold is active to prevent submission.</p>
+            <ol class="undo-timeline" id="undo-demo-timeline">
+              <li><span class="undo-step-index">1</span><div><strong>Hold the send</strong><small>Approval gates complete before the hold begins.</small></div></li>
+              <li><span class="undo-step-index">2</span><div><strong>Cancel before dispatch</strong><small>A successful cancellation prevents upstream submission.</small></div></li>
+              <li><span class="undo-step-index">3</span><div><strong>Keep the audit trail</strong><small>The action remains visible after cancellation.</small></div></li>
+            </ol>
+            <noscript><p class="undo-note">With JavaScript enabled, try cancellation, a configured inverse, and reverse-order rollback here. The contracts and operator workflow below are available without JavaScript.</p></noscript>
+          </div>
+          <div class="undo-feed" aria-labelledby="undo-feed-heading">
+            <div class="undo-feed-heading"><span id="undo-feed-heading">Action feed</span><span class="undo-feed-context">demo / coding</span></div>
+            <div id="undo-demo-records">
+              <article class="undo-record"><span class="undo-state">DELAYABLE CONTRACT</span><h4>mail.send</h4><dl><div><dt>Actor</dt><dd>demo-agent</dd></div><div><dt>Work item</dt><dd>DEMO-42</dd></div></dl><p>Configured hold → cancel before submission → audit record.</p></article>
+            </div>
+            <div class="undo-demo-actions" id="undo-demo-actions" data-undo-controls hidden></div>
+            <p class="undo-demo-status" id="undo-demo-status" role="status" aria-live="polite" aria-atomic="true">This is a local illustration, not a connection to your Control Deck.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="undo-boundaries reveal">
+        <article><span class="undo-eyebrow">Before submission</span><h3>Cancel a held action</h3><p>Delayable contracts create a cancellation window. Once dispatch is claimed, cancellation is too late.</p></article>
+        <article><span class="undo-eyebrow">After execution</span><h3>Run a configured inverse</h3><p>Reversible and compensable contracts register an inverse after success. An optional drift check can block it if upstream state has changed.</p></article>
+        <article><span class="undo-eyebrow">At every undo</span><h3>Apply the current rules</h3><p>Tenant boundaries, authorization, policy, expiry, and applicable approval gates still apply. Each outcome has an audit trail.</p></article>
+      </div>
+      <p class="undo-note reveal">Undo runs the inverse you configure. External side effects may require compensation rather than exact restoration.</p>
+
+      <div class="undo-setup reveal">
+        <div class="undo-workflow">
+          <span class="section-label">From contract to control</span>
+          <h3>Define it.<br>Test it.<br><em>Keep a way back.</em></h3>
+          <ol>
+            <li><strong>Configure in Facade &amp; Alias Studio.</strong> Choose a reversibility class, snapshot read, inverse template, and undo window.</li>
+            <li><strong>Test against a dedicated server.</strong> Configure <code>testTarget</code> with fixed safe inputs, then test the saved contract from the UI or CLI.</li>
+            <li><strong>Operate from Action Feed &amp; Undo.</strong> Inspect history, undo one action, or roll back eligible entries for a work item.</li>
+          </ol>
+          <p class="undo-note">For shared live state, connect agents to the daemon’s <code>/mcp</code> endpoint with <code>mcpHttpServer</code> enabled. A separate stdio process owns a separate runtime.</p>
+          <a class="btn btn-ghost" href="https://github.com/Warmplane/warmplane/blob/main/docs/USER-GUIDE.md#evaluation-rules" target="_blank" rel="noopener">Read the undo guide ↗</a>
+        </div>
+        <div class="undo-contract">
+          <div class="code-block">
+            <div class="code-block-header"><span class="code-block-filename">mcp_servers.json · alias excerpt</span><span class="code-block-lang">json</span></div>
+            <pre id="undo-contract-example">{
+  <span class="kw">"capabilityAliases"</span>: {
+    <span class="kw">"set-priority"</span>: {
+      <span class="kw">"target"</span>: <span class="str">"issues.update"</span>,
+      <span class="kw">"reversibility"</span>: {
+        <span class="kw">"class"</span>: <span class="str">"reversible"</span>,
+        <span class="kw">"ttlSecs"</span>: <span class="num">3600</span>,
+        <span class="kw">"preSnapshot"</span>: {
+          <span class="kw">"capability"</span>: <span class="str">"issues.read"</span>,
+          <span class="kw">"args"</span>: {<span class="kw">"id"</span>: <span class="str">"${args.id}"</span>},
+          <span class="kw">"captureJsonPath"</span>: <span class="str">"$.priority"</span>
+        },
+        <span class="kw">"preUndoCheck"</span>: {
+          <span class="kw">"capability"</span>: <span class="str">"issues.read"</span>,
+          <span class="kw">"args"</span>: {<span class="kw">"id"</span>: <span class="str">"${args.id}"</span>},
+          <span class="kw">"captureJsonPath"</span>: <span class="str">"$.priority"</span>
+        },
+        <span class="kw">"inverse"</span>: {
+          <span class="kw">"capability"</span>: <span class="str">"issues.update"</span>,
+          <span class="kw">"args"</span>: {
+            <span class="kw">"id"</span>: <span class="str">"${args.id}"</span>,
+            <span class="kw">"priority"</span>: <span class="str">"${snapshot}"</span>
+          }
+        }
+      }
+    }
+  }
+}</pre>
+          </div>
+          <p class="undo-note">Illustrative tool names; adapt them to your upstream schemas. Snapshot and drift-check reads must be permitted without approval. The optional <code>testTarget</code> must point to an isolated test server before testing.</p>
+          <div class="undo-cli"><span class="undo-eyebrow">Operator CLI</span><pre><code>warmplane undo list
+warmplane undo run &lt;undo-id&gt;
+warmplane undo rollback &lt;work-item-id&gt;
+warmplane undo test set-priority</code></pre></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
   <!-- Problem Section -->
   <section class="section" id="why">
     <div class="section-inner">
-      <div class="section-label reveal">01 — The Problem</div>
+      <div class="section-label reveal">02 — The Problem</div>
       <h2 class="section-heading reveal">The description tax is real</h2>
       <p class="section-desc reveal">
         Before an LLM agent executes a single tool call, it ingests the full schema catalog of every connected MCP server on every turn. As server count grows, prompt tokens balloon rapidly—adding cost, latency, and context distraction.
@@ -1490,7 +1725,7 @@ Warmplane manages the lifecycle of upstream MCP servers.
   <!-- Measured Token Savings Section -->
   <section class="section" id="savings">
     <div class="section-inner">
-      <div class="section-label reveal">02 — Empirical Measurement</div>
+      <div class="section-label reveal">03 — Empirical Measurement</div>
       <h2 class="section-heading reveal">Proven Token Savings</h2>
       <p class="section-desc reveal">
         Reproducible evaluation measured with the <code style="font-family:var(--ff-mono);color:var(--text)">cl100k_base</code> tokenizer. Run the evaluation suite in <code style="font-family:var(--ff-mono);color:var(--text)">eval/token-efficiency/</code> to verify on your own workloads.
@@ -1600,7 +1835,7 @@ Discovery       <span style="color:#e6b85c">2,552</span> -&gt; <span style="colo
   <!-- Core Capabilities Bento Grid -->
   <section class="section" id="capabilities">
     <div class="section-inner">
-      <div class="section-label reveal">03 — Capability Matrix</div>
+      <div class="section-label reveal">04 — Capability Matrix</div>
       <h2 class="section-heading reveal">Built for Hot Production Stacks</h2>
       <p class="section-desc reveal">
         Everything ships in a single zero-dependency Rust binary compliant with Microsoft Pragmatic Rust guidelines.
@@ -1621,6 +1856,14 @@ Discovery       <span style="color:#e6b85c">2,552</span> -&gt; <span style="colo
             <span class="pill">MCP Native Exposure</span>
             <span class="pill">Hybrid Search</span>
           </div>
+        </div>
+
+        <div class="bento-cell bento-undo">
+          <span class="bento-tag">Action Recovery</span>
+          <div class="bento-icon" aria-hidden="true">↶</div>
+          <div class="bento-title">Cancellation, Undo &amp; Rollback</div>
+          <div class="bento-body">Hold delayable sends, capture pre-state for configured inverses, and roll back eligible work-item actions in reverse order. Inspect the outcome in Action Feed &amp; Undo.</div>
+          <a class="undo-text-link" href="#undo">Explore the undo workflow →</a>
         </div>
 
         <div class="bento-cell">
@@ -1703,42 +1946,44 @@ Discovery       <span style="color:#e6b85c">2,552</span> -&gt; <span style="colo
   <!-- Interactive Spec Playground Section -->
   <section class="section" id="playground">
     <div class="section-inner">
-      <div class="section-label reveal">04 — API &amp; Protocol Spec</div>
+      <div class="section-label reveal">05 — API &amp; Protocol Spec</div>
       <h2 class="section-heading reveal">Interactive Control Plane Endpoints</h2>
       <p class="section-desc reveal">
         Explore the primary RESTful HTTP/v1 endpoints exposed by Warmplane daemon.
       </p>
 
       <div class="playground-box reveal">
-        <div class="playground-sidebar">
-          <div class="pg-item active" onclick="switchPg('caps', this)">
+        <div class="playground-sidebar" role="tablist" aria-label="API examples" aria-orientation="vertical">
+          <button type="button" class="pg-item active" id="pg-control-caps" role="tab" aria-selected="true" aria-controls="pg-caps" tabindex="0" data-tab-target="pg-caps">
             <span>GET /v1/capabilities</span>
             <span class="pg-tag">INDEX</span>
-          </div>
-          <div class="pg-item" onclick="switchPg('tasks', this)">
+          </button>
+          <button type="button" class="pg-item" id="pg-control-tasks" role="tab" aria-selected="false" aria-controls="pg-tasks" tabindex="-1" data-tab-target="pg-tasks">
             <span>GET /v1/tasks/:id</span>
             <span class="pg-tag">TASK</span>
-          </div>
-          <div class="pg-item" onclick="switchPg('search', this)">
+          </button>
+          <button type="button" class="pg-item" id="pg-control-search" role="tab" aria-selected="false" aria-controls="pg-search" tabindex="-1" data-tab-target="pg-search">
             <span>POST /v1/capabilities/search</span>
             <span class="pg-tag">SEARCH</span>
-          </div>
-          <div class="pg-item" onclick="switchPg('call', this)">
+          </button>
+          <button type="button" class="pg-item" id="pg-control-call" role="tab" aria-selected="false" aria-controls="pg-call" tabindex="-1" data-tab-target="pg-call">
             <span>POST /v1/tools/call</span>
             <span class="pg-tag">EXEC</span>
-          </div>
-          <div class="pg-item" onclick="switchPg('sse', this)">
+          </button>
+          <button type="button" class="pg-item" id="pg-control-sse" role="tab" aria-selected="false" aria-controls="pg-sse" tabindex="-1" data-tab-target="pg-sse">
             <span>GET /v1/resources/updates</span>
             <span class="pg-tag">SSE</span>
-          </div>
-          <div class="pg-item" onclick="switchPg('complete', this)">
+          </button>
+          <button type="button" class="pg-item" id="pg-control-complete" role="tab" aria-selected="false" aria-controls="pg-complete" tabindex="-1" data-tab-target="pg-complete">
             <span>POST /v1/completion/complete</span>
             <span class="pg-tag">AUTO</span>
-          </div>
+          </button>
+          <button type="button" class="pg-item" id="pg-control-undo" role="tab" aria-selected="false" aria-controls="pg-undo" tabindex="-1" data-tab-target="pg-undo"><span>POST /v1/undo/:id/execute</span><span class="pg-tag">UNDO</span></button>
+          <button type="button" class="pg-item" id="pg-control-cancel" role="tab" aria-selected="false" aria-controls="pg-cancel" tabindex="-1" data-tab-target="pg-cancel"><span>POST /v1/tasks/:id/cancel</span><span class="pg-tag">CANCEL</span></button>
         </div>
 
         <div class="playground-content">
-          <div id="pg-caps" class="code-output">
+          <div id="pg-caps" role="tabpanel" aria-labelledby="pg-control-caps" tabindex="0" class="code-output">
 <span class="code-comment">// HTTP GET /v1/capabilities</span>
 <span class="code-comment">// ETag header matching yields HTTP 304 Not Modified (0 tokens)</span>
 
@@ -1761,7 +2006,7 @@ Discovery       <span style="color:#e6b85c">2,552</span> -&gt; <span style="colo
 }
           </div>
 
-          <div id="pg-tasks" class="code-output" style="display:none;">
+          <div id="pg-tasks" role="tabpanel" aria-labelledby="pg-control-tasks" tabindex="0" class="code-output" style="display:none;">
 <span class="code-comment">// HTTP GET /v1/tasks/task_1771891200_a81f</span>
 <span class="code-comment">// SEP-2663 Tasks Extension (io.modelcontextprotocol/tasks)</span>
 
@@ -1780,7 +2025,7 @@ Discovery       <span style="color:#e6b85c">2,552</span> -&gt; <span style="colo
 }
           </div>
 
-          <div id="pg-search" class="code-output" style="display:none;">
+          <div id="pg-search" role="tabpanel" aria-labelledby="pg-control-search" tabindex="0" class="code-output" style="display:none;">
 <span class="code-comment">// HTTP POST /v1/capabilities/search</span>
 <span class="code-comment">// Body: {"query": "database sql query", "limit": 2}</span>
 
@@ -1796,7 +2041,7 @@ Discovery       <span style="color:#e6b85c">2,552</span> -&gt; <span style="colo
 }
           </div>
 
-          <div id="pg-call" class="code-output" style="display:none;">
+          <div id="pg-call" role="tabpanel" aria-labelledby="pg-control-call" tabindex="0" class="code-output" style="display:none;">
 <span class="code-comment">// HTTP POST /v1/tools/call</span>
 <span class="code-comment">// Header: Idempotency-Key: op-9481-run1</span>
 
@@ -1814,7 +2059,7 @@ Discovery       <span style="color:#e6b85c">2,552</span> -&gt; <span style="colo
 }
           </div>
 
-          <div id="pg-sse" class="code-output" style="display:none;">
+          <div id="pg-sse" role="tabpanel" aria-labelledby="pg-control-sse" tabindex="0" class="code-output" style="display:none;">
 <span class="code-comment">// HTTP GET /v1/resources/updates (Server-Sent Events)</span>
 <span class="code-comment">// Streams real-time catalog changes and resource update notifications</span>
 
@@ -1825,7 +2070,7 @@ event: resource_update
 data: {"uri": "file:///workspace/logs/app.log", "timestamp": 1770982800}
           </div>
 
-          <div id="pg-complete" class="code-output" style="display:none;">
+          <div id="pg-complete" role="tabpanel" aria-labelledby="pg-control-complete" tabindex="0" class="code-output" style="display:none;">
 <span class="code-comment">// HTTP POST /v1/completion/complete (MCP Autocompletion API)</span>
 <span class="code-comment">// Body: {"ref": {"type": "ref/prompt", "name": "sql_query"}, "argument": {"name": "table", "value": "us"}}</span>
 
@@ -1837,6 +2082,42 @@ data: {"uri": "file:///workspace/logs/app.log", "timestamp": 1770982800}
   }
 }
           </div>
+          <div id="pg-undo" role="tabpanel" aria-labelledby="pg-control-undo" tabindex="0" class="code-output" style="display:none;">// POST /v1/undo/undo_demo_42/execute
+// Body: {}
+// Authorization is required when RBAC is enabled.
+// Illustrative successful response, receipt fields omitted.
+
+{
+  "ok": true,
+  "result": {
+    "undo_id": "undo_demo_42",
+    "operation_id": "op_demo_42",
+    "capability": "issues.update",
+    "ok": true,
+    "error": null,
+    "forced_expired": false,
+    "entry_status": "reverted"
+  }
+}
+
+// The full result can also include sanitized output,
+// audit_event_id, audit_hash, and audit_error.
+// Undo applies the current policy and configured checks.</div>
+
+          <div id="pg-cancel" role="tabpanel" aria-labelledby="pg-control-cancel" tabindex="0" class="code-output" style="display:none;">// POST /v1/tasks/task_demo_42/cancel
+// Body: {"reason": "Operator cancelled the held send"}
+// Authorization is required when RBAC is enabled.
+
+{
+  "ok": true,
+  "resultType": "complete",
+  "message": "Task 'task_demo_42' cancelled"
+}
+
+// For a held send, success prevents upstream submission.
+// HTTP 409 / EMISSION_DISPATCHING means dispatch has
+// already been claimed and cancellation is too late.</div>
+
         </div>
       </div>
     </div>
@@ -1847,7 +2128,7 @@ data: {"uri": "file:///workspace/logs/app.log", "timestamp": 1770982800}
   <!-- Access Modes Section -->
   <section class="section" id="modes">
     <div class="section-inner">
-      <div class="section-label reveal">05 — Access Modes</div>
+      <div class="section-label reveal">06 — Access Modes</div>
       <h2 class="section-heading reveal">Four Client Modes, One Engine</h2>
       <p class="section-desc reveal">
         All interfaces share identical policy rules, session warmers, idempotency layers, and execution envelopes.
@@ -1898,7 +2179,7 @@ data: {"uri": "file:///workspace/logs/app.log", "timestamp": 1770982800}
   <!-- Quick Start & Code Showcase -->
   <section class="section" id="quickstart">
     <div class="section-inner">
-      <div class="section-label reveal">06 — Quick Start</div>
+      <div class="section-label reveal">07 — Quick Start</div>
       <h2 class="section-heading reveal">Running in Three Minutes</h2>
       <p class="section-desc reveal">
         Configure your upstreams, validate your profile, and start serving warm sessions.
@@ -1914,7 +2195,7 @@ data: {"uri": "file:///workspace/logs/app.log", "timestamp": 1770982800}
   <span class="kw">"port"</span>: <span class="num">9090</span>,
   <span class="kw">"toolTimeoutMs"</span>: <span class="num">15000</span>,
   <span class="kw">"capabilityAliases"</span>: {
-    <span class="kw">"sqlite.read_query"</span>: <span class="str">"db.query"</span>
+    <span class="kw">"db.query"</span>: <span class="str">"sqlite.read_query"</span>
   },
   <span class="kw">"policy"</span>: {
     <span class="kw">"allow"</span>: [<span class="str">"db.*"</span>, <span class="str">"fs.*"</span>],
@@ -1965,7 +2246,7 @@ data: {"uri": "file:///workspace/logs/app.log", "timestamp": 1770982800}
       The cheapest token is<br>the one <em>never sent</em>
     </h2>
     <p class="cta-sub reveal">
-      Start cutting AI agent token overhead while adding enterprise policy control.
+      Cut discovery overhead and govern agent actions, with cancellation windows and configured undo paths.
     </p>
     <div class="hero-cta" style="justify-content: center;">
       <a href="https://github.com/Warmplane/warmplane" class="btn btn-primary" target="_blank" rel="noopener">GitHub Repository ↗</a>
@@ -2028,24 +2309,207 @@ data: {"uri": "file:///workspace/logs/app.log", "timestamp": 1770982800}
     const savingsSection = document.getElementById('savings-cards');
     if (savingsSection) observer.observe(savingsSection);
 
-    // Switch Architecture Demo Deck Tabs
-    function switchDemoTab(tabName, btn) {
-      document.querySelectorAll('.demo-tab').forEach(t => t.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById('tab-flow').style.display = tabName === 'flow' ? 'block' : 'none';
-      document.getElementById('tab-config').style.display = tabName === 'config' ? 'block' : 'none';
-      document.getElementById('tab-envelope').style.display = tabName === 'envelope' ? 'block' : 'none';
-    }
-
-    // Switch Interactive Spec Playground Tabs
-    function switchPg(pgId, btn) {
-      document.querySelectorAll('.pg-item').forEach(item => item.classList.remove('active'));
-      btn.classList.add('active');
-      ['caps', 'tasks', 'search', 'call', 'sse', 'complete'].forEach(id => {
-        const el = document.getElementById('pg-' + id);
-        if (el) el.style.display = (id === pgId) ? 'block' : 'none';
+    // Share selection, keyboard behavior, and panel visibility across example decks.
+    function initializeExampleTabs(container) {
+      const tabs = Array.from(container.querySelectorAll('[data-tab-target]'));
+      function selectTab(selected) {
+        tabs.forEach(tab => {
+          const active = tab === selected;
+          tab.classList.toggle('active', active);
+          tab.setAttribute('aria-selected', String(active));
+          tab.tabIndex = active ? 0 : -1;
+          const panel = document.getElementById(tab.dataset.tabTarget);
+          panel.style.removeProperty('display');
+          panel.hidden = !active;
+        });
+      }
+      tabs.forEach((tab, index) => {
+        tab.addEventListener('click', () => selectTab(tab));
+        tab.addEventListener('keydown', event => {
+          const vertical = container.getAttribute('aria-orientation') === 'vertical';
+          const nextKey = vertical ? 'ArrowDown' : 'ArrowRight';
+          const previousKey = vertical ? 'ArrowUp' : 'ArrowLeft';
+          let next;
+          if (event.key === nextKey) next = (index + 1) % tabs.length;
+          else if (event.key === previousKey) next = (index - 1 + tabs.length) % tabs.length;
+          else if (event.key === 'Home') next = 0;
+          else if (event.key === 'End') next = tabs.length - 1;
+          else return;
+          event.preventDefault();
+          selectTab(tabs[next]);
+          tabs[next].focus();
+        });
       });
+      selectTab(tabs.find(tab => tab.getAttribute('aria-selected') === 'true') || tabs[0]);
     }
+    document.querySelectorAll('[role="tablist"]').forEach(initializeExampleTabs);
+
+    // This demonstration changes only local page state; it never calls an upstream service.
+    function initializeUndoDemo() {
+      const demo = document.getElementById('undo-demo');
+      const title = document.getElementById('undo-demo-title');
+      const kicker = document.getElementById('undo-demo-kicker');
+      const description = document.getElementById('undo-demo-description');
+      const timeline = document.getElementById('undo-demo-timeline');
+      const records = document.getElementById('undo-demo-records');
+      const actions = document.getElementById('undo-demo-actions');
+      const status = document.getElementById('undo-demo-status');
+      let scenario = 'hold';
+      let phase = 'idle';
+      let releaseAt = 0;
+      let timer;
+      const scenarios = {
+        hold: {
+          kicker: 'Before dispatch', title: 'A moment to change your mind.',
+          description: 'A delayable contract holds an approved send before submitting it upstream. This demo uses a 10-second hold; cancel before it expires.',
+        },
+        inverse: {
+          kicker: 'After execution', title: 'A change with a way back.',
+          description: 'A reversible issue update captures pre-state and registers its configured inverse after success. An optional drift check runs before undo.',
+        },
+        rollback: {
+          kicker: 'Across a work item', title: 'Unwind in reverse order.',
+          description: 'Two configured changes succeed; a third step fails. Roll back the eligible entries for DEMO-42, newest first. Each inverse still passes the current rules.',
+        },
+      };
+      function step(number, heading, detail, state = '') {
+        return `<li class="${state}"><span class="undo-step-index">${number}</span><div><strong>${heading}</strong><small>${detail}</small></div></li>`;
+      }
+      function record(capability, state, detail, inverse) {
+        const completed = ['CANCELLED', 'REVERTED'].includes(state);
+        return `<article class="undo-record"><span class="undo-state ${completed ? 'is-done' : ''}">${state}</span><h4>${capability}</h4><dl><div><dt>Actor</dt><dd>demo-agent</dd></div><div><dt>Work item</dt><dd>DEMO-42</dd></div>${inverse ? `<div><dt>Inverse</dt><dd>${inverse}</dd></div>` : ''}</dl><p>${detail}</p>${scenario === 'hold' && phase === 'held' ? '<progress id="undo-hold-progress" aria-label="Demo hold time remaining" max="10" value="10"></progress>' : ''}</article>`;
+      }
+      function button(action, label, primary = false) {
+        return `<button type="button" class="btn ${primary ? 'btn-primary' : 'btn-ghost'}" data-undo-action="${action}">${label}</button>`;
+      }
+      function render() {
+        const focusAction = actions.contains(document.activeElement);
+        const content = scenarios[scenario];
+        kicker.textContent = content.kicker;
+        title.textContent = content.title;
+        description.textContent = content.description;
+        demo.querySelectorAll('[data-undo-scenario]').forEach(control => {
+          control.setAttribute('aria-pressed', String(control.dataset.undoScenario === scenario));
+        });
+        if (scenario === 'hold') {
+          const ended = ['cancelled', 'released'].includes(phase);
+          timeline.innerHTML = step(1, 'Hold the approved send', 'The payload stays local until the hold ends.', phase === 'idle' ? '' : 'step-done')
+            + step(2, phase === 'cancelled' ? 'Cancel before submission' : 'Choose during the hold', 'Cancellation is available until dispatch is claimed.', phase === 'held' ? 'step-active' : ended ? 'step-done' : '')
+            + step(3, phase === 'cancelled' ? 'Upstream submission prevented' : phase === 'released' ? 'Dispatch claimed; cancel is too late' : 'Record the outcome', 'The action remains in the audit trail.', ended ? 'step-done' : '');
+          const detail = phase === 'held' ? '<span id="undo-hold-clock">10s</span> until demo release. No upstream submission yet.'
+            : phase === 'cancelled' ? 'Cancelled during the hold. No upstream submission.'
+            : phase === 'released' ? 'Submitted to upstream in this illustration. The cancellation window is closed.'
+            : 'Ready to start a local 10-second hold.';
+          records.innerHTML = record('mail.send', phase === 'idle' ? 'READY' : phase === 'held' ? 'HELD SEND' : phase.toUpperCase(), detail);
+          actions.innerHTML = phase === 'idle' ? button('start', 'Start demo hold', true)
+            : phase === 'held' ? button('cancel', 'Cancel send', true) : button('reset', 'Try again');
+        } else if (scenario === 'inverse') {
+          const started = phase !== 'idle';
+          timeline.innerHTML = step(1, 'Capture pre-state, then update', 'The configured read runs before the forward mutation.', started ? 'step-done' : '')
+            + step(2, 'Register the configured inverse', 'A 60-minute window is configured for this example.', started ? 'step-done' : '')
+            + step(3, phase === 'reverted' ? 'Inverse completed' : phase === 'drift' ? 'State drift blocks the inverse' : phase === 'expired' ? 'Undo window expired' : 'Check state before undo', 'Authorization, policy, expiry, and applicable approval checks still apply.', phase === 'armed' ? 'step-active' : phase === 'reverted' ? 'step-done' : '');
+          const state = phase === 'idle' ? 'READY' : phase === 'drift' ? 'ARMED · DRIFT DETECTED' : phase.toUpperCase();
+          const detail = phase === 'drift' ? 'UNDO_STATE_DRIFT: the entry remains armed. Inverse not dispatched.'
+            : phase === 'expired' ? 'Window expired. Normal undo is unavailable; an override requires separate permission and a recorded reason.'
+            : phase === 'reverted' ? 'The configured inverse completed. Its outcome is recorded in the audit trail.'
+            : phase === 'armed' ? '60m configured window. State values and inverse arguments are omitted.'
+            : 'Configure a snapshot read and inverse before running the forward call.';
+          records.innerHTML = record('issues.update', state, detail, 'issues.update');
+          actions.innerHTML = phase === 'idle' ? button('start', 'Run demo update', true)
+            : phase === 'armed' ? button('undo', 'Undo action', true) + button('drift', 'Simulate state drift') + button('expire', 'Expire demo window')
+            : button('reset', 'Try again');
+        } else {
+          const started = phase !== 'idle';
+          const reverted = phase === 'reverted';
+          timeline.innerHTML = reverted
+            ? step(1, 'Undo step 2: label update', 'Newest registered inverse runs first.', 'step-done')
+              + step(2, 'Undo step 1: priority update', 'Earlier registered inverse runs next.', 'step-done')
+              + step(3, 'Keep the original failure', 'Rollback outcomes are recorded separately.', 'step-done')
+            : step(1, 'Update priority', 'A configured inverse is registered after success.', started ? 'step-done' : '')
+              + step(2, 'Update labels', 'A second configured inverse is registered.', started ? 'step-done' : '')
+              + step(3, 'A later step fails', 'Review the work item, then request rollback.', started ? 'step-active' : '');
+          records.innerHTML = record('issues.set_labels', reverted ? 'REVERTED' : started ? 'ARMED · STEP 2' : 'READY · STEP 2', reverted ? 'Rollback order 1 of 2. Inverse completed.' : 'Newest successful change in DEMO-42.', 'issues.set_labels')
+            + record('issues.update', reverted ? 'REVERTED' : started ? 'ARMED · STEP 1' : 'READY · STEP 1', reverted ? 'Rollback order 2 of 2. Inverse completed.' : 'Earlier successful change in DEMO-42.', 'issues.update');
+          actions.innerHTML = phase === 'idle' ? button('start', 'Run demo work item', true)
+            : phase === 'failed' ? button('rollback', 'Roll back work item', true) : button('reset', 'Try again');
+        }
+        if (focusAction) actions.querySelector('button')?.focus();
+      }
+      function stopTimer() {
+        window.clearInterval(timer);
+        timer = undefined;
+      }
+      function updateHold() {
+        if (phase !== 'held') return;
+        const remaining = Math.max(0, (releaseAt - Date.now()) / 1000);
+        if (remaining === 0) {
+          phase = 'released';
+          stopTimer();
+          render();
+          status.textContent = 'Demo hold ended. Dispatch has been claimed; cancellation is no longer available.';
+          return;
+        }
+        document.getElementById('undo-hold-clock').textContent = `${Math.ceil(remaining)}s`;
+        document.getElementById('undo-hold-progress').value = remaining;
+      }
+      demo.addEventListener('click', event => {
+        const target = event.target.closest('button');
+        if (!target || !demo.contains(target)) return;
+        if (target.dataset.undoScenario) {
+          stopTimer();
+          scenario = target.dataset.undoScenario;
+          phase = 'idle';
+          render();
+          status.textContent = `${scenarios[scenario].kicker}. Ready to start this local illustration.`;
+          return;
+        }
+        const action = target.dataset.undoAction;
+        if (action === 'reset') {
+          stopTimer();
+          phase = 'idle';
+          render();
+          status.textContent = 'Demo reset. No upstream calls have been made.';
+        } else if (action === 'start' && phase === 'idle') {
+          phase = scenario === 'hold' ? 'held' : scenario === 'inverse' ? 'armed' : 'failed';
+          if (scenario === 'hold') {
+            releaseAt = Date.now() + 10000;
+            timer = window.setInterval(updateHold, 250);
+          }
+          render();
+          status.textContent = scenario === 'hold' ? 'Demo send is held for 10 seconds. You can cancel it before release.'
+            : scenario === 'inverse' ? 'Demo update completed. Its configured inverse is armed.'
+            : 'Two demo changes succeeded; a later step failed. Their inverses are available for rollback.';
+        } else if (action === 'cancel' && phase === 'held') {
+          updateHold();
+          if (phase !== 'held') return;
+          stopTimer();
+          phase = 'cancelled';
+          render();
+          status.textContent = 'Demo send cancelled. Upstream submission was prevented.';
+        } else if (scenario === 'inverse' && phase === 'armed' && ['undo', 'drift', 'expire'].includes(action)) {
+          phase = action === 'undo' ? 'reverted' : action === 'drift' ? 'drift' : 'expired';
+          render();
+          status.textContent = action === 'undo' ? 'Demo inverse completed. The action is reverted and its outcome is recorded.'
+            : action === 'drift' ? 'State drift detected. The entry remains armed; the inverse was not dispatched.'
+            : 'Demo window expired. Normal undo is unavailable.';
+        } else if (action === 'rollback' && scenario === 'rollback' && phase === 'failed') {
+          phase = 'reverted';
+          render();
+          status.textContent = 'Demo rollback completed: step 2, then step 1. The original step 3 failure remains recorded.';
+        }
+      });
+      document.addEventListener('visibilitychange', updateHold);
+      window.addEventListener('pagehide', stopTimer);
+      window.addEventListener('pageshow', () => {
+        if (phase === 'held') {
+          updateHold();
+          if (phase === 'held' && timer === undefined) timer = window.setInterval(updateHold, 250);
+        }
+      });
+      demo.querySelectorAll('[data-undo-controls]').forEach(control => { control.hidden = false; });
+      render();
+    }
+    initializeUndoDemo();
 
     // Copy Command to Clipboard Toast
     function copyInstall() {
