@@ -4353,6 +4353,7 @@ dependencies = [
  "rand 0.8.7",
  "reqwest 0.13.4",
  "rmcp",
+ "rustix",
  "serde",
  "serde_json",
  "sha2 0.10.9",

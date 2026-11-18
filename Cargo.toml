@@ -45,6 +45,9 @@ subtle = "2.6"
 fastembed = { version = "4.5", optional = true }
 openssl = { version = "0.10", features = ["vendored"], optional = true }
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.6", features = ["fs"] }
+
 [features]
 default = []
 semantic-search = ["dep:fastembed", "dep:openssl"]

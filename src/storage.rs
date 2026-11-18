@@ -121,9 +121,26 @@ where
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
+        let parent = fs::canonicalize(parent)
+            .with_context(|| format!("Failed to resolve state directory {}", parent.display()))?;
+        #[cfg(unix)]
+        let directory = {
+            use rustix::fs::{Mode, OFlags};
+
+            // Retain a directory-only descriptor through replacement and sync. Resolve configured
+            // symlinks above, then refuse a final symlink if the path changes before opening it.
+            let descriptor = rustix::fs::open(
+                &parent,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .with_context(|| format!("Failed to open state directory {}", parent.display()))?;
+            fs::File::from(descriptor)
+        };
+
         // Keep the temporary file beside the destination for an atomic rename. Its generated
         // basename is independent of the configured target, and ownership handles cleanup.
-        let mut temporary = tempfile::NamedTempFile::new_in(parent).with_context(|| {
+        let mut temporary = tempfile::NamedTempFile::new_in(&parent).with_context(|| {
             format!(
                 "Failed to create temporary state file in {}",
                 parent.display()
@@ -147,8 +164,8 @@ where
             })?;
 
         #[cfg(unix)]
-        fs::File::open(parent)
-            .and_then(|directory| directory.sync_all())
+        directory
+            .sync_all()
             .with_context(|| format!("Failed to sync state directory {}", parent.display()))?;
 
         debug!(path = %self.path.display(), "atomically saved persistent state");
@@ -372,6 +389,28 @@ mod tests {
         store.save(&updated).unwrap();
         assert_eq!(store.load_opt().unwrap(), Some(updated));
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_save_supports_a_configured_symlink_to_the_state_directory() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let actual = directory.path().join("actual");
+        fs::create_dir(&actual).unwrap();
+        let configured = directory.path().join("configured");
+        symlink(&actual, &configured).unwrap();
+
+        let store = AtomicFile::<SampleState>::new(configured.join("state.json"));
+        let state = SampleState {
+            counter: 3,
+            tags: vec![],
+        };
+        store.save(&state).unwrap();
+        assert_eq!(store.load_opt().unwrap(), Some(state));
+        assert!(actual.join("state.json").is_file());
+        assert_eq!(fs::read_dir(actual).unwrap().count(), 1);
     }
 
     #[test]
