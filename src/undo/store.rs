@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-18
 
 //! Persistent undo ledger and content-addressed snapshot storage.
 
@@ -214,20 +214,21 @@ impl UndoLedgerStore {
             .await
             .entries
             .iter()
-            .filter(|entry| {
+            .enumerate()
+            .filter(|(_, entry)| {
                 entry.tenant_id == tenant_id
                     && work_item_id.is_none_or(|id| entry.work_item_id.as_deref() == Some(id))
                     && status.is_none_or(|wanted| &entry.status == wanted)
             })
-            .cloned()
+            .map(|(index, entry)| (index, entry.clone()))
             .collect::<Vec<_>>();
-        entries.sort_by(|left, right| {
+        entries.sort_by(|(left_index, left), (right_index, right)| {
             right
                 .created_at_ms
                 .cmp(&left.created_at_ms)
-                .then_with(|| right.undo_id.cmp(&left.undo_id))
+                .then_with(|| right_index.cmp(left_index))
         });
-        entries
+        entries.into_iter().map(|(_, entry)| entry).collect()
     }
 
     /// Claims an entry for an operator, optionally forcing an expired entry after authorization.

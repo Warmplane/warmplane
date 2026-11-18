@@ -51,6 +51,9 @@ export interface AppState {
   tasks: TaskItem[];
   undoEntries: UndoEntrySummary[];
   undoError: string | null;
+  undoOffset: number;
+  undoTotal: number;
+  undoLoading: boolean;
   selectedTaskId: string | null;
   taskFilterStatus: string;
   approvals: PendingApproval[];
@@ -107,6 +110,9 @@ class Store {
     tasks: [],
     undoEntries: [],
     undoError: null,
+    undoOffset: 0,
+    undoTotal: 0,
+    undoLoading: false,
     selectedTaskId: null,
     taskFilterStatus: 'all',
     approvals: [],

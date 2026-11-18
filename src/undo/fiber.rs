@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-17
+// Rust guideline compliant 2026-11-18
 //! Tenant-scoped reverse-order execution of persisted inverse actions.
 
 use serde::{Deserialize, Serialize};
@@ -153,7 +153,7 @@ async fn unwind_matching_fiber(
     let Some(ledger) = state.undo_ledger.as_ref() else {
         return Vec::new();
     };
-    let now_ms = now_ms();
+    let selection_time_ms = now_ms();
     let mut entries = ledger
         .entries()
         .await
@@ -163,7 +163,7 @@ async fn unwind_matching_fiber(
             entry.tenant_id == tenant_id
                 && selector.matches(entry)
                 && entry.status == UndoEntryStatus::Armed
-                && entry.expires_at_ms > now_ms
+                && entry.expires_at_ms > selection_time_ms
         })
         .collect::<Vec<_>>();
     entries.sort_by(|(left_index, left), (right_index, right)| {
@@ -190,7 +190,7 @@ async fn unwind_matching_fiber(
             }));
             break;
         }
-        let claimed = match ledger.claim(&candidate.undo_id, now_ms).await {
+        let claimed = match ledger.claim(&candidate.undo_id, now_ms()).await {
             Ok(Some(entry)) => entry,
             Ok(None) => continue,
             Err(error) => {
@@ -648,4 +648,183 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+    use crate::daemon::{CapabilityMeta, ServerMsg};
+    use std::collections::HashMap;
+
+    async fn fixture() -> (
+        tempfile::TempDir,
+        AppState,
+        tokio::sync::mpsc::Receiver<ServerMsg>,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger =
+            crate::undo::UndoLedgerStore::open(directory.path().join("undo.json")).unwrap();
+        let (sender, receiver) = tokio::sync::mpsc::channel(8);
+        let capability = CapabilityMeta::new(
+            "mock",
+            "restore",
+            "Restore",
+            "Restore",
+            json!({"type":"object"}),
+        );
+        let state = AppState::builder()
+            .undo_ledger(ledger)
+            .servers(HashMap::from([("mock".to_string(), sender)]))
+            .capabilities(HashMap::from([("mock.restore".to_string(), capability)]))
+            .build();
+        (directory, state, receiver)
+    }
+
+    fn entry(id: &str, value: u64, expiry: u64) -> UndoEntry {
+        UndoEntry {
+            undo_id: id.to_string(),
+            operation_id: None,
+            work_item_id: Some("work".to_string()),
+            batch_id: Some("batch".to_string()),
+            tenant_id: "default".to_string(),
+            profile_id: None,
+            actor_id: None,
+            forward_capability: "mock.set".to_string(),
+            reversibility_class: "reversible".to_string(),
+            resolved_inverse_capability: "mock.restore".to_string(),
+            resolved_inverse_args: json!({"value":value}),
+            change_preview: Vec::new(),
+            snapshot_artifact_hash: None,
+            pre_undo_check: None,
+            expected_post_snapshot_hash: None,
+            created_at_ms: 1,
+            expires_at_ms: expiry,
+            status: UndoEntryStatus::Armed,
+        }
+    }
+
+    fn scope<'a>(policy: &'a Policy, profile: &'a ProfileContext) -> FiberExecutionScope<'a> {
+        FiberExecutionScope {
+            policy,
+            profile,
+            context: None,
+            authorization_expires_at_epoch_secs: None,
+            trace_id: "regression",
+            operator_id: None,
+            force_expired_reason: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn operator_rollback_uses_registration_order_for_timestamp_ties_after_restart() {
+        let (directory, mut state, mut receiver) = fixture().await;
+        let ledger = state.undo_ledger.as_ref().unwrap();
+        ledger
+            .register(entry("z-first", 0, now_ms() + 60_000))
+            .await
+            .unwrap();
+        ledger
+            .register(entry("a-second", 1, now_ms() + 60_000))
+            .await
+            .unwrap();
+        state.undo_ledger =
+            Some(crate::undo::UndoLedgerStore::open(directory.path().join("undo.json")).unwrap());
+        let task = tokio::spawn(async move {
+            rollback_operator_work_item(
+                &state,
+                "default",
+                "work",
+                scope(&Policy::default(), &ProfileContext::default()),
+                false,
+                None,
+            )
+            .await
+        });
+        let mut restored = Vec::new();
+        for expected in [1, 0] {
+            let Some(ServerMsg::CallTool { params, reply, .. }) = receiver.recv().await else {
+                panic!("missing inverse")
+            };
+            assert_eq!(params["value"], expected);
+            restored.push(expected);
+            reply.send(Ok(json!({"ok":true}))).unwrap();
+        }
+        let results = task.await.unwrap();
+        assert!(results.iter().all(|result| result.ok));
+        assert_eq!(restored.last(), Some(&0));
+    }
+
+    #[tokio::test]
+    async fn approval_gated_drift_check_releases_the_claim_without_upstream_dispatch() {
+        let (_directory, state, mut receiver) = fixture().await;
+        let ledger = state.undo_ledger.as_ref().unwrap();
+        let mut action = entry("drift-check", 0, now_ms() + 60_000);
+        action.pre_undo_check = Some(crate::config::PreSnapshotConfig {
+            capability: "mock.restore".to_string(),
+            args: json!({}),
+            capture_json_path: None,
+        });
+        action.expected_post_snapshot_hash = Some("expected".to_string());
+        ledger.register(action).await.unwrap();
+        let policy = Policy {
+            require_approval: vec!["mock.restore".to_string()],
+            ..Default::default()
+        };
+        let outcome = execute_operator_undo(
+            &state,
+            "default",
+            "drift-check",
+            scope(&policy, &ProfileContext::default()),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            outcome.error_code.as_deref(),
+            Some("UNDO_STATE_CHECK_FAILED")
+        );
+        assert_eq!(
+            ledger.get("drift-check").await.unwrap().status,
+            UndoEntryStatus::Armed
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn automatic_rollback_rechecks_expiry_after_an_earlier_inverse() {
+        let (_directory, state, mut receiver) = fixture().await;
+        let ledger = state.undo_ledger.as_ref().unwrap().clone();
+        let expiry = now_ms() + 200;
+        ledger.register(entry("first", 0, expiry)).await.unwrap();
+        ledger
+            .register(entry("second", 1, now_ms() + 60_000))
+            .await
+            .unwrap();
+        let task = tokio::spawn(async move {
+            unwind_batch_fiber(
+                &state,
+                "default",
+                "batch",
+                scope(&Policy::default(), &ProfileContext::default()),
+            )
+            .await
+        });
+        let Some(ServerMsg::CallTool { params, reply, .. }) = receiver.recv().await else {
+            panic!("missing first inverse")
+        };
+        assert_eq!(params["value"], 1);
+        tokio::time::sleep(std::time::Duration::from_millis(
+            expiry.saturating_sub(now_ms()) + 20,
+        ))
+        .await;
+        reply.send(Ok(json!({"ok":true}))).unwrap();
+        let results = task.await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(
+            ledger.get("first").await.unwrap().status,
+            UndoEntryStatus::Armed
+        );
+    }
 }

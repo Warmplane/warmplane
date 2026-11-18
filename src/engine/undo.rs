@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-18
 
 //! Helpers for capturing pre-state and arming inverse actions.
 
@@ -63,6 +63,9 @@ pub(crate) async fn read_checked_state(
 ) -> Result<Value> {
     if !policy.allows(&config.capability) {
         bail!("state-check capability is denied by policy");
+    }
+    if policy.requires_approval(&config.capability) {
+        bail!("state-check capability requires approval and cannot run automatically");
     }
     let (server_id, tool_name) = {
         let capabilities = state.capabilities.read().await;
@@ -330,5 +333,92 @@ mod tests {
         assert!(is_safe_preview_key("priority", &redact_keys));
         assert!(!is_safe_preview_key("api_token", &redact_keys));
         assert!(!is_safe_preview_key("customer_name", &redact_keys));
+    }
+}
+
+#[cfg(test)]
+mod approval_regression_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn internal_state_reads_cannot_bypass_approval_rules() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let state = AppState::builder()
+            .servers(HashMap::from([("mock".to_string(), sender)]))
+            .capabilities(HashMap::from([(
+                "mock.read".to_string(),
+                crate::daemon::CapabilityMeta::new(
+                    "mock",
+                    "read",
+                    "Read",
+                    "Read",
+                    serde_json::json!({"type":"object"}),
+                ),
+            )]))
+            .build();
+        let policy = Policy {
+            require_approval: vec!["mock.*".to_string()],
+            ..Default::default()
+        };
+        let check = PreSnapshotConfig {
+            capability: "mock.read".to_string(),
+            args: serde_json::json!({}),
+            capture_json_path: None,
+        };
+        let error = read_checked_state(
+            &state,
+            &check,
+            &Value::Null,
+            &ProfileContext::default(),
+            &policy,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("requires approval"));
+        let snapshot_error = capture_pre_snapshot(
+            &state,
+            &check,
+            &Value::Null,
+            &ProfileContext::default(),
+            &policy,
+        )
+        .await
+        .unwrap_err();
+        assert!(snapshot_error.to_string().contains("requires approval"));
+        let contract = ReversibilityConfig {
+            class: ReversibilityClass::Reversible,
+            hold_window_secs: None,
+            ttl_secs: None,
+            daily_limit: None,
+            pre_snapshot: None,
+            pre_undo_check: Some(Box::new(check)),
+            test_target: None,
+            inverse: Some(Box::new(crate::config::InverseConfig {
+                capability: "mock.restore".to_string(),
+                args: serde_json::json!({}),
+            })),
+        };
+        let post_error = register_inverse(
+            &state,
+            &contract,
+            ForwardCall {
+                capability: "mock.set",
+                args: &Value::Null,
+                result: &Value::Null,
+                snapshot: &Value::Null,
+                snapshot_hash: None,
+                context: &RequestContext::default(),
+                batch_id: None,
+                tenant_id: "default",
+                profile_id: None,
+            },
+            &ProfileContext::default(),
+            &policy,
+        )
+        .await
+        .unwrap_err();
+        assert!(post_error.to_string().contains("requires approval"));
+        assert!(receiver.try_recv().is_err());
     }
 }

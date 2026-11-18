@@ -644,8 +644,8 @@ export class WarmplaneClient {
     return res.json();
   }
 
-  async listUndo(): Promise<{ ok: boolean; result?: { entries: UndoEntrySummary[]; total: number }; error?: any }> {
-    const res = await fetch(`${this.baseUrl}/v1/undo`);
+  async listUndo(offset = 0, limit = 50): Promise<{ ok: boolean; result?: { entries: UndoEntrySummary[]; total: number; offset: number; limit: number }; error?: any }> {
+    const res = await fetch(`${this.baseUrl}/v1/undo?offset=${offset}&limit=${limit}`);
     return res.json();
   }
 

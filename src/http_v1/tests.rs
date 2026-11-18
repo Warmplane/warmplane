@@ -1051,6 +1051,37 @@ async fn capability_alias_reversibility_can_be_saved_preserved_and_cleared() {
         Some(&contract)
     );
 
+    for kind in ["resource", "prompt"] {
+        for summary in [None, Some("Updated summary".to_string())] {
+            let response = handle_update_alias(
+                State(state.clone()),
+                Json(UpdateAliasRequest {
+                    kind: kind.to_string(),
+                    alias: "issue.update".to_string(),
+                    target: Some("shared.target".to_string()),
+                    summary,
+                    description: None,
+                    passthrough: None,
+                    reversibility: ReversibilityUpdate::Preserve,
+                }),
+            )
+            .await
+            .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            let saved = crate::config::load_or_default_config(&config_path).unwrap();
+            let alias = if kind == "resource" {
+                &saved.resource_aliases["issue.update"]
+            } else {
+                &saved.prompt_aliases["issue.update"]
+            };
+            assert!(alias.reversibility().is_none());
+            assert_eq!(
+                saved.capability_aliases["issue.update"].reversibility(),
+                Some(&contract)
+            );
+        }
+    }
+
     let edit_without_contract = handle_update_alias(
         State(state.clone()),
         Json(UpdateAliasRequest {

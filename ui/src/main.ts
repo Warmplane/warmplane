@@ -57,7 +57,10 @@ class WarmplaneApp {
       }
       const action = button.dataset.undoAction;
       const targetId = button.dataset.undoTarget;
-      if (action === 'refresh') {
+      if (action === 'previous' || action === 'next') {
+        const state = store.getState();
+        if (!state.undoLoading) void this.refreshUndo(Math.max(0, state.undoOffset + (action === 'next' ? 50 : -50)));
+      } else if (action === 'refresh') {
         void this.refreshUndo();
       } else if (action === 'cancel-task' && targetId) {
         void this.cancelHeldTask(targetId);
@@ -349,16 +352,39 @@ class WarmplaneApp {
     }
   }
 
-  async refreshUndo() {
+  private undoRequestGeneration = 0;
+
+  async refreshUndo(offset = store.getState().undoOffset) {
+    const generation = ++this.undoRequestGeneration;
+    const changingPage = offset !== store.getState().undoOffset;
+    store.setState({
+      undoLoading: true,
+      undoOffset: offset,
+      ...(changingPage ? { undoEntries: [] } : {}),
+    });
     try {
-      const response = await api.listUndo();
+      let response = await api.listUndo(offset, 50);
+      if (generation !== this.undoRequestGeneration) return;
+      if (response.ok && response.result && offset > 0 && offset >= response.result.total) {
+        offset = Math.max(0, Math.floor((response.result.total - 1) / 50) * 50);
+        response = await api.listUndo(offset, 50);
+        if (generation !== this.undoRequestGeneration) return;
+      }
       if (response.ok && response.result && Array.isArray(response.result.entries)) {
-        store.setState({ undoEntries: response.result.entries, undoError: null });
+        store.setState({
+          undoEntries: response.result.entries,
+          undoOffset: offset,
+          undoTotal: response.result.total,
+          undoLoading: false,
+          undoError: null,
+        });
       } else {
-        store.setState({ undoError: response.error?.message || response.error?.code || 'Undo entries could not be loaded.' });
+        store.setState({ undoLoading: false, undoError: response.error?.message || response.error?.code || 'Undo entries could not be loaded.' });
       }
     } catch (error: any) {
-      store.setState({ undoError: error?.message || 'Undo entries could not be loaded.' });
+      if (generation === this.undoRequestGeneration) {
+        store.setState({ undoLoading: false, undoError: error?.message || 'Undo entries could not be loaded.' });
+      }
     }
   }
 
