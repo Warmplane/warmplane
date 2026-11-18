@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-17
+// Rust guideline compliant 2026-11-18
 //! Daemon HTTP service initialization, routing, and TCP listener runtime.
 
 use anyhow::Result;
@@ -656,17 +656,7 @@ pub async fn run_daemon(
         let json_response = mcp_cfg.json_response;
 
         let mut allowed_hosts = mcp_cfg.allowed_hosts.clone();
-        for loopback in &["127.0.0.1", "::1", "localhost"] {
-            if !allowed_hosts.iter().any(|h| h == loopback) {
-                allowed_hosts.push((*loopback).to_string());
-            }
-        }
-        if !matches!(
-            bind_addr.as_str(),
-            "127.0.0.1" | "::1" | "localhost" | "0.0.0.0" | "::"
-        ) {
-            allowed_hosts.push(bind_addr.clone());
-        }
+        crate::mcp_server::add_mcp_http_hosts(&mut allowed_hosts, &bind_addr);
 
         let state_for_factory = app_state.clone();
         let profile_for_factory = profile.clone();
@@ -679,17 +669,8 @@ pub async fn run_daemon(
         mcp_server_cfg.allowed_hosts = allowed_hosts;
         mcp_server_cfg.allowed_origins = mcp_cfg.allowed_origins.clone();
 
-        let parsed_protocol_versions: Vec<rmcp::model::ProtocolVersion> = mcp_cfg
-            .supported_protocol_versions
-            .iter()
-            .map(|s| match s.as_str() {
-                "2024-11-05" => rmcp::model::ProtocolVersion::V_2024_11_05,
-                "2025-03-26" => rmcp::model::ProtocolVersion::V_2025_03_26,
-                "2025-06-18" => rmcp::model::ProtocolVersion::V_2025_06_18,
-                "2025-11-25" => rmcp::model::ProtocolVersion::V_2025_11_25,
-                _ => rmcp::model::ProtocolVersion::V_2026_07_28,
-            })
-            .collect();
+        let parsed_protocol_versions =
+            crate::mcp_server::parse_mcp_protocol_versions(&mcp_cfg.supported_protocol_versions);
 
         let mcp_service = StreamableHttpService::new(
             move || {

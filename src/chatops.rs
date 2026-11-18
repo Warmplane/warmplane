@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-18
 
 //! Multi-platform ChatOps payload formatting and incoming callback resolution.
 //!
@@ -56,6 +56,21 @@ pub fn format_webhook_payload(
     }
 }
 
+fn approval_fields(data: &Value, pretty: bool) -> (&str, &str, &str, String) {
+    let text = |key| data.get(key).and_then(Value::as_str).unwrap_or("unknown");
+    let args = data.get("sanitized_args").or_else(|| data.get("args"));
+    let args = args
+        .and_then(|value| {
+            if pretty {
+                serde_json::to_string_pretty(value).ok()
+            } else {
+                serde_json::to_string(value).ok()
+            }
+        })
+        .unwrap_or_else(|| "{}".to_string());
+    (text("id"), text("capability_id"), text("server_id"), args)
+}
+
 fn build_slack_payload(event_type: &str, data: &Value, callback_url: Option<&str>) -> Value {
     let title = match event_type {
         "approval.requested" => "🚨 Warmplane: Human Approval Required",
@@ -75,20 +90,7 @@ fn build_slack_payload(event_type: &str, data: &Value, callback_url: Option<&str
     })];
 
     if event_type == "approval.requested" {
-        let ticket_id = data.get("id").and_then(Value::as_str).unwrap_or("unknown");
-        let cap_id = data
-            .get("capability_id")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        let server_id = data
-            .get("server_id")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        let args_str = data
-            .get("sanitized_args")
-            .or_else(|| data.get("args"))
-            .map(|a| serde_json::to_string_pretty(a).unwrap_or_else(|_| "{}".to_string()))
-            .unwrap_or_else(|| "{}".to_string());
+        let (ticket_id, cap_id, server_id, args_str) = approval_fields(data, true);
 
         blocks.push(json!({
             "type": "section",
@@ -221,20 +223,7 @@ fn build_discord_payload(event_type: &str, data: &Value, callback_url: Option<&s
 
     let mut fields = Vec::new();
     if event_type == "approval.requested" {
-        let ticket_id = data.get("id").and_then(Value::as_str).unwrap_or("unknown");
-        let cap_id = data
-            .get("capability_id")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        let server_id = data
-            .get("server_id")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        let args_str = data
-            .get("sanitized_args")
-            .or_else(|| data.get("args"))
-            .map(|a| serde_json::to_string(a).unwrap_or_else(|_| "{}".to_string()))
-            .unwrap_or_else(|| "{}".to_string());
+        let (ticket_id, cap_id, server_id, args_str) = approval_fields(data, false);
 
         fields.push(
             json!({ "name": "Capability", "value": format!("`{}`", cap_id), "inline": true }),

@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-18
 //! HTTP v1 handlers for WORM audit log querying, verification, export, and analytics.
 
 use axum::{
@@ -118,26 +118,7 @@ pub async fn handle_list_audit_events(
     State(state): State<AppState>,
     Query(query): Query<AuditEventsQuery>,
 ) -> impl IntoResponse {
-    let parsed_event_type = query.event_type.as_deref().and_then(parse_event_type);
-    let parsed_status = query.status.as_deref().and_then(parse_event_status);
-    let search_query = query.search.or(query.q);
-
-    let filter = AuditQueryFilter {
-        start_time_ns: query.start_time,
-        end_time_ns: query.end_time,
-        actor_id: query.actor_id,
-        server_id: query.server_id,
-        capability_id: query.capability_id,
-        event_type: parsed_event_type,
-        status: parsed_status,
-        trace_id: query.trace_id,
-        request_id: query.request_id,
-        idempotency_key: query.idempotency_key,
-        is_replay: query.is_replay,
-        search: search_query,
-        limit: query.limit.unwrap_or(50),
-        offset: query.offset.unwrap_or(0),
-    };
+    let filter = query.into_filter();
 
     let (events, total) = state.audit_store.query(&filter).await;
 
@@ -292,29 +273,27 @@ pub async fn handle_export_audit(
     State(state): State<AppState>,
     Query(query): Query<AuditExportQuery>,
 ) -> impl IntoResponse {
-    let parsed_event_type = query.event_type.as_deref().and_then(parse_event_type);
-    let parsed_status = query.status.as_deref().and_then(parse_event_status);
-    let search_query = query.search.or(query.q);
-
-    let filter = AuditQueryFilter {
-        start_time_ns: query.start_time,
-        end_time_ns: query.end_time,
+    let format = query.format.clone().unwrap_or_else(|| "jsonl".to_string());
+    let filter = AuditEventsQuery {
+        limit: Some(crate::audit::MAX_IN_MEMORY_AUDIT_EVENTS),
+        offset: Some(0),
+        start_time: query.start_time,
+        end_time: query.end_time,
         actor_id: query.actor_id,
         server_id: query.server_id,
         capability_id: query.capability_id,
-        event_type: parsed_event_type,
-        status: parsed_status,
+        event_type: query.event_type,
+        status: query.status,
         trace_id: query.trace_id,
         request_id: query.request_id,
         idempotency_key: query.idempotency_key,
         is_replay: query.is_replay,
-        search: search_query,
-        limit: crate::audit::MAX_IN_MEMORY_AUDIT_EVENTS,
-        offset: 0,
-    };
+        search: query.search,
+        q: query.q,
+    }
+    .into_filter();
 
     let (events, _) = state.audit_store.query(&filter).await;
-    let format = query.format.unwrap_or_else(|| "jsonl".to_string());
 
     let mut headers = HeaderMap::new();
     if format.to_lowercase() == "csv" {
@@ -389,5 +368,26 @@ fn sanitize_csv_cell(cell: &str) -> String {
         format!("\"{}\"", escaped.replace('"', "\"\""))
     } else {
         escaped
+    }
+}
+
+impl AuditEventsQuery {
+    fn into_filter(self) -> AuditQueryFilter {
+        AuditQueryFilter {
+            start_time_ns: self.start_time,
+            end_time_ns: self.end_time,
+            actor_id: self.actor_id,
+            server_id: self.server_id,
+            capability_id: self.capability_id,
+            event_type: self.event_type.as_deref().and_then(parse_event_type),
+            status: self.status.as_deref().and_then(parse_event_status),
+            trace_id: self.trace_id,
+            request_id: self.request_id,
+            idempotency_key: self.idempotency_key,
+            is_replay: self.is_replay,
+            search: self.search.or(self.q),
+            limit: self.limit.unwrap_or(50),
+            offset: self.offset.unwrap_or(0),
+        }
     }
 }

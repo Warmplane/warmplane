@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-18
 
 //! Human-in-the-Loop (HITL) Approval Engine and Registry.
 //!
@@ -118,13 +118,29 @@ pub struct CreateApprovalRequest<'a> {
 }
 
 impl ApprovalRegistry {
+    /// Creates a ticket and its interception audit event without cloning raw arguments.
+    ///
+    /// The caller supplies transport-specific audit fields and submits the returned event.
+    pub(crate) async fn create_audited_approval(
+        &self,
+        request: CreateApprovalRequest<'_>,
+        trace_id: String,
+        started: std::time::Instant,
+    ) -> (
+        String,
+        oneshot::Receiver<ApprovalResolution>,
+        crate::audit::RawAuditEvent,
+    ) {
+        let mut event = request.audit_event(trace_id);
+        let (id, receiver) = self.create_approval(request).await;
+        event.approval_ticket_id = Some(id.clone());
+        event.execution_latency_us = Some(started.elapsed().as_micros() as u64);
+        (id, receiver, event)
+    }
+
     /// Creates a new empty in-memory `ApprovalRegistry`.
     pub fn new() -> Self {
-        Self {
-            pending: Arc::new(RwLock::new(HashMap::new())),
-            wait_channels: Arc::new(RwLock::new(HashMap::new())),
-            storage: None,
-        }
+        Self::default()
     }
 
     /// Initializes an `ApprovalRegistry` backed by a persistent atomic JSON file.
@@ -265,49 +281,22 @@ impl ApprovalRegistry {
         modified_args: Option<serde_json::Value>,
         webhook: Option<&WebhookConfig>,
     ) -> Result<bool> {
-        let mut pending_guard = self.pending.write().await;
-        let Some(approval) = pending_guard.get_mut(id) else {
-            return Ok(false);
-        };
-
-        if approval.status != ApprovalStatus::Pending {
-            return Ok(false);
-        }
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        approval.status = ApprovalStatus::Approved {
-            operator: operator.clone(),
-            timestamp: now,
-            modified_args: modified_args.clone(),
-        };
-
-        let approval_snapshot = approval.clone();
-        drop(pending_guard);
-
-        self.sync_to_disk().await;
-
-        // Notify waiting caller
-        let mut chan_guard = self.wait_channels.write().await;
-        if let Some(tx) = chan_guard.remove(id) {
-            let _ = tx.send(ApprovalResolution::Approved {
+        let timestamp = approval_timestamp();
+        self.resolve_pending(
+            id,
+            ApprovalStatus::Approved {
+                operator: operator.clone(),
+                timestamp,
+                modified_args: modified_args.clone(),
+            },
+            ApprovalResolution::Approved {
                 operator,
                 modified_args,
-            });
-        }
-
-        if let Some(cfg) = webhook {
-            let webhook_cfg = cfg.clone();
-            tokio::spawn(async move {
-                dispatch_webhook(&webhook_cfg, "approval.granted", &approval_snapshot).await;
-            });
-        }
-
-        info!(approval_id = %id, "approval granted by operator");
-        Ok(true)
+            },
+            "approval.granted",
+            webhook,
+        )
+        .await
     }
 
     /// Atomically rejects a pending ticket, notifying the suspended caller.
@@ -318,45 +307,51 @@ impl ApprovalRegistry {
         reason: Option<String>,
         webhook: Option<&WebhookConfig>,
     ) -> Result<bool> {
-        let mut pending_guard = self.pending.write().await;
-        let Some(approval) = pending_guard.get_mut(id) else {
+        let timestamp = approval_timestamp();
+        self.resolve_pending(
+            id,
+            ApprovalStatus::Rejected {
+                operator: operator.clone(),
+                reason: reason.clone(),
+                timestamp,
+            },
+            ApprovalResolution::Rejected { operator, reason },
+            "approval.rejected",
+            webhook,
+        )
+        .await
+    }
+
+    async fn resolve_pending(
+        &self,
+        id: &str,
+        status: ApprovalStatus,
+        resolution: ApprovalResolution,
+        event: &'static str,
+        webhook: Option<&WebhookConfig>,
+    ) -> Result<bool> {
+        let mut pending = self.pending.write().await;
+        let Some(approval) = pending.get_mut(id) else {
             return Ok(false);
         };
-
         if approval.status != ApprovalStatus::Pending {
             return Ok(false);
         }
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        approval.status = ApprovalStatus::Rejected {
-            operator: operator.clone(),
-            reason: reason.clone(),
-            timestamp: now,
-        };
-
-        let approval_snapshot = approval.clone();
-        drop(pending_guard);
-
+        approval.status = status;
+        let snapshot = approval.clone();
+        drop(pending);
         self.sync_to_disk().await;
-
-        // Notify waiting caller
-        let mut chan_guard = self.wait_channels.write().await;
-        if let Some(tx) = chan_guard.remove(id) {
-            let _ = tx.send(ApprovalResolution::Rejected { operator, reason });
+        let mut channels = self.wait_channels.write().await;
+        if let Some(sender) = channels.remove(id) {
+            let _ = sender.send(resolution);
         }
-
-        if let Some(cfg) = webhook {
-            let webhook_cfg = cfg.clone();
+        if let Some(config) = webhook {
+            let config = config.clone();
             tokio::spawn(async move {
-                dispatch_webhook(&webhook_cfg, "approval.rejected", &approval_snapshot).await;
+                dispatch_webhook(&config, event, &snapshot).await;
             });
         }
-
-        info!(approval_id = %id, "approval rejected by operator");
+        info!(approval_id = %id, resolution = event, "approval resolved by operator");
         Ok(true)
     }
 
@@ -618,6 +613,46 @@ pub(crate) fn dispatch_signed_action(
             warn!(url = %webhook.url, error = %error, event_type = dispatch.event_type, "ChatOps action notification failed");
         }
     });
+}
+
+fn approval_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+impl CreateApprovalRequest<'_> {
+    /// Builds the interception audit event using the same request context as the approval.
+    fn audit_event(&self, trace_id: String) -> crate::audit::RawAuditEvent {
+        crate::audit::RawAuditEvent {
+            event_type: crate::audit::AuditEventType::ToolInterceptedHitl,
+            trace_id,
+            request_id: self.request_id.clone(),
+            actor_id: self
+                .context
+                .as_ref()
+                .and_then(|context| context.actor_id.clone()),
+            work_item_id: self
+                .context
+                .as_ref()
+                .and_then(|context| context.work_item_id.clone()),
+            client_ip: None,
+            server_id: Some(self.server_id.clone()),
+            capability_id: Some(self.capability_id.clone()),
+            resource_uri: None,
+            sanitized_args: Some(self.sanitized_args.clone()),
+            sanitized_response: None,
+            execution_latency_us: None,
+            status: crate::audit::AuditEventStatus::Intercepted,
+            error_code: None,
+            error_message: None,
+            operator_id: None,
+            approval_ticket_id: None,
+            idempotency_key: None,
+            is_replay: None,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1293,32 +1293,20 @@ async fn held_and_cancelled_audit_events_are_redacted_and_hash_chained() {
     );
     state.audit_handle.shutdown().await;
 
-    let filter = warmplane::audit::AuditQueryFilter {
-        event_type: Some(warmplane::audit::AuditEventType::EmissionHeld),
-        limit: 10,
-        ..Default::default()
-    };
-    let (events, count) = state.audit_store.query(&filter).await;
+    let (events, count) =
+        audit_events(&state, warmplane::audit::AuditEventType::EmissionHeld).await;
     assert_eq!(count, 2);
     assert!(events
         .iter()
         .all(|event| { event.sanitized_args.as_ref().unwrap()["body"] == "<redacted>" }));
     assert!(state.audit_store.verify_chain().await.is_valid);
 
-    let filter = warmplane::audit::AuditQueryFilter {
-        event_type: Some(warmplane::audit::AuditEventType::EmissionCancelled),
-        limit: 10,
-        ..Default::default()
-    };
-    let (_, count) = state.audit_store.query(&filter).await;
+    let (_, count) =
+        audit_events(&state, warmplane::audit::AuditEventType::EmissionCancelled).await;
     assert_eq!(count, 1);
 
-    let filter = warmplane::audit::AuditQueryFilter {
-        event_type: Some(warmplane::audit::AuditEventType::ToolExecution),
-        limit: 10,
-        ..Default::default()
-    };
-    let (events, count) = state.audit_store.query(&filter).await;
+    let (events, count) =
+        audit_events(&state, warmplane::audit::AuditEventType::ToolExecution).await;
     assert_eq!(count, 1);
     assert_eq!(
         events[0].sanitized_args.as_ref().unwrap()["body"],
@@ -1380,12 +1368,8 @@ async fn failed_emission_audit_does_not_include_raw_upstream_error_text() {
     );
     state.audit_handle.shutdown().await;
 
-    let filter = warmplane::audit::AuditQueryFilter {
-        event_type: Some(warmplane::audit::AuditEventType::ToolExecution),
-        limit: 10,
-        ..Default::default()
-    };
-    let (events, count) = state.audit_store.query(&filter).await;
+    let (events, count) =
+        audit_events(&state, warmplane::audit::AuditEventType::ToolExecution).await;
     assert_eq!(count, 1);
     assert_eq!(
         events[0].sanitized_args.as_ref().unwrap()["password"],
@@ -1481,4 +1465,18 @@ async fn approval_argument_edits_are_the_payload_held_and_dispatched() {
         .await
         .unwrap();
     assert_eq!(completed.status, TaskStatus::Completed);
+}
+
+async fn audit_events(
+    state: &AppState,
+    event_type: warmplane::audit::AuditEventType,
+) -> (Vec<warmplane::audit::AuditEvent>, usize) {
+    state
+        .audit_store
+        .query(&warmplane::audit::AuditQueryFilter {
+            event_type: Some(event_type),
+            limit: 10,
+            ..Default::default()
+        })
+        .await
 }

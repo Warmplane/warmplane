@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-18
 //! MCP SEP-2663 Tasks Extension State Machine and Registry (`M-CANONICAL-DOCS`).
 //!
 //! Provides asynchronous task management, durable lifecycle transitions,
@@ -285,11 +285,7 @@ pub struct TaskRegistry {
 impl TaskRegistry {
     /// Creates a new in-memory `TaskRegistry`.
     pub fn new() -> Self {
-        Self {
-            tasks: Arc::new(RwLock::new(HashMap::new())),
-            wait_channels: Arc::new(RwLock::new(HashMap::new())),
-            storage: None,
-        }
+        Self::default()
     }
 
     /// Initializes a `TaskRegistry` backed by a persistent atomic JSON file.
@@ -356,27 +352,9 @@ impl TaskRegistry {
             (None, None)
         };
 
-        let mut record = TaskRecord {
-            task_id: task_id.clone(),
-            status: params.initial_status,
-            status_message: params.status_message,
-            capability_id: params.capability_id,
-            server_id: params.server_id,
-            args: params.args,
-            request_id: params.request_id,
-            context: params.context,
-            idempotency_key: params.idempotency_key,
-            input_requests: params.input_requests.unwrap_or_default(),
-            input_responses: BTreeMap::new(),
-            result: None,
-            error: None,
-            created_at: iso_time.clone(),
-            last_updated_at: iso_time,
-            created_at_epoch_secs: now_secs,
-            ttl_ms: params.ttl_ms.or(Some(300_000)), // default 5m TTL
-            poll_interval_ms: params.poll_interval_ms.or(Some(1_000)),
-            emission: None,
-        };
+        let mut params = params;
+        params.ttl_ms = params.ttl_ms.or(Some(300_000));
+        let mut record = new_task_record(task_id, params, now_secs, iso_time, None);
 
         let mut guard = self.tasks.write().await;
         while guard.contains_key(&record.task_id) {
@@ -413,27 +391,7 @@ impl TaskRegistry {
                 break candidate;
             }
         };
-        let record = TaskRecord {
-            task_id: task_id.clone(),
-            status: params.initial_status,
-            status_message: params.status_message,
-            capability_id: params.capability_id,
-            server_id: params.server_id,
-            args: params.args,
-            request_id: params.request_id,
-            context: params.context,
-            idempotency_key: params.idempotency_key,
-            input_requests: params.input_requests.unwrap_or_default(),
-            input_responses: BTreeMap::new(),
-            result: None,
-            error: None,
-            created_at: iso_time.clone(),
-            last_updated_at: iso_time,
-            created_at_epoch_secs: now_secs,
-            ttl_ms: params.ttl_ms,
-            poll_interval_ms: params.poll_interval_ms.or(Some(1_000)),
-            emission: Some(emission),
-        };
+        let record = new_task_record(task_id.clone(), params, now_secs, iso_time, Some(emission));
         guard.insert(task_id.clone(), record.clone());
         if let Some(storage) = &self.storage {
             if let Err(error) = storage.save(&guard) {
@@ -790,6 +748,36 @@ fn format_iso_time(time: SystemTime) -> String {
         minutes,
         seconds
     )
+}
+
+fn new_task_record(
+    task_id: String,
+    params: CreateTaskParams,
+    now_secs: u64,
+    iso_time: String,
+    emission: Option<EmissionRecord>,
+) -> TaskRecord {
+    TaskRecord {
+        task_id,
+        status: params.initial_status,
+        status_message: params.status_message,
+        capability_id: params.capability_id,
+        server_id: params.server_id,
+        args: params.args,
+        request_id: params.request_id,
+        context: params.context,
+        idempotency_key: params.idempotency_key,
+        input_requests: params.input_requests.unwrap_or_default(),
+        input_responses: BTreeMap::new(),
+        result: None,
+        error: None,
+        created_at: iso_time.clone(),
+        last_updated_at: iso_time,
+        created_at_epoch_secs: now_secs,
+        ttl_ms: params.ttl_ms,
+        poll_interval_ms: params.poll_interval_ms.or(Some(1_000)),
+        emission,
+    }
 }
 
 #[cfg(test)]

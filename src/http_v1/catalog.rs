@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-18
 
 //! Catalog discovery and exploration endpoints for tools, resources, prompts, completions, and change feeds.
 
@@ -748,99 +748,31 @@ pub async fn handle_read_resource(
     headers: HeaderMap,
     Json(payload): Json<ReadResourceRequest>,
 ) -> impl IntoResponse {
-    let prof_ctx = prof_ext.as_ref().map(|e| e.0.clone()).unwrap_or_default();
-    let trace_id = next_trace_id();
-    let request_id =
-        crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
-    let req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
-    let _idempotency_key = resolve_idempotency_key(payload.idempotency_key.clone(), &headers);
-    let cancel_token: tokio_util::sync::CancellationToken =
-        state.operation_registry.register(&request_id).await;
-
-    let (_prof, pol, _ver) =
-        resolve_catalog_context(&state, &req_ext.map(|e| e.0), prof_ext.as_ref()).await;
-    if !pol.allows(&payload.resource_id) {
-        state.operation_registry.unregister(&request_id).await;
-        return (
-            StatusCode::FORBIDDEN,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                crate::idempotency::RetryMetadata::safe("not_started"),
-                "POLICY_DENIED",
-                format!("Resource '{}' blocked by policy", payload.resource_id),
-                false,
-            )),
-        )
-            .into_response();
-    }
-
-    let (server_id, uri) = {
-        let res_guard = state.resources.read().await;
-        let Some(meta) = res_guard.get(&payload.resource_id) else {
-            state.operation_registry.unregister(&request_id).await;
-            return (
-                StatusCode::NOT_FOUND,
-                Json(error_envelope(
-                    trace_id,
-                    Some(request_id),
-                    Some(req_context),
-                    crate::idempotency::RetryMetadata::safe("not_started"),
-                    "RESOURCE_NOT_FOUND",
-                    format!("Resource '{}' not found", payload.resource_id),
-                    false,
-                )),
-            )
-                .into_response();
-        };
-
-        if !prof_ctx.is_server_allowed(&meta.server) {
-            state.operation_registry.unregister(&request_id).await;
-            return (
-                StatusCode::NOT_FOUND,
-                Json(error_envelope(
-                    trace_id,
-                    Some(request_id),
-                    Some(req_context),
-                    crate::idempotency::RetryMetadata::safe("not_started"),
-                    "RESOURCE_NOT_FOUND",
-                    format!(
-                        "Resource '{}' not available in active profile",
-                        payload.resource_id
-                    ),
-                    false,
-                )),
-            )
-                .into_response();
-        }
-
-        (meta.server.clone(), meta.uri.clone())
+    let prepared = prepare_catalog_dispatch(
+        &state,
+        prof_ext.as_ref(),
+        req_ext.map(|extension| extension.0),
+        &headers,
+        CatalogRequest::Resource(&payload),
+    )
+    .await;
+    let CatalogDispatch {
+        call,
+        policy: _,
+        server_id,
+        target: uri,
+        sender: tx,
+    } = match prepared {
+        Ok(dispatch) => dispatch,
+        Err(response) => return *response,
     };
-
-    let tx = {
-        let servers_guard = state.servers.read().await;
-        let Some(tx) = servers_guard.get(&server_id).cloned() else {
-            state.operation_registry.unregister(&request_id).await;
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(error_envelope(
-                    trace_id,
-                    Some(request_id),
-                    Some(req_context),
-                    crate::idempotency::RetryMetadata::safe("not_started"),
-                    "SERVER_UNREACHABLE",
-                    format!("Server '{}' is unreachable", server_id),
-                    true,
-                )),
-            )
-                .into_response();
-        };
-        tx
-    };
-
+    let CatalogCall {
+        trace_id,
+        request_id,
+        req_context,
+        cancel_token,
+    } = call;
     let redact_keys = state.policy.read().await.redact_keys.clone();
-
     info!(
         trace_id = %trace_id,
         request_id = %request_id,
@@ -853,118 +785,30 @@ pub async fn handle_read_resource(
         "resource read start"
     );
 
-    let (reply_tx, reply_rx) = oneshot::channel();
-    if tx
-        .send(ServerMsg::ReadResource {
+    dispatch_catalog_call(
+        &state,
+        &server_id,
+        tx,
+        CatalogCall {
+            trace_id,
+            request_id,
+            req_context,
+            cancel_token,
+        },
+        "Resource read",
+        |reply| ServerMsg::ReadResource {
             uri,
             input_responses: payload.input_responses,
             request_state: payload.request_state,
-            reply: reply_tx,
-        })
-        .await
-        .is_err()
-    {
-        state.operation_registry.unregister(&request_id).await;
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                crate::idempotency::RetryMetadata::safe("not_started"),
-                "SERVER_UNREACHABLE",
-                format!("Server '{}' mailbox is closed", server_id),
-                true,
-            )),
-        )
-            .into_response();
-    }
-
-    let result: Result<Result<Value, UpstreamCallError>, oneshot::error::RecvError> = tokio::select! {
-        _ = cancel_token.cancelled() => {
-            state.operation_registry.unregister(&request_id).await;
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(error_envelope(
-                    trace_id,
-                    Some(request_id),
-                    Some(req_context),
-                    crate::idempotency::RetryMetadata::safe("unknown"),
-                    "OPERATION_CANCELLED",
-                    "Resource read operation was cancelled",
-                    false,
-                )),
-            ).into_response();
-        }
-        res = reply_rx => res,
-    };
-
-    state.operation_registry.unregister(&request_id).await;
-
-    match result {
-        Ok(Ok(data)) => {
-            let redacted_output = redact_value(data.clone(), &redact_keys);
-            info!(
-                trace_id = %trace_id,
-                request_id = %request_id,
-                resource_id = %payload.resource_id,
-                data = %redacted_output,
-                "resource read success"
-            );
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "ok": true,
-                    "request_id": request_id,
-                    "context": req_context,
-                    "trace_id": trace_id,
-                    "data": data,
-                    "error": null,
-                    "retry": crate::idempotency::RetryMetadata::safe("completed"),
-                })),
-            )
-                .into_response()
-        }
-        Ok(Err(UpstreamCallError::Timeout)) => (
-            StatusCode::GATEWAY_TIMEOUT,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                crate::idempotency::RetryMetadata::safe("unknown"),
-                "UPSTREAM_TIMEOUT",
-                format!("Resource read timed out after {}ms", state.tool_timeout_ms),
-                true,
-            )),
-        )
-            .into_response(),
-        Ok(Err(UpstreamCallError::Upstream(err))) => (
-            StatusCode::BAD_GATEWAY,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                crate::idempotency::RetryMetadata::safe("unknown"),
-                "UPSTREAM_ERROR",
-                err,
-                false,
-            )),
-        )
-            .into_response(),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                crate::idempotency::RetryMetadata::safe("unknown"),
-                "INTERNAL_ERROR",
-                "Daemon actor task died",
-                true,
-            )),
-        )
-            .into_response(),
-    }
+            reply,
+        },
+        CatalogLog {
+            kind: CatalogKind::Resource,
+            id: &payload.resource_id,
+            redact_keys: &redact_keys,
+        },
+    )
+    .await
 }
 
 /// Handles HTTP POST `/v1/prompts/get` fetching rendered prompt template.
@@ -975,98 +819,31 @@ pub async fn handle_get_prompt(
     headers: HeaderMap,
     Json(payload): Json<GetPromptRequest>,
 ) -> impl IntoResponse {
-    let prof_ctx = prof_ext.as_ref().map(|e| e.0.clone()).unwrap_or_default();
-    let trace_id = next_trace_id();
-    let request_id =
-        crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
-    let req_context = crate::context::resolve_request_context(payload.context.clone(), &headers);
-    let _idempotency_key = resolve_idempotency_key(payload.idempotency_key.clone(), &headers);
-    let cancel_token: tokio_util::sync::CancellationToken =
-        state.operation_registry.register(&request_id).await;
-
-    let (_prof, pol, _ver) =
-        resolve_catalog_context(&state, &req_ext.map(|e| e.0), prof_ext.as_ref()).await;
-    if !pol.allows(&payload.prompt_id) {
-        state.operation_registry.unregister(&request_id).await;
-        return (
-            StatusCode::FORBIDDEN,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                crate::idempotency::RetryMetadata::safe("not_started"),
-                "POLICY_DENIED",
-                format!("Prompt '{}' blocked by policy", payload.prompt_id),
-                false,
-            )),
-        )
-            .into_response();
-    }
-    let redact_keys = pol.redact_keys.clone();
-
-    let (server_id, prompt_name) = {
-        let prompts_guard = state.prompts.read().await;
-        let Some(meta) = prompts_guard.get(&payload.prompt_id) else {
-            state.operation_registry.unregister(&request_id).await;
-            return (
-                StatusCode::NOT_FOUND,
-                Json(error_envelope(
-                    trace_id,
-                    Some(request_id),
-                    Some(req_context),
-                    crate::idempotency::RetryMetadata::safe("not_started"),
-                    "PROMPT_NOT_FOUND",
-                    format!("Prompt '{}' not found", payload.prompt_id),
-                    false,
-                )),
-            )
-                .into_response();
-        };
-
-        if !prof_ctx.is_server_allowed(&meta.server) {
-            state.operation_registry.unregister(&request_id).await;
-            return (
-                StatusCode::NOT_FOUND,
-                Json(error_envelope(
-                    trace_id,
-                    Some(request_id),
-                    Some(req_context),
-                    crate::idempotency::RetryMetadata::safe("not_started"),
-                    "PROMPT_NOT_FOUND",
-                    format!(
-                        "Prompt '{}' not available in active profile",
-                        payload.prompt_id
-                    ),
-                    false,
-                )),
-            )
-                .into_response();
-        }
-
-        (meta.server.clone(), meta.name.clone())
+    let prepared = prepare_catalog_dispatch(
+        &state,
+        prof_ext.as_ref(),
+        req_ext.map(|extension| extension.0),
+        &headers,
+        CatalogRequest::Prompt(&payload),
+    )
+    .await;
+    let CatalogDispatch {
+        call,
+        policy,
+        server_id,
+        target: prompt_name,
+        sender: tx,
+    } = match prepared {
+        Ok(dispatch) => dispatch,
+        Err(response) => return *response,
     };
-
-    let tx = {
-        let servers_guard = state.servers.read().await;
-        let Some(tx) = servers_guard.get(&server_id).cloned() else {
-            state.operation_registry.unregister(&request_id).await;
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(error_envelope(
-                    trace_id,
-                    Some(request_id),
-                    Some(req_context),
-                    crate::idempotency::RetryMetadata::safe("not_started"),
-                    "SERVER_UNREACHABLE",
-                    format!("Server '{}' is unreachable", server_id),
-                    true,
-                )),
-            )
-                .into_response();
-        };
-        tx
-    };
-
+    let CatalogCall {
+        trace_id,
+        request_id,
+        req_context,
+        cancel_token,
+    } = call;
+    let redact_keys = policy.redact_keys.clone();
     let arguments = match payload.arguments {
         Some(Value::Object(map)) => Some(map),
         Some(_) => {
@@ -1104,18 +881,57 @@ pub async fn handle_get_prompt(
         "prompt get start"
     );
 
-    let (reply_tx, reply_rx) = oneshot::channel();
-    if tx
-        .send(ServerMsg::GetPrompt {
+    dispatch_catalog_call(
+        &state,
+        &server_id,
+        tx,
+        CatalogCall {
+            trace_id,
+            request_id,
+            req_context,
+            cancel_token,
+        },
+        "Prompt get",
+        |reply| ServerMsg::GetPrompt {
             name: prompt_name,
             arguments,
             input_responses: payload.input_responses,
             request_state: payload.request_state,
-            reply: reply_tx,
-        })
-        .await
-        .is_err()
-    {
+            reply,
+        },
+        CatalogLog {
+            kind: CatalogKind::Prompt,
+            id: &payload.prompt_id,
+            redact_keys: &redact_keys,
+        },
+    )
+    .await
+}
+
+struct CatalogCall {
+    trace_id: String,
+    request_id: String,
+    req_context: crate::context::RequestContext,
+    cancel_token: tokio_util::sync::CancellationToken,
+}
+
+async fn dispatch_catalog_call(
+    state: &AppState,
+    server_id: &str,
+    tx: tokio::sync::mpsc::Sender<ServerMsg>,
+    call: CatalogCall,
+    operation: &str,
+    message: impl FnOnce(oneshot::Sender<Result<Value, UpstreamCallError>>) -> ServerMsg,
+    log: CatalogLog<'_>,
+) -> axum::response::Response {
+    let CatalogCall {
+        trace_id,
+        request_id,
+        req_context,
+        cancel_token,
+    } = call;
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if tx.send(message(reply_tx)).await.is_err() {
         state.operation_registry.unregister(&request_id).await;
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1143,7 +959,7 @@ pub async fn handle_get_prompt(
                     Some(req_context),
                     crate::idempotency::RetryMetadata::safe("unknown"),
                     "OPERATION_CANCELLED",
-                    "Prompt get operation was cancelled",
+                    format!("{operation} operation was cancelled"),
                     false,
                 )),
             ).into_response();
@@ -1155,14 +971,7 @@ pub async fn handle_get_prompt(
 
     match result {
         Ok(Ok(data)) => {
-            let redacted_output = redact_value(data.clone(), &redact_keys);
-            info!(
-                trace_id = %trace_id,
-                request_id = %request_id,
-                prompt_id = %payload.prompt_id,
-                data = %redacted_output,
-                "prompt get success"
-            );
+            log.success(&trace_id, &request_id, &data);
             (
                 StatusCode::OK,
                 Json(json!({
@@ -1185,7 +994,7 @@ pub async fn handle_get_prompt(
                 Some(req_context),
                 crate::idempotency::RetryMetadata::safe("unknown"),
                 "UPSTREAM_TIMEOUT",
-                format!("Prompt get timed out after {}ms", state.tool_timeout_ms),
+                format!("{operation} timed out after {}ms", state.tool_timeout_ms),
                 true,
             )),
         )
@@ -1216,5 +1025,203 @@ pub async fn handle_get_prompt(
             )),
         )
             .into_response(),
+    }
+}
+
+async fn resolve_catalog_target(
+    state: &AppState,
+    policy: &crate::daemon::Policy,
+    profile: &crate::context::ProfileContext,
+    request_id: &str,
+    kind: CatalogKind,
+    id: &str,
+    target: Option<(String, String)>,
+) -> Result<(String, String), (StatusCode, &'static str, String)> {
+    let missing_code = if matches!(kind, CatalogKind::Resource) {
+        "RESOURCE_NOT_FOUND"
+    } else {
+        "PROMPT_NOT_FOUND"
+    };
+    let error = if !policy.allows(id) {
+        Some((
+            StatusCode::FORBIDDEN,
+            "POLICY_DENIED",
+            format!("{kind} '{id}' blocked by policy"),
+        ))
+    } else if let Some((server, _)) = &target {
+        (!profile.is_server_allowed(server)).then(|| {
+            (
+                StatusCode::NOT_FOUND,
+                missing_code,
+                format!("{kind} '{id}' not available in active profile"),
+            )
+        })
+    } else {
+        Some((
+            StatusCode::NOT_FOUND,
+            missing_code,
+            format!("{kind} '{id}' not found"),
+        ))
+    };
+    if let Some(error) = error {
+        state.operation_registry.unregister(request_id).await;
+        return Err(error);
+    }
+    target.ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            missing_code,
+            format!("{kind} '{id}' not found"),
+        )
+    })
+}
+
+enum CatalogRequest<'a> {
+    Resource(&'a ReadResourceRequest),
+    Prompt(&'a GetPromptRequest),
+}
+
+struct CatalogDispatch {
+    call: CatalogCall,
+    policy: crate::daemon::Policy,
+    server_id: String,
+    target: String,
+    sender: tokio::sync::mpsc::Sender<ServerMsg>,
+}
+
+async fn prepare_catalog_dispatch(
+    state: &AppState,
+    profile: Option<&axum::extract::Extension<crate::context::ProfileContext>>,
+    tenant: Option<crate::rbac::TenantContext>,
+    headers: &HeaderMap,
+    request: CatalogRequest<'_>,
+) -> Result<CatalogDispatch, Box<axum::response::Response>> {
+    let (kind, id, request_id, context, idempotency_key) = match request {
+        CatalogRequest::Resource(payload) => (
+            CatalogKind::Resource,
+            &payload.resource_id,
+            payload.request_id.clone(),
+            payload.context.clone(),
+            payload.idempotency_key.clone(),
+        ),
+        CatalogRequest::Prompt(payload) => (
+            CatalogKind::Prompt,
+            &payload.prompt_id,
+            payload.request_id.clone(),
+            payload.context.clone(),
+            payload.idempotency_key.clone(),
+        ),
+    };
+    let prof_ctx = profile
+        .map(|extension| extension.0.clone())
+        .unwrap_or_default();
+    let trace_id = next_trace_id();
+    let request_id = crate::context::resolve_request_id(request_id, headers, trace_id.clone());
+    let req_context = crate::context::resolve_request_context(context, headers);
+    let _idempotency_key = resolve_idempotency_key(idempotency_key, headers);
+    let cancel_token = state.operation_registry.register(&request_id).await;
+    let (_, policy, _) = resolve_catalog_context(state, &tenant, profile).await;
+    let target = if matches!(kind, CatalogKind::Resource) {
+        state
+            .resources
+            .read()
+            .await
+            .get(id)
+            .map(|meta| (meta.server.clone(), meta.uri.clone()))
+    } else {
+        state
+            .prompts
+            .read()
+            .await
+            .get(id)
+            .map(|meta| (meta.server.clone(), meta.name.clone()))
+    };
+    let resolved =
+        resolve_catalog_target(state, &policy, &prof_ctx, &request_id, kind, id, target).await;
+    let call = CatalogCall {
+        trace_id,
+        request_id,
+        req_context,
+        cancel_token,
+    };
+    let (server_id, target) = resolved
+        .map_err(|(status, code, message)| Box::new(call.failure(status, code, message, false)))?;
+    let sender = match state.servers.read().await.get(&server_id).cloned() {
+        Some(sender) => sender,
+        None => {
+            state.operation_registry.unregister(&call.request_id).await;
+            return Err(Box::new(call.failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "SERVER_UNREACHABLE",
+                format!("Server '{}' is unreachable", server_id),
+                true,
+            )));
+        }
+    };
+    Ok(CatalogDispatch {
+        call,
+        policy,
+        server_id,
+        target,
+        sender,
+    })
+}
+
+impl CatalogCall {
+    fn failure(
+        &self,
+        status: StatusCode,
+        code: &str,
+        message: String,
+        retryable: bool,
+    ) -> axum::response::Response {
+        (
+            status,
+            Json(error_envelope(
+                self.trace_id.clone(),
+                Some(self.request_id.clone()),
+                Some(self.req_context.clone()),
+                crate::idempotency::RetryMetadata::safe("not_started"),
+                code,
+                message,
+                retryable,
+            )),
+        )
+            .into_response()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CatalogKind {
+    Resource,
+    Prompt,
+}
+
+impl std::fmt::Display for CatalogKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Resource => "Resource",
+            Self::Prompt => "Prompt",
+        })
+    }
+}
+
+struct CatalogLog<'a> {
+    kind: CatalogKind,
+    id: &'a str,
+    redact_keys: &'a [String],
+}
+
+impl CatalogLog<'_> {
+    fn success(&self, trace_id: &str, request_id: &str, data: &Value) {
+        let redacted_output = redact_value(data.clone(), self.redact_keys);
+        match self.kind {
+            CatalogKind::Resource => {
+                info!(%trace_id, %request_id, resource_id = %self.id, data = %redacted_output, "resource read success")
+            }
+            CatalogKind::Prompt => {
+                info!(%trace_id, %request_id, prompt_id = %self.id, data = %redacted_output, "prompt get success")
+            }
+        }
     }
 }

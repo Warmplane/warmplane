@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-18
 //! HTTP v1 API endpoints for managing SEP-2663 Tasks (`M-CANONICAL-DOCS`).
 //!
 //! Exposes REST endpoints for querying task status, submitting input responses,
@@ -46,27 +46,16 @@ pub async fn handle_list_tasks(
     req_ext: axum::extract::Extension<Option<crate::rbac::TenantContext>>,
     prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
 ) -> impl IntoResponse {
-    let tenant_id = req_ext
-        .0
-        .as_ref()
-        .map(|context| context.tenant_id.as_str())
-        .unwrap_or("default");
-    let default_role = state.rbac_engine.default_role();
-    let role = req_ext
-        .0
-        .as_ref()
-        .map(|context| context.role.as_str())
-        .unwrap_or(default_role.as_str());
-    let profile_id = prof_ext
-        .as_ref()
-        .and_then(|extension| extension.0.profile_id.as_deref());
     let records = state.task_registry.list_tasks().await;
     let mut responses = Vec::new();
     for record in &records {
-        if state
-            .hold_coordinator
-            .can_access_task(&state, record, tenant_id, role, profile_id)
-            .await
+        if crate::http_v1::helpers::can_access_emission_task(
+            &state,
+            record,
+            req_ext.0.as_ref(),
+            prof_ext.as_ref().map(|extension| &extension.0),
+        )
+        .await
         {
             responses.push(TaskResponse::from(record));
         }
@@ -91,24 +80,13 @@ pub async fn handle_get_task(
     prof_ext: Option<axum::extract::Extension<crate::context::ProfileContext>>,
 ) -> impl IntoResponse {
     if let Some(record) = state.task_registry.get_task(&id).await {
-        let tenant_id = req_ext
-            .0
-            .as_ref()
-            .map(|context| context.tenant_id.as_str())
-            .unwrap_or("default");
-        let default_role = state.rbac_engine.default_role();
-        let role = req_ext
-            .0
-            .as_ref()
-            .map(|context| context.role.as_str())
-            .unwrap_or(default_role.as_str());
-        let profile_id = prof_ext
-            .as_ref()
-            .and_then(|extension| extension.0.profile_id.as_deref());
-        if !state
-            .hold_coordinator
-            .can_access_task(&state, &record, tenant_id, role, profile_id)
-            .await
+        if !crate::http_v1::helpers::can_access_emission_task(
+            &state,
+            &record,
+            req_ext.0.as_ref(),
+            prof_ext.as_ref().map(|extension| &extension.0),
+        )
+        .await
         {
             return (StatusCode::NOT_FOUND, Json(json!({"ok": false, "error": {"code": "TASK_NOT_FOUND", "message": format!("Task '{}' was not found", id)}}))).into_response();
         }

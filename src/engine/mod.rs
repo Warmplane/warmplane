@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-18
 //! Embedded Warmplane engine interface and ControlPlaneHandle implementation (`M-CANONICAL-DOCS`).
 //!
 //! Provides direct Rust callable APIs without HTTP or transport serialization overhead:
@@ -9,6 +9,7 @@ pub mod interpolation;
 pub mod types;
 pub(crate) mod undo;
 
+use crate::undo::{RollbackResult, UndoAccessContext, UndoEntrySummary, UndoOperationError};
 use anyhow::Result;
 use serde_json::Value;
 use std::sync::atomic::Ordering;
@@ -81,6 +82,16 @@ pub struct ControlPlaneHandle {
     state: AppState,
 }
 
+// Keep the thin undo facade methods and their context forwarding consistent.
+macro_rules! forward_undo_entry {
+    ($(#[$docs:meta])* $method:ident($id:ident) -> $output:ty) => {
+        $(#[$docs])*
+        pub async fn $method(&self, $id: &str, access: &UndoAccessContext) -> Result<$output, UndoOperationError> {
+            crate::undo::$method(&self.state, access, $id).await
+        }
+    };
+}
+
 impl ControlPlaneHandle {
     /// Creates a new `ControlPlaneHandle` wrapping an active `AppState`.
     pub fn new(state: AppState) -> Self {
@@ -148,28 +159,24 @@ impl ControlPlaneHandle {
     pub async fn list_undo_entries(
         &self,
         filter: crate::undo::UndoListFilter,
-        access: &crate::undo::UndoAccessContext,
-    ) -> Result<crate::undo::UndoListResponse, crate::undo::UndoOperationError> {
+        access: &UndoAccessContext,
+    ) -> Result<crate::undo::UndoListResponse, UndoOperationError> {
         crate::undo::list_undo_entries(&self.state, access, filter).await
     }
 
-    /// Returns safe details for one undo entry belonging to the caller's tenant.
-    ///
-    /// # Arguments
-    /// * `undo_id` - Stable undo-entry identifier.
-    /// * `access` - Trusted tenant and role context.
-    ///
-    /// # Returns
-    /// A safe summary without inverse arguments or snapshot contents.
-    ///
-    /// # Errors
-    /// Returns not-found for missing or cross-tenant entries, or an authorization error.
-    pub async fn get_undo_entry(
-        &self,
-        undo_id: &str,
-        access: &crate::undo::UndoAccessContext,
-    ) -> Result<crate::undo::UndoEntrySummary, crate::undo::UndoOperationError> {
-        crate::undo::get_undo_entry(&self.state, access, undo_id).await
+    forward_undo_entry! {
+        /// Returns safe details for one undo entry belonging to the caller's tenant.
+        ///
+        /// # Arguments
+        /// * `undo_id` - Stable undo-entry identifier.
+        /// * `access` - Trusted tenant and role context.
+        ///
+        /// # Returns
+        /// A safe summary without inverse arguments or snapshot contents.
+        ///
+        /// # Errors
+        /// Returns not-found for missing or cross-tenant entries, or an authorization error.
+        get_undo_entry(undo_id) -> UndoEntrySummary
     }
 
     /// Executes one authorized undo entry and returns its inverse output and audit receipt.
@@ -188,10 +195,10 @@ impl ControlPlaneHandle {
     pub async fn execute_undo(
         &self,
         undo_id: &str,
-        access: &crate::undo::UndoAccessContext,
+        access: &UndoAccessContext,
         force_expired: bool,
         force_reason: Option<&str>,
-    ) -> Result<crate::undo::RollbackResult, crate::undo::UndoOperationError> {
+    ) -> Result<RollbackResult, UndoOperationError> {
         crate::undo::execute_undo(&self.state, access, undo_id, force_expired, force_reason).await
     }
 
@@ -211,10 +218,10 @@ impl ControlPlaneHandle {
     pub async fn rollback_work_item(
         &self,
         work_item_id: &str,
-        access: &crate::undo::UndoAccessContext,
+        access: &UndoAccessContext,
         force_expired: bool,
         force_reason: Option<&str>,
-    ) -> Result<Vec<crate::undo::RollbackResult>, crate::undo::UndoOperationError> {
+    ) -> Result<Vec<RollbackResult>, UndoOperationError> {
         crate::undo::rollback_work_item(
             &self.state,
             access,
@@ -225,42 +232,34 @@ impl ControlPlaneHandle {
         .await
     }
 
-    /// Executes an undo requested by an opted-in MCP agent.
-    ///
-    /// # Arguments
-    /// * `undo_id` - Stable undo-entry identifier.
-    /// * `access` - Trusted role, profile, tenant, and actor context.
-    ///
-    /// # Returns
-    /// The inverse execution result and committed audit receipt.
-    ///
-    /// # Errors
-    /// Returns policy, ownership, expiry, or storage errors.
-    pub async fn execute_agent_self_undo(
-        &self,
-        undo_id: &str,
-        access: &crate::undo::UndoAccessContext,
-    ) -> Result<crate::undo::RollbackResult, crate::undo::UndoOperationError> {
-        crate::undo::execute_agent_self_undo(&self.state, access, undo_id).await
+    forward_undo_entry! {
+        /// Executes an undo requested by an opted-in MCP agent.
+        ///
+        /// # Arguments
+        /// * `undo_id` - Stable undo-entry identifier.
+        /// * `access` - Trusted role, profile, tenant, and actor context.
+        ///
+        /// # Returns
+        /// The inverse execution result and committed audit receipt.
+        ///
+        /// # Errors
+        /// Returns policy, ownership, expiry, or storage errors.
+        execute_agent_self_undo(undo_id) -> RollbackResult
     }
 
-    /// Executes the newest armed undo entry for an opted-in MCP agent's work item.
-    ///
-    /// # Arguments
-    /// * `work_item_id` - Work-item fiber associated with the agent's current turn.
-    /// * `access` - Trusted role, profile, tenant, and caller context.
-    ///
-    /// # Returns
-    /// The inverse execution result and committed audit receipt.
-    ///
-    /// # Errors
-    /// Returns policy, ownership, expiry, or storage errors.
-    pub async fn execute_agent_self_undo_for_work_item(
-        &self,
-        work_item_id: &str,
-        access: &crate::undo::UndoAccessContext,
-    ) -> Result<crate::undo::RollbackResult, crate::undo::UndoOperationError> {
-        crate::undo::execute_agent_self_undo_for_work_item(&self.state, access, work_item_id).await
+    forward_undo_entry! {
+        /// Executes the newest armed undo entry for an opted-in MCP agent's work item.
+        ///
+        /// # Arguments
+        /// * `work_item_id` - Work-item fiber associated with the agent's current turn.
+        /// * `access` - Trusted role, profile, tenant, and caller context.
+        ///
+        /// # Returns
+        /// The inverse execution result and committed audit receipt.
+        ///
+        /// # Errors
+        /// Returns policy, ownership, expiry, or storage errors.
+        execute_agent_self_undo_for_work_item(work_item_id) -> RollbackResult
     }
 
     /// Lists registered capabilities, optionally filtered by a named profile constellation.
@@ -1916,85 +1915,20 @@ impl ControlPlaneHandle {
             (meta.server.clone(), meta.uri.clone())
         };
 
-        let tx = {
-            let servers_guard = self.state.servers.read().await;
-            let Some(tx) = servers_guard.get(&server).cloned() else {
-                return Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    WarmplaneError::new(
-                        "SERVER_UNREACHABLE",
-                        format!("Server '{}' is unreachable", server),
-                        true,
-                    ),
-                    RetryMetadata::safe("not_started"),
-                );
-            };
-            tx
-        };
-
-        let (reply_tx, reply_rx) = oneshot::channel();
-        if tx
-            .send(ServerMsg::ReadResource {
+        self.dispatch_catalog_call(
+            server,
+            trace_id,
+            req_id,
+            req_ctx,
+            "Resource read",
+            |reply| ServerMsg::ReadResource {
                 uri,
                 input_responses: options.input_responses,
                 request_state: options.request_state,
-                reply: reply_tx,
-            })
-            .await
-            .is_err()
-        {
-            return Envelope::failure(
-                trace_id,
-                Some(req_id),
-                Some(req_ctx),
-                WarmplaneError::new(
-                    "SERVER_UNREACHABLE",
-                    format!("Server '{}' mailbox is closed", server),
-                    true,
-                ),
-                RetryMetadata::safe("not_started"),
-            );
-        }
-
-        match reply_rx.await {
-            Ok(Ok(data)) => Envelope::success(
-                trace_id,
-                Some(req_id),
-                Some(req_ctx),
-                data,
-                RetryMetadata::safe("completed"),
-            ),
-            Ok(Err(UpstreamCallError::Timeout)) => Envelope::failure(
-                trace_id,
-                Some(req_id),
-                Some(req_ctx),
-                WarmplaneError::new(
-                    "UPSTREAM_TIMEOUT",
-                    format!(
-                        "Resource read timed out after {}ms",
-                        self.state.tool_timeout_ms
-                    ),
-                    true,
-                ),
-                RetryMetadata::safe("unknown"),
-            ),
-            Ok(Err(UpstreamCallError::Upstream(err))) => Envelope::failure(
-                trace_id,
-                Some(req_id),
-                Some(req_ctx),
-                WarmplaneError::new("UPSTREAM_ERROR", err, false),
-                RetryMetadata::safe("unknown"),
-            ),
-            Err(_) => Envelope::failure(
-                trace_id,
-                Some(req_id),
-                Some(req_ctx),
-                WarmplaneError::new("INTERNAL_ERROR", "Server actor task died", true),
-                RetryMetadata::safe("unknown"),
-            ),
-        }
+                reply,
+            },
+        )
+        .await
     }
 
     /// Renders a registered prompt template.
@@ -2056,6 +1990,32 @@ impl ControlPlaneHandle {
             (meta.server.clone(), meta.name.clone())
         };
 
+        let arguments = options
+            .arguments
+            .and_then(|value| value.as_object().cloned());
+        self.dispatch_catalog_call(server, trace_id, req_id, req_ctx, "Prompt get", |reply| {
+            ServerMsg::GetPrompt {
+                name,
+                arguments,
+                input_responses: options.input_responses,
+                request_state: options.request_state,
+                reply,
+            }
+        })
+        .await
+    }
+
+    async fn dispatch_catalog_call(
+        &self,
+        server: String,
+        trace_id: String,
+        req_id: String,
+        req_ctx: RequestContext,
+        operation: &str,
+        message: impl FnOnce(
+            oneshot::Sender<std::result::Result<Value, UpstreamCallError>>,
+        ) -> ServerMsg,
+    ) -> Envelope<Value> {
         let tx = {
             let servers_guard = self.state.servers.read().await;
             let Some(tx) = servers_guard.get(&server).cloned() else {
@@ -2074,23 +2034,8 @@ impl ControlPlaneHandle {
             tx
         };
 
-        let args_map = options.arguments.and_then(|v| match v {
-            Value::Object(m) => Some(m),
-            _ => None,
-        });
-
         let (reply_tx, reply_rx) = oneshot::channel();
-        if tx
-            .send(ServerMsg::GetPrompt {
-                name,
-                arguments: args_map,
-                input_responses: options.input_responses,
-                request_state: options.request_state,
-                reply: reply_tx,
-            })
-            .await
-            .is_err()
-        {
+        if tx.send(message(reply_tx)).await.is_err() {
             return Envelope::failure(
                 trace_id,
                 Some(req_id),
@@ -2119,7 +2064,7 @@ impl ControlPlaneHandle {
                 WarmplaneError::new(
                     "UPSTREAM_TIMEOUT",
                     format!(
-                        "Prompt get timed out after {}ms",
+                        "{operation} timed out after {}ms",
                         self.state.tool_timeout_ms
                     ),
                     true,

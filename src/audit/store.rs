@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-17
+// Rust guideline compliant 2026-11-18
 
 //! Append-only WORM audit log storage engine and query interface.
 //!
@@ -172,31 +172,7 @@ impl AuditStore {
         let hash =
             compute_event_hash_with_key(&prev_hash, &id, now_ns, &raw, self.hmac_key.as_deref());
 
-        let record = AuditEvent {
-            id,
-            timestamp_ns: now_ns,
-            event_type: raw.event_type,
-            trace_id: raw.trace_id,
-            request_id: raw.request_id,
-            actor_id: raw.actor_id,
-            work_item_id: raw.work_item_id,
-            client_ip: raw.client_ip,
-            server_id: raw.server_id,
-            capability_id: raw.capability_id,
-            resource_uri: raw.resource_uri,
-            sanitized_args: raw.sanitized_args,
-            sanitized_response: raw.sanitized_response,
-            execution_latency_us: raw.execution_latency_us,
-            status: raw.status,
-            error_code: raw.error_code,
-            error_message: raw.error_message,
-            operator_id: raw.operator_id,
-            approval_ticket_id: raw.approval_ticket_id,
-            idempotency_key: raw.idempotency_key,
-            is_replay: raw.is_replay,
-            prev_hash,
-            hash: hash.clone(),
-        };
+        let record = chained_record(id, now_ns, raw, prev_hash, hash.clone());
 
         if let Some(ref path) = self.file_path {
             let mut file = OpenOptions::new().create(true).append(true).open(path)?;
@@ -255,31 +231,7 @@ impl AuditStore {
                 self.hmac_key.as_deref(),
             );
 
-            let record = AuditEvent {
-                id,
-                timestamp_ns: now_ns,
-                event_type: raw.event_type,
-                trace_id: raw.trace_id,
-                request_id: raw.request_id,
-                actor_id: raw.actor_id,
-                work_item_id: raw.work_item_id,
-                client_ip: raw.client_ip,
-                server_id: raw.server_id,
-                capability_id: raw.capability_id,
-                resource_uri: raw.resource_uri,
-                sanitized_args: raw.sanitized_args,
-                sanitized_response: raw.sanitized_response,
-                execution_latency_us: raw.execution_latency_us,
-                status: raw.status,
-                error_code: raw.error_code,
-                error_message: raw.error_message,
-                operator_id: raw.operator_id,
-                approval_ticket_id: raw.approval_ticket_id,
-                idempotency_key: raw.idempotency_key,
-                is_replay: raw.is_replay,
-                prev_hash,
-                hash: hash.clone(),
-            };
+            let record = chained_record(id, now_ns, raw, prev_hash, hash.clone());
 
             *latest_hash_guard = hash;
             disk_lines.push(serde_json::to_string(&record)?);
@@ -508,6 +460,40 @@ impl AuditStore {
 }
 
 pub type SharedAuditStore = Arc<AuditStore>;
+
+fn chained_record(
+    id: String,
+    now_ns: u64,
+    raw: RawAuditEvent,
+    prev_hash: String,
+    hash: String,
+) -> AuditEvent {
+    AuditEvent {
+        id,
+        timestamp_ns: now_ns,
+        event_type: raw.event_type,
+        trace_id: raw.trace_id,
+        request_id: raw.request_id,
+        actor_id: raw.actor_id,
+        work_item_id: raw.work_item_id,
+        client_ip: raw.client_ip,
+        server_id: raw.server_id,
+        capability_id: raw.capability_id,
+        resource_uri: raw.resource_uri,
+        sanitized_args: raw.sanitized_args,
+        sanitized_response: raw.sanitized_response,
+        execution_latency_us: raw.execution_latency_us,
+        status: raw.status,
+        error_code: raw.error_code,
+        error_message: raw.error_message,
+        operator_id: raw.operator_id,
+        approval_ticket_id: raw.approval_ticket_id,
+        idempotency_key: raw.idempotency_key,
+        is_replay: raw.is_replay,
+        prev_hash,
+        hash,
+    }
+}
 
 #[cfg(test)]
 mod tests {
