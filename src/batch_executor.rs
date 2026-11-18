@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-18
 //! Multi-step chained and batched capability execution with variable reference resolution (`M-CANONICAL-DOCS`).
 
 use serde::{Deserialize, Serialize};
@@ -419,41 +419,21 @@ async fn execute_batch_for_tenant_with_budget(
         if requires_approval {
             let sanitized =
                 crate::http_v1::helpers::redact_value(interpolated_args.clone(), &redact_keys);
-            let (approval_id, rx) = state
-                .approval_registry
-                .create_approval(crate::approvals::CreateApprovalRequest {
-                    capability_id: step.capability_id.clone(),
-                    server_id: server.clone(),
-                    args: interpolated_args.clone(),
-                    sanitized_args: sanitized.clone(),
-                    request_id: request_id.clone(),
-                    context: context.clone(),
-                    timeout_secs: approval_timeout_secs,
-                    webhook: webhook_cfg.as_ref(),
-                })
-                .await;
-
-            state.audit_handle.send(crate::audit::RawAuditEvent {
-                event_type: crate::audit::AuditEventType::ToolInterceptedHitl,
-                trace_id: trace_id.clone(),
+            let approval_request = crate::approvals::CreateApprovalRequest {
+                capability_id: step.capability_id.clone(),
+                server_id: server.clone(),
+                args: interpolated_args.clone(),
+                sanitized_args: sanitized.clone(),
                 request_id: request_id.clone(),
-                actor_id: context.as_ref().and_then(|c| c.actor_id.clone()),
-                work_item_id: context.as_ref().and_then(|c| c.work_item_id.clone()),
-                client_ip: None,
-                server_id: Some(server.clone()),
-                capability_id: Some(step.capability_id.clone()),
-                resource_uri: None,
-                sanitized_args: Some(sanitized),
-                sanitized_response: None,
-                execution_latency_us: Some(step_start.elapsed().as_micros() as u64),
-                status: crate::audit::AuditEventStatus::Intercepted,
-                error_code: None,
-                error_message: None,
-                operator_id: None,
-                approval_ticket_id: Some(approval_id),
-                idempotency_key: None,
-                is_replay: None,
-            });
+                context: context.clone(),
+                timeout_secs: approval_timeout_secs,
+                webhook: webhook_cfg.as_ref(),
+            };
+            let (_, rx, event) = state
+                .approval_registry
+                .create_audited_approval(approval_request, trace_id.clone(), step_start)
+                .await;
+            state.audit_handle.send(event);
 
             let approval_budget_ms =
                 batch_timeout_ms.saturating_sub(start_all.elapsed().as_millis() as u64);
@@ -1081,37 +1061,10 @@ mod tests {
 
     #[tokio::test]
     async fn batch_budget_cancels_a_pending_emission_before_dispatch() {
-        use crate::{
-            config::{ReversibilityClass, ReversibilityConfig},
-            context::ProfileContext,
-            daemon::{AppState, CapabilityMeta, Policy},
-            tasks::TaskStatus,
-        };
-        use std::collections::HashMap;
-        use tokio::sync::mpsc;
+        use crate::{context::ProfileContext, daemon::Policy, tasks::TaskStatus};
 
-        let (server_tx, mut upstream) = mpsc::channel(8);
-        let mut capability = CapabilityMeta::new(
-            "mail",
-            "send",
-            "Send",
-            "Send a message",
-            json!({"type": "object"}),
-        );
-        capability.reversibility = Some(ReversibilityConfig {
-            class: ReversibilityClass::Delayable,
-            hold_window_secs: Some(30),
-            ttl_secs: None,
-            daily_limit: None,
-            pre_snapshot: None,
-            pre_undo_check: None,
-            test_target: None,
-            inverse: None,
-        });
-        let state = AppState::builder()
-            .servers(HashMap::from([("mail".to_string(), server_tx)]))
-            .capabilities(HashMap::from([("mail.send".to_string(), capability)]))
-            .build();
+        let (state, mut upstream) =
+            crate::test_support::delayable_mail(30, crate::config::DEFAULT_TOOL_TIMEOUT_MS);
         let policy = Policy::default();
         let profile = ProfileContext::unrestricted();
         let response = execute_batch_for_tenant_with_budget(

@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-18
 
 //! Durable cancellation windows for delayable tool calls.
 
@@ -512,43 +512,22 @@ impl HoldCoordinator {
             crate::http_v1::helpers::redact_value(record.args.clone(), &policy.redact_keys);
         let sanitized_response =
             result.map(|value| crate::http_v1::helpers::redact_value(value, &policy.redact_keys));
-        state.audit_handle.send(crate::audit::RawAuditEvent {
-            event_type: crate::audit::AuditEventType::ToolExecution,
-            trace_id: record
-                .request_id
-                .clone()
-                .unwrap_or_else(|| record.task_id.clone()),
-            request_id: record.request_id.clone(),
-            actor_id: record
-                .context
-                .as_ref()
-                .and_then(|context| context.actor_id.clone()),
-            work_item_id: record
-                .context
-                .as_ref()
-                .and_then(|context| context.work_item_id.clone()),
-            client_ip: None,
-            server_id: Some(record.server_id.clone()),
-            capability_id: Some(record.capability_id.clone()),
-            resource_uri: None,
-            sanitized_args: Some(sanitized_args),
-            sanitized_response: Some(
-                json!({"taskId": record.task_id, "result": sanitized_response}),
-            ),
-            execution_latency_us: None,
-            status: if failure.is_some() {
-                crate::audit::AuditEventStatus::Failed
-            } else {
-                crate::audit::AuditEventStatus::Success
-            },
-            error_code: failure.as_ref().map(|(code, _)| (*code).to_string()),
-            error_message: failure
-                .map(|_| "Emission failed; see the task error for details".to_string()),
-            operator_id: None,
-            approval_ticket_id: None,
-            idempotency_key: record.idempotency_key.clone(),
-            is_replay: Some(false),
-        });
+        let mut event = emission_audit_event(
+            record,
+            crate::audit::AuditEventType::ToolExecution,
+            sanitized_args,
+        );
+        event.sanitized_response =
+            Some(json!({"taskId": record.task_id, "result": sanitized_response}));
+        event.status = if failure.is_some() {
+            crate::audit::AuditEventStatus::Failed
+        } else {
+            crate::audit::AuditEventStatus::Success
+        };
+        event.error_code = failure.as_ref().map(|(code, _)| (*code).to_string());
+        event.error_message =
+            failure.map(|_| "Emission failed; see the task error for details".to_string());
+        state.audit_handle.send(event);
     }
 
     async fn audit_emission(
@@ -560,40 +539,50 @@ impl HoldCoordinator {
         let policy = current_emission_policy(state, record).await;
         let sanitized_args =
             crate::http_v1::helpers::redact_value(record.args.clone(), &policy.redact_keys);
-        state.audit_handle.send(crate::audit::RawAuditEvent {
-            event_type,
-            trace_id: record
-                .request_id
-                .clone()
-                .unwrap_or_else(|| record.task_id.clone()),
-            request_id: record.request_id.clone(),
-            actor_id: record
-                .context
-                .as_ref()
-                .and_then(|context| context.actor_id.clone()),
-            work_item_id: record
-                .context
-                .as_ref()
-                .and_then(|context| context.work_item_id.clone()),
-            client_ip: None,
-            server_id: Some(record.server_id.clone()),
-            capability_id: Some(record.capability_id.clone()),
-            resource_uri: None,
-            sanitized_args: Some(sanitized_args),
-            sanitized_response: Some(json!({"taskId": record.task_id})),
-            execution_latency_us: None,
-            status: if record.status == TaskStatus::Cancelled {
-                crate::audit::AuditEventStatus::Cancelled
-            } else {
-                crate::audit::AuditEventStatus::Intercepted
-            },
-            error_code: None,
-            error_message: None,
-            operator_id: None,
-            approval_ticket_id: None,
-            idempotency_key: record.idempotency_key.clone(),
-            is_replay: Some(false),
-        });
+        state
+            .audit_handle
+            .send(emission_audit_event(record, event_type, sanitized_args));
+    }
+}
+
+fn emission_audit_event(
+    record: &TaskRecord,
+    event_type: crate::audit::AuditEventType,
+    sanitized_args: serde_json::Value,
+) -> crate::audit::RawAuditEvent {
+    crate::audit::RawAuditEvent {
+        event_type,
+        trace_id: record
+            .request_id
+            .clone()
+            .unwrap_or_else(|| record.task_id.clone()),
+        request_id: record.request_id.clone(),
+        actor_id: record
+            .context
+            .as_ref()
+            .and_then(|context| context.actor_id.clone()),
+        work_item_id: record
+            .context
+            .as_ref()
+            .and_then(|context| context.work_item_id.clone()),
+        client_ip: None,
+        server_id: Some(record.server_id.clone()),
+        capability_id: Some(record.capability_id.clone()),
+        resource_uri: None,
+        sanitized_args: Some(sanitized_args),
+        sanitized_response: Some(json!({"taskId": record.task_id})),
+        execution_latency_us: None,
+        status: if record.status == TaskStatus::Cancelled {
+            crate::audit::AuditEventStatus::Cancelled
+        } else {
+            crate::audit::AuditEventStatus::Intercepted
+        },
+        error_code: None,
+        error_message: None,
+        operator_id: None,
+        approval_ticket_id: None,
+        idempotency_key: record.idempotency_key.clone(),
+        is_replay: Some(false),
     }
 }
 

@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-27
+// Rust guideline compliant 2026-11-18
 
 //! Helper utilities for HTTP headers, trace identifiers, idempotency keys, and redaction.
 
@@ -236,4 +236,28 @@ pub fn resolve_client_ip(headers: &HeaderMap) -> Option<String> {
     }
 
     None
+}
+
+/// Checks held-task access against the authenticated tenant, role, and active profile.
+pub(crate) async fn can_access_emission_task(
+    state: &crate::daemon::AppState,
+    task: &crate::tasks::TaskRecord,
+    tenant: Option<&crate::rbac::TenantContext>,
+    profile: Option<&crate::context::ProfileContext>,
+) -> bool {
+    let default_role = state.rbac_engine.default_role();
+    state
+        .hold_coordinator
+        .can_access_task(
+            state,
+            task,
+            tenant
+                .map(|context| context.tenant_id.as_str())
+                .unwrap_or("default"),
+            tenant
+                .map(|context| context.role.as_str())
+                .unwrap_or(&default_role),
+            profile.and_then(|profile| profile.profile_id.as_deref()),
+        )
+        .await
 }

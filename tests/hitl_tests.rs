@@ -1,17 +1,16 @@
-// Rust guideline compliant 2026-08-14
+// Rust guideline compliant 2026-11-18
 
 //! Integration test suite for Warmplane Human-in-the-Loop (HITL) approval flows,
 //! argument modification, structured rejection reasoning, and HMAC webhook verification.
 
 use axum::{
-    body::to_bytes,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
 use hmac::{Hmac, Mac};
-use serde_json::{json, Value};
+use serde_json::json;
 use sha2::Sha256;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
@@ -93,11 +92,7 @@ async fn test_hitl_end_to_end_wildcard_matching_and_approval() {
         capability_id: "kubernetes.delete_pod".to_string(),
         args: json!({"pod": "api-worker-1", "token": "secret123"}),
         request_id: Some("req-k8s-delete".to_string()),
-        context: None,
-        idempotency_key: None,
-        input_responses: None,
-        request_state: None,
-        async_task: false,
+        ..Default::default()
     };
 
     let res = handle_call_capability(
@@ -110,9 +105,7 @@ async fn test_hitl_end_to_end_wildcard_matching_and_approval() {
     .await
     .into_response();
 
-    assert_eq!(res.status(), StatusCode::OK);
-    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
-    let payload: Value = serde_json::from_slice(&bytes).unwrap();
+    let payload = http_test::assert_json_response(res, StatusCode::OK).await;
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["data"]["deleted"], true);
 }
@@ -134,3 +127,6 @@ async fn test_hitl_hmac_signature_calculation() {
     let expected_bytes = hex::decode(sig_hex).unwrap();
     assert!(verifier.verify_slice(&expected_bytes).is_ok());
 }
+
+#[path = "support/http.rs"]
+mod http_test;

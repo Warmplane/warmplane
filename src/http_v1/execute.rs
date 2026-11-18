@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-18
 //! Capability tool execution handlers, cancellation, rate limiting, and HITL approval workflow.
 
 use anyhow::Context;
@@ -76,24 +76,13 @@ pub async fn handle_call_capability(
     if let Some(key) = idempotency_key.as_deref() {
         if let Some(task) = state.task_registry.find_by_idempotency_key(key).await {
             if task.emission.is_some() {
-                let tenant = req_ext
-                    .0
-                    .as_ref()
-                    .map(|context| context.tenant_id.as_str())
-                    .unwrap_or("default");
-                let default_role = state.rbac_engine.default_role();
-                let role = req_ext
-                    .0
-                    .as_ref()
-                    .map(|context| context.role.as_str())
-                    .unwrap_or(default_role.as_str());
-                let profile = prof_ext
-                    .as_ref()
-                    .and_then(|extension| extension.0.profile_id.as_deref());
-                if !state
-                    .hold_coordinator
-                    .can_access_task(&state, &task, tenant, role, profile)
-                    .await
+                if !crate::http_v1::helpers::can_access_emission_task(
+                    &state,
+                    &task,
+                    req_ext.0.as_ref(),
+                    prof_ext.as_ref().map(|extension| &extension.0),
+                )
+                .await
                 {
                     return (
                         StatusCode::FORBIDDEN,
@@ -422,41 +411,24 @@ pub async fn handle_call_capability(
             })
             .await;
 
-        let (approval_id, rx) = state
-            .approval_registry
-            .create_approval(crate::approvals::CreateApprovalRequest {
-                capability_id: payload.capability_id.clone(),
-                server_id: server_id.clone(),
-                args: payload.args.clone(),
-                sanitized_args: sanitized.clone(),
-                request_id: Some(request_id.clone()),
-                context: Some(req_context.clone()),
-                timeout_secs: approval_timeout_secs,
-                webhook: webhook_cfg.as_ref(),
-            })
-            .await;
-
-        state.audit_handle.send(crate::audit::RawAuditEvent {
-            event_type: crate::audit::AuditEventType::ToolInterceptedHitl,
-            trace_id: trace_id.clone(),
+        let approval_request = crate::approvals::CreateApprovalRequest {
+            capability_id: payload.capability_id.clone(),
+            server_id: server_id.clone(),
+            args: payload.args.clone(),
+            sanitized_args: sanitized.clone(),
             request_id: Some(request_id.clone()),
-            actor_id: req_context.actor_id.clone(),
-            work_item_id: req_context.work_item_id.clone(),
-            client_ip: client_ip.clone(),
-            server_id: Some(server_id.clone()),
-            capability_id: Some(payload.capability_id.clone()),
-            resource_uri: None,
-            sanitized_args: Some(sanitized.clone()),
-            sanitized_response: None,
-            execution_latency_us: Some(start_time.elapsed().as_micros() as u64),
-            status: crate::audit::AuditEventStatus::Intercepted,
-            error_code: None,
-            error_message: None,
-            operator_id: None,
-            approval_ticket_id: Some(approval_id.clone()),
-            idempotency_key: idempotency_key.clone(),
-            is_replay: Some(false),
-        });
+            context: Some(req_context.clone()),
+            timeout_secs: approval_timeout_secs,
+            webhook: webhook_cfg.as_ref(),
+        };
+        let (approval_id, rx, mut event) = state
+            .approval_registry
+            .create_audited_approval(approval_request, trace_id.clone(), start_time)
+            .await;
+        event.client_ip = client_ip.clone();
+        event.idempotency_key = idempotency_key.clone();
+        event.is_replay = Some(false);
+        state.audit_handle.send(event);
 
         let prefer_async = payload.async_task
             || headers
@@ -1686,24 +1658,13 @@ pub async fn handle_cancel_operation(
         .into_iter()
         .find(|task| task.request_id.as_deref() == Some(id.as_str()) && task.emission.is_some())
     {
-        let tenant_id = req_ext
-            .0
-            .as_ref()
-            .map(|context| context.tenant_id.as_str())
-            .unwrap_or("default");
-        let default_role = state.rbac_engine.default_role();
-        let role = req_ext
-            .0
-            .as_ref()
-            .map(|context| context.role.as_str())
-            .unwrap_or(default_role.as_str());
-        let profile_id = prof_ext
-            .as_ref()
-            .and_then(|extension| extension.0.profile_id.as_deref());
-        if !state
-            .hold_coordinator
-            .can_access_task(&state, &task, tenant_id, role, profile_id)
-            .await
+        if !crate::http_v1::helpers::can_access_emission_task(
+            &state,
+            &task,
+            req_ext.0.as_ref(),
+            prof_ext.as_ref().map(|extension| &extension.0),
+        )
+        .await
         {
             return (StatusCode::NOT_FOUND, Json(json!({"ok": false, "request_id": id, "cancelled": false, "error": {"code": "NOT_FOUND", "message": "Operation not found"}}))).into_response();
         }
@@ -1739,24 +1700,13 @@ pub async fn handle_cancel_operation(
             .into_iter()
             .find(|task| task.request_id.as_deref() == Some(id.as_str()) && task.emission.is_some())
         {
-            let tenant_id = req_ext
-                .0
-                .as_ref()
-                .map(|context| context.tenant_id.as_str())
-                .unwrap_or("default");
-            let default_role = state.rbac_engine.default_role();
-            let role = req_ext
-                .0
-                .as_ref()
-                .map(|context| context.role.as_str())
-                .unwrap_or(default_role.as_str());
-            let profile_id = prof_ext
-                .as_ref()
-                .and_then(|extension| extension.0.profile_id.as_deref());
-            if !state
-                .hold_coordinator
-                .can_access_task(&state, &task, tenant_id, role, profile_id)
-                .await
+            if !crate::http_v1::helpers::can_access_emission_task(
+                &state,
+                &task,
+                req_ext.0.as_ref(),
+                prof_ext.as_ref().map(|extension| &extension.0),
+            )
+            .await
             {
                 return (StatusCode::NOT_FOUND, Json(json!({"ok": false, "request_id": id, "cancelled": false, "error": {"code": "NOT_FOUND", "message": "Operation not found"}}))).into_response();
             }

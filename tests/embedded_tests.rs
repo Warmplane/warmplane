@@ -45,45 +45,7 @@ async fn test_embedded_warmplane_start_and_shutdown() {
 
 #[tokio::test]
 async fn reversible_call_captures_pre_state_and_persists_interpolated_inverse() {
-    let mut forward = CapabilityMeta::new(
-        "mock",
-        "set_priority",
-        "Set issue priority",
-        "Set issue priority",
-        json!({"type": "object"}),
-    );
-    forward.reversibility = Some(ReversibilityConfig {
-        class: ReversibilityClass::Reversible,
-        hold_window_secs: None,
-        ttl_secs: Some(60),
-        daily_limit: None,
-        pre_snapshot: Some(Box::new(PreSnapshotConfig {
-            capability: "mock.get_issue".to_string(),
-            args: json!({"id": "${args.id}"}),
-            capture_json_path: Some("$.priority".to_string()),
-        })),
-        pre_undo_check: Some(Box::new(PreSnapshotConfig {
-            capability: "mock.get_issue".to_string(),
-            args: json!({"id": "${args.id}"}),
-            capture_json_path: Some("$.priority".to_string()),
-        })),
-        test_target: None,
-        inverse: Some(Box::new(InverseConfig {
-            capability: "mock.set_priority".to_string(),
-            args: json!({"id": "${args.id}", "priority": "${snapshot}"}),
-        })),
-    });
-    let getter = CapabilityMeta::new(
-        "mock",
-        "get_issue",
-        "Get issue",
-        "Get issue",
-        json!({"type": "object"}),
-    );
-    let capabilities = HashMap::from([
-        ("mock.set_priority".to_string(), forward),
-        ("mock.get_issue".to_string(), getter),
-    ]);
+    let capabilities = priority_capabilities(true);
     let (upstream_tx, mut upstream_rx) = tokio::sync::mpsc::channel(4);
     let servers = HashMap::from([("mock".to_string(), upstream_tx)]);
     let temp = tempfile::tempdir().unwrap();
@@ -324,41 +286,7 @@ async fn inverse_upstream_error_text_is_not_written_to_the_audit_chain() {
 
 #[tokio::test]
 async fn failed_pre_snapshot_prevents_the_forward_mutation() {
-    let mut forward = CapabilityMeta::new(
-        "mock",
-        "set_priority",
-        "Set issue priority",
-        "Set issue priority",
-        json!({"type": "object"}),
-    );
-    forward.reversibility = Some(ReversibilityConfig {
-        class: ReversibilityClass::Reversible,
-        hold_window_secs: None,
-        ttl_secs: Some(60),
-        daily_limit: None,
-        pre_snapshot: Some(Box::new(PreSnapshotConfig {
-            capability: "mock.get_issue".to_string(),
-            args: json!({"id": "${args.id}"}),
-            capture_json_path: Some("$.priority".to_string()),
-        })),
-        pre_undo_check: None,
-        test_target: None,
-        inverse: Some(Box::new(InverseConfig {
-            capability: "mock.set_priority".to_string(),
-            args: json!({"id": "${args.id}", "priority": "${snapshot}"}),
-        })),
-    });
-    let getter = CapabilityMeta::new(
-        "mock",
-        "get_issue",
-        "Get issue",
-        "Get issue",
-        json!({"type": "object"}),
-    );
-    let capabilities = HashMap::from([
-        ("mock.set_priority".to_string(), forward),
-        ("mock.get_issue".to_string(), getter),
-    ]);
+    let capabilities = priority_capabilities(false);
     let (upstream_tx, mut upstream_rx) = tokio::sync::mpsc::channel(4);
     let temp = tempfile::tempdir().unwrap();
     let snapshot_store = SnapshotStore::open(temp.path().join("artifacts")).unwrap();
@@ -912,4 +840,48 @@ async fn test_embedded_async_task_hitl_and_completion_lifecycle() {
     );
 
     cp.shutdown().await;
+}
+
+fn priority_capabilities(drift_check: bool) -> HashMap<String, CapabilityMeta> {
+    let mut forward = CapabilityMeta::new(
+        "mock",
+        "set_priority",
+        "Set issue priority",
+        "Set issue priority",
+        json!({"type": "object"}),
+    );
+    forward.reversibility = Some(ReversibilityConfig {
+        class: ReversibilityClass::Reversible,
+        hold_window_secs: None,
+        ttl_secs: Some(60),
+        daily_limit: None,
+        pre_snapshot: Some(Box::new(PreSnapshotConfig {
+            capability: "mock.get_issue".to_string(),
+            args: json!({"id": "${args.id}"}),
+            capture_json_path: Some("$.priority".to_string()),
+        })),
+        pre_undo_check: drift_check.then(|| {
+            Box::new(PreSnapshotConfig {
+                capability: "mock.get_issue".to_string(),
+                args: json!({"id": "${args.id}"}),
+                capture_json_path: Some("$.priority".to_string()),
+            })
+        }),
+        test_target: None,
+        inverse: Some(Box::new(InverseConfig {
+            capability: "mock.set_priority".to_string(),
+            args: json!({"id": "${args.id}", "priority": "${snapshot}"}),
+        })),
+    });
+    let getter = CapabilityMeta::new(
+        "mock",
+        "get_issue",
+        "Get issue",
+        "Get issue",
+        json!({"type": "object"}),
+    );
+    HashMap::from([
+        ("mock.set_priority".to_string(), forward),
+        ("mock.get_issue".to_string(), getter),
+    ])
 }

@@ -1,10 +1,10 @@
 import { escapeHtml } from './escape';
-import { store } from './state';
+import { store, BatchStepState, AppState } from './state';
 import { api } from './api';
 import { ReversibilityConfig } from './api';
 import { renderOverview } from './components/overview';
 import { renderServers } from './components/servers';
-import { renderPlayground, generateSampleArgsFromSchema } from './components/playground';
+import { renderPlayground, renderResourceList, renderPromptList, generateSampleArgsFromSchema } from './components/playground';
 import { renderTasks } from './components/tasks';
 import { renderUndoFeed } from './components/undo';
 import { renderApprovals } from './components/approvals';
@@ -322,15 +322,17 @@ class WarmplaneApp {
     }
   }
 
-  async refreshApprovals() {
+  private async refreshCollection<T>(request: () => Promise<T>, update: (response: T) => Partial<AppState> | null, errorMessage: string) {
     try {
-      const apprRes = await api.listApprovals();
-      if (apprRes && Array.isArray(apprRes.approvals)) {
-        store.setState({ approvals: apprRes.approvals });
-      }
-    } catch (e) {
-      console.error('Failed to refresh approvals:', e);
+      const patch = update(await request());
+      if (patch) store.setState(patch);
+    } catch (error) {
+      console.error(errorMessage, error);
     }
+  }
+
+  async refreshApprovals() {
+    await this.refreshCollection(() => api.listApprovals(), res => res && Array.isArray(res.approvals) ? { approvals: res.approvals } : null, 'Failed to refresh approvals:');
   }
 
   initSSE() {
@@ -625,14 +627,7 @@ class WarmplaneApp {
 
   // SEP-2663 Tasks & HITL Actions
   async refreshTasks() {
-    try {
-      const tasksRes = await api.listTasks();
-      if (tasksRes && Array.isArray(tasksRes.tasks)) {
-        store.setState({ tasks: tasksRes.tasks });
-      }
-    } catch (e) {
-      console.error('Failed to refresh tasks:', e);
-    }
+    await this.refreshCollection(() => api.listTasks(), res => res && Array.isArray(res.tasks) ? { tasks: res.tasks } : null, 'Failed to refresh tasks:');
   }
 
   filterTasksByStatus(status: string) {
@@ -950,79 +945,21 @@ class WarmplaneApp {
     store.setState({ selectedPromptId: id });
   }
 
-  filterResources(query: string) {
+  private filterCatalog(query: string, items: any[], detailKey: string, listId: string, render: (items: any[]) => string) {
     const q = query.toLowerCase().trim();
-    const allRes = store.getState().resources || [];
-    const filtered = allRes.filter(r =>
-      r.id.toLowerCase().includes(q) ||
-      (r.name && r.name.toLowerCase().includes(q)) ||
-      (r.uri && r.uri.toLowerCase().includes(q)) ||
-      (r.server && r.server.toLowerCase().includes(q))
-    );
-    const listEl = document.getElementById('pg-res-list');
-    if (listEl) {
-      if (filtered.length === 0) {
-        listEl.innerHTML = `
-          <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
-            No resources match "${escapeHtml(query)}"
-          </div>
-        `;
-      } else {
-        listEl.innerHTML = filtered.map(r => {
-          const active = r.id === store.getState().selectedResourceId ? 'active' : '';
-          const scheme = r.uri ? r.uri.split(':')[0] : 'res';
-          return `
-            <div class="cap-item ${active}" onclick="window.app.selectResource('${escapeHtml(r.id)}')">
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${escapeHtml(r.name || r.id)}</span>
-                <span class="badge" style="font-size: 9.5px; background: rgba(56, 189, 248, 0.15); color: var(--cyan-400);">${escapeHtml(scheme)}</span>
-              </div>
-              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(r.uri)}</div>
-              <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 4px;">
-                <span>server: ${escapeHtml(r.server || 'local')}</span>
-                <span>${escapeHtml(r.mime_type || 'text/plain')}</span>
-              </div>
-            </div>
-          `;
-        }).join('');
-      }
-    }
+    const filtered = items.filter(item => [item.id, item.name, item[detailKey], item.server].some(value => value && value.toLowerCase().includes(q)));
+    const list = document.getElementById(listId);
+    if (list) list.innerHTML = render(filtered);
+  }
+
+  filterResources(query: string) {
+    const state = store.getState();
+    this.filterCatalog(query, state.resources || [], 'uri', 'pg-res-list', items => renderResourceList(items, state.selectedResourceId, `No resources match "${query}"`));
   }
 
   filterPrompts(query: string) {
-    const q = query.toLowerCase().trim();
-    const allPrompts = store.getState().prompts || [];
-    const filtered = allPrompts.filter(p =>
-      p.id.toLowerCase().includes(q) ||
-      (p.name && p.name.toLowerCase().includes(q)) ||
-      (p.description && p.description.toLowerCase().includes(q)) ||
-      (p.server && p.server.toLowerCase().includes(q))
-    );
-    const listEl = document.getElementById('pg-prompt-list');
-    if (listEl) {
-      if (filtered.length === 0) {
-        listEl.innerHTML = `
-          <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
-            No prompts match "${escapeHtml(query)}"
-          </div>
-        `;
-      } else {
-        listEl.innerHTML = filtered.map(p => {
-          const active = p.id === store.getState().selectedPromptId ? 'active' : '';
-          const argCount = p.arguments ? p.arguments.length : 0;
-          return `
-            <div class="cap-item ${active}" onclick="window.app.selectPrompt('${escapeHtml(p.id)}')">
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${escapeHtml(p.name || p.id)}</span>
-                <span class="badge" style="font-size: 9.5px; background: rgba(168, 85, 247, 0.15); color: var(--purple-400);">${argCount} args</span>
-              </div>
-              <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">${escapeHtml(p.description || p.title || 'Prompt template')}</div>
-              <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">server: ${escapeHtml(p.server || 'local')}</div>
-            </div>
-          `;
-        }).join('');
-      }
-    }
+    const state = store.getState();
+    this.filterCatalog(query, state.prompts || [], 'description', 'pg-prompt-list', items => renderPromptList(items, state.selectedPromptId, `No prompts match "${query}"`));
   }
 
   updatePlaygroundArgs(val: string) {
@@ -1360,19 +1297,17 @@ class WarmplaneApp {
   }
 
   updateBatchStepCapability(idx: number, capId: string) {
-    const state = store.getState();
-    const steps = [...(state.batchSteps || [])];
-    if (steps[idx]) {
-      steps[idx] = { ...steps[idx], capability_id: capId };
-      store.setState({ batchSteps: steps });
-    }
+    this.updateBatchStep(idx, { capability_id: capId });
   }
 
   updateBatchStepContinueOnError(idx: number, continueOnError: boolean) {
-    const state = store.getState();
-    const steps = [...(state.batchSteps || [])];
+    this.updateBatchStep(idx, { continue_on_error: continueOnError });
+  }
+
+  private updateBatchStep(idx: number, update: Partial<BatchStepState>) {
+    const steps = [...store.getState().batchSteps];
     if (steps[idx]) {
-      steps[idx] = { ...steps[idx], continue_on_error: continueOnError };
+      steps[idx] = { ...steps[idx], ...update };
       store.setState({ batchSteps: steps });
     }
   }
@@ -1454,6 +1389,16 @@ class WarmplaneApp {
     }
   }
 
+  private async executeCatalogRequest(key: 'resourceReadResult' | 'promptGetResult', path: string, request: () => Promise<{ status: number; durationMs: number; data: any }>) {
+    try {
+      const res = await request();
+      store.setState({ [key]: res });
+      store.addEventLog('POST', path, res.status === 200 ? '200 OK' : `HTTP ${res.status}`, `${res.durationMs.toFixed(1)}ms`);
+    } catch (error: any) {
+      store.setState({ [key]: { status: 500, durationMs: 0, data: { error: error.toString() } } });
+    }
+  }
+
   async executeReadResource() {
     const state = store.getState();
     const resId = state.selectedResourceId || (state.resources[0] ? state.resources[0].id : null);
@@ -1469,28 +1414,10 @@ class WarmplaneApp {
     if (bytes && !isNaN(Number(bytes))) reqPayload['_truncate_bytes'] = Number(bytes);
 
     const prof = state.activeProfile || undefined;
-    try {
-      const res = await api.readResource({
+    await this.executeCatalogRequest('resourceReadResult', `/v1/resources/read → ${resId}`, () => api.readResource({
         resource_id: resId,
         input_responses: reqPayload
-      }, prof);
-      store.setState({
-        resourceReadResult: {
-          status: res.status,
-          durationMs: res.durationMs,
-          data: res.data
-        }
-      });
-      store.addEventLog('POST', `/v1/resources/read → ${resId}`, res.status === 200 ? '200 OK' : `HTTP ${res.status}`, `${res.durationMs.toFixed(1)}ms`);
-    } catch (e: any) {
-      store.setState({
-        resourceReadResult: {
-          status: 500,
-          durationMs: 0,
-          data: { error: e.toString() }
-        }
-      });
-    }
+      }, prof));
   }
 
   async executeGetPrompt() {
@@ -1509,28 +1436,10 @@ class WarmplaneApp {
     });
 
     const prof = state.activeProfile || undefined;
-    try {
-      const res = await api.getPrompt({
+    await this.executeCatalogRequest('promptGetResult', `/v1/prompts/get → ${promptId}`, () => api.getPrompt({
         prompt_id: promptId,
         arguments: args
-      }, prof);
-      store.setState({
-        promptGetResult: {
-          status: res.status,
-          durationMs: res.durationMs,
-          data: res.data
-        }
-      });
-      store.addEventLog('POST', `/v1/prompts/get → ${promptId}`, res.status === 200 ? '200 OK' : `HTTP ${res.status}`, `${res.durationMs.toFixed(1)}ms`);
-    } catch (e: any) {
-      store.setState({
-        promptGetResult: {
-          status: 500,
-          durationMs: 0,
-          data: { error: e.toString() }
-        }
-      });
-    }
+      }, prof));
   }
 
   toggleBatchPlayground() {
@@ -1566,121 +1475,36 @@ class WarmplaneApp {
   }
 
   async addPolicyRule(type: 'allow' | 'deny' | 'redact' | 'requireApproval', val: string) {
-    const trimmed = (val || '').trim();
-    if (!trimmed) return;
-    const state = store.getState();
-    const activeProfName = state.activeProfile;
-    const activeProf = activeProfName ? state.config.profiles?.[activeProfName] : undefined;
-
-    if (activeProf && activeProfName) {
-      // Add rule to active profile's policy
-      const current = activeProf.policy || {};
-      const allow = [...(current.allow || [])];
-      const deny = [...(current.deny || [])];
-      const redact = [...(current.redact_keys || current.redactKeys || [])];
-      const requireApproval = [...(current.require_approval || current.requireApproval || [])];
-
-      if (type === 'allow' && !allow.includes(trimmed)) allow.push(trimmed);
-      if (type === 'deny' && !deny.includes(trimmed)) deny.push(trimmed);
-      if (type === 'redact' && !redact.includes(trimmed)) redact.push(trimmed);
-      if (type === 'requireApproval' && !requireApproval.includes(trimmed)) requireApproval.push(trimmed);
-
-      const updatedPolicy = {
-        ...current,
-        allow,
-        deny,
-        redactKeys: redact,
-        requireApproval,
-      };
-
-      const res = await api.upsertProfile(activeProfName, activeProf.servers, activeProf.description, updatedPolicy);
-      if (!res.ok) {
-        alert(`Failed to save profile policy rule: ${res.error || 'Unknown error'}`);
-      }
-    } else {
-      // Add rule to global daemon policy
-      const current = state.config.policy || {};
-      const allow = [...(current.allow || [])];
-      const deny = [...(current.deny || [])];
-      const redact = [...(current.redact_keys || current.redactKeys || [])];
-      const requireApproval = [...(current.require_approval || current.requireApproval || [])];
-
-      if (type === 'allow' && !allow.includes(trimmed)) allow.push(trimmed);
-      if (type === 'deny' && !deny.includes(trimmed)) deny.push(trimmed);
-      if (type === 'redact' && !redact.includes(trimmed)) redact.push(trimmed);
-      if (type === 'requireApproval' && !requireApproval.includes(trimmed)) requireApproval.push(trimmed);
-
-      const res = await api.savePolicy({
-        ...current,
-        allow,
-        deny,
-        redact_keys: redact,
-        redactKeys: redact,
-        require_approval: requireApproval,
-        requireApproval,
-      });
-      if (!res.ok) {
-        alert(`Failed to save policy rule: ${res.error || 'Unknown error'}`);
-      }
-    }
-    await this.refreshData();
+    const rule = (val || '').trim();
+    if (rule) await this.mutatePolicyRules(type, rules => rules.includes(rule) ? rules : [...rules, rule], true);
   }
 
   async removePolicyRule(type: 'allow' | 'deny' | 'redact' | 'requireApproval', index: number) {
+    await this.mutatePolicyRules(type, rules => { rules.splice(index, 1); return rules; }, false);
+  }
+
+  private async mutatePolicyRules(
+    type: 'allow' | 'deny' | 'redact' | 'requireApproval',
+    mutate: (rules: string[]) => string[],
+    adding: boolean,
+  ) {
     const state = store.getState();
-    const activeProfName = state.activeProfile;
-    const activeProf = activeProfName ? state.config.profiles?.[activeProfName] : undefined;
-
-    if (activeProf && activeProfName) {
-      // Remove rule from active profile's policy
-      const current = activeProf.policy || {};
-      const allow = [...(current.allow || [])];
-      const deny = [...(current.deny || [])];
-      const redact = [...(current.redact_keys || current.redactKeys || [])];
-      const requireApproval = [...(current.require_approval || current.requireApproval || [])];
-
-      if (type === 'allow') allow.splice(index, 1);
-      if (type === 'deny') deny.splice(index, 1);
-      if (type === 'redact') redact.splice(index, 1);
-      if (type === 'requireApproval') requireApproval.splice(index, 1);
-
-      const updatedPolicy = {
-        ...current,
-        allow,
-        deny,
-        redactKeys: redact,
-        requireApproval,
-      };
-
-      const res = await api.upsertProfile(activeProfName, activeProf.servers, activeProf.description, updatedPolicy);
-      if (!res.ok) {
-        alert(`Failed to update profile policy: ${res.error || 'Unknown error'}`);
-      }
-    } else {
-      // Remove rule from global policy
-      const current = state.config.policy || {};
-      const allow = [...(current.allow || [])];
-      const deny = [...(current.deny || [])];
-      const redact = [...(current.redact_keys || current.redactKeys || [])];
-      const requireApproval = [...(current.require_approval || current.requireApproval || [])];
-
-      if (type === 'allow') allow.splice(index, 1);
-      if (type === 'deny') deny.splice(index, 1);
-      if (type === 'redact') redact.splice(index, 1);
-      if (type === 'requireApproval') requireApproval.splice(index, 1);
-
-      const res = await api.savePolicy({
-        ...current,
-        allow,
-        deny,
-        redact_keys: redact,
-        redactKeys: redact,
-        require_approval: requireApproval,
-        requireApproval,
-      });
-      if (!res.ok) {
-        alert(`Failed to update policy: ${res.error || 'Unknown error'}`);
-      }
+    const profileName = state.activeProfile;
+    const profile = profileName ? state.config.profiles?.[profileName] : undefined;
+    const current = (profile ? profile.policy : state.config.policy) || {};
+    const rules = {
+      allow: [...(current.allow || [])], deny: [...(current.deny || [])],
+      redact: [...(current.redact_keys || current.redactKeys || [])],
+      requireApproval: [...(current.require_approval || current.requireApproval || [])],
+    };
+    rules[type] = mutate(rules[type]);
+    const policy = { ...current, allow: rules.allow, deny: rules.deny, redactKeys: rules.redact, requireApproval: rules.requireApproval };
+    const result = profile && profileName
+      ? await api.upsertProfile(profileName, profile.servers, profile.description, policy)
+      : await api.savePolicy({ ...policy, redact_keys: rules.redact, require_approval: rules.requireApproval });
+    if (!result.ok) {
+      const operation = adding ? (profile ? 'save profile policy rule' : 'save policy rule') : (profile ? 'update profile policy' : 'update policy');
+      alert(`Failed to ${operation}: ${result.error || 'Unknown error'}`);
     }
     await this.refreshData();
   }
@@ -1976,38 +1800,7 @@ class WarmplaneApp {
 
   openAddServerModal() {
     this.closeModals();
-    const titleEl = document.getElementById('modal-srv-title');
-    const bannerEl = document.getElementById('modal-srv-template-banner');
-    const nameInput = document.getElementById('modal-srv-name') as HTMLInputElement | null;
-    const transportSelect = document.getElementById('modal-srv-transport') as HTMLSelectElement | null;
-    const cmdInput = document.getElementById('modal-srv-command') as HTMLInputElement | null;
-    const urlInput = document.getElementById('modal-srv-url') as HTMLInputElement | null;
-    const ftInput = document.getElementById('modal-srv-ft') as HTMLInputElement | null;
-    const cdInput = document.getElementById('modal-srv-cd') as HTMLInputElement | null;
-    const autoRestartSelect = document.getElementById('modal-srv-autorestart') as HTMLSelectElement | null;
-    const maxRestartsInput = document.getElementById('modal-srv-maxrestarts') as HTMLInputElement | null;
-
-    if (titleEl) titleEl.textContent = 'Add Upstream MCP Server';
-    if (bannerEl) bannerEl.style.display = 'flex';
-    if (nameInput) {
-      nameInput.value = '';
-      nameInput.disabled = false;
-    }
-    if (transportSelect) transportSelect.value = 'stdio';
-    if (cmdInput) cmdInput.value = '';
-    if (urlInput) urlInput.value = '';
-    const cmdGroup = document.getElementById('modal-group-cmd');
-    const urlGroup = document.getElementById('modal-group-url');
-    if (cmdGroup) cmdGroup.style.display = 'block';
-    if (urlGroup) urlGroup.style.display = 'none';
-
-    if (ftInput) ftInput.value = '3';
-    if (cdInput) cdInput.value = '30000';
-    if (autoRestartSelect) autoRestartSelect.value = 'true';
-    if (maxRestartsInput) maxRestartsInput.value = '5';
-
-    const modal = document.getElementById('modal-add-server');
-    if (modal) modal.classList.add('active');
+    this.populateServerModal();
   }
 
   openEditServerModal(serverName: string) {
@@ -2018,48 +1811,35 @@ class WarmplaneApp {
       alert(`Server '${serverName}' not found in configuration.`);
       return;
     }
+    this.populateServerModal(serverName, serverCfg);
+  }
 
-    const titleEl = document.getElementById('modal-srv-title');
-    const bannerEl = document.getElementById('modal-srv-template-banner');
-    const nameInput = document.getElementById('modal-srv-name') as HTMLInputElement | null;
-    const transportSelect = document.getElementById('modal-srv-transport') as HTMLSelectElement | null;
-    const cmdInput = document.getElementById('modal-srv-command') as HTMLInputElement | null;
-    const urlInput = document.getElementById('modal-srv-url') as HTMLInputElement | null;
-    const ftInput = document.getElementById('modal-srv-ft') as HTMLInputElement | null;
-    const cdInput = document.getElementById('modal-srv-cd') as HTMLInputElement | null;
-    const autoRestartSelect = document.getElementById('modal-srv-autorestart') as HTMLSelectElement | null;
-    const maxRestartsInput = document.getElementById('modal-srv-maxrestarts') as HTMLInputElement | null;
-
-    if (titleEl) titleEl.textContent = `Edit Server '${serverName}'`;
-    if (bannerEl) bannerEl.style.display = 'none';
-    if (nameInput) {
-      nameInput.value = serverName;
-      nameInput.disabled = true; // Identifier remains immutable during edit
+  private populateServerModal(serverName?: string, serverCfg?: any) {
+    const editing = serverName !== undefined;
+    const title = document.getElementById('modal-srv-title');
+    const banner = document.getElementById('modal-srv-template-banner');
+    if (title) title.textContent = editing ? `Edit Server '${serverName}'` : 'Add Upstream MCP Server';
+    if (banner) banner.style.display = editing ? 'none' : 'flex';
+    const name = document.getElementById('modal-srv-name') as HTMLInputElement | null;
+    if (name) { name.value = serverName || ''; name.disabled = editing; }
+    const stdio = !editing || !!serverCfg?.command;
+    const resilience = editing ? serverCfg.resilience || store.getState().config.resilience : undefined;
+    const values: Record<string, string> = {
+      transport: stdio ? 'stdio' : 'http',
+      command: editing && stdio ? `${serverCfg.command} ${(serverCfg.args || []).join(' ')}`.trim() : '',
+      url: serverCfg?.url || '', ft: String(resilience?.failureThreshold ?? 3),
+      cd: String(resilience?.cooldownMs ?? 30000), autorestart: resilience?.autoRestart === false ? 'false' : 'true',
+      maxrestarts: String(resilience?.maxRestarts ?? 5),
+    };
+    for (const [field, value] of Object.entries(values)) {
+      const input = document.getElementById(`modal-srv-${field}`) as HTMLInputElement | HTMLSelectElement | null;
+      if (input) input.value = value;
     }
-
-    const isStdio = !!serverCfg.command;
-    if (transportSelect) transportSelect.value = isStdio ? 'stdio' : 'http';
-
     const cmdGroup = document.getElementById('modal-group-cmd');
     const urlGroup = document.getElementById('modal-group-url');
-    if (cmdGroup) cmdGroup.style.display = isStdio ? 'block' : 'none';
-    if (urlGroup) urlGroup.style.display = isStdio ? 'none' : 'block';
-
-    if (cmdInput) {
-      cmdInput.value = isStdio ? `${serverCfg.command} ${(serverCfg.args || []).join(' ')}`.trim() : '';
-    }
-    if (urlInput) {
-      urlInput.value = serverCfg.url || '';
-    }
-
-    const res = serverCfg.resilience || state.config.resilience;
-    if (ftInput) ftInput.value = String(res?.failureThreshold ?? 3);
-    if (cdInput) cdInput.value = String(res?.cooldownMs ?? 30000);
-    if (autoRestartSelect) autoRestartSelect.value = res?.autoRestart === false ? 'false' : 'true';
-    if (maxRestartsInput) maxRestartsInput.value = String(res?.maxRestarts ?? 5);
-
-    const modal = document.getElementById('modal-add-server');
-    if (modal) modal.classList.add('active');
+    if (cmdGroup) cmdGroup.style.display = stdio ? 'block' : 'none';
+    if (urlGroup) urlGroup.style.display = stdio ? 'none' : 'block';
+    document.getElementById('modal-add-server')?.classList.add('active');
   }
 
   async submitAddServer() {
@@ -2420,14 +2200,7 @@ class WarmplaneApp {
 
   // Client Actions
   async refreshClients() {
-    try {
-      const res = await api.getClients();
-      if (res.ok && Array.isArray(res.clients)) {
-        store.setState({ clients: res.clients });
-      }
-    } catch (e) {
-      console.error('Failed to scan clients:', e);
-    }
+    await this.refreshCollection(() => api.getClients(), res => res.ok && Array.isArray(res.clients) ? { clients: res.clients } : null, 'Failed to scan clients:');
   }
 
   setClientCategoryFilter(category: string) {

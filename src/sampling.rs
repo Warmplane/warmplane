@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-08-18
+// Rust guideline compliant 2026-11-18
 
 //! Model Context Protocol (MCP) Sampling Delegation Engine & Registry.
 //!
@@ -153,11 +153,7 @@ pub struct SamplingRegistry {
 impl SamplingRegistry {
     /// Creates a new in-memory `SamplingRegistry`.
     pub fn new() -> Self {
-        Self {
-            requests: Arc::new(RwLock::new(HashMap::new())),
-            wait_channels: Arc::new(RwLock::new(HashMap::new())),
-            storage: None,
-        }
+        Self::default()
     }
 
     /// Initializes a `SamplingRegistry` backed by atomic persistent JSON storage.

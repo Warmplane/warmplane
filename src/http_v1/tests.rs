@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-17
+// Rust guideline compliant 2026-11-18
 
 //! Comprehensive unit and integration test suite for HTTP v1 facade API handlers.
 
@@ -463,18 +463,7 @@ async fn list_resources_returns_sorted_ids() {
     )
     .await
     .into_response();
-    assert_eq!(response.status(), StatusCode::OK);
-    let bytes = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("body");
-    let body: Value = serde_json::from_slice(&bytes).expect("json");
-    let entries = body
-        .get("resources")
-        .and_then(Value::as_array)
-        .expect("resources array");
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0]["id"], "alpha.res");
-    assert_eq!(entries[1]["id"], "zeta.res");
+    assert_catalog_ids(response, "resources", &["alpha.res", "zeta.res"]).await;
 }
 
 async fn assert_json_error(response: axum::response::Response, expected_code: &str) {
@@ -574,18 +563,7 @@ async fn list_prompts_returns_sorted_ids() {
     )
     .await
     .into_response();
-    assert_eq!(response.status(), StatusCode::OK);
-    let bytes = to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("body");
-    let body: Value = serde_json::from_slice(&bytes).expect("json");
-    let entries = body
-        .get("prompts")
-        .and_then(Value::as_array)
-        .expect("prompts array");
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0]["id"], "alpha.prompt");
-    assert_eq!(entries[1]["id"], "zeta.prompt");
+    assert_catalog_ids(response, "prompts", &["alpha.prompt", "zeta.prompt"]).await;
 }
 
 #[tokio::test]
@@ -1257,9 +1235,7 @@ async fn test_get_config_sanitizes_secrets() {
         .build();
 
     let res = handle_get_config(State(state)).await.into_response();
-    assert_eq!(res.status(), StatusCode::OK);
-    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
-    let payload: Value = serde_json::from_slice(&bytes).unwrap();
+    let payload = http_test::assert_json_response(res, StatusCode::OK).await;
 
     // Verify secrets are masked
     let cfg_json = payload["config"].to_string();
@@ -1318,11 +1294,7 @@ async fn test_hitl_approval_flow_and_endpoints() {
         capability_id: "docker.run".to_string(),
         args: json!({"image": "ubuntu", "command": "rm -rf /"}),
         request_id: Some("req-hitl-async".to_string()),
-        context: None,
-        idempotency_key: None,
-        input_responses: None,
-        request_state: None,
-        async_task: false,
+        ..Default::default()
     };
 
     let async_res = handle_call_capability(
@@ -1387,11 +1359,7 @@ async fn test_hitl_approval_flow_and_endpoints() {
         capability_id: "docker.run".to_string(),
         args: json!({"image": "ubuntu", "command": "rm -rf /"}),
         request_id: Some("req-hitl-sync".to_string()),
-        context: None,
-        idempotency_key: None,
-        input_responses: None,
-        request_state: None,
-        async_task: false,
+        ..Default::default()
     };
 
     // Note: this creates a second approval ticket since it's a new call
@@ -1485,11 +1453,7 @@ async fn test_hitl_rejection_returns_structured_envelope() {
         capability_id: "db.drop_table".to_string(),
         args: json!({"table": "users"}),
         request_id: Some("req-reject-test".to_string()),
-        context: None,
-        idempotency_key: None,
-        input_responses: None,
-        request_state: None,
-        async_task: false,
+        ..Default::default()
     };
 
     let res = handle_call_capability(
@@ -1502,9 +1466,7 @@ async fn test_hitl_rejection_returns_structured_envelope() {
     .await
     .into_response();
 
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
-    let payload: Value = serde_json::from_slice(&bytes).unwrap();
+    let payload = http_test::assert_json_response(res, StatusCode::FORBIDDEN).await;
     assert_eq!(payload["ok"], false);
     assert_eq!(payload["error"]["code"], "OPERATION_REJECTED_BY_OPERATOR");
     assert!(payload["error"]["message"]
@@ -1549,11 +1511,7 @@ async fn test_tool_call_emits_audit_events_and_hash_chain() {
         capability_id: "srv.echo".to_string(),
         args: json!({"message": "hello audit", "secret": "shhh"}),
         request_id: Some("req-audit-test".to_string()),
-        context: None,
-        idempotency_key: None,
-        input_responses: None,
-        request_state: None,
-        async_task: false,
+        ..Default::default()
     };
 
     let res = handle_call_capability(
@@ -2199,3 +2157,20 @@ async fn test_handle_delete_server_cascades_profiles_and_aliases() {
     assert!(saved_config["capabilityAliases"].get("sql_query").is_none());
     assert!(saved_config["capabilityAliases"].get("mem_write").is_some());
 }
+
+async fn assert_catalog_ids(response: axum::response::Response, key: &str, expected: &[&str]) {
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let body: Value = serde_json::from_slice(&bytes).expect("json");
+    let entries = body[key].as_array().expect("catalog array");
+    let ids: Vec<_> = entries
+        .iter()
+        .map(|entry| entry["id"].as_str().expect("id"))
+        .collect();
+    assert_eq!(ids, expected);
+}
+
+#[path = "../../tests/support/http.rs"]
+mod http_test;

@@ -167,19 +167,7 @@ async fn test_e2e_realtime_sse_event_streaming() {
     let config_path = temp_config.path().to_str().unwrap().to_string();
 
     let initial_config = McpConfig::default();
-    save_config(&config_path, &initial_config).unwrap();
-
-    let state = initialize_state(initial_config, &config_path)
-        .await
-        .unwrap();
-    let app = build_router(state.clone());
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-
-    let server_task = tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
+    let (_state, port, server_task) = start_test_daemon(initial_config, &config_path).await;
 
     let client = reqwest::Client::new();
     let sse_url = format!("http://127.0.0.1:{}/v1/resources/updates", port);
@@ -275,19 +263,7 @@ async fn test_e2e_config_file_hot_reload() {
         mcp_servers,
         ..Default::default()
     };
-    save_config(&config_path, &initial_config).unwrap();
-
-    let state = initialize_state(initial_config, &config_path)
-        .await
-        .unwrap();
-    let app = build_router(state.clone());
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-
-    let server_task = tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
+    let (_state, port, server_task) = start_test_daemon(initial_config, &config_path).await;
 
     let client = reqwest::Client::new();
 
@@ -627,19 +603,7 @@ async fn test_e2e_server_restart_endpoint() {
         mcp_servers,
         ..Default::default()
     };
-    save_config(&config_path, &initial_config).unwrap();
-
-    let state = initialize_state(initial_config, &config_path)
-        .await
-        .unwrap();
-    let app = build_router(state.clone());
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-
-    let server_task = tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
+    let (_state, port, server_task) = start_test_daemon(initial_config, &config_path).await;
 
     let client = reqwest::Client::new();
     let restart_url = format!(
@@ -805,8 +769,10 @@ async fn test_e2e_undo_stdio_to_signed_callback() {
         .unwrap();
     let port = timeout(Duration::from_secs(10), async {
         loop {
-            if let Ok(port) = std::fs::read_to_string(directory.path().join("port")) {
-                break port;
+            if let Ok(contents) = std::fs::read_to_string(directory.path().join("port")) {
+                if let Ok(port) = contents.trim().parse::<std::num::NonZeroU16>() {
+                    break port.get();
+                }
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -962,4 +928,23 @@ async fn test_e2e_undo_stdio_to_signed_callback() {
     assert!(!audits[0].hash.is_empty());
     assert!(serde_json::to_string(&audits[0]).unwrap().contains(id));
     assert!(store.verify_chain().await.is_valid);
+}
+
+async fn start_test_daemon(
+    config: McpConfig,
+    config_path: &str,
+) -> (
+    warmplane::daemon::AppState,
+    u16,
+    tokio::task::JoinHandle<()>,
+) {
+    save_config(config_path, &config).unwrap();
+    let state = initialize_state(config, config_path).await.unwrap();
+    let app = build_router(state.clone());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (state, port, task)
 }

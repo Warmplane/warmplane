@@ -1462,18 +1462,7 @@ pub async fn run_mcp_http_server(
         .map(|c| c.allowed_origins.clone())
         .unwrap_or_default();
 
-    // Always allow loopback; add the bind address if it is not already covered
-    for loopback in &["127.0.0.1", "::1", "localhost"] {
-        if !allowed_hosts.iter().any(|h| h == loopback) {
-            allowed_hosts.push((*loopback).to_string());
-        }
-    }
-    if !matches!(
-        bind_addr.as_str(),
-        "127.0.0.1" | "::1" | "localhost" | "0.0.0.0" | "::"
-    ) {
-        allowed_hosts.push(bind_addr.clone());
-    }
+    add_mcp_http_hosts(&mut allowed_hosts, &bind_addr);
 
     let state = initialize_state(config, config_path).await?;
     let shutdown_token = state.shutdown_token.clone();
@@ -1487,18 +1476,11 @@ pub async fn run_mcp_http_server(
     mcp_server_cfg.allowed_hosts = allowed_hosts;
     mcp_server_cfg.allowed_origins = allowed_origins;
 
-    let parsed_protocol_versions: Vec<rmcp::model::ProtocolVersion> = http_cfg
-        .map(|c| c.supported_protocol_versions.clone())
-        .unwrap_or_else(crate::config::default_mcp_http_protocol_versions)
-        .iter()
-        .map(|s| match s.as_str() {
-            "2024-11-05" => rmcp::model::ProtocolVersion::V_2024_11_05,
-            "2025-03-26" => rmcp::model::ProtocolVersion::V_2025_03_26,
-            "2025-06-18" => rmcp::model::ProtocolVersion::V_2025_06_18,
-            "2025-11-25" => rmcp::model::ProtocolVersion::V_2025_11_25,
-            _ => rmcp::model::ProtocolVersion::V_2026_07_28,
-        })
-        .collect();
+    let parsed_protocol_versions = parse_mcp_protocol_versions(
+        &http_cfg
+            .map(|config| config.supported_protocol_versions)
+            .unwrap_or_else(crate::config::default_mcp_http_protocol_versions),
+    );
 
     // Build the Tower service factory — one FacadeMcpServer clone per session
     let state_for_factory = state.clone();
@@ -1540,6 +1522,38 @@ pub async fn run_mcp_http_server(
     Ok(())
 }
 
+/// Adds required loopback and explicit bind hosts for the MCP HTTP facade.
+pub(crate) fn add_mcp_http_hosts(allowed_hosts: &mut Vec<String>, bind_addr: &str) {
+    // Always allow loopback; add the bind address if it is not already covered
+    for loopback in &["127.0.0.1", "::1", "localhost"] {
+        if !allowed_hosts.iter().any(|h| h == loopback) {
+            allowed_hosts.push((*loopback).to_string());
+        }
+    }
+    if !matches!(
+        bind_addr,
+        "127.0.0.1" | "::1" | "localhost" | "0.0.0.0" | "::"
+    ) {
+        allowed_hosts.push(bind_addr.to_string());
+    }
+}
+
+/// Parses the advertised MCP protocol versions using the established fallback.
+pub(crate) fn parse_mcp_protocol_versions(
+    versions: &[String],
+) -> Vec<rmcp::model::ProtocolVersion> {
+    versions
+        .iter()
+        .map(|version| match version.as_str() {
+            "2024-11-05" => rmcp::model::ProtocolVersion::V_2024_11_05,
+            "2025-03-26" => rmcp::model::ProtocolVersion::V_2025_03_26,
+            "2025-06-18" => rmcp::model::ProtocolVersion::V_2025_06_18,
+            "2025-11-25" => rmcp::model::ProtocolVersion::V_2025_11_25,
+            _ => rmcp::model::ProtocolVersion::V_2026_07_28,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{facade_tools, invalid_args};
@@ -1575,37 +1589,11 @@ mod tests {
 
     #[tokio::test]
     async fn mcp_facade_call_uses_the_delayable_hold_before_upstream_dispatch() {
-        use crate::{
-            config::{ReversibilityClass, ReversibilityConfig},
-            daemon::{AppState, CapabilityMeta, ServerMsg},
-        };
+        use crate::daemon::ServerMsg;
         use serde_json::json;
-        use std::{collections::HashMap, time::Duration};
-        use tokio::sync::mpsc;
+        use std::time::Duration;
 
-        let (server_tx, mut upstream) = mpsc::channel(8);
-        let mut capability = CapabilityMeta::new(
-            "mail",
-            "send",
-            "Send",
-            "Send a message",
-            json!({"type": "object"}),
-        );
-        capability.reversibility = Some(ReversibilityConfig {
-            class: ReversibilityClass::Delayable,
-            hold_window_secs: Some(1),
-            ttl_secs: None,
-            daily_limit: None,
-            pre_snapshot: None,
-            pre_undo_check: None,
-            test_target: None,
-            inverse: None,
-        });
-        let state = AppState::builder()
-            .servers(HashMap::from([("mail".to_string(), server_tx)]))
-            .capabilities(HashMap::from([("mail.send".to_string(), capability)]))
-            .tool_timeout_ms(2_000)
-            .build();
+        let (state, mut upstream) = crate::test_support::delayable_mail(1, 2000);
         let facade = super::FacadeMcpServer::new(state, None);
         let call = tokio::spawn(async move {
             facade
@@ -1722,37 +1710,14 @@ mod tests {
     #[tokio::test]
     async fn mcp_task_cancel_routes_through_the_hold_coordinator() {
         use crate::{
-            config::{ReversibilityClass, ReversibilityConfig},
-            daemon::{AppState, CapabilityMeta},
             emissions::release_deadline_ms,
             tasks::{CreateTaskParams, EmissionPhase, EmissionRecord, TaskStatus},
         };
         use serde_json::json;
-        use std::{collections::HashMap, time::Duration};
-        use tokio::sync::mpsc;
+        use std::time::Duration;
 
-        let (server_tx, mut upstream) = mpsc::channel(8);
-        let mut capability = CapabilityMeta::new(
-            "mail",
-            "send",
-            "Send",
-            "Send a message",
-            json!({"type": "object"}),
-        );
-        capability.reversibility = Some(ReversibilityConfig {
-            class: ReversibilityClass::Delayable,
-            hold_window_secs: Some(2),
-            ttl_secs: None,
-            daily_limit: None,
-            pre_snapshot: None,
-            pre_undo_check: None,
-            test_target: None,
-            inverse: None,
-        });
-        let state = AppState::builder()
-            .servers(HashMap::from([("mail".to_string(), server_tx)]))
-            .capabilities(HashMap::from([("mail.send".to_string(), capability)]))
-            .build();
+        let (state, mut upstream) =
+            crate::test_support::delayable_mail(2, crate::config::DEFAULT_TOOL_TIMEOUT_MS);
         let task = state
             .hold_coordinator
             .accept(

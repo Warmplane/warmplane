@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-11-16
+// Rust guideline compliant 2026-11-18
 
 //! Dynamic server mounting, unmounting, and configuration reconciliation lifecycle operations.
 
@@ -17,6 +17,61 @@ use crate::{
 };
 
 impl AppState {
+    /// Recomputes catalog identity and emits the server-level resource invalidation.
+    pub(crate) async fn refresh_server_catalog(&self, server_id: &str) {
+        {
+            let caps = self.capabilities.read().await;
+            let res = self.resources.read().await;
+            let prompts = self.prompts.read().await;
+            let new_ver = compute_catalog_version(&caps, &res, &prompts);
+            let mut ver_guard = self.catalog_version.write().await;
+            *ver_guard = new_ver;
+        }
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_else(|_| "0".to_string());
+
+        let _ = self
+            .resource_update_tx
+            .send(crate::catalog::ResourceUpdateEvent {
+                uri: format!("server://{}", server_id),
+                timestamp,
+                server: server_id.to_string(),
+            });
+    }
+
+    fn audit_server_lifecycle(
+        &self,
+        server_id: &str,
+        action: &str,
+        status: &str,
+        args: serde_json::Value,
+    ) {
+        self.audit_handle.send(crate::audit::RawAuditEvent {
+            event_type: crate::audit::AuditEventType::ConfigMutation,
+            trace_id: format!("trace-{action}-{server_id}"),
+            request_id: None,
+            actor_id: None,
+            work_item_id: None,
+            client_ip: None,
+            server_id: Some(server_id.to_string()),
+            capability_id: None,
+            resource_uri: None,
+            sanitized_args: Some(args),
+            sanitized_response: Some(json!({"status":status})),
+            execution_latency_us: None,
+            status: crate::audit::AuditEventStatus::Success,
+            error_code: None,
+            error_message: None,
+            operator_id: None,
+            approval_ticket_id: None,
+            idempotency_key: None,
+            is_replay: None,
+        });
+    }
+
     /// Mounts a single upstream server dynamically into `AppState`.
     ///
     /// # Arguments
@@ -141,27 +196,7 @@ impl AppState {
             }
         }
 
-        {
-            let caps = self.capabilities.read().await;
-            let res = self.resources.read().await;
-            let prompts = self.prompts.read().await;
-            let new_ver = compute_catalog_version(&caps, &res, &prompts);
-            let mut ver_guard = self.catalog_version.write().await;
-            *ver_guard = new_ver;
-        }
-
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs().to_string())
-            .unwrap_or_else(|_| "0".to_string());
-
-        let _ = self
-            .resource_update_tx
-            .send(crate::catalog::ResourceUpdateEvent {
-                uri: format!("server://{}", server_id),
-                timestamp,
-                server: server_id.to_string(),
-            });
+        self.refresh_server_catalog(server_id).await;
 
         if has_new_caps {
             self.notify_tools_changed();
@@ -173,32 +208,17 @@ impl AppState {
             self.notify_prompts_changed();
         }
 
-        self.audit_handle.send(crate::audit::RawAuditEvent {
-            event_type: crate::audit::AuditEventType::ConfigMutation,
-            trace_id: format!("trace-mount-{}", server_id),
-            request_id: None,
-            actor_id: None,
-            work_item_id: None,
-            client_ip: None,
-            server_id: Some(server_id.to_string()),
-            capability_id: None,
-            resource_uri: None,
-            sanitized_args: Some(serde_json::json!({
+        self.audit_server_lifecycle(
+            server_id,
+            "mount",
+            "mounted",
+            json!({
                 "action": "mount_server",
                 "capabilities_count": new_caps_count,
                 "resources_count": new_res_count,
                 "prompts_count": new_prompts_count,
-            })),
-            sanitized_response: Some(serde_json::json!({ "status": "mounted" })),
-            execution_latency_us: None,
-            status: crate::audit::AuditEventStatus::Success,
-            error_code: None,
-            error_message: None,
-            operator_id: None,
-            approval_ticket_id: None,
-            idempotency_key: None,
-            is_replay: None,
-        });
+            }),
+        );
 
         Ok(())
     }
@@ -274,27 +294,7 @@ impl AppState {
             }
         }
 
-        {
-            let caps = self.capabilities.read().await;
-            let res = self.resources.read().await;
-            let prompts = self.prompts.read().await;
-            let new_ver = compute_catalog_version(&caps, &res, &prompts);
-            let mut ver_guard = self.catalog_version.write().await;
-            *ver_guard = new_ver;
-        }
-
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs().to_string())
-            .unwrap_or_else(|_| "0".to_string());
-
-        let _ = self
-            .resource_update_tx
-            .send(crate::catalog::ResourceUpdateEvent {
-                uri: format!("server://{}", server_id),
-                timestamp,
-                server: server_id.to_string(),
-            });
+        self.refresh_server_catalog(server_id).await;
 
         if has_removed_caps {
             self.notify_tools_changed();
@@ -306,29 +306,12 @@ impl AppState {
             self.notify_prompts_changed();
         }
 
-        self.audit_handle.send(crate::audit::RawAuditEvent {
-            event_type: crate::audit::AuditEventType::ConfigMutation,
-            trace_id: format!("trace-unmount-{}", server_id),
-            request_id: None,
-            actor_id: None,
-            work_item_id: None,
-            client_ip: None,
-            server_id: Some(server_id.to_string()),
-            capability_id: None,
-            resource_uri: None,
-            sanitized_args: Some(serde_json::json!({
-                "action": "unmount_server",
-            })),
-            sanitized_response: Some(serde_json::json!({ "status": "unmounted" })),
-            execution_latency_us: None,
-            status: crate::audit::AuditEventStatus::Success,
-            error_code: None,
-            error_message: None,
-            operator_id: None,
-            approval_ticket_id: None,
-            idempotency_key: None,
-            is_replay: None,
-        });
+        self.audit_server_lifecycle(
+            server_id,
+            "unmount",
+            "unmounted",
+            json!({"action":"unmount_server"}),
+        );
     }
 
     /// Performs graceful shutdown of all upstream servers and background worker queues.

@@ -387,50 +387,11 @@ function renderResourcesPlayground(state: any): string {
   const selectedRes = resources.find((r: any) => r.id === selectedId);
   const result = state.resourceReadResult;
 
-  let resListHtml = '';
-  if (resources.length === 0) {
-    resListHtml = `
-      <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
-        No resources exposed by connected MCP servers.
-      </div>
-    `;
-  } else {
-    resListHtml = resources.map((r: any) => {
-      const active = r.id === selectedId ? 'active' : '';
-      const scheme = r.uri ? r.uri.split(':')[0] : 'res';
-      return `
-        <div class="cap-item ${active}" onclick="window.app.selectResource('${escapeHtml(r.id)}')">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${escapeHtml(r.name || r.id)}</span>
-            <span class="badge" style="font-size: 9.5px; background: rgba(56, 189, 248, 0.15); color: var(--cyan-400);">${escapeHtml(scheme)}</span>
-          </div>
-          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(r.uri)}</div>
-          <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 4px;">
-            <span>server: ${escapeHtml(r.server || 'local')}</span>
-            <span>${escapeHtml(r.mime_type || 'text/plain')}</span>
-          </div>
-        </div>
-      `;
-    }).join('');
-  }
+  const resListHtml = renderResourceList(resources, selectedId, 'No resources exposed by connected MCP servers.');
 
   return `
     <div style="display: grid; grid-template-columns: 340px 1fr; gap: 16px; height: calc(100vh - 165px);">
-      <!-- Left Sidebar: Resources Catalog -->
-      <div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); display: flex; flex-direction: column; overflow: hidden;">
-        <div style="padding: 12px; border-bottom: 1px solid var(--border);">
-          <input type="text" class="form-input" placeholder="Search ${resources.length} resources..." oninput="window.app.filterResources(this.value)">
-        </div>
-        <div style="flex: 1; overflow-y: auto; padding: 8px;" id="pg-res-list">
-          ${resListHtml}
-        </div>
-        ${resHidden > 0 ? `
-          <div style="padding: 8px 12px; background: rgba(245, 158, 11, 0.08); border-top: 1px solid rgba(245, 158, 11, 0.2); font-size: 11px; color: var(--amber-300); display: flex; justify-content: space-between; align-items: center;">
-            <span>🛡️ ${resHidden} resource${resHidden > 1 ? 's' : ''} hidden by policy</span>
-            <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600; font-size: 10.5px;">Edit Policy</a>
-          </div>
-        ` : ''}
-      </div>
+      ${renderCatalogSidebar(resources.length, resHidden, resListHtml, 'pg-res-list', 'filterResources', 'resource')}
 
       <!-- Right Panel: Resource Content Reader & Metadata Inspector -->
       <div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); display: flex; flex-direction: column; overflow: hidden;">
@@ -488,16 +449,7 @@ function renderResourcesPlayground(state: any): string {
             </div>
           </div>
 
-          <!-- Content Output Preview -->
-          <div style="padding: 16px; background: var(--bg-app); display: flex; flex-direction: column; overflow: hidden;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-              <span style="font-size: 11px; font-weight: 600; color: var(--text-dim);">RESOURCE CONTENT ENVELOPE</span>
-              <span style="font-size: 11px; font-weight: 600; color: ${result ? (result.status === 200 ? 'var(--green-400)' : 'var(--red-400)') : 'var(--text-dim)'}; font-family: var(--ff-mono);">
-                ${result ? `HTTP ${result.status} · ${result.durationMs.toFixed(1)}ms` : 'READY'}
-              </span>
-            </div>
-            <pre style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: var(--cyan-400); font-size: 11.5px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-word;">${result ? escapeHtml(JSON.stringify(result.data, null, 2)) : '// Click "Read Resource Content" to inspect live payload'}</pre>
-          </div>
+          ${renderCatalogOutput(result, 'RESOURCE CONTENT ENVELOPE', 'var(--cyan-400)', '// Click "Read Resource Content" to inspect live payload')}
         </div>
       </div>
     </div>
@@ -511,29 +463,7 @@ function renderPromptsPlayground(state: any): string {
   const selectedPrompt = prompts.find((p: any) => p.id === selectedId);
   const result = state.promptGetResult;
 
-  let promptListHtml = '';
-  if (prompts.length === 0) {
-    promptListHtml = `
-      <div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">
-        No prompt templates registered by connected MCP servers.
-      </div>
-    `;
-  } else {
-    promptListHtml = prompts.map((p: any) => {
-      const active = p.id === selectedId ? 'active' : '';
-      const argCount = p.arguments ? p.arguments.length : 0;
-      return `
-        <div class="cap-item ${active}" onclick="window.app.selectPrompt('${escapeHtml(p.id)}')">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${escapeHtml(p.name || p.id)}</span>
-            <span class="badge" style="font-size: 9.5px; background: rgba(168, 85, 247, 0.15); color: var(--purple-400);">${argCount} args</span>
-          </div>
-          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">${escapeHtml(p.description || p.title || 'Prompt template')}</div>
-          <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">server: ${escapeHtml(p.server || 'local')}</div>
-        </div>
-      `;
-    }).join('');
-  }
+  const promptListHtml = renderPromptList(prompts, selectedId, 'No prompt templates registered by connected MCP servers.');
 
   // Dynamic argument form fields
   let argumentFieldsHtml = '';
@@ -558,21 +488,7 @@ function renderPromptsPlayground(state: any): string {
 
   return `
     <div style="display: grid; grid-template-columns: 340px 1fr; gap: 16px; height: calc(100vh - 165px);">
-      <!-- Left Sidebar: Prompts Catalog -->
-      <div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); display: flex; flex-direction: column; overflow: hidden;">
-        <div style="padding: 12px; border-bottom: 1px solid var(--border);">
-          <input type="text" class="form-input" placeholder="Search ${prompts.length} prompts..." oninput="window.app.filterPrompts(this.value)">
-        </div>
-        <div style="flex: 1; overflow-y: auto; padding: 8px;" id="pg-prompt-list">
-          ${promptListHtml}
-        </div>
-        ${promptsHidden > 0 ? `
-          <div style="padding: 8px 12px; background: rgba(245, 158, 11, 0.08); border-top: 1px solid rgba(245, 158, 11, 0.2); font-size: 11px; color: var(--amber-300); display: flex; justify-content: space-between; align-items: center;">
-            <span>🛡️ ${promptsHidden} prompt${promptsHidden > 1 ? 's' : ''} hidden by policy</span>
-            <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600; font-size: 10.5px;">Edit Policy</a>
-          </div>
-        ` : ''}
-      </div>
+      ${renderCatalogSidebar(prompts.length, promptsHidden, promptListHtml, 'pg-prompt-list', 'filterPrompts', 'prompt')}
 
       <!-- Right Panel: Prompt Parameter Binder & Message Envelope Preview -->
       <div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); display: flex; flex-direction: column; overflow: hidden;">
@@ -600,16 +516,7 @@ function renderPromptsPlayground(state: any): string {
             ${argumentFieldsHtml}
           </div>
 
-          <!-- Rendered Messages Output -->
-          <div style="padding: 16px; background: var(--bg-app); display: flex; flex-direction: column; overflow: hidden;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-              <span style="font-size: 11px; font-weight: 600; color: var(--text-dim);">RENDERED PROMPT MESSAGES</span>
-              <span style="font-size: 11px; font-weight: 600; color: ${result ? (result.status === 200 ? 'var(--green-400)' : 'var(--red-400)') : 'var(--text-dim)'}; font-family: var(--ff-mono);">
-                ${result ? `HTTP ${result.status} · ${result.durationMs.toFixed(1)}ms` : 'READY'}
-              </span>
-            </div>
-            <pre style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: #c084fc; font-size: 11.5px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-word;">${result ? escapeHtml(JSON.stringify(result.data, null, 2)) : '// Click "Render Prompt Messages" to view resolved system/user messages'}</pre>
-          </div>
+          ${renderCatalogOutput(result, 'RENDERED PROMPT MESSAGES', '#c084fc', '// Click "Render Prompt Messages" to view resolved system/user messages')}
         </div>
       </div>
     </div>
@@ -753,3 +660,80 @@ function renderBatchModal(state: any): string {
 }
 
 
+
+function catalogEmptyMessage(message: string): string {
+  return `<div style="padding: 24px 16px; text-align: center; color: var(--text-dim); font-size: 11.5px;">${escapeHtml(message)}</div>`;
+}
+
+function renderCatalogSidebar(count: number, hidden: number, list: string, listId: string, filter: string, noun: string): string {
+  return `<div style="background: var(--surface-card); border: 1px solid var(--border); border-radius: var(--radius-md); display: flex; flex-direction: column; overflow: hidden;">
+    <div style="padding: 12px; border-bottom: 1px solid var(--border);">
+      <input type="text" class="form-input" placeholder="Search ${count} ${noun}s..." oninput="window.app.${filter}(this.value)">
+    </div>
+    <div style="flex: 1; overflow-y: auto; padding: 8px;" id="${listId}">${list}</div>
+    ${hidden > 0 ? `<div style="padding: 8px 12px; background: rgba(245, 158, 11, 0.08); border-top: 1px solid rgba(245, 158, 11, 0.2); font-size: 11px; color: var(--amber-300); display: flex; justify-content: space-between; align-items: center;">
+      <span>🛡️ ${hidden} ${noun}${hidden > 1 ? 's' : ''} hidden by policy</span>
+      <a href="javascript:void(0)" onclick="window.app.switchTab('policy')" style="color: var(--amber-400); text-decoration: underline; font-weight: 600; font-size: 10.5px;">Edit Policy</a>
+    </div>` : ''}
+  </div>`;
+}
+
+function renderCatalogOutput(result: any, heading: string, color: string, placeholder: string): string {
+  return `<div style="padding: 16px; background: var(--bg-app); display: flex; flex-direction: column; overflow: hidden;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+      <span style="font-size: 11px; font-weight: 600; color: var(--text-dim);">${heading}</span>
+      <span style="font-size: 11px; font-weight: 600; color: ${result ? (result.status === 200 ? 'var(--green-400)' : 'var(--red-400)') : 'var(--text-dim)'}; font-family: var(--ff-mono);">
+        ${result ? `HTTP ${result.status} · ${result.durationMs.toFixed(1)}ms` : 'READY'}
+      </span>
+    </div>
+    <pre style="flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; color: ${color}; font-size: 11.5px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-word;">${result ? escapeHtml(JSON.stringify(result.data, null, 2)) : placeholder}</pre>
+  </div>`;
+}
+export function renderResourceList(resources: any[], selectedId: string | null, emptyMessage: string): string {
+  let resListHtml = '';
+  if (resources.length === 0) {
+    resListHtml = catalogEmptyMessage(emptyMessage);  } else {
+    resListHtml = resources.map((r: any) => {
+      const active = r.id === selectedId ? 'active' : '';
+      const scheme = r.uri ? r.uri.split(':')[0] : 'res';
+      return `
+        <div class="cap-item ${active}" onclick="window.app.selectResource('${escapeHtml(r.id)}')">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${escapeHtml(r.name || r.id)}</span>
+            <span class="badge" style="font-size: 9.5px; background: rgba(56, 189, 248, 0.15); color: var(--cyan-400);">${escapeHtml(scheme)}</span>
+          </div>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(r.uri)}</div>
+          <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+            <span>server: ${escapeHtml(r.server || 'local')}</span>
+            <span>${escapeHtml(r.mime_type || 'text/plain')}</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  return resListHtml;
+}
+
+export function renderPromptList(prompts: any[], selectedId: string | null, emptyMessage: string): string {
+  let promptListHtml = '';
+  if (prompts.length === 0) {
+    promptListHtml = catalogEmptyMessage(emptyMessage);  } else {
+    promptListHtml = prompts.map((p: any) => {
+      const active = p.id === selectedId ? 'active' : '';
+      const argCount = p.arguments ? p.arguments.length : 0;
+      return `
+        <div class="cap-item ${active}" onclick="window.app.selectPrompt('${escapeHtml(p.id)}')">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-weight: 600; color: var(--text-main); font-family: var(--ff-mono); font-size: 12px;">${escapeHtml(p.name || p.id)}</span>
+            <span class="badge" style="font-size: 9.5px; background: rgba(168, 85, 247, 0.15); color: var(--purple-400);">${argCount} args</span>
+          </div>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">${escapeHtml(p.description || p.title || 'Prompt template')}</div>
+          <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">server: ${escapeHtml(p.server || 'local')}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  return promptListHtml;
+}
