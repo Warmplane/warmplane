@@ -73,6 +73,31 @@ Execute namespaced tool `<server>.<tool>` via standard MCP `tools/call`:
 
 ## Undo and operator controls
 
-Capability aliases apply their configured reversibility contracts to MCP tool calls. `capabilities_batch_call` accepts `autoRollbackOnFailure: true` for automatic rollback. The `undo_execute` tool is hidden by default. With RBAC enabled, its role must opt in using `allowAgentSelfUndo`; an active profile must also opt in. It accepts either `undo_id` or `work_item_id` to undo the newest armed entry.
+Capability aliases apply their configured reversibility contracts to MCP tool calls. `capabilities_batch_call` accepts the optional boolean `autoRollbackOnFailure` over both stdio and HTTP MCP. It defaults to `false`; other types, including `null`, are rejected before execution. When enabled, the batch stops at its first failure even if a step has `continue_on_error: true`, then attempts registered inverses for earlier successful steps in reverse order. The response retains the original forward failure (`ok: false`) and reports inverse outcomes in `rollback_results`. Current policy, profile, and approval checks can block inverses, so rollback is not an atomic transaction.
+
+For example, call the MCP tool with these arguments, replacing capability IDs and arguments with configured aliases:
+
+```json
+{
+  "request_id": "priority-batch-42",
+  "autoRollbackOnFailure": true,
+  "steps": [
+    {
+      "id": "first",
+      "capability_id": "tickets.set_priority",
+      "args": {"id": "ISSUE-1", "priority": "high"}
+    },
+    {
+      "id": "second",
+      "capability_id": "tickets.set_priority",
+      "args": {"id": "ISSUE-2", "priority": "high"}
+    }
+  ]
+}
+```
+
+The batch identity is `request_id`, or the generated trace ID if omitted. A `context.work_item_id` is not required. The option applies only to this batch request; separate tool calls inside a Claude Code Mode script are not automatically grouped or rolled back. Automatic batch rollback does not require enabling the separate agent self-undo tool.
+
+The `undo_execute` tool is hidden by default. With RBAC enabled, its role must opt in using `allowAgentSelfUndo`; an active profile must also opt in. It accepts either `undo_id` or `work_item_id` to undo the newest armed entry.
 
 For a shared Action Feed and operator REST/CLI controls, connect agents to the daemon's configured MCP HTTP `/mcp` endpoint. A standalone stdio process owns a separate in-memory ledger and event bus. Running separate processes against the same state files does not synchronize their live state.

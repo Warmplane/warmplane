@@ -365,6 +365,17 @@ impl ServerHandler for FacadeMcpServer {
                         )),
                     ));
                 };
+                let auto_rollback_on_failure = match args.get("autoRollbackOnFailure") {
+                    None => false,
+                    Some(Value::Bool(enabled)) => *enabled,
+                    Some(_) => {
+                        return Ok(CallToolResponse::Complete(
+                            CallToolResult::structured_error(invalid_args(
+                                "'autoRollbackOnFailure' must be a boolean",
+                            )),
+                        ));
+                    }
+                };
                 let request_id = args
                     .get("request_id")
                     .and_then(Value::as_str)
@@ -377,14 +388,22 @@ impl ServerHandler for FacadeMcpServer {
                 let trace_id = next_trace_id();
                 let policy = self.state.policy.read().await.clone();
                 let prof_ctx = self.profile_context().await;
-                let res = crate::batch_executor::execute_batch(
+                let default_role = self.state.rbac_engine.default_role();
+                let res = crate::batch_executor::execute_batch_for_tenant_with_rollback(
                     &self.state,
                     steps,
                     trace_id,
                     request_id,
                     context,
-                    &policy,
-                    &prof_ctx,
+                    crate::batch_executor::BatchExecutionScope {
+                        policy: &policy,
+                        profile: &prof_ctx,
+                        tenant_id: "default",
+                        role: &default_role,
+                        authorization_expires_at_epoch_secs: None,
+                        cancellation_token: tokio_util::sync::CancellationToken::new(),
+                    },
+                    auto_rollback_on_failure,
                 )
                 .await;
                 Ok(serde_json::to_value(res).unwrap_or_default())
@@ -1195,7 +1214,12 @@ fn facade_tools() -> Vec<Tool> {
                     },
                     "request_id":{"type":"string"},
                     "context":{"type":"object"},
-                    "_meta":{"type":"object"}
+                    "_meta":{"type":"object"},
+                    "autoRollbackOnFailure":{
+                        "type":"boolean",
+                        "default":false,
+                        "description":"Stop on the first failed step and attempt registered inverses for earlier successful steps in reverse order"
+                    }
                 },
                 "required":["steps"],
                 "additionalProperties":true
@@ -1918,3 +1942,6 @@ mod tests {
         assert_eq!(call_res["error"]["code"], "TOOL_NOT_IN_PROFILE");
     }
 }
+
+#[cfg(test)]
+mod batch_tests;

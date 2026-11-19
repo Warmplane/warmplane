@@ -57,6 +57,8 @@ When task persistence is disabled, accepted holds exist only in memory and are l
 
 For operators and agents to share live undo state, use the daemon with `mcpHttpServer` enabled and connect agents to `/mcp`. Separate stdio processes own separate runtime state.
 
+For sequential MCP batches, `capabilities_batch_call` accepts optional boolean `autoRollbackOnFailure` (default `false`). When enabled, the first failure stops the batch and triggers eligible registered inverses in reverse order; `rollback_results` reports outcomes while the original failure remains `ok: false`. Inverses retain policy, profile, and approval checks. This applies to one batch request, not separate calls in an agent's JavaScript script. See [MCP Stdio Usage](./references/mcp_stdio_usage.md#undo-and-operator-controls) for an example.
+
 ### W5: Inspect and Run Undo Entries
 Operators can list and inspect safe undo summaries with `GET /v1/undo` and `GET /v1/undo/{undo_id}`, execute an entry with `POST /v1/undo/{undo_id}/execute`, or unwind a work item in reverse order with `POST /v1/undo/work-items/{work_item_id}/rollback`. Configure role `undoPermissions` for these operations. Expired entries require the dedicated `forceExpired` permission and a non-empty reason, which is included in the committed audit event. MCP `undo_execute` is exposed only when both the RBAC role and active profile opt in with `allowAgentSelfUndo`; agents can target a known `undo_id` or the newest armed entry for a `work_item_id`.
 
