@@ -6,7 +6,7 @@
 
 > **The local control plane that keeps Model Context Protocol (MCP) sessions warm with compact capability facades, policy governance, and deterministic execution.**
 > 
-> v0.33.1 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.33.2 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 ---
 
@@ -255,6 +255,12 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 ---
 
 ## Changelog
+
+### v0.33.2 — MCP batch rollback
+
+- Fixed `capabilities_batch_call` ignoring `autoRollbackOnFailure` over stdio and HTTP MCP. Enabling the option now stops at the first failed step and attempts registered inverses for earlier successful steps in reverse order, subject to current policy, profile, and approval checks.
+- The MCP tool schema now advertises the optional boolean, and invalid values are rejected before dispatch. The default remains `false`; responses retain the original forward failure alongside per-entry `rollback_results`.
+- Added MCP session regression tests and clarified batch recovery behavior in the user guide and agent skill. Separate calls inside an agent script are not automatically grouped or rolled back.
 
 ### v0.33.1 — MCP transport compatibility
 
