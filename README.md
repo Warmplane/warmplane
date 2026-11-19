@@ -6,7 +6,7 @@
 
 > **The local control plane that keeps Model Context Protocol (MCP) sessions warm with compact capability facades, policy governance, and deterministic execution.**
 > 
-> v0.33.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.33.1 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 ---
 
@@ -255,6 +255,12 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 ---
 
 ## Changelog
+
+### v0.33.1 — MCP transport compatibility
+
+- Upgraded to rmcp 3.11.0. Streamable HTTP upstreams can return any 2xx status for notification-only requests, and tool replies can omit `content`.
+- The Streamable HTTP client now rejects complete upstream JSON responses larger than 16 MiB and caps HTTP error diagnostic text at 64 KiB.
+- Added regression coverage for legacy session negotiation over HTTP and stdio, including after a stdio restart.
 
 ### v0.33.0 — Undo, Cancellation & Work-Item Rollback
 

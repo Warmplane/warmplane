@@ -262,6 +262,8 @@ Example:
 | `headers` | Object | No | `{}` | Custom HTTP headers sent with every request. |
 | `auth` | Object | No | `null` | Authentication configuration block. |
 
+For Streamable HTTP upstreams, Warmplane rejects complete JSON responses larger than 16 MiB and limits HTTP error diagnostic text to 64 KiB. The separate limit for each SSE event is 16 MiB. For OAuth2 upstreams, Warmplane's OAuth proxy buffers the response before the MCP client applies these limits.
+
 Example:
 
 ```json

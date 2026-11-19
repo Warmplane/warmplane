@@ -146,8 +146,25 @@ async fn test_e2e_stdio_mcp_server_facade_protocol() {
     let call_resp = read_jsonrpc_until_id(&mut reader, 3).await;
     assert_eq!(call_resp["id"], 3);
     assert!(call_resp["result"]["content"].is_array());
+    assert!(call_resp["result"]["structuredContent"].is_object());
 
-    // 5. Clean termination upon closing stdin
+    let completion = json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "completion/complete",
+        "params": {
+            "ref": {"type": "ref/prompt", "name": "example"},
+            "argument": {"name": "query", "value": "ex"}
+        }
+    });
+    stdin
+        .write_all(format!("{completion}\n").as_bytes())
+        .await
+        .unwrap();
+    let completion_resp = read_jsonrpc_until_id(&mut reader, 4).await;
+    assert_eq!(completion_resp["error"]["code"], -32601);
+
+    // Clean termination upon closing stdin.
     drop(child.stdin.take());
     let exit_status = timeout(Duration::from_secs(5), child.wait())
         .await
