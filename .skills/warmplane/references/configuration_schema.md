@@ -80,6 +80,10 @@
 - `op://<vault>/<item>/<field>`: 1Password CLI
 - `env://<VAR>`: Process environment variable
 
+## Upstream HTTP Response Limits
+
+The Streamable HTTP client caps complete JSON responses at 16 MiB, HTTP error diagnostic text at 64 KiB, and individual SSE events at 16 MiB. The OAuth2 proxy buffers the upstream response before the MCP client applies these limits.
+
 ## Reversibility Contracts
 
 Detailed capability aliases may set `reversibility.class` to `delayable`, `reversible`, `compensable`, or `irreversible`. The Control Deck's **Facade & Alias Studio** can create or edit these contracts; argument templates are entered as JSON objects. A delayable call starts its cancellable hold after any required approval and uses approved arguments. Its duration resolves as profile policy, alias `holdWindowSecs`, global policy, then 30 seconds. Async calls return a task receipt; synchronous calls wait only when the hold is shorter than `toolTimeoutMs`. Task receipts expose `phase`, `releaseAtMs`, and `cancellable`; cancellation through task or operation endpoints succeeds only before durable dispatch claim. Pending holds resume after restart and current-policy revalidation. A task recovered in `dispatching` fails with `EMISSION_OUTCOME_UNKNOWN` and is never resent automatically. Batch steps await release within the shared 60-second batch budget.
