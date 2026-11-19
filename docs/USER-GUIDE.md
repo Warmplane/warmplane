@@ -1156,6 +1156,28 @@ Set `autoRollbackOnFailure` to `true` to stop at the first failed step and attem
 }
 ```
 
+#### Batch rollback over MCP
+
+The `capabilities_batch_call` MCP tool supports the same optional boolean `autoRollbackOnFailure` over stdio and Streamable HTTP. It defaults to `false`; non-boolean values, including `null`, return `INVALID_ARGS` before execution. With the option enabled, execution stops on the first failure even when a step sets `continue_on_error: true`. The response remains `ok: false` for that forward failure and includes per-entry inverse outcomes in `rollback_results`. A successful batch does not trigger rollback.
+
+For example, send this `tools/call` payload after configuring the illustrated aliases:
+
+```json
+{
+  "name": "capabilities_batch_call",
+  "arguments": {
+    "request_id": "priority-batch-42",
+    "autoRollbackOnFailure": true,
+    "steps": [
+      {"id": "first", "capability_id": "tickets.set_priority", "args": {"id": "ISSUE-1", "priority": "high"}},
+      {"id": "second", "capability_id": "tickets.set_priority", "args": {"id": "ISSUE-2", "priority": "high"}}
+    ]
+  }
+}
+```
+
+MCP uses the supplied request ID as the batch identity, or a generated trace ID when omitted. Work-item context is optional. Inverses remain subject to current policy, profile, and approval checks; recovery can be blocked or fail and does not provide an atomic external transaction. Batch rollback does not require opting into the separate `undo_execute` tool. Separate tool calls inside a Claude Code Mode script are not automatically grouped into a batch or rolled back together.
+
 ---
 
 ### 6.5 Exactly-Once Idempotency & Replay Ledger
