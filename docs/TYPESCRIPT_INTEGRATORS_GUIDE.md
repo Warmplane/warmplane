@@ -675,7 +675,7 @@ With `policy.resultSanitization` enabled, `RESULT_WITHHELD` can carry a complete
 
 The pinned tool catalog's ETag changes when tool visibility changes. If an invocation is refused after a definition changes, refresh the catalog and submit a new request after an operator approves the current definition.
 
-Under RBAC, authenticate approval and task input requests with a token for the ticket tenant and a role with `resolveApprovals`. Send `{"inputResponses":{"hitl_approval":{"approved":true}}}` for a linked task. The `receipt` describes the persisted decision. Read the task separately for execution status.
+Under RBAC, authenticate approval and task input requests with a token for the ticket tenant and a role with `resolveApprovals`. Send `{"inputResponses":{"hitl_approval":{"approved":true}}}` for a linked task. If the task was created in a profile, include that profile in the `X-Warmplane-Profile` header on task input requests. The `receipt` describes the persisted decision. Read the task separately for execution status.
 
 See the [User Guide](USER-GUIDE.md) for the complete error code table and the [Whitepaper](WHITEPAPER.md) for architectural context.
 
