@@ -251,15 +251,10 @@ impl UndoLedgerStore {
         let entry = &guard.entries[index];
         let expired = entry.expires_at_ms <= now_ms;
         if entry.status == crate::undo::UndoEntryStatus::Armed && expired && !force_expired {
-            let previous = entry.status.clone();
-            guard.entries[index].status = crate::undo::UndoEntryStatus::Expired;
-            if let Err(error) = self.storage.save(&guard) {
-                if !error.is::<ReplacementDurabilityUnknown>() {
-                    guard.entries[index].status = previous;
-                }
-                return Err(error).context("failed to persist expired undo status");
-            }
-            return Ok(UndoClaimResult::Expired(guard.entries[index].clone()));
+            return self
+                .persist_entry_status(&mut guard, index, crate::undo::UndoEntryStatus::Expired)
+                .map(UndoClaimResult::Expired)
+                .context("failed to persist expired undo status");
         }
         let forceable = force_expired
             && expired
@@ -270,16 +265,25 @@ impl UndoLedgerStore {
         if entry.status != crate::undo::UndoEntryStatus::Armed && !forceable {
             return Ok(UndoClaimResult::Unavailable(Some(entry.clone())));
         }
-        let previous = entry.status.clone();
-        guard.entries[index].status = crate::undo::UndoEntryStatus::Executing;
-        let claimed = guard.entries[index].clone();
-        if let Err(error) = self.storage.save(&guard) {
+        self.persist_entry_status(&mut guard, index, crate::undo::UndoEntryStatus::Executing)
+            .map(UndoClaimResult::Claimed)
+            .context("failed to persist operator undo claim")
+    }
+
+    fn persist_entry_status(
+        &self,
+        ledger: &mut UndoLedger,
+        index: usize,
+        status: crate::undo::UndoEntryStatus,
+    ) -> Result<UndoEntry> {
+        let previous = std::mem::replace(&mut ledger.entries[index].status, status);
+        self.storage.save(ledger).map_err(|error| {
             if !error.is::<ReplacementDurabilityUnknown>() {
-                guard.entries[index].status = previous;
+                ledger.entries[index].status = previous;
             }
-            return Err(error).context("failed to persist operator undo claim");
-        }
-        Ok(UndoClaimResult::Claimed(claimed))
+            error
+        })?;
+        Ok(ledger.entries[index].clone())
     }
 
     /// Claims an armed, unexpired entry for execution and persists the claim.
@@ -427,25 +431,19 @@ impl UndoLedgerStore {
         guard
             .compensable_usage
             .retain(|usage| now_ms.saturating_sub(usage.timestamp_ms) < 86_400_000);
-        if let Some(key) = idempotency_key {
-            if guard.compensable_usage.iter().any(|usage| {
-                usage.idempotency_key.as_deref() == Some(key)
-                    && usage.tenant_id == tenant_id
-                    && usage.profile_id.as_deref() == profile_id
-                    && usage.capability == capability
-            }) {
-                return Ok(true);
-            }
+        let scoped_usage = guard.compensable_usage.iter().filter(|usage| {
+            usage.tenant_id == tenant_id
+                && usage.profile_id.as_deref() == profile_id
+                && usage.capability == capability
+        });
+        if idempotency_key.is_some_and(|key| {
+            scoped_usage
+                .clone()
+                .any(|usage| usage.idempotency_key.as_deref() == Some(key))
+        }) {
+            return Ok(true);
         }
-        let count = guard
-            .compensable_usage
-            .iter()
-            .filter(|usage| {
-                usage.tenant_id == tenant_id
-                    && usage.profile_id.as_deref() == profile_id
-                    && usage.capability == capability
-            })
-            .count() as u64;
+        let count = scoped_usage.count() as u64;
         if count >= daily_limit && !approved_over_limit {
             return Ok(false);
         }

@@ -113,18 +113,18 @@ pub async fn handle_call_capability(
         }
     }
 
-    let idempotency_claim = if let Some(ref key) = idempotency_key {
-        loop {
-            match state
-                .idempotency_store
-                .check_or_start_with_meta(
-                    key,
-                    Some(payload.capability_id.clone()),
-                    Some(trace_id.clone()),
-                )
-                .await
-            {
-                crate::idempotency::DeduplicateResult::Completed(cached) => {
+    let idempotency_claim = if let Some(key) = idempotency_key.as_deref() {
+        match state
+            .idempotency_store
+            .claim_or_replay(key, &payload.capability_id, &trace_id)
+            .await
+        {
+            crate::idempotency::ExecutionClaim::New(claim) => Some(claim),
+            crate::idempotency::ExecutionClaim::Replay {
+                response,
+                from_cache,
+            } => {
+                if from_cache {
                     state.audit_handle.send(crate::audit::RawAuditEvent {
                         event_type: crate::audit::AuditEventType::ToolExecution,
                         trace_id: trace_id.clone(),
@@ -136,29 +136,23 @@ pub async fn handle_call_capability(
                         capability_id: Some(payload.capability_id.clone()),
                         resource_uri: None,
                         sanitized_args: Some(payload.args.clone()),
-                        sanitized_response: Some(cached.clone()),
+                        sanitized_response: Some(response.clone()),
                         execution_latency_us: Some(start_time.elapsed().as_micros() as u64),
                         status: crate::audit::AuditEventStatus::Success,
                         error_code: None,
                         error_message: None,
                         operator_id: None,
                         approval_ticket_id: None,
-                        idempotency_key: Some(key.clone()),
+                        idempotency_key: Some(key.to_owned()),
                         is_replay: Some(true),
                     });
-
-                    let mut resp_headers = HeaderMap::new();
-                    resp_headers.insert("x-warmplane-deduplicated", "true".parse().unwrap());
-                    return (StatusCode::OK, resp_headers, Json(cached)).into_response();
                 }
-                crate::idempotency::DeduplicateResult::InProgress(mut rx) => {
-                    if let Ok(cached) = rx.recv().await {
-                        let mut resp_headers = HeaderMap::new();
-                        resp_headers.insert("x-warmplane-deduplicated", "true".parse().unwrap());
-                        return (StatusCode::OK, resp_headers, Json(cached)).into_response();
-                    }
-                }
-                crate::idempotency::DeduplicateResult::New(claim) => break Some(claim),
+                let mut response_headers = HeaderMap::new();
+                response_headers.insert(
+                    "x-warmplane-deduplicated",
+                    axum::http::HeaderValue::from_static("true"),
+                );
+                return (StatusCode::OK, response_headers, Json(response)).into_response();
             }
         }
     } else {
@@ -170,9 +164,10 @@ pub async fn handle_call_capability(
 
     if !payload.args.is_object() {
         state.operation_registry.unregister(&request_id).await;
-        if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-            state.idempotency_store.remove(key, claim).await;
-        }
+        state
+            .idempotency_store
+            .release_execution(idempotency_key.as_deref(), idempotency_claim)
+            .await;
         return (
             StatusCode::BAD_REQUEST,
             Json(error_envelope(
@@ -199,9 +194,10 @@ pub async fn handle_call_capability(
 
         if !pol.allows(&payload.capability_id) {
             state.operation_registry.unregister(&request_id).await;
-            if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-                state.idempotency_store.remove(key, claim).await;
-            }
+            state
+                .idempotency_store
+                .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                .await;
             state.audit_handle.send(crate::audit::RawAuditEvent {
                 event_type: crate::audit::AuditEventType::PolicyViolation,
                 trace_id: trace_id.clone(),
@@ -253,9 +249,10 @@ pub async fn handle_call_capability(
         let caps_guard = state.capabilities.read().await;
         let Some(meta) = caps_guard.get(&payload.capability_id) else {
             state.operation_registry.unregister(&request_id).await;
-            if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-                state.idempotency_store.remove(key, claim).await;
-            }
+            state
+                .idempotency_store
+                .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                .await;
             return (
                 StatusCode::NOT_FOUND,
                 Json(error_envelope(
@@ -273,9 +270,10 @@ pub async fn handle_call_capability(
 
         if !prof_ctx.is_server_allowed(&meta.server) {
             state.operation_registry.unregister(&request_id).await;
-            if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-                state.idempotency_store.remove(key, claim).await;
-            }
+            state
+                .idempotency_store
+                .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                .await;
             return (
                 StatusCode::FORBIDDEN,
                 Json(error_envelope(
@@ -323,9 +321,10 @@ pub async fn handle_call_capability(
     {
         if state.undo_ledger.is_none() {
             state.operation_registry.unregister(&request_id).await;
-            if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-                state.idempotency_store.remove(key, claim).await;
-            }
+            state
+                .idempotency_store
+                .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                .await;
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(error_envelope(
@@ -356,11 +355,10 @@ pub async fn handle_call_capability(
                 Ok(false) => requires_approval = true,
                 Err(error) => {
                     state.operation_registry.unregister(&request_id).await;
-                    if let (Some(key), Some(claim)) =
-                        (idempotency_key.as_deref(), idempotency_claim)
-                    {
-                        state.idempotency_store.remove(key, claim).await;
-                    }
+                    state
+                        .idempotency_store
+                        .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                        .await;
                     return (
                         StatusCode::SERVICE_UNAVAILABLE,
                         Json(error_envelope(
@@ -485,11 +483,13 @@ pub async fn handle_call_capability(
                                         .task_registry
                                         .cancel_task(&task_id_clone, reason)
                                         .await;
-                                    if let (Some(key), Some(claim)) =
-                                        (idempotency_key_clone.as_deref(), idempotency_claim)
-                                    {
-                                        state_clone.idempotency_store.remove(key, claim).await;
-                                    }
+                                    state_clone
+                                        .idempotency_store
+                                        .release_execution(
+                                            idempotency_key_clone.as_deref(),
+                                            idempotency_claim,
+                                        )
+                                        .await;
                                     return;
                                 }
                             }
@@ -503,11 +503,13 @@ pub async fn handle_call_capability(
                                     Some("Approval request timed out or cancelled".to_string()),
                                 )
                                 .await;
-                            if let (Some(key), Some(claim)) =
-                                (idempotency_key_clone.as_deref(), idempotency_claim)
-                            {
-                                state_clone.idempotency_store.remove(key, claim).await;
-                            }
+                            state_clone
+                                .idempotency_store
+                                .release_execution(
+                                    idempotency_key_clone.as_deref(),
+                                    idempotency_claim,
+                                )
+                                .await;
                             return;
                         }
                     }
@@ -535,11 +537,13 @@ pub async fn handle_call_capability(
                                     serde_json::json!({"code": "COMPENSABLE_LIMIT_STORAGE_FAILED"}),
                                     Some("Could not reserve compensable invocation".to_string()),
                                 ).await;
-                                if let (Some(key), Some(claim)) =
-                                    (idempotency_key_clone.as_deref(), idempotency_claim)
-                                {
-                                    state_clone.idempotency_store.remove(key, claim).await;
-                                }
+                                state_clone
+                                    .idempotency_store
+                                    .release_execution(
+                                        idempotency_key_clone.as_deref(),
+                                        idempotency_claim,
+                                    )
+                                    .await;
                                 return;
                             }
                         }
@@ -605,11 +609,13 @@ pub async fn handle_call_capability(
                                     Some(error.to_string()),
                                 )
                                 .await;
-                            if let (Some(key), Some(claim)) =
-                                (idempotency_key_clone.as_deref(), idempotency_claim)
-                            {
-                                state_clone.idempotency_store.remove(key, claim).await;
-                            }
+                            state_clone
+                                .idempotency_store
+                                .release_execution(
+                                    idempotency_key_clone.as_deref(),
+                                    idempotency_claim,
+                                )
+                                .await;
                             return;
                         }
                     }
@@ -631,11 +637,10 @@ pub async fn handle_call_capability(
                                 Some("Persistent undo storage is unavailable".to_string()),
                             )
                             .await;
-                        if let (Some(key), Some(claim)) =
-                            (idempotency_key_clone.as_deref(), idempotency_claim)
-                        {
-                            state_clone.idempotency_store.remove(key, claim).await;
-                        }
+                        state_clone
+                            .idempotency_store
+                            .release_execution(idempotency_key_clone.as_deref(), idempotency_claim)
+                            .await;
                         return;
                     }
                     if let Some(pre_snapshot) = &contract.pre_snapshot {
@@ -658,11 +663,13 @@ pub async fn handle_call_capability(
                                         Some(error.to_string()),
                                     )
                                     .await;
-                                if let (Some(key), Some(claim)) =
-                                    (idempotency_key_clone.as_deref(), idempotency_claim)
-                                {
-                                    state_clone.idempotency_store.remove(key, claim).await;
-                                }
+                                state_clone
+                                    .idempotency_store
+                                    .release_execution(
+                                        idempotency_key_clone.as_deref(),
+                                        idempotency_claim,
+                                    )
+                                    .await;
                                 return;
                             }
                         }
@@ -686,11 +693,13 @@ pub async fn handle_call_capability(
                                     Some(format!("Server '{}' is unreachable", server_id_clone)),
                                 )
                                 .await;
-                            if let (Some(key), Some(claim)) =
-                                (idempotency_key_clone.as_deref(), idempotency_claim)
-                            {
-                                state_clone.idempotency_store.remove(key, claim).await;
-                            }
+                            state_clone
+                                .idempotency_store
+                                .release_execution(
+                                    idempotency_key_clone.as_deref(),
+                                    idempotency_claim,
+                                )
+                                .await;
                             return;
                         }
                     }
@@ -720,11 +729,10 @@ pub async fn handle_call_capability(
                             Some(format!("Server '{}' mailbox is closed", server_id_clone)),
                         )
                         .await;
-                    if let (Some(key), Some(claim)) =
-                        (idempotency_key_clone.as_deref(), idempotency_claim)
-                    {
-                        state_clone.idempotency_store.remove(key, claim).await;
-                    }
+                    state_clone
+                        .idempotency_store
+                        .release_execution(idempotency_key_clone.as_deref(), idempotency_claim)
+                        .await;
                     return;
                 }
 
@@ -838,11 +846,10 @@ pub async fn handle_call_capability(
                                 )),
                             )
                             .await;
-                        if let (Some(key), Some(claim)) =
-                            (idempotency_key_clone.as_deref(), idempotency_claim)
-                        {
-                            state_clone.idempotency_store.remove(key, claim).await;
-                        }
+                        state_clone
+                            .idempotency_store
+                            .release_execution(idempotency_key_clone.as_deref(), idempotency_claim)
+                            .await;
                     }
                     Ok(Err(UpstreamCallError::Upstream(err))) => {
                         state_clone
@@ -857,11 +864,10 @@ pub async fn handle_call_capability(
                                 Some(err),
                             )
                             .await;
-                        if let (Some(key), Some(claim)) =
-                            (idempotency_key_clone.as_deref(), idempotency_claim)
-                        {
-                            state_clone.idempotency_store.remove(key, claim).await;
-                        }
+                        state_clone
+                            .idempotency_store
+                            .release_execution(idempotency_key_clone.as_deref(), idempotency_claim)
+                            .await;
                     }
                     Err(_) => {
                         state_clone
@@ -876,11 +882,10 @@ pub async fn handle_call_capability(
                                 Some("Server actor task dropped reply channel".to_string()),
                             )
                             .await;
-                        if let (Some(key), Some(claim)) =
-                            (idempotency_key_clone.as_deref(), idempotency_claim)
-                        {
-                            state_clone.idempotency_store.remove(key, claim).await;
-                        }
+                        state_clone
+                            .idempotency_store
+                            .release_execution(idempotency_key_clone.as_deref(), idempotency_claim)
+                            .await;
                     }
                 }
             });
@@ -905,9 +910,9 @@ pub async fn handle_call_capability(
         let resolution = tokio::select! {
             _ = cancel_token.cancelled() => {
                 state.operation_registry.unregister(&request_id).await;
-                if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-                    state.idempotency_store.remove(key, claim).await;
-                }
+                state.idempotency_store
+                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                    .await;
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(error_envelope(
@@ -940,9 +945,10 @@ pub async fn handle_call_capability(
             }
             crate::approvals::ApprovalResolution::Rejected { operator, reason } => {
                 state.operation_registry.unregister(&request_id).await;
-                if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-                    state.idempotency_store.remove(key, claim).await;
-                }
+                state
+                    .idempotency_store
+                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                    .await;
                 state.audit_handle.send(crate::audit::RawAuditEvent {
                     event_type: crate::audit::AuditEventType::ApprovalRejected,
                     trace_id: trace_id.clone(),
@@ -986,9 +992,10 @@ pub async fn handle_call_capability(
             }
             crate::approvals::ApprovalResolution::Expired => {
                 state.operation_registry.unregister(&request_id).await;
-                if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-                    state.idempotency_store.remove(key, claim).await;
-                }
+                state
+                    .idempotency_store
+                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                    .await;
                 state.audit_handle.send(crate::audit::RawAuditEvent {
                     event_type: crate::audit::AuditEventType::ApprovalExpired,
                     trace_id: trace_id.clone(),
@@ -1050,9 +1057,10 @@ pub async fn handle_call_capability(
             .await
             {
                 state.operation_registry.unregister(&request_id).await;
-                if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-                    state.idempotency_store.remove(key, claim).await;
-                }
+                state
+                    .idempotency_store
+                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                    .await;
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
                     Json(error_envelope(
@@ -1195,9 +1203,10 @@ pub async fn handle_call_capability(
             }
             Err(error) => {
                 state.operation_registry.unregister(&request_id).await;
-                if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-                    state.idempotency_store.remove(key, claim).await;
-                }
+                state
+                    .idempotency_store
+                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                    .await;
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
                     Json(error_envelope(
@@ -1281,9 +1290,10 @@ pub async fn handle_call_capability(
         ) && state.undo_ledger.is_none()
         {
             state.operation_registry.unregister(&request_id).await;
-            if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-                state.idempotency_store.remove(key, claim).await;
-            }
+            state
+                .idempotency_store
+                .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                .await;
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(error_envelope(
@@ -1311,11 +1321,10 @@ pub async fn handle_call_capability(
                 Ok(value) => value,
                 Err(error) => {
                     state.operation_registry.unregister(&request_id).await;
-                    if let (Some(key), Some(claim)) =
-                        (idempotency_key.as_deref(), idempotency_claim)
-                    {
-                        state.idempotency_store.remove(key, claim).await;
-                    }
+                    state
+                        .idempotency_store
+                        .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                        .await;
                     return (
                         StatusCode::BAD_GATEWAY,
                         Json(error_envelope(
@@ -1342,9 +1351,10 @@ pub async fn handle_call_capability(
         let servers_guard = state.servers.read().await;
         let Some(tx) = servers_guard.get(&server_id).cloned() else {
             state.operation_registry.unregister(&request_id).await;
-            if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-                state.idempotency_store.remove(key, claim).await;
-            }
+            state
+                .idempotency_store
+                .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                .await;
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(error_envelope(
@@ -1378,9 +1388,10 @@ pub async fn handle_call_capability(
     // Circuit Breaker Permission Check
     if let Err(cb_err) = state.circuit_breakers.check_permission(&server_id).await {
         state.operation_registry.unregister(&request_id).await;
-        if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-            state.idempotency_store.remove(key, claim).await;
-        }
+        state
+            .idempotency_store
+            .release_execution(idempotency_key.as_deref(), idempotency_claim)
+            .await;
         state.audit_handle.send(crate::audit::RawAuditEvent {
             event_type: crate::audit::AuditEventType::ToolExecution,
             trace_id: trace_id.clone(),
@@ -1431,9 +1442,10 @@ pub async fn handle_call_capability(
     {
         state.circuit_breakers.record_failure(&server_id).await;
         state.operation_registry.unregister(&request_id).await;
-        if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-            state.idempotency_store.remove(key, claim).await;
-        }
+        state
+            .idempotency_store
+            .release_execution(idempotency_key.as_deref(), idempotency_claim)
+            .await;
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(error_envelope(
@@ -1452,9 +1464,9 @@ pub async fn handle_call_capability(
     let result: Result<Result<Value, UpstreamCallError>, oneshot::error::RecvError> = tokio::select! {
         _ = cancel_token.cancelled() => {
             state.operation_registry.unregister(&request_id).await;
-            if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-                state.idempotency_store.remove(key, claim).await;
-            }
+            state.idempotency_store
+                .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                .await;
             return (
                 StatusCode::BAD_REQUEST,
                 Json(error_envelope(
@@ -1593,9 +1605,10 @@ pub async fn handle_call_capability(
         Ok(Err(UpstreamCallError::Timeout)) => {
             state.circuit_breakers.record_failure(&server_id).await;
             let elapsed_us = start_time.elapsed().as_micros() as u64;
-            if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-                state.idempotency_store.remove(key, claim).await;
-            }
+            state
+                .idempotency_store
+                .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                .await;
             state.audit_handle.send(crate::audit::RawAuditEvent {
                 event_type: crate::audit::AuditEventType::ToolExecution,
                 trace_id: trace_id.clone(),
@@ -1637,9 +1650,10 @@ pub async fn handle_call_capability(
         Ok(Err(UpstreamCallError::Upstream(err))) => {
             state.circuit_breakers.record_failure(&server_id).await;
             let elapsed_us = start_time.elapsed().as_micros() as u64;
-            if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-                state.idempotency_store.remove(key, claim).await;
-            }
+            state
+                .idempotency_store
+                .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                .await;
             state.audit_handle.send(crate::audit::RawAuditEvent {
                 event_type: crate::audit::AuditEventType::ToolExecution,
                 trace_id: trace_id.clone(),
@@ -1676,9 +1690,10 @@ pub async fn handle_call_capability(
                 .into_response()
         }
         Err(_) => {
-            if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-                state.idempotency_store.remove(key, claim).await;
-            }
+            state
+                .idempotency_store
+                .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                .await;
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(error_envelope(

@@ -6,6 +6,16 @@ use std::sync::Arc;
 use std::time::Duration;
 use warmplane::idempotency::{DeduplicateResult, IdempotencyStore};
 
+async fn complete_new_claim(
+    store: &IdempotencyStore,
+    key: &str,
+    response: impl FnOnce() -> serde_json::Value,
+) {
+    if let DeduplicateResult::New(claim) = store.check_or_start(key).await {
+        store.complete(key, claim, response()).await;
+    }
+}
+
 fn bench_idempotency_store(c: &mut Criterion) {
     let mut group = c.benchmark_group("idempotency_store");
 
@@ -19,10 +29,7 @@ fn bench_idempotency_store(c: &mut Criterion) {
             let key = format!("req_idem_key_{}", counter);
             let s = &store;
             async move {
-                if let DeduplicateResult::New(claim) = s.check_or_start(black_box(&key)).await {
-                    s.complete(black_box(&key), claim, black_box(json!({"status": "ok"})))
-                        .await;
-                }
+                complete_new_claim(s, black_box(&key), || black_box(json!({"status": "ok"}))).await;
                 let _ = s.check_or_start(black_box(&key)).await;
             }
         });
@@ -34,11 +41,7 @@ fn bench_idempotency_store(c: &mut Criterion) {
 
         rt.block_on(async {
             let key = "cached_key";
-            if let DeduplicateResult::New(claim) = store.check_or_start(key).await {
-                store
-                    .complete(key, claim, json!({"status": "cached_result"}))
-                    .await;
-            }
+            complete_new_claim(&store, key, || json!({"status": "cached_result"})).await;
         });
 
         b.to_async(&rt).iter(|| {
@@ -65,11 +68,7 @@ fn bench_idempotency_store(c: &mut Criterion) {
                             handles.push(tokio::spawn(async move {
                                 for i in 0..50 {
                                     let key = format!("concurrent_t{}_{}", t, i);
-                                    if let DeduplicateResult::New(claim) =
-                                        s.check_or_start(&key).await
-                                    {
-                                        s.complete(&key, claim, json!({"res": i})).await;
-                                    }
+                                    complete_new_claim(&s, &key, || json!({"res": i})).await;
                                 }
                             }));
                         }

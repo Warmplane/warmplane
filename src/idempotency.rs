@@ -191,6 +191,11 @@ pub enum DeduplicateResult {
     Completed(Value),
 }
 
+pub(crate) enum ExecutionClaim {
+    New(IdempotencyClaim),
+    Replay { response: Value, from_cache: bool },
+}
+
 impl IdempotencyStore {
     /// Creates a new in-memory `IdempotencyStore` with specified entry TTL duration.
     ///
@@ -377,6 +382,46 @@ impl IdempotencyStore {
             },
         );
         DeduplicateResult::New(claim)
+    }
+
+    pub(crate) async fn claim_or_replay(
+        &self,
+        key: &str,
+        capability_id: &str,
+        trace_id: &str,
+    ) -> ExecutionClaim {
+        loop {
+            match self
+                .check_or_start_with_meta(key, Some(capability_id.into()), Some(trace_id.into()))
+                .await
+            {
+                DeduplicateResult::New(claim) => return ExecutionClaim::New(claim),
+                DeduplicateResult::Completed(response) => {
+                    return ExecutionClaim::Replay {
+                        response,
+                        from_cache: true,
+                    };
+                }
+                DeduplicateResult::InProgress(mut receiver) => {
+                    if let Ok(response) = receiver.recv().await {
+                        return ExecutionClaim::Replay {
+                            response,
+                            from_cache: false,
+                        };
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn release_execution(
+        &self,
+        key: Option<&str>,
+        claim: Option<IdempotencyClaim>,
+    ) {
+        if let (Some(key), Some(claim)) = (key, claim) {
+            self.remove(key, claim).await;
+        }
     }
 
     /// Completes a matching in-progress claim and broadcasts the final JSON payload.

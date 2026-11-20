@@ -1,6 +1,38 @@
 import { escapeHtml } from '../escape';
 import { store } from '../state';
-import { api, AuditEventItem } from '../api';
+import { api, AuditEventItem, VerificationReport } from '../api';
+
+function verificationLabel(report: VerificationReport): string {
+  if (!report.is_valid) {
+    return report.corrupted_at_index === undefined
+      ? 'Verification failed'
+      : `Verification failed at record #${report.corrupted_at_index}`;
+  }
+  if (report.first_retained_index === undefined) {
+    return `Chain verified (${report.total_records} events)`;
+  }
+  const retainedCount = report.total_records - report.first_retained_index;
+  return `Retained records verified (${retainedCount} of ${report.total_records} events)`;
+}
+
+function renderVerificationBadge(report: VerificationReport | null): string {
+  if (!report) {
+    return `
+      <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.verifyAuditChain()">
+        🛡️ Verify Cryptographic Hash Chain
+      </button>
+    `;
+  }
+  const rgb = report.is_valid ? '34, 197, 94' : '239, 68, 68';
+  const color = report.is_valid ? 'var(--green-400)' : 'var(--red-400)';
+  const icon = report.is_valid ? '🛡️' : '⚠️';
+  return `
+    <div style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: rgba(${rgb}, 0.1); border: 1px solid rgba(${rgb}, 0.3); border-radius: var(--radius-sm); font-size: 11.5px; color: ${color};">
+      <span>${icon}</span>
+      <span style="font-weight: 600;">${verificationLabel(report)}</span>
+    </div>
+  `;
+}
 
 export function renderAudit(): string {
   const state = store.getState();
@@ -43,25 +75,7 @@ export function renderAudit(): string {
     'jsonl'
   );
 
-  const verificationBadge = verification ? (
-    verification.is_valid ? `
-      <div style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: var(--radius-sm); font-size: 11.5px; color: var(--green-400);">
-        <span>🛡️</span>
-        <span style="font-weight: 600;">${verification.first_retained_index === undefined
-          ? `Chain verified (${verification.total_records} events)`
-          : `Retained records verified (${verification.total_records - verification.first_retained_index} of ${verification.total_records} events)`}</span>
-      </div>
-    ` : `
-      <div style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-sm); font-size: 11.5px; color: var(--red-400);">
-        <span>⚠️</span>
-        <span style="font-weight: 600;">Verification failed${verification.corrupted_at_index === undefined ? "" : ` at record #${verification.corrupted_at_index}`}</span>
-      </div>
-    `
-  ) : `
-    <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.verifyAuditChain()">
-      🛡️ Verify Cryptographic Hash Chain
-    </button>
-  `;
+  const verificationBadge = renderVerificationBadge(verification);
 
   // Filter toolbar HTML
   const serverOptionsHtml = knownServers

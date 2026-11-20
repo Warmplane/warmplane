@@ -184,22 +184,7 @@ impl AuditStore {
         }
 
         if let Some(path) = &self.file_path {
-            let mut bytes = Vec::new();
-            for record in &records {
-                serde_json::to_writer(&mut bytes, record)?;
-                bytes.push(b'\n');
-            }
-
-            let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-            let original_len = file.metadata()?.len();
-            if let Err(error) = file.write_all(&bytes).and_then(|()| file.sync_data()) {
-                // Keep the next append from chaining across a partial batch.
-                if let Err(rollback) = file.set_len(original_len).and_then(|()| file.sync_data()) {
-                    log.append_blocked = true;
-                    return Err(error).context(format!("failed to restore audit log: {rollback}"));
-                }
-                return Err(error).context("failed to append audit records");
-            }
+            persist_audit_batch(path, &records, &mut log.append_blocked)?;
         }
 
         log.total_records += records.len();
@@ -226,44 +211,16 @@ impl AuditStore {
     /// Verifies the persisted chain or the retained suffix of an in-memory log.
     pub async fn verify_chain(&self) -> VerificationReport {
         let log = self.log.read().await;
-        let total_records = log.total_records;
-        let key = self.hmac_key.as_deref();
-        if let Some(path) = &self.file_path {
-            // Capture the committed tail and a stable file handle before letting appends resume.
-            let snapshot = AuditSnapshot::capture(path, &log);
-            drop(log);
-            let key = self.hmac_key.clone();
-            return match snapshot {
-                Ok(snapshot) => {
-                    match tokio::task::spawn_blocking(move || snapshot.verify(key.as_deref())).await
-                    {
-                        Ok(report) => report,
-                        Err(error) => failed_verification(total_records, None, None, None, error),
-                    }
-                }
-                Err(error) => failed_verification(total_records, None, None, None, error),
-            };
-        }
-
-        let retained_start = total_records - log.events.len();
-        let first_retained_index = (retained_start > 0).then_some(retained_start);
-        let mut previous = GENESIS_HASH;
-        if let (Some(_), Some(first)) = (first_retained_index, log.events.first()) {
-            previous = &first.prev_hash;
-        }
-        for (offset, record) in log.events.iter().enumerate() {
-            if let Err(error) = validate_record(record, previous, key) {
-                return failed_verification(
-                    total_records,
-                    first_retained_index,
-                    Some(retained_start + offset),
-                    Some(record.id.clone()),
-                    error,
-                );
+        match &self.file_path {
+            Some(path) => {
+                // Capture the committed tail and a stable file handle before letting appends resume.
+                let snapshot = AuditSnapshot::capture(path, &log);
+                let total_records = log.total_records;
+                drop(log);
+                verify_audit_snapshot(snapshot, total_records, self.hmac_key.clone()).await
             }
-            previous = &record.hash;
+            None => verify_retained_events(&log, self.hmac_key.as_deref()),
         }
-        valid_verification(total_records, first_retained_index)
     }
 
     /// Queries audit events matching the provided filter criteria.
@@ -275,10 +232,10 @@ impl AuditStore {
     /// (Matching records subset, total matching count).
     pub async fn query(&self, filter: &AuditQueryFilter) -> (Vec<AuditEvent>, usize) {
         let log = self.log.read().await;
-        let events = &log.events;
         let search_pattern = filter.search.as_ref().map(|s| s.to_lowercase());
 
-        let filtered: Vec<&AuditEvent> = events
+        let filtered: Vec<&AuditEvent> = log
+            .events
             .iter()
             .rev() // Newest first
             .filter(|e| {
@@ -337,44 +294,9 @@ impl AuditStore {
                         return false;
                     }
                 }
-                if let Some(ref needle) = search_pattern {
-                    let matches = e.id.to_lowercase().contains(needle)
-                        || e.trace_id.to_lowercase().contains(needle)
-                        || e.request_id
-                            .as_deref()
-                            .is_some_and(|v| v.to_lowercase().contains(needle))
-                        || e.idempotency_key
-                            .as_deref()
-                            .is_some_and(|v| v.to_lowercase().contains(needle))
-                        || e.actor_id
-                            .as_deref()
-                            .is_some_and(|v| v.to_lowercase().contains(needle))
-                        || e.server_id
-                            .as_deref()
-                            .is_some_and(|v| v.to_lowercase().contains(needle))
-                        || e.capability_id
-                            .as_deref()
-                            .is_some_and(|v| v.to_lowercase().contains(needle))
-                        || e.resource_uri
-                            .as_deref()
-                            .is_some_and(|v| v.to_lowercase().contains(needle))
-                        || e.error_code
-                            .as_deref()
-                            .is_some_and(|v| v.to_lowercase().contains(needle))
-                        || e.error_message
-                            .as_deref()
-                            .is_some_and(|v| v.to_lowercase().contains(needle))
-                        || e.operator_id
-                            .as_deref()
-                            .is_some_and(|v| v.to_lowercase().contains(needle))
-                        || e.approval_ticket_id
-                            .as_deref()
-                            .is_some_and(|v| v.to_lowercase().contains(needle));
-                    if !matches {
-                        return false;
-                    }
-                }
-                true
+                search_pattern
+                    .as_deref()
+                    .is_none_or(|needle| matches_search(e, needle))
             })
             .collect();
 
@@ -405,11 +327,92 @@ impl AuditStore {
 
 pub type SharedAuditStore = Arc<AuditStore>;
 
+fn matches_search(event: &AuditEvent, needle: &str) -> bool {
+    [
+        Some(event.id.as_str()),
+        Some(event.trace_id.as_str()),
+        event.request_id.as_deref(),
+        event.idempotency_key.as_deref(),
+        event.actor_id.as_deref(),
+        event.server_id.as_deref(),
+        event.capability_id.as_deref(),
+        event.resource_uri.as_deref(),
+        event.error_code.as_deref(),
+        event.error_message.as_deref(),
+        event.operator_id.as_deref(),
+        event.approval_ticket_id.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|field| field.to_lowercase().contains(needle))
+}
+
 fn unix_time_ns() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos() as u64
+}
+
+fn persist_audit_batch(
+    path: &Path,
+    records: &[AuditEvent],
+    append_blocked: &mut bool,
+) -> Result<()> {
+    let mut bytes = Vec::new();
+    for record in records {
+        serde_json::to_writer(&mut bytes, record)?;
+        bytes.push(b'\n');
+    }
+
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    let original_len = file.metadata()?.len();
+    if let Err(error) = file.write_all(&bytes).and_then(|()| file.sync_data()) {
+        // Keep the next append from chaining across a partial batch.
+        if let Err(rollback) = file.set_len(original_len).and_then(|()| file.sync_data()) {
+            *append_blocked = true;
+            return Err(error).context(format!("failed to restore audit log: {rollback}"));
+        }
+        return Err(error).context("failed to append audit records");
+    }
+    Ok(())
+}
+
+async fn verify_audit_snapshot(
+    snapshot: Result<AuditSnapshot>,
+    total_records: usize,
+    key: Option<Vec<u8>>,
+) -> VerificationReport {
+    let snapshot = match snapshot {
+        Ok(snapshot) => snapshot,
+        Err(error) => return failed_verification(total_records, None, None, None, error),
+    };
+    match tokio::task::spawn_blocking(move || snapshot.verify(key.as_deref())).await {
+        Ok(report) => report,
+        Err(error) => failed_verification(total_records, None, None, None, error),
+    }
+}
+
+fn verify_retained_events(log: &AuditLog, key: Option<&[u8]>) -> VerificationReport {
+    let retained_start = log.total_records - log.events.len();
+    let first_retained_index = (retained_start > 0).then_some(retained_start);
+    let mut previous = GENESIS_HASH;
+    if let (Some(_), Some(first)) = (first_retained_index, log.events.first()) {
+        previous = &first.prev_hash;
+    }
+    for (offset, record) in log.events.iter().enumerate() {
+        if let Err(error) = validate_record(record, previous, key) {
+            return failed_verification(
+                log.total_records,
+                first_retained_index,
+                Some(retained_start + offset),
+                Some(record.id.clone()),
+                error,
+            );
+        }
+        previous = &record.hash;
+    }
+    valid_verification(log.total_records, first_retained_index)
 }
 
 struct AuditSnapshot {

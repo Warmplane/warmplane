@@ -151,17 +151,7 @@ where
     }
 
     fn replace(&self, data: &T) -> Result<Option<fs::File>> {
-        if let Some(parent) = self.path.parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists() {
-                fs::create_dir_all(parent).with_context(|| {
-                    format!(
-                        "Failed to create persistent state directory {}",
-                        parent.display()
-                    )
-                })?;
-            }
-        }
-
+        self.ensure_parent_exists()?;
         let json_bytes = serde_json::to_string_pretty(data)
             .context("Failed to serialize state data to JSON format")?;
 
@@ -173,19 +163,7 @@ where
         let parent = fs::canonicalize(parent)
             .with_context(|| format!("Failed to resolve state directory {}", parent.display()))?;
         #[cfg(unix)]
-        let directory = {
-            use rustix::fs::{Mode, OFlags};
-
-            // Retain a directory-only descriptor through replacement and sync. Resolve configured
-            // symlinks above, then refuse a final symlink if the path changes before opening it.
-            let descriptor = rustix::fs::open(
-                &parent,
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .with_context(|| format!("Failed to open state directory {}", parent.display()))?;
-            fs::File::from(descriptor)
-        };
+        let directory = open_state_directory(&parent)?;
 
         // Keep the temporary file beside the destination for an atomic rename. Its generated
         // basename is independent of the configured target, and ownership handles cleanup.
@@ -218,6 +196,21 @@ where
         Ok(None)
     }
 
+    fn ensure_parent_exists(&self) -> Result<()> {
+        if let Some(parent) = self.path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!(
+                        "Failed to create persistent state directory {}",
+                        parent.display()
+                    )
+                })?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Saves state and logs any persistence failure using the specified error message context.
     pub fn save_logged(&self, data: &T, failure_msg: &str) {
         if let Err(e) = self.save(data) {
@@ -241,6 +234,21 @@ where
             }),
         }
     }
+}
+
+#[cfg(unix)]
+fn open_state_directory(parent: &Path) -> Result<fs::File> {
+    use rustix::fs::{Mode, OFlags};
+
+    // Retain a directory-only descriptor through replacement and sync. Refuse a
+    // final symlink if the canonicalized path changes before opening it.
+    let descriptor = rustix::fs::open(
+        parent,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .with_context(|| format!("Failed to open state directory {}", parent.display()))?;
+    Ok(fs::File::from(descriptor))
 }
 
 fn sync_replacement(result: std::io::Result<()>, path: &Path) -> Result<()> {
