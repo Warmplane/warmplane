@@ -7,7 +7,10 @@ use std::{collections::HashMap, time::Duration};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
-use crate::daemon::{AppState, ServerMsg, UpstreamCallError};
+use crate::{
+    daemon::{AppState, ServerMsg, UpstreamCallError},
+    tasks::{CreateTaskParams, EmissionCancelResult, EmissionPhase, EmissionRecord, TaskStatus},
+};
 
 /// Single execution step within a batch capability call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -579,8 +582,9 @@ async fn execute_batch_for_tenant_with_budget(
                     continue;
                 }
             };
-            let emission = crate::tasks::EmissionRecord {
-                phase: crate::tasks::EmissionPhase::PendingEmission,
+            let emission = EmissionRecord {
+                idempotency_claim: None,
+                phase: EmissionPhase::PendingEmission,
                 release_at_ms,
                 cancellable: true,
                 tool_name: tool.clone(),
@@ -598,14 +602,14 @@ async fn execute_batch_for_tenant_with_budget(
                 .hold_coordinator
                 .accept(
                     state,
-                    crate::tasks::CreateTaskParams {
+                    CreateTaskParams {
                         capability_id: step.capability_id.clone(),
                         server_id: server.clone(),
                         args: interpolated_args.clone(),
                         request_id: request_id.clone(),
                         context: context.clone(),
                         idempotency_key: compensable_idempotency_key.clone(),
-                        initial_status: crate::tasks::TaskStatus::Working,
+                        initial_status: TaskStatus::Working,
                         status_message: Some(
                             "Waiting for the batch emission release deadline".to_string(),
                         ),
@@ -655,8 +659,7 @@ async fn execute_batch_for_tenant_with_budget(
                     .await;
                 let message = match cancellation {
                     Ok(
-                        crate::tasks::EmissionCancelResult::Cancelled
-                        | crate::tasks::EmissionCancelResult::AlreadyCancelled,
+                        EmissionCancelResult::Cancelled | EmissionCancelResult::AlreadyCancelled,
                     ) => {
                         "Batch cancelled; held emission was prevented from dispatching".to_string()
                     }
@@ -674,7 +677,7 @@ async fn execute_batch_for_tenant_with_budget(
                 overall_ok = false;
                 break;
             };
-            if terminal.status == crate::tasks::TaskStatus::Completed {
+            if terminal.status == TaskStatus::Completed {
                 let value = terminal.result.unwrap_or(Value::Null);
                 state.circuit_breakers.record_success(&server).await;
                 let sanitized_args =
@@ -717,10 +720,7 @@ async fn execute_batch_for_tenant_with_budget(
                 });
                 continue;
             }
-            if !matches!(
-                terminal.status,
-                crate::tasks::TaskStatus::Failed | crate::tasks::TaskStatus::Cancelled
-            ) {
+            if !matches!(terminal.status, TaskStatus::Failed | TaskStatus::Cancelled) {
                 let cancellation = state
                     .hold_coordinator
                     .cancel(
@@ -731,8 +731,7 @@ async fn execute_batch_for_tenant_with_budget(
                     .await;
                 let message = match cancellation {
                     Ok(
-                        crate::tasks::EmissionCancelResult::Cancelled
-                        | crate::tasks::EmissionCancelResult::AlreadyCancelled,
+                        EmissionCancelResult::Cancelled | EmissionCancelResult::AlreadyCancelled,
                     ) => "Batch budget expired; held emission was cancelled before dispatch"
                         .to_string(),
                     _ => {

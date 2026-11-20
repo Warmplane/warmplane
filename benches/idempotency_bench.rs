@@ -4,7 +4,17 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
-use warmplane::idempotency::IdempotencyStore;
+use warmplane::idempotency::{DeduplicateResult, IdempotencyStore};
+
+async fn complete_new_claim(
+    store: &IdempotencyStore,
+    key: &str,
+    response: impl FnOnce() -> serde_json::Value,
+) {
+    if let DeduplicateResult::New(claim) = store.check_or_start(key).await {
+        store.complete(key, claim, response()).await;
+    }
+}
 
 fn bench_idempotency_store(c: &mut Criterion) {
     let mut group = c.benchmark_group("idempotency_store");
@@ -19,9 +29,7 @@ fn bench_idempotency_store(c: &mut Criterion) {
             let key = format!("req_idem_key_{}", counter);
             let s = &store;
             async move {
-                let _ = s.check_or_start(black_box(&key)).await;
-                s.complete(black_box(&key), black_box(json!({"status": "ok"})))
-                    .await;
+                complete_new_claim(s, black_box(&key), || black_box(json!({"status": "ok"}))).await;
                 let _ = s.check_or_start(black_box(&key)).await;
             }
         });
@@ -33,10 +41,7 @@ fn bench_idempotency_store(c: &mut Criterion) {
 
         rt.block_on(async {
             let key = "cached_key";
-            let _ = store.check_or_start(key).await;
-            store
-                .complete(key, json!({"status": "cached_result"}))
-                .await;
+            complete_new_claim(&store, key, || json!({"status": "cached_result"})).await;
         });
 
         b.to_async(&rt).iter(|| {
@@ -63,8 +68,7 @@ fn bench_idempotency_store(c: &mut Criterion) {
                             handles.push(tokio::spawn(async move {
                                 for i in 0..50 {
                                     let key = format!("concurrent_t{}_{}", t, i);
-                                    let _ = s.check_or_start(&key).await;
-                                    s.complete(&key, json!({"res": i})).await;
+                                    complete_new_claim(&s, &key, || json!({"res": i})).await;
                                 }
                             }));
                         }

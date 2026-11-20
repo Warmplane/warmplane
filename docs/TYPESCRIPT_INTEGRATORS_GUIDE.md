@@ -692,3 +692,15 @@ No polyfills, no build step, no bundler configuration required.
 - **Retry middleware**: Wrap `callTool` with automatic retry logic that respects `retryable` and `classification` fields.
 - **HITL integration**: Poll `GET /v1/approvals` to build operator approval workflows.
 - **Audit queries**: Use `GET /v1/audit/events` to pull execution history for compliance reporting.
+
+### Audit verification
+
+`GET /v1/audit/verify` returns `report.is_valid` and `report.total_records`.
+When `report.first_retained_index` is present, it is the zero-based start of the
+verified in-memory suffix. The number of retained records is
+`total_records - first_retained_index`. Persisted audit logs are verified from disk.
+
+When an upstream result arrives after task expiry, task polling and idempotent
+replay of that result report `TASK_EXPIRED`. A hold receipt may report uncertain persistence
+in `statusMessage`; the hold has been accepted and can resume after restart if
+its record survives.

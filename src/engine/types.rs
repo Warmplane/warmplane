@@ -83,6 +83,13 @@ impl<T> EnvelopeBuilder<T> {
         self
     }
 
+    pub(crate) fn outcome(self, result: Result<T, WarmplaneError>) -> Envelope<T> {
+        match result {
+            Ok(value) => self.success(value).build(),
+            Err(error) => self.error(error).build(),
+        }
+    }
+
     /// Builds the final `Envelope<T>`.
     pub fn build(self) -> Envelope<T> {
         Envelope {

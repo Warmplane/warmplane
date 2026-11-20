@@ -131,7 +131,7 @@ impl HoldCoordinator {
         Ok(record)
     }
 
-    /// Converts an approval task into a durably held emission and starts its timer.
+    /// Converts an approval task into a held emission and starts its timer.
     pub async fn queue_existing(
         &self,
         state: &AppState,
@@ -195,7 +195,13 @@ impl HoldCoordinator {
                     crate::audit::AuditEventType::EmissionCancelled,
                 )
                 .await;
-                if let Some(key) = record.idempotency_key.as_deref() {
+                if let (Some(key), Some(claim)) = (
+                    record.idempotency_key.as_deref(),
+                    record
+                        .emission
+                        .as_ref()
+                        .and_then(|emission| emission.idempotency_claim),
+                ) {
                     let envelope = crate::engine::Envelope::<serde_json::Value>::failure(
                         record
                             .request_id
@@ -213,7 +219,7 @@ impl HoldCoordinator {
                         crate::idempotency::RetryMetadata::idempotent("not_started"),
                     );
                     if let Ok(value) = serde_json::to_value(envelope) {
-                        state.idempotency_store.complete(key, value).await;
+                        state.idempotency_store.complete(key, claim, value).await;
                     }
                 }
             }
@@ -245,6 +251,8 @@ impl HoldCoordinator {
                 && record.status != TaskStatus::Completed
                 && record.status != TaskStatus::Failed
             {
+                // A visible pending record denotes acceptance. The worker still
+                // has to persist a dispatch claim before sending it upstream.
                 self.start_worker(state.clone(), record).await;
             }
         }
@@ -438,30 +446,31 @@ impl HoldCoordinator {
         record: &TaskRecord,
         result: serde_json::Value,
     ) {
-        let _ = state
+        let outcome = state
             .task_registry
-            .complete_task(&record.task_id, result.clone())
+            .complete_execution(&record.task_id, result.clone())
             .await;
         self.audit_execution(state, record, Some(result.clone()), None)
             .await;
-        if let Some(key) = record.idempotency_key.as_deref() {
-            let retry = if record.idempotency_key.is_some() {
-                crate::idempotency::RetryMetadata::idempotent("completed")
-            } else {
-                crate::idempotency::RetryMetadata::unsafe_op("completed")
-            };
-            let envelope = crate::engine::Envelope::success(
+        if let (Some(key), Some(claim)) = (
+            record.idempotency_key.as_deref(),
+            record
+                .emission
+                .as_ref()
+                .and_then(|emission| emission.idempotency_claim),
+        ) {
+            let envelope = crate::engine::EnvelopeBuilder::new(
                 record
                     .request_id
                     .clone()
                     .unwrap_or_else(|| record.task_id.clone()),
-                record.request_id.clone(),
-                record.context.clone(),
-                result,
-                retry,
-            );
+                crate::idempotency::RetryMetadata::idempotent("completed"),
+            )
+            .request_id(record.request_id.clone())
+            .context(record.context.clone())
+            .outcome(outcome);
             if let Ok(value) = serde_json::to_value(envelope) {
-                state.idempotency_store.complete(key, value).await;
+                state.idempotency_store.complete(key, claim, value).await;
             }
         }
     }
@@ -483,7 +492,13 @@ impl HoldCoordinator {
             .await;
         self.audit_execution(state, record, None, Some((code, message.clone())))
             .await;
-        if let Some(key) = record.idempotency_key.as_deref() {
+        if let (Some(key), Some(claim)) = (
+            record.idempotency_key.as_deref(),
+            record
+                .emission
+                .as_ref()
+                .and_then(|emission| emission.idempotency_claim),
+        ) {
             let envelope = crate::engine::Envelope::<serde_json::Value>::failure(
                 record
                     .request_id
@@ -495,7 +510,7 @@ impl HoldCoordinator {
                 crate::idempotency::RetryMetadata::idempotent("completed"),
             );
             if let Ok(value) = serde_json::to_value(envelope) {
-                state.idempotency_store.complete(key, value).await;
+                state.idempotency_store.complete(key, claim, value).await;
             }
         }
     }

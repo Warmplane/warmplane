@@ -13,11 +13,33 @@ use std::{
 };
 use tracing::debug;
 
+/// The destination was replaced, but syncing its parent directory failed.
+#[derive(Debug)]
+pub struct ReplacementDurabilityUnknown(std::io::Error);
+
+impl std::fmt::Display for ReplacementDurabilityUnknown {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "replacement is visible, but directory sync failed: {}",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for ReplacementDurabilityUnknown {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
 /// Thread-safe manager for an atomically persisted JSON file on disk.
 #[derive(Debug, Clone)]
 pub struct AtomicFile<T> {
     path: PathBuf,
     _phantom: std::marker::PhantomData<T>,
+    #[cfg(all(test, unix))]
+    fail_next_directory_sync: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl<T> AtomicFile<T>
@@ -35,6 +57,8 @@ where
         Self {
             path: path.as_ref().to_path_buf(),
             _phantom: std::marker::PhantomData,
+            #[cfg(all(test, unix))]
+            fail_next_directory_sync: std::sync::Arc::default(),
         }
     }
 
@@ -100,19 +124,34 @@ where
     /// * `data` - Reference to data structure implementing `Serialize`.
     ///
     /// # Errors
-    /// Returns an error if serialization, directory creation, writing, or renaming fails.
+    /// Returns an error if preparing or replacing the file fails. A
+    /// [`ReplacementDurabilityUnknown`] error means the new file is already visible.
     pub fn save(&self, data: &T) -> Result<()> {
-        if let Some(parent) = self.path.parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists() {
-                fs::create_dir_all(parent).with_context(|| {
-                    format!(
-                        "Failed to create persistent state directory {}",
-                        parent.display()
-                    )
-                })?;
+        if let Some(directory) = self.replace(data)? {
+            #[cfg(all(test, unix))]
+            if self
+                .fail_next_directory_sync
+                .swap(false, std::sync::atomic::Ordering::Relaxed)
+            {
+                return sync_replacement(
+                    Err(std::io::Error::other("injected sync failure")),
+                    &self.path,
+                );
             }
+            sync_replacement(directory.sync_all(), &self.path)?;
         }
+        debug!(path = %self.path.display(), "atomically saved persistent state");
+        Ok(())
+    }
 
+    #[cfg(all(test, unix))]
+    pub(crate) fn fail_next_directory_sync(&self) {
+        self.fail_next_directory_sync
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn replace(&self, data: &T) -> Result<Option<fs::File>> {
+        self.ensure_parent_exists()?;
         let json_bytes = serde_json::to_string_pretty(data)
             .context("Failed to serialize state data to JSON format")?;
 
@@ -124,19 +163,7 @@ where
         let parent = fs::canonicalize(parent)
             .with_context(|| format!("Failed to resolve state directory {}", parent.display()))?;
         #[cfg(unix)]
-        let directory = {
-            use rustix::fs::{Mode, OFlags};
-
-            // Retain a directory-only descriptor through replacement and sync. Resolve configured
-            // symlinks above, then refuse a final symlink if the path changes before opening it.
-            let descriptor = rustix::fs::open(
-                &parent,
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .with_context(|| format!("Failed to open state directory {}", parent.display()))?;
-            fs::File::from(descriptor)
-        };
+        let directory = open_state_directory(&parent)?;
 
         // Keep the temporary file beside the destination for an atomic rename. Its generated
         // basename is independent of the configured target, and ownership handles cleanup.
@@ -164,11 +191,23 @@ where
             })?;
 
         #[cfg(unix)]
-        directory
-            .sync_all()
-            .with_context(|| format!("Failed to sync state directory {}", parent.display()))?;
+        return Ok(Some(directory));
+        #[cfg(not(unix))]
+        Ok(None)
+    }
 
-        debug!(path = %self.path.display(), "atomically saved persistent state");
+    fn ensure_parent_exists(&self) -> Result<()> {
+        if let Some(parent) = self.path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!(
+                        "Failed to create persistent state directory {}",
+                        parent.display()
+                    )
+                })?;
+            }
+        }
+
         Ok(())
     }
 
@@ -195,6 +234,27 @@ where
             }),
         }
     }
+}
+
+#[cfg(unix)]
+fn open_state_directory(parent: &Path) -> Result<fs::File> {
+    use rustix::fs::{Mode, OFlags};
+
+    // Retain a directory-only descriptor through replacement and sync. Refuse a
+    // final symlink if the canonicalized path changes before opening it.
+    let descriptor = rustix::fs::open(
+        parent,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .with_context(|| format!("Failed to open state directory {}", parent.display()))?;
+    Ok(fs::File::from(descriptor))
+}
+
+fn sync_replacement(result: std::io::Result<()>, path: &Path) -> Result<()> {
+    result
+        .map_err(ReplacementDurabilityUnknown)
+        .with_context(|| format!("Failed to sync state directory for {}", path.display()))
 }
 
 /// Helper to ensure the base state directory exists and return paths for state components.
@@ -300,6 +360,21 @@ mod tests {
     struct SampleState {
         counter: u64,
         tags: Vec<String>,
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_sync_failure_reports_a_visible_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        let store = AtomicFile::new(&path);
+        store.save(&1_u64).unwrap();
+
+        store.fail_next_directory_sync();
+        let error = store.save(&2).unwrap_err();
+
+        assert!(error.is::<ReplacementDurabilityUnknown>());
+        assert_eq!(store.load_opt().unwrap(), Some(2));
     }
 
     #[test]

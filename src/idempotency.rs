@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 use tracing::error;
 
 use crate::storage::AtomicFile;
@@ -115,8 +115,15 @@ impl RetryMetadata {
     }
 }
 
+/// Opaque ownership token for one execution of an idempotency key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IdempotencyClaim([u8; 16]);
+
 enum EntryState {
-    InProgress(broadcast::Sender<Value>),
+    InProgress {
+        claim: IdempotencyClaim,
+        result: broadcast::Sender<Value>,
+    },
     Completed(Value),
 }
 
@@ -128,6 +135,16 @@ struct IdempotencyEntry {
     completed_at_epoch_secs: Option<u64>,
     replay_count: u64,
     first_trace_id: Option<String>,
+}
+
+impl IdempotencyEntry {
+    fn is_live(&self, now: Instant, completed_ttl: Duration) -> bool {
+        let ttl = match self.state {
+            EntryState::InProgress { .. } => IN_PROGRESS_TIMEOUT,
+            EntryState::Completed(_) => completed_ttl,
+        };
+        now.duration_since(self.created_at) < ttl
+    }
 }
 
 /// Serialized record for persistent idempotency cache storage and external inspection.
@@ -161,16 +178,22 @@ pub struct IdempotencyStore {
     ttl: Duration,
     entries: RwLock<HashMap<String, IdempotencyEntry>>,
     storage: Option<AtomicFile<HashMap<String, PersistedIdempotencyRecord>>>,
+    persistence: Mutex<()>,
 }
 
 /// Result of checking or starting an idempotent request execution.
 pub enum DeduplicateResult {
     /// Request is new; caller must execute the underlying operation.
-    New,
+    New(IdempotencyClaim),
     /// Request is already in progress; receiver yields completed payload.
     InProgress(broadcast::Receiver<Value>),
-    /// Request was already completed; contains cached payload and whether it was previously recorded.
+    /// Request was already completed; contains the cached payload.
     Completed(Value),
+}
+
+pub(crate) enum ExecutionClaim {
+    New(IdempotencyClaim),
+    Replay { response: Value, from_cache: bool },
 }
 
 impl IdempotencyStore {
@@ -186,6 +209,7 @@ impl IdempotencyStore {
             ttl,
             entries: RwLock::new(HashMap::new()),
             storage: None,
+            persistence: Mutex::new(()),
         }
     }
 
@@ -246,11 +270,13 @@ impl IdempotencyStore {
             ttl,
             entries: RwLock::new(in_memory_map),
             storage: Some(storage),
+            persistence: Mutex::new(()),
         })
     }
 
     async fn sync_to_disk(&self) {
         if let Some(ref store) = self.storage {
+            let _persistence = self.persistence.lock().await;
             let guard = self.entries.read().await;
             let mut persisted = HashMap::new();
             for (k, entry) in guard.iter() {
@@ -306,20 +332,17 @@ impl IdempotencyStore {
 
         // Check if existing key is valid before returning
         if let Some(entry) = map.get_mut(key_ref) {
-            let age = now.duration_since(entry.created_at);
-            match &entry.state {
-                EntryState::Completed(val) => {
-                    if age < self.ttl {
+            if entry.is_live(now, self.ttl) {
+                match &entry.state {
+                    EntryState::Completed(val) => {
                         entry.replay_count = entry.replay_count.saturating_add(1);
                         let ret_val = val.clone();
                         drop(map);
                         self.sync_to_disk().await;
                         return DeduplicateResult::Completed(ret_val);
                     }
-                }
-                EntryState::InProgress(tx) => {
-                    if age < IN_PROGRESS_TIMEOUT {
-                        return DeduplicateResult::InProgress(tx.subscribe());
+                    EntryState::InProgress { result, .. } => {
+                        return DeduplicateResult::InProgress(result.subscribe());
                     }
                 }
             }
@@ -330,20 +353,26 @@ impl IdempotencyStore {
         // Opportunistic batch eviction only if map size exceeds threshold (amortized O(1))
         if map.len() > 1024 {
             let ttl = self.ttl;
-            map.retain(|_, entry| now.duration_since(entry.created_at) < ttl);
+            map.retain(|_, entry| entry.is_live(now, ttl));
             if map.len() >= 4096 {
-                let keys: Vec<String> = map.keys().take(1024).cloned().collect();
+                let keys: Vec<String> = map
+                    .iter()
+                    .filter(|(_, entry)| matches!(entry.state, EntryState::Completed(_)))
+                    .take(1024)
+                    .map(|(key, _)| key.clone())
+                    .collect();
                 for k in keys {
                     map.remove(&k);
                 }
             }
         }
 
-        let (tx, _) = broadcast::channel(1);
+        let (result, _) = broadcast::channel(1);
+        let claim = IdempotencyClaim(rand::random());
         map.insert(
             key_ref.to_string(),
             IdempotencyEntry {
-                state: EntryState::InProgress(tx),
+                state: EntryState::InProgress { claim, result },
                 capability_id,
                 created_at: now,
                 created_at_epoch_secs: now_epoch_secs,
@@ -352,28 +381,76 @@ impl IdempotencyStore {
                 first_trace_id: trace_id,
             },
         );
-        DeduplicateResult::New
+        DeduplicateResult::New(claim)
     }
 
-    /// Completes an in-progress idempotency entry and broadcasts the final JSON payload.
-    ///
-    /// # Arguments
-    /// * `key` - Unique idempotency key string.
-    /// * `result` - Completed JSON payload.
-    pub async fn complete(&self, key: impl AsRef<str>, result: Value) {
-        let key_ref = key.as_ref();
-        let now_epoch_secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let mut map = self.entries.write().await;
-        if let Some(entry) = map.get_mut(key_ref) {
-            if let EntryState::InProgress(tx) = &entry.state {
-                let _ = tx.send(result.clone());
+    pub(crate) async fn claim_or_replay(
+        &self,
+        key: &str,
+        capability_id: &str,
+        trace_id: &str,
+    ) -> ExecutionClaim {
+        loop {
+            match self
+                .check_or_start_with_meta(key, Some(capability_id.into()), Some(trace_id.into()))
+                .await
+            {
+                DeduplicateResult::New(claim) => return ExecutionClaim::New(claim),
+                DeduplicateResult::Completed(response) => {
+                    return ExecutionClaim::Replay {
+                        response,
+                        from_cache: true,
+                    };
+                }
+                DeduplicateResult::InProgress(mut receiver) => {
+                    if let Ok(response) = receiver.recv().await {
+                        return ExecutionClaim::Replay {
+                            response,
+                            from_cache: false,
+                        };
+                    }
+                }
             }
-            entry.state = EntryState::Completed(result);
-            entry.completed_at_epoch_secs = Some(now_epoch_secs);
         }
+    }
+
+    pub(crate) async fn release_execution(
+        &self,
+        key: Option<&str>,
+        claim: Option<IdempotencyClaim>,
+    ) {
+        if let (Some(key), Some(claim)) = (key, claim) {
+            self.remove(key, claim).await;
+        }
+    }
+
+    /// Completes a matching in-progress claim and broadcasts the final JSON payload.
+    ///
+    /// A stale claim leaves the current entry untouched.
+    pub async fn complete(&self, key: impl AsRef<str>, claim: IdempotencyClaim, result: Value) {
+        let mut map = self.entries.write().await;
+        let Some(entry) = map.get_mut(key.as_ref()) else {
+            return;
+        };
+        let EntryState::InProgress {
+            claim: owner,
+            result: sender,
+        } = &entry.state
+        else {
+            return;
+        };
+        if *owner != claim {
+            return;
+        }
+
+        let _ = sender.send(result.clone());
+        entry.state = EntryState::Completed(result);
+        entry.completed_at_epoch_secs = Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        );
         drop(map);
         self.sync_to_disk().await;
     }
@@ -435,7 +512,7 @@ impl IdempotencyStore {
         let now = Instant::now();
         let ttl = self.ttl;
         let initial_len = map.len();
-        map.retain(|_, entry| now.duration_since(entry.created_at) < ttl);
+        map.retain(|_, entry| entry.is_live(now, ttl));
         let removed = initial_len.saturating_sub(map.len());
         drop(map);
         if removed > 0 {
@@ -444,12 +521,18 @@ impl IdempotencyStore {
         removed
     }
 
-    /// Removes an idempotency record by key.
-    pub async fn remove(&self, key: &str) {
+    /// Releases a matching in-progress claim after execution aborts.
+    ///
+    /// A stale claim leaves the current entry untouched.
+    pub async fn remove(&self, key: &str, claim: IdempotencyClaim) {
         let mut map = self.entries.write().await;
-        map.remove(key);
-        drop(map);
-        self.sync_to_disk().await;
+        if map.get(key).is_some_and(|entry| {
+            matches!(entry.state, EntryState::InProgress { claim: owner, .. } if owner == claim)
+        }) {
+            map.remove(key);
+            drop(map);
+            self.sync_to_disk().await;
+        }
     }
 }
 
@@ -502,10 +585,9 @@ mod tests {
         let store = IdempotencyStore::new(Duration::from_secs(60));
         let key = "idem-key-1";
 
-        match store.check_or_start(key).await {
-            DeduplicateResult::New => {}
-            _ => panic!("Expected New"),
-        }
+        let DeduplicateResult::New(claim) = store.check_or_start(key).await else {
+            panic!("Expected New");
+        };
 
         let store_arc = Arc::new(store);
         let store_clone = store_arc.clone();
@@ -524,7 +606,7 @@ mod tests {
 
         started_rx.await.unwrap();
         let res_value = serde_json::json!({"ok": true, "data": "test"});
-        store_arc.complete(key, res_value.clone()).await;
+        store_arc.complete(key, claim, res_value.clone()).await;
 
         let received = handle.await.unwrap();
         assert_eq!(received, res_value);
@@ -542,6 +624,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stale_owner_cannot_complete_or_remove_replacement() {
+        let store = IdempotencyStore::new(Duration::from_secs(300));
+        let key = "replacement";
+        let DeduplicateResult::New(stale) = store.check_or_start(key).await else {
+            panic!("expected initial claim");
+        };
+        store.entries.write().await.get_mut(key).unwrap().created_at -= IN_PROGRESS_TIMEOUT;
+        let DeduplicateResult::New(current) = store.check_or_start(key).await else {
+            panic!("expected replacement claim");
+        };
+        let DeduplicateResult::InProgress(mut waiter) = store.check_or_start(key).await else {
+            panic!("expected pending replacement");
+        };
+
+        store.complete(key, stale, serde_json::json!("stale")).await;
+        store.remove(key, stale).await;
+        assert!(matches!(
+            waiter.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+
+        let result = serde_json::json!("current");
+        store.complete(key, current, result.clone()).await;
+        assert_eq!(waiter.recv().await.unwrap(), result);
+    }
+
+    #[tokio::test]
+    async fn capacity_and_completed_ttl_preserve_active_claims() {
+        let store = IdempotencyStore::new(Duration::ZERO);
+        for index in 0..4100 {
+            let _ = store.check_or_start(index.to_string()).await;
+        }
+        assert_eq!(store.clear_expired().await, 0);
+        assert!(matches!(
+            store.check_or_start("0").await,
+            DeduplicateResult::InProgress(_)
+        ));
+    }
+
+    #[tokio::test]
     async fn test_idempotency_persistence_across_restarts() {
         let temp_dir = tempfile::tempdir().unwrap();
         let cache_file = temp_dir.path().join("idempotency.json");
@@ -550,22 +672,21 @@ mod tests {
         // 1. First run: Start and complete an idempotent key
         let store1 = IdempotencyStore::open_or_create(&cache_file, ttl).unwrap();
         let key = "idem-restart-key";
-        match store1
+        let DeduplicateResult::New(claim) = store1
             .check_or_start_with_meta(
                 key,
                 Some("tools.calc".to_string()),
                 Some("trace-initial".to_string()),
             )
             .await
-        {
-            DeduplicateResult::New => {}
-            _ => panic!("Expected New"),
-        }
+        else {
+            panic!("Expected New");
+        };
         let completed_payload = serde_json::json!({
             "status": "success",
             "transaction_id": "tx-999"
         });
-        store1.complete(key, completed_payload.clone()).await;
+        store1.complete(key, claim, completed_payload.clone()).await;
 
         drop(store1); // Simulate daemon restart
 

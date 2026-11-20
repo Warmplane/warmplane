@@ -53,7 +53,7 @@ If an upstream process crashes or reports `Circuit: OPEN`:
 ### W4: Hold and Cancel Delayable Emissions
 For aliases configured with `reversibility.class: "delayable"`, Warmplane starts the hold after any required approval. The duration precedence is profile policy, alias `holdWindowSecs`, global policy, then 30 seconds. Async calls return a task receipt (`phase`, `releaseAtMs`, `cancellable`); synchronous calls wait only when the hold is shorter than `toolTimeoutMs`. Cancel with `/v1/tasks/{taskId}/cancel`, `/v1/operations/{requestId}/cancel`, MCP `tasks/cancel`, or the embedded `ControlPlaneHandle::cancel_task` API. A `409 EMISSION_DISPATCHING` means dispatch was durably claimed. Pending calls resume after restart and policy/profile revalidation; calls recovered in `dispatching` fail as `EMISSION_OUTCOME_UNKNOWN` and are never automatically resent. Batch steps wait for the held result within the batch budget.
 
-When task persistence is disabled, accepted holds exist only in memory and are lost when the process exits. Persistent state is required for restart recovery.
+When task persistence is disabled, accepted holds exist only in memory and are lost when the process exits. If a receipt reports uncertain persistence across restart, the hold was accepted and may resume if its task record survives. Dispatch still requires a durable claim. Persistent state is required for restart recovery.
 
 For operators and agents to share live undo state, use the daemon with `mcpHttpServer` enabled and connect agents to `/mcp`. Separate stdio processes own separate runtime state.
 
@@ -71,3 +71,7 @@ The Control Deck Action Feed provides Previous/Next navigation through undo hist
 - [CLI Cheatsheet](./references/cli_cheatsheet.md): Shell commands for daemon, 1-click sync, and vault.
 - [Configuration Schema](./references/configuration_schema.md): `mcp_servers.json` spec, dynamic secrets (`keychain://`, `op://`, `env://`), profiles, resilience, and reversibility contracts.
 - [Troubleshooting](./references/error_resolution.md): Circuit breakers, policy denials, and cascade cleanup.
+
+`GET /v1/audit/verify` checks the complete persisted log. When an in-memory
+log has evicted records, `report.first_retained_index` identifies the start of
+the verified suffix and `report.total_records` includes earlier records.

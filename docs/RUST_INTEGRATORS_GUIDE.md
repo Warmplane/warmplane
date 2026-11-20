@@ -563,3 +563,19 @@ See the [User Guide](USER-GUIDE.md) for the complete error code table and the [W
 - **SSE streaming**: Connect to `GET /v1/resources/updates` for real-time catalog mutation events using `reqwest`'s streaming API.
 - **HITL integration**: Poll `GET /v1/approvals` to build operator approval workflows into your application.
 - **Audit queries**: Use `GET /v1/audit/events` to pull execution history for compliance reporting.
+
+### Direct idempotency store use
+
+`IdempotencyStore::check_or_start` and `check_or_start_with_meta` return
+`DeduplicateResult::New(claim)` when the caller owns the execution. Pass that
+claim and the key to `complete` when publishing a result or to `remove` when
+abandoning the execution. A superseded claim has no effect on the current
+execution. The embedded control plane manages these claims for its callers.
+
+When constructing an `EmissionRecord` directly without an originating store
+claim, set `idempotency_claim` to `None`. The field is scoped to the current process.
+
+`TaskRegistry::complete_task` returns the resulting task record, or `None` if
+the task is missing. Check the returned status when publishing a result.
+A task that expires before completion returns a failed record with
+`TASK_EXPIRED`. Embedded tool calls use that outcome for idempotent replay.

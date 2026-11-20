@@ -67,14 +67,13 @@ async fn test_uc5_failing_after_commit_simulation_and_audit_linkage() {
         )
         .await;
 
-    assert!(matches!(
-        start_res,
-        warmplane::idempotency::DeduplicateResult::New
-    ));
+    let warmplane::idempotency::DeduplicateResult::New(claim) = start_res else {
+        panic!("expected an execution claim");
+    };
     execution_count.fetch_add(1, Ordering::SeqCst);
 
     idempotency_store
-        .complete(&test_key, success_payload.clone())
+        .complete(&test_key, claim, success_payload.clone())
         .await;
 
     // Record the first attempt in WORM audit store
