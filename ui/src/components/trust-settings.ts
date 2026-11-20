@@ -16,8 +16,8 @@ export function renderResultSanitization(rules: ResultRules | undefined): string
           <textarea class="form-textarea" id="result-fields" name="fields" rows="3">${escapeHtml((rules?.fieldNames ?? []).join('\n'))}</textarea>
         </div>
         <div class="form-group">
-          <label class="form-label" for="result-patterns">Regular expressions · one per line</label>
-          <textarea class="form-textarea" id="result-patterns" name="patterns" rows="3">${escapeHtml((rules?.patterns ?? []).join('\n'))}</textarea>
+          <label class="form-label" for="result-patterns">Regular expressions · JSON array</label>
+          <textarea class="form-textarea" id="result-patterns" name="patterns" rows="3">${escapeHtml(JSON.stringify(rules?.patterns ?? [], null, 2))}</textarea>
         </div>
       </div>
       <div class="form-group">
@@ -88,7 +88,10 @@ function text(data: FormData, name: string): string {
 export function readResultRules(data: FormData): ResultRules | undefined {
   if (!data.has('enabled')) return undefined;
   const fieldNames = text(data, 'fields').split('\n').map(line => line.trim()).filter(Boolean);
-  const patterns = String(data.get('patterns') ?? '').split(/\r?\n/).filter(line => line.length);
+  const patterns: unknown = JSON.parse(text(data, 'patterns') || '[]');
+  if (!Array.isArray(patterns) || !patterns.every(pattern => typeof pattern === 'string')) {
+    throw new Error('Enter regular expressions as a JSON array of strings.');
+  }
   const exceptions: unknown = JSON.parse(text(data, 'exceptions') || '[]');
   if (!Array.isArray(exceptions)) throw new Error('Enter opaque content exceptions as a JSON array.');
   return { fieldNames, patterns, opaqueExceptions: exceptions };
@@ -104,26 +107,37 @@ export function readWebhook(data: FormData, previous: PolicyConfig['webhook'], r
   const events = (current?.events ?? []).filter(event => event !== approvalEvent && event !== quarantineEvent);
   if (data.has('approvals')) events.push(approvalEvent);
   if (data.has('quarantine')) events.push(quarantineEvent);
-  const callbackUrl = text(data, 'callbackUrl') || undefined;
-  const actionRole = text(data, 'actionRole') || undefined;
-  const approvalTenant = text(data, 'approvalTenant') || undefined;
-  const secret = text(data, 'secret') || undefined;
-  const secretEnv = text(data, 'secretEnv') || undefined;
-  const slackSigningSecret = text(data, 'slackSigningSecret') || undefined;
-  const slackSigningSecretEnv = text(data, 'slackSigningSecretEnv') || undefined;
-  const format = (text(data, 'format') || 'generic') as WebhookConfig['format'];
-  if (data.has('approvals')) {
-    if (!callbackUrl || new URL(callbackUrl).pathname !== '/v1/webhooks/actions') throw new Error('Use a callback URL ending in /v1/webhooks/actions.');
-    if (!actionRole) throw new Error('Enter the delegated action role for signed approvals.');
-    if (rbacEnabled && !approvalTenant) throw new Error('Enter the approval tenant for signed approvals under RBAC.');
-    if (format === 'slack' && !slackSigningSecret && !slackSigningSecretEnv) throw new Error('Enter the Slack app signing secret or its environment variable.');
+  const setting = (name: string) => text(data, name) || undefined;
+  const webhook: WebhookConfig = {
+    ...current, url, events,
+    format: (setting('format') ?? 'generic') as WebhookConfig['format'],
+    callbackUrl: setting('callbackUrl'),
+    actionRole: setting('actionRole'),
+    approvalTenant: setting('approvalTenant'),
+    secret: setting('secret'),
+    secretEnv: setting('secretEnv'),
+    slackSigningSecret: setting('slackSigningSecret'),
+    slackSigningSecretEnv: setting('slackSigningSecretEnv'),
+    callback_url: undefined,
+    secret_env: undefined,
+  };
+  validateWebhook(webhook, rbacEnabled);
+  return webhook;
+}
+
+function validateWebhook(webhook: WebhookConfig, rbacEnabled: boolean) {
+  if (webhook.events?.includes(approvalEvent)) {
+    if (!webhook.callbackUrl || new URL(webhook.callbackUrl).pathname !== '/v1/webhooks/actions') {
+      throw new Error('Use a callback URL ending in /v1/webhooks/actions.');
+    }
+    if (!webhook.actionRole) throw new Error('Enter the delegated action role for signed approvals.');
+    if (rbacEnabled && !webhook.approvalTenant) throw new Error('Enter the approval tenant for signed approvals under RBAC.');
+    if (webhook.format === 'slack' && !webhook.slackSigningSecret && !webhook.slackSigningSecretEnv) {
+      throw new Error('Enter the Slack app signing secret or its environment variable.');
+    }
   }
-  if ((data.has('approvals') || data.has('quarantine')) && !secret && !secretEnv) {
+  const signed = webhook.events?.some(event => event === approvalEvent || event === quarantineEvent);
+  if (signed && !webhook.secret && !webhook.secretEnv) {
     throw new Error('Enter the webhook signing secret or its environment variable.');
   }
-  return {
-    ...current, url, format, events, callbackUrl, actionRole, approvalTenant,
-    secret, secretEnv, slackSigningSecret, slackSigningSecretEnv,
-    callback_url: undefined, secret_env: undefined,
-  };
 }

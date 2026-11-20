@@ -69,11 +69,6 @@ pub async fn handle_upsert_server(
     admin: Option<axum::extract::Extension<TrustAdmin>>,
     Json(mut payload): Json<UpsertServerRequest>,
 ) -> impl IntoResponse {
-    if payload.server.require_tool_pins
-        && !admin.is_some_and(|axum::extract::Extension(TrustAdmin(admin))| admin)
-    {
-        return trust_admin_required();
-    }
     let mut config = match crate::config::load_or_default_config(&state.config_path) {
         Ok(c) => c,
         Err(e) => {
@@ -86,27 +81,12 @@ pub async fn handle_upsert_server(
     };
 
     let current = config.mcp_servers.get(&payload.name);
-    if current.is_some_and(|server| server.require_tool_pins)
+    if (payload.server.require_tool_pins || current.is_some_and(|server| server.require_tool_pins))
         && !admin.is_some_and(|axum::extract::Extension(TrustAdmin(admin))| admin)
     {
         return trust_admin_required();
     }
-    if let Some(current) = current {
-        if payload.preserve_unedited {
-            payload.server.preserve_unedited_settings(current);
-        } else if let Err(error) = payload.server.preserve_masked_credentials(current) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"ok": false, "error": error.to_string()})),
-            )
-                .into_response();
-        }
-    }
-
-    config
-        .mcp_servers
-        .insert(payload.name.clone(), payload.server.clone());
-    if let Err(e) = crate::config::save_config(&state.config_path, &config) {
+    if let Err(e) = persist_server_update(&state.config_path, &mut config, &mut payload) {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "ok": false, "error": e.to_string() })),
@@ -141,6 +121,24 @@ pub async fn handle_upsert_server(
         })),
     )
         .into_response()
+}
+
+fn persist_server_update(
+    path: &str,
+    config: &mut crate::config::McpConfig,
+    payload: &mut UpsertServerRequest,
+) -> anyhow::Result<()> {
+    if let Some(current) = config.mcp_servers.get(&payload.name) {
+        if payload.preserve_unedited {
+            payload.server.preserve_unedited_settings(current);
+        } else {
+            payload.server.preserve_masked_credentials(current)?;
+        }
+    }
+    config
+        .mcp_servers
+        .insert(payload.name.clone(), payload.server.clone());
+    crate::config::save_config(path, config)
 }
 
 /// Handles DELETE `/v1/config/servers/:id` to remove an upstream server.

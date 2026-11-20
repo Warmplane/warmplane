@@ -582,19 +582,9 @@ class WarmplaneApp {
       case 'audit':
         mainEl.innerHTML = renderAudit();
         break;
-      case 'policy': {
-        const previousPinPanel = mainEl.querySelector<HTMLElement>('#tool-pins-panel');
-        const openForms = [...mainEl.querySelectorAll<HTMLFormElement>('form[data-policy-key]')];
-        mainEl.innerHTML = renderPolicy();
-        for (const form of openForms) {
-          const replacement = document.getElementById(form.id);
-          if (replacement?.dataset.policyKey === form.dataset.policyKey) replacement?.replaceWith(form);
-        }
-        const pinPanel = mainEl.querySelector<HTMLElement>('#tool-pins-panel');
-        if (pinPanel && previousPinPanel) pinPanel.replaceWith(previousPinPanel);
-        else if (pinPanel) mountToolPinReview(pinPanel);
+      case 'policy':
+        this.renderPolicyView(mainEl);
         break;
-      }
       case 'secrets':
         mainEl.innerHTML = renderSecrets();
         break;
@@ -1614,6 +1604,23 @@ class WarmplaneApp {
     await this.refreshData();
   }
 
+  private renderPolicyView(main: HTMLElement) {
+    const pinPanel = main.querySelector<HTMLElement>('#tool-pins-panel');
+    const forms = [...main.querySelectorAll<HTMLFormElement>('form[data-policy-key]')];
+    const focused = document.activeElement;
+    main.innerHTML = renderPolicy();
+    for (const form of forms) {
+      const replacement = document.getElementById(form.id);
+      if (replacement && replacement.dataset.policyKey === form.dataset.policyKey) {
+        replacement.replaceWith(form);
+        if (focused instanceof HTMLElement && form.contains(focused)) focused.focus({ preventScroll: true });
+      }
+    }
+    const replacement = main.querySelector<HTMLElement>('#tool-pins-panel');
+    if (replacement && pinPanel) replacement.replaceWith(pinPanel);
+    else if (replacement) mountToolPinReview(replacement);
+  }
+
   async saveResultSanitization(event: SubmitEvent) {
     await this.saveTrustPolicy(event, (policy, data) => ({ ...policy, resultSanitization: readResultRules(data) }));
   }
@@ -1971,19 +1978,7 @@ class WarmplaneApp {
       serverPayload.url = url;
     }
 
-    const ftVal = (document.getElementById('modal-srv-ft') as HTMLInputElement)?.value.trim();
-    const cdVal = (document.getElementById('modal-srv-cd') as HTMLInputElement)?.value.trim();
-    const autoRestartVal = (document.getElementById('modal-srv-autorestart') as HTMLSelectElement)?.value;
-    const maxRestartsVal = (document.getElementById('modal-srv-maxrestarts') as HTMLInputElement)?.value.trim();
-
-    if (ftVal || cdVal || autoRestartVal || maxRestartsVal) {
-      serverPayload.resilience = {
-        failureThreshold: ftVal ? Number(ftVal) : 3,
-        cooldownMs: cdVal ? Number(cdVal) : 30000,
-        autoRestart: autoRestartVal !== 'false',
-        maxRestarts: maxRestartsVal ? Number(maxRestartsVal) : 5
-      };
-    }
+    serverPayload.resilience = this.readServerResilience('modal');
 
     const res = await api.upsertServer(name, serverPayload, editing);
     if (res.ok) {
@@ -2212,27 +2207,16 @@ class WarmplaneApp {
       }
     }
 
-    const payload: any = {
+    const payload: McpServerConfig = {
       command: tmpl.command,
-      args: args
+      args,
+      requireToolPins: existingServers[serverId]?.requireToolPins,
     };
     if (Object.keys(env).length > 0) {
       payload.env = env;
     }
 
-    const ftVal = (document.getElementById('cfg-srv-ft') as HTMLInputElement)?.value.trim();
-    const cdVal = (document.getElementById('cfg-srv-cd') as HTMLInputElement)?.value.trim();
-    const autoRestartVal = (document.getElementById('cfg-srv-autorestart') as HTMLSelectElement)?.value;
-    const maxRestartsVal = (document.getElementById('cfg-srv-maxrestarts') as HTMLInputElement)?.value.trim();
-
-    if (ftVal || cdVal || autoRestartVal || maxRestartsVal) {
-      payload.resilience = {
-        failureThreshold: ftVal ? Number(ftVal) : 3,
-        cooldownMs: cdVal ? Number(cdVal) : 30000,
-        autoRestart: autoRestartVal !== 'false',
-        maxRestarts: maxRestartsVal ? Number(maxRestartsVal) : 5
-      };
-    }
+    payload.resilience = this.readServerResilience('cfg');
 
     const res = await api.upsertServer(serverId, payload);
     if (res.ok) {
@@ -2241,6 +2225,21 @@ class WarmplaneApp {
     } else {
       alert(`Failed to save server: ${res.error}`);
     }
+  }
+
+  private readServerResilience(prefix: 'cfg' | 'modal'): McpServerConfig['resilience'] {
+    const value = (field: string) => document.querySelector<HTMLInputElement | HTMLSelectElement>(`#${prefix}-srv-${field}`)?.value.trim();
+    const threshold = value('ft');
+    const cooldown = value('cd');
+    const restart = value('autorestart');
+    const restarts = value('maxrestarts');
+    if (!threshold && !cooldown && !restart && !restarts) return undefined;
+    return {
+      failureThreshold: threshold ? Number(threshold) : 3,
+      cooldownMs: cooldown ? Number(cooldown) : 30000,
+      autoRestart: restart !== 'false',
+      maxRestarts: restarts ? Number(restarts) : 5,
+    };
   }
 
   // Ecosystem Actions
