@@ -117,28 +117,10 @@ fn approval_fields(data: &Value, pretty: bool) -> (&str, &str, &str, String) {
     (text("id"), text("capability_id"), text("server_id"), args)
 }
 
-fn build_slack_payload(event_type: &str, data: &Value, callback_url: Option<&str>) -> Value {
-    let title = match event_type {
-        "approval.requested" => "🚨 Warmplane: Human Approval Required",
-        "circuit_breaker.tripped" => "⚠️ Warmplane: Circuit Breaker Tripped",
-        "policy.violation" => "🛡️ Warmplane: Security Policy Violation",
-        "task.timeout" => "⏱️ Warmplane: Task Timeout",
-        _ => "📢 Warmplane Notification",
-    };
+fn append_slack_approval(blocks: &mut Vec<Value>, data: &Value) {
+    let (ticket_id, cap_id, server_id, args_str) = approval_fields(data, true);
 
-    let mut blocks = vec![json!({
-        "type": "header",
-        "text": {
-            "type": "plain_text",
-            "text": title,
-            "emoji": true
-        }
-    })];
-
-    if event_type == "approval.requested" {
-        let (ticket_id, cap_id, server_id, args_str) = approval_fields(data, true);
-
-        blocks.push(json!({
+    blocks.push(json!({
             "type": "section",
             "fields": [
                 {
@@ -160,25 +142,47 @@ fn build_slack_payload(event_type: &str, data: &Value, callback_url: Option<&str
             ]
         }));
 
-        blocks.push(json!({
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": format!("*Parameters:*\n```{}```", args_str)
-            }
-        }));
-
-        if let Some((approve, reject)) = approval_tokens(data) {
-            blocks.push(json!({
-                "type": "actions",
-                "elements": [
-                    {"type": "button", "text": {"type": "plain_text", "text": "Approve"},
-                     "style": "primary", "value": approve, "action_id": "warmplane_approve_btn"},
-                    {"type": "button", "text": {"type": "plain_text", "text": "Reject"},
-                     "style": "danger", "value": reject, "action_id": "warmplane_reject_btn"}
-                ]
-            }));
+    blocks.push(json!({
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": format!("*Parameters:*\n```{}```", args_str)
         }
+    }));
+
+    if let Some((approve, reject)) = approval_tokens(data) {
+        blocks.push(json!({
+            "type": "actions",
+            "elements": [
+                {"type": "button", "text": {"type": "plain_text", "text": "Approve"},
+                 "style": "primary", "value": approve, "action_id": "warmplane_approve_btn"},
+                {"type": "button", "text": {"type": "plain_text", "text": "Reject"},
+                 "style": "danger", "value": reject, "action_id": "warmplane_reject_btn"}
+            ]
+        }));
+    }
+}
+
+fn build_slack_payload(event_type: &str, data: &Value, callback_url: Option<&str>) -> Value {
+    let title = match event_type {
+        "approval.requested" => "🚨 Warmplane: Human Approval Required",
+        "circuit_breaker.tripped" => "⚠️ Warmplane: Circuit Breaker Tripped",
+        "policy.violation" => "🛡️ Warmplane: Security Policy Violation",
+        "task.timeout" => "⏱️ Warmplane: Task Timeout",
+        _ => "📢 Warmplane Notification",
+    };
+
+    let mut blocks = vec![json!({
+        "type": "header",
+        "text": {
+            "type": "plain_text",
+            "text": title,
+            "emoji": true
+        }
+    })];
+
+    if event_type == "approval.requested" {
+        append_slack_approval(&mut blocks, data);
     } else if matches!(event_type, "undo.action_available" | "emission.held") {
         let capability = data
             .get("capability")

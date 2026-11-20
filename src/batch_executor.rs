@@ -333,6 +333,16 @@ impl BatchExecution<'_> {
                 break;
             }
         }
+        let results_current = self.withhold_stale_results(&mut results, revisions).await;
+        (ok && results_current, results)
+    }
+
+    async fn withhold_stale_results(
+        &self,
+        results: &mut [BatchStepResult],
+        revisions: Vec<Option<String>>,
+    ) -> bool {
+        let mut ok = true;
         let policy = self.state.policy.read().await;
         if let Some(rules) = &policy.result_sanitization {
             for (result, revision) in results.iter_mut().zip(revisions) {
@@ -346,7 +356,7 @@ impl BatchExecution<'_> {
                 }
             }
         }
-        (ok, results)
+        ok
     }
 
     fn handle_step_failure(

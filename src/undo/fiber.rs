@@ -153,25 +153,7 @@ async fn unwind_matching_fiber(
     let Some(ledger) = state.undo_ledger.as_ref() else {
         return Vec::new();
     };
-    let selection_time_ms = now_ms();
-    let mut entries = ledger
-        .entries()
-        .await
-        .into_iter()
-        .enumerate()
-        .filter(|(_, entry)| {
-            entry.tenant_id == tenant_id
-                && selector.matches(entry)
-                && entry.status == UndoEntryStatus::Armed
-                && entry.expires_at_ms > selection_time_ms
-        })
-        .collect::<Vec<_>>();
-    entries.sort_by(|(left_index, left), (right_index, right)| {
-        right
-            .created_at_ms
-            .cmp(&left.created_at_ms)
-            .then_with(|| right_index.cmp(left_index))
-    });
+    let entries = eligible_fiber_entries(ledger, selector, tenant_id).await;
 
     let mut outcomes = Vec::with_capacity(entries.len());
     let unwind_started = std::time::Instant::now();
@@ -248,6 +230,34 @@ fn failed_result(entry: &UndoEntry, error: String) -> RollbackResult {
     }
 }
 
+async fn eligible_fiber_entries(
+    ledger: &crate::undo::UndoLedgerStore,
+    selector: FiberSelector<'_>,
+    tenant_id: &str,
+) -> Vec<(usize, UndoEntry)> {
+    let selection_time_ms = now_ms();
+    let mut entries = ledger
+        .entries()
+        .await
+        .into_iter()
+        .enumerate()
+        .filter(|(_, entry)| {
+            entry.tenant_id == tenant_id
+                && selector.matches(entry)
+                && entry.status == UndoEntryStatus::Armed
+                && entry.expires_at_ms > selection_time_ms
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|(left_index, left), (right_index, right)| {
+        right
+            .created_at_ms
+            .cmp(&left.created_at_ms)
+            .then_with(|| right_index.cmp(left_index))
+    });
+
+    entries
+}
+
 async fn block_on_pre_undo_drift(
     state: &AppState,
     ledger: &crate::undo::UndoLedgerStore,
@@ -287,16 +297,13 @@ async fn block_on_pre_undo_drift(
     let release_result = ledger.release_operator_claim(&claimed.undo_id).await;
     state.notify_action_capsules_changed();
     let mut result = failed_result(claimed, message.to_string());
-    result.error_code = Some(if release_result.is_ok() {
-        code.to_string()
+    let (outcome_code, entry_status) = if release_result.is_ok() {
+        (code, UndoEntryStatus::Armed)
     } else {
-        "UNDO_PERSISTENCE_FAILED".to_string()
-    });
-    result.entry_status = Some(if release_result.is_ok() {
-        UndoEntryStatus::Armed
-    } else {
-        UndoEntryStatus::Executing
-    });
+        ("UNDO_PERSISTENCE_FAILED", UndoEntryStatus::Executing)
+    };
+    result.error_code = Some(outcome_code.to_owned());
+    result.entry_status = Some(entry_status);
     let server_id = state
         .capabilities
         .read()
@@ -344,6 +351,22 @@ async fn block_on_pre_undo_drift(
     Some(result)
 }
 
+fn inverse_denial(
+    policy: &Policy,
+    capability: &str,
+    authorization_expires_at_epoch_secs: Option<u64>,
+) -> Option<String> {
+    if authorization_expires_at_epoch_secs.is_some_and(|expiry| now_secs() >= expiry) {
+        Some("caller authorization expired before inverse dispatch".to_string())
+    } else if !policy.allows(capability) {
+        Some("inverse capability is denied by current policy".to_string())
+    } else if policy.requires_approval(capability) {
+        Some("inverse requires operator approval and cannot run automatically".to_string())
+    } else {
+        None
+    }
+}
+
 async fn dispatch_inverse(
     state: &AppState,
     entry: &UndoEntry,
@@ -359,15 +382,7 @@ async fn dispatch_inverse(
         trace_id,
     } = scope;
     let capability = &entry.resolved_inverse_capability;
-    let denied = if authorization_expires_at_epoch_secs.is_some_and(|expiry| now_secs() >= expiry) {
-        Some("caller authorization expired before inverse dispatch".to_string())
-    } else if !policy.allows(capability) {
-        Some("inverse capability is denied by current policy".to_string())
-    } else if policy.requires_approval(capability) {
-        Some("inverse requires operator approval and cannot run automatically".to_string())
-    } else {
-        None
-    };
+    let denied = inverse_denial(policy, capability, authorization_expires_at_epoch_secs);
     let mut error = denied;
     let idempotency_key = format!(
         "idk_{}",

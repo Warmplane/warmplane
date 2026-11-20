@@ -744,28 +744,9 @@ class WarmplaneApp {
       for (const k of inputKeys) {
         const reqDef = inputReqs[k];
         if (reqDef && reqDef.type === 'approval_review') {
-          const decisionEl = document.getElementById(`task-input-${taskId}-${k}-decision`) as HTMLSelectElement | null;
-          const argsEl = document.getElementById(`task-input-${taskId}-${k}`) as HTMLTextAreaElement | null;
-          if (!decisionEl?.value) {
-            alert('Choose whether to approve or reject this invocation.');
-            decisionEl?.focus();
-            return;
-          }
-          const isApproved = decisionEl.value === 'true';
-          let modArgs: any = undefined;
-          if (isApproved && argsEl && argsEl.value.trim()) {
-            try {
-              modArgs = JSON.parse(argsEl.value.trim());
-            } catch {
-              alert('Invalid JSON in parameters editor');
-              return;
-            }
-          }
-          responses[k] = {
-            approved: isApproved,
-            modified_args: modArgs,
-            reason: isApproved ? undefined : 'Operator rejected execution via Tasks review',
-          };
+          const decision = this.readTaskApproval(taskId, k);
+          if (!decision) return;
+          responses[k] = decision;
         } else {
           const el = document.getElementById(`task-input-${taskId}-${k}`) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null;
           if (el) {
@@ -800,6 +781,31 @@ class WarmplaneApp {
     } catch (e: any) {
       alert(`Error updating task: ${e.message}`);
     }
+  }
+
+  private readTaskApproval(taskId: string, k: string) {
+    const decisionEl = document.getElementById(`task-input-${taskId}-${k}-decision`) as HTMLSelectElement | null;
+    const argsEl = document.getElementById(`task-input-${taskId}-${k}`) as HTMLTextAreaElement | null;
+    if (!decisionEl?.value) {
+      alert('Choose whether to approve or reject this invocation.');
+      decisionEl?.focus();
+      return;
+    }
+    const isApproved = decisionEl.value === 'true';
+    let modArgs: any = undefined;
+    if (isApproved && argsEl && argsEl.value.trim()) {
+      try {
+        modArgs = JSON.parse(argsEl.value.trim());
+      } catch {
+        alert('Invalid JSON in parameters editor');
+        return;
+      }
+    }
+    return {
+      approved: isApproved,
+      modified_args: modArgs,
+      reason: isApproved ? undefined : 'Operator rejected execution via Tasks review',
+    };
   }
 
   async promptCancelTask(taskId: string) {

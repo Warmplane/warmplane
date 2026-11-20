@@ -16,6 +16,51 @@ use crate::{
     http_v1,
 };
 
+fn initialize_audit(
+    config: Option<&crate::config::AuditConfig>,
+) -> Result<(crate::audit::SharedAuditStore, crate::audit::AuditHandle)> {
+    let audit = if let Some(audit_cfg) = config.filter(|cfg| cfg.enabled) {
+        let hmac_key_bytes = audit_cfg.resolve_hmac_key().map(|k| k.into_bytes());
+        let store = if let Some(ref path) = audit_cfg.file_path {
+            Arc::new(crate::audit::AuditStore::open_or_create_with_key(
+                path,
+                hmac_key_bytes,
+            )?)
+        } else {
+            Arc::new(crate::audit::AuditStore::in_memory_with_key(hmac_key_bytes))
+        };
+        let siem_dispatcher = audit_cfg
+            .siem
+            .clone()
+            .map(|cfg| crate::audit::SiemDispatcher::new(Some(cfg)));
+        let handle = crate::audit::spawn_audit_worker(
+            store.clone(),
+            siem_dispatcher,
+            audit_cfg
+                .buffer_capacity
+                .unwrap_or(crate::audit::DEFAULT_AUDIT_BUFFER_CAPACITY),
+            audit_cfg
+                .flush_interval_ms
+                .unwrap_or(crate::audit::DEFAULT_AUDIT_FLUSH_INTERVAL_MS),
+            audit_cfg
+                .max_batch_size
+                .unwrap_or(crate::audit::DEFAULT_AUDIT_MAX_BATCH_SIZE),
+        );
+        (store, handle)
+    } else {
+        let store = Arc::new(crate::audit::AuditStore::in_memory());
+        let handle = crate::audit::spawn_audit_worker(
+            store.clone(),
+            None,
+            crate::audit::DEFAULT_AUDIT_BUFFER_CAPACITY,
+            crate::audit::DEFAULT_AUDIT_FLUSH_INTERVAL_MS,
+            crate::audit::DEFAULT_AUDIT_MAX_BATCH_SIZE,
+        );
+        (store, handle)
+    };
+    Ok(audit)
+}
+
 /// Boots all configured upstream MCP servers and constructs global `AppState`.
 ///
 /// # Arguments
@@ -109,57 +154,7 @@ pub async fn initialize_state(
 
     let search_engine = Arc::new(crate::search::HybridSearchEngine::new());
 
-    let (audit_store, audit_handle) = if let Some(ref audit_cfg) = config.audit {
-        let hmac_key_bytes = audit_cfg.resolve_hmac_key().map(|k| k.into_bytes());
-        if audit_cfg.enabled {
-            let store = if let Some(ref path) = audit_cfg.file_path {
-                Arc::new(crate::audit::AuditStore::open_or_create_with_key(
-                    path,
-                    hmac_key_bytes,
-                )?)
-            } else {
-                Arc::new(crate::audit::AuditStore::in_memory_with_key(hmac_key_bytes))
-            };
-            let siem_dispatcher = audit_cfg
-                .siem
-                .clone()
-                .map(|cfg| crate::audit::SiemDispatcher::new(Some(cfg)));
-            let handle = crate::audit::spawn_audit_worker(
-                store.clone(),
-                siem_dispatcher,
-                audit_cfg
-                    .buffer_capacity
-                    .unwrap_or(crate::audit::DEFAULT_AUDIT_BUFFER_CAPACITY),
-                audit_cfg
-                    .flush_interval_ms
-                    .unwrap_or(crate::audit::DEFAULT_AUDIT_FLUSH_INTERVAL_MS),
-                audit_cfg
-                    .max_batch_size
-                    .unwrap_or(crate::audit::DEFAULT_AUDIT_MAX_BATCH_SIZE),
-            );
-            (store, handle)
-        } else {
-            let store = Arc::new(crate::audit::AuditStore::in_memory());
-            let handle = crate::audit::spawn_audit_worker(
-                store.clone(),
-                None,
-                crate::audit::DEFAULT_AUDIT_BUFFER_CAPACITY,
-                crate::audit::DEFAULT_AUDIT_FLUSH_INTERVAL_MS,
-                crate::audit::DEFAULT_AUDIT_MAX_BATCH_SIZE,
-            );
-            (store, handle)
-        }
-    } else {
-        let store = Arc::new(crate::audit::AuditStore::in_memory());
-        let handle = crate::audit::spawn_audit_worker(
-            store.clone(),
-            None,
-            crate::audit::DEFAULT_AUDIT_BUFFER_CAPACITY,
-            crate::audit::DEFAULT_AUDIT_FLUSH_INTERVAL_MS,
-            crate::audit::DEFAULT_AUDIT_MAX_BATCH_SIZE,
-        );
-        (store, handle)
-    };
+    let (audit_store, audit_handle) = initialize_audit(config.audit.as_ref())?;
 
     let auth_token = config.auth_token.or_else(|| {
         std::env::var("WARMPLANE_AUTH_TOKEN")

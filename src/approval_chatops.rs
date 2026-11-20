@@ -168,6 +168,23 @@ pub(crate) fn slack_principal(
     payload: &Value,
     now: u64,
 ) -> Option<String> {
+    verify_slack_signature(cfg, headers, body, now)?;
+    let slack_user = payload.pointer("/user/id")?.as_str()?;
+    if slack_user.is_empty()
+        || slack_user.len() > 100
+        || !slack_user.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+    Some(format!("slack:{slack_user}"))
+}
+
+fn verify_slack_signature(
+    cfg: &WebhookConfig,
+    headers: &HeaderMap,
+    body: &[u8],
+    now: u64,
+) -> Option<()> {
     let timestamp = headers.get("x-slack-request-timestamp")?.to_str().ok()?;
     if timestamp.parse::<u64>().ok()?.abs_diff(now) > SLACK_MAX_SKEW_SECS {
         return None;
@@ -182,15 +199,7 @@ pub(crate) fn slack_principal(
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).ok()?;
     mac.update(format!("v0:{timestamp}:").as_bytes());
     mac.update(body);
-    mac.verify_slice(&signature).ok()?;
-    let slack_user = payload.pointer("/user/id")?.as_str()?;
-    if slack_user.is_empty()
-        || slack_user.len() > 100
-        || !slack_user.bytes().all(|byte| byte.is_ascii_alphanumeric())
-    {
-        return None;
-    }
-    Some(format!("slack:{slack_user}"))
+    mac.verify_slice(&signature).ok()
 }
 
 pub(crate) async fn resolve_signed(

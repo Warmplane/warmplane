@@ -62,17 +62,7 @@ pub async fn handle_approve_ticket(
     tenant: Option<Extension<Option<TenantContext>>>,
     Json(payload): Json<ApproveTicketRequest>,
 ) -> Response {
-    resolve(
-        &state,
-        &id,
-        tenant_ref(&tenant),
-        DecisionRequest {
-            choice: Decision::Approve,
-            modified_args: payload.modified_args,
-            reason: None,
-        },
-    )
-    .await
+    resolve(&state, &id, tenant_ref(&tenant), payload.into()).await
 }
 
 /// Handles POST `/v1/approvals/:id/reject` for a verified operator.
@@ -82,17 +72,19 @@ pub async fn handle_reject_ticket(
     tenant: Option<Extension<Option<TenantContext>>>,
     Json(payload): Json<RejectTicketRequest>,
 ) -> Response {
-    resolve(
-        &state,
-        &id,
-        tenant_ref(&tenant),
-        DecisionRequest {
-            choice: Decision::Reject,
-            modified_args: None,
-            reason: payload.reason,
-        },
-    )
-    .await
+    let mut rejection = DecisionRequest::unchanged(Decision::Reject);
+    rejection.reason = payload.reason;
+    resolve(&state, &id, tenant_ref(&tenant), rejection).await
+}
+
+impl From<ApproveTicketRequest> for DecisionRequest {
+    fn from(payload: ApproveTicketRequest) -> Self {
+        Self {
+            choice: Decision::Approve,
+            modified_args: payload.modified_args,
+            reason: None,
+        }
+    }
 }
 
 fn tenant_ref(tenant: &Option<Extension<Option<TenantContext>>>) -> Option<&TenantContext> {

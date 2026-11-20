@@ -124,6 +124,15 @@ pub async fn handle_call_capability(
         start_time,
     } = identity;
 
+    let registered = RegisteredCall {
+        state: &state,
+        trace: &trace_id,
+        request_id: &request_id,
+        context: &req_context,
+        key: idempotency_key.as_deref(),
+        claim: idempotency_claim,
+        retry: retry_base,
+    };
     let mut effective_args = payload.args.clone();
     let mut approval_task = None;
 
@@ -560,19 +569,7 @@ pub async fn handle_call_capability(
         // Synchronous caller suspension on approval wait channel
         let resolution = tokio::select! {
             _ = cancel_token.cancelled() => {
-                release_registered_call(&state, &request_id, idempotency_key.as_deref(), idempotency_claim).await;
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(error_envelope(
-                        trace_id,
-                        Some(request_id),
-                        Some(req_context),
-                        retry_base("unknown"),
-                        "OPERATION_CANCELLED",
-                        "Tool call operation was cancelled while awaiting approval",
-                        false,
-                    )),
-                ).into_response();
+                return registered.reject(StatusCode::BAD_REQUEST, "unknown", "OPERATION_CANCELLED", "Tool call operation was cancelled while awaiting approval", false).await;
             }
             resolution = crate::approvals::wait_for_decision(rx, task_rx) => resolution,
         };
@@ -586,26 +583,15 @@ pub async fn handle_call_capability(
                     .ok()
                     != Some(true)
                 {
-                    release_registered_call(
-                        &state,
-                        &request_id,
-                        idempotency_key.as_deref(),
-                        idempotency_claim,
-                    )
-                    .await;
-                    return (
-                        StatusCode::CONFLICT,
-                        Json(error_envelope(
-                            trace_id,
-                            Some(request_id),
-                            Some(req_context),
-                            retry_base("not_started"),
+                    return registered
+                        .reject(
+                            StatusCode::CONFLICT,
+                            "not_started",
                             "APPROVAL_TASK_UNAVAILABLE",
                             "Approval task no longer permits execution",
                             false,
-                        )),
-                    )
-                        .into_response();
+                        )
+                        .await;
                 }
                 approval_task = Some(task_record);
                 if let Some(mod_args) = modified_args {
@@ -741,26 +727,15 @@ pub async fn handle_call_capability(
             )
             .await
             {
-                release_registered_call(
-                    &state,
-                    &request_id,
-                    idempotency_key.as_deref(),
-                    idempotency_claim,
-                )
-                .await;
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    Json(error_envelope(
-                        trace_id,
-                        Some(request_id),
-                        Some(req_context),
-                        retry_base("not_started"),
+                return registered
+                    .reject(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "not_started",
                         "COMPENSABLE_LIMIT_STORAGE_FAILED",
                         error.to_string(),
                         true,
-                    )),
-                )
-                    .into_response();
+                    )
+                    .await;
             }
         }
     }
@@ -814,52 +789,30 @@ pub async fn handle_call_capability(
     {
         Ok(snapshot) => snapshot,
         Err((status, error)) => {
-            release_registered_call(
-                &state,
-                &request_id,
-                idempotency_key.as_deref(),
-                idempotency_claim,
-            )
-            .await;
-            return (
-                status,
-                Json(error_envelope(
-                    trace_id,
-                    Some(request_id),
-                    Some(req_context),
-                    retry_base("not_started"),
+            return registered
+                .reject(
+                    status,
+                    "not_started",
                     error.code,
                     error.message,
                     error.retryable,
-                )),
-            )
-                .into_response();
+                )
+                .await;
         }
     };
 
     let tx = {
         let servers_guard = state.servers.read().await;
         let Some(tx) = servers_guard.get(&server_id).cloned() else {
-            release_registered_call(
-                &state,
-                &request_id,
-                idempotency_key.as_deref(),
-                idempotency_claim,
-            )
-            .await;
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(error_envelope(
-                    trace_id,
-                    Some(request_id),
-                    Some(req_context),
-                    retry_base("not_started"),
+            return registered
+                .reject(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "not_started",
                     "SERVER_UNREACHABLE",
                     format!("Server '{}' is unreachable", server_id),
                     true,
-                )),
-            )
-                .into_response();
+                )
+                .await;
         };
         tx
     };
@@ -936,43 +889,20 @@ pub async fn handle_call_capability(
         .is_err()
     {
         state.circuit_breakers.record_failure(&server_id).await;
-        release_registered_call(
-            &state,
-            &request_id,
-            idempotency_key.as_deref(),
-            idempotency_claim,
-        )
-        .await;
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                retry_base("not_started"),
+        return registered
+            .reject(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "not_started",
                 "SERVER_UNREACHABLE",
                 format!("Server '{}' mailbox is closed", server_id),
                 true,
-            )),
-        )
-            .into_response();
+            )
+            .await;
     }
 
     let result: Result<Result<Value, UpstreamCallError>, oneshot::error::RecvError> = tokio::select! {
         _ = cancel_token.cancelled() => {
-            release_registered_call(&state, &request_id, idempotency_key.as_deref(), idempotency_claim).await;
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(error_envelope(
-                    trace_id,
-                    Some(request_id),
-                    Some(req_context),
-                    retry_base("unknown"),
-                    "OPERATION_CANCELLED",
-                    "Tool call operation was cancelled",
-                    false,
-                )),
-            ).into_response();
+            return registered.reject(StatusCode::BAD_REQUEST, "unknown", "OPERATION_CANCELLED", "Tool call operation was cancelled", false).await;
         }
         res = reply_rx => res,
     };
@@ -1050,83 +980,20 @@ pub async fn handle_call_capability(
                         .into_response();
                 }
             }
-            let delivery = state
-                .sanitize_result(
-                    &server_id,
-                    &trace_id,
+            let (status, response_json, revision) = audit
+                .deliver(
+                    &state,
                     data,
-                    crate::result_sanitization::Shape::Tool,
+                    ToolDelivery {
+                        args: &payload.args,
+                        task: approval_task.as_ref(),
+                        redact_keys: &redact_keys,
+                        redacted_input,
+                        start_time,
+                        retry: retry_base,
+                    },
                 )
                 .await;
-            let elapsed_us = start_time.elapsed().as_micros() as u64;
-            state
-                .total_tool_duration_us
-                .fetch_add(elapsed_us, Ordering::Relaxed);
-            let (status, response_json, revision) = match delivery {
-                Ok(delivery) => {
-                    let redacted_output = if delivery.revision.is_none() {
-                        redact_value(delivery.value.clone(), &redact_keys)
-                    } else {
-                        Value::Null
-                    };
-                    info!(
-                        trace_id = %trace_id,
-                        request_id = %request_id,
-                        capability_id = %payload.capability_id,
-                        data = %redacted_output,
-                        "tool call success"
-                    );
-                    state.audit_handle.send(audit.event(
-                        redacted_input,
-                        elapsed_us,
-                        Ok(redacted_output),
-                    ));
-
-                    let distill_opts =
-                        crate::context_filter::DistillationOptions::from_args(Some(&payload.args));
-                    let distilled_data =
-                        crate::context_filter::distill_value(delivery.value, &distill_opts);
-                    if let Some(task) = &approval_task {
-                        let _ = state
-                            .task_registry
-                            .complete_execution(
-                                &task.task_id,
-                                distilled_data.clone(),
-                                delivery.revision.clone(),
-                            )
-                            .await;
-                    }
-                    let response = json!({
-                        "ok": true,
-                        "request_id": request_id,
-                        "context": req_context,
-                        "trace_id": trace_id,
-                        "data": distilled_data,
-                        "error": null,
-                        "retry": retry_base("completed"),
-                    });
-                    (StatusCode::OK, response, delivery.revision)
-                }
-                Err(withheld) => {
-                    let error = crate::WarmplaneError::from(withheld);
-                    if let Some(task) = &approval_task {
-                        state
-                            .task_registry
-                            .fail_execution(&task.task_id, &error.code, &error.message, "completed")
-                            .await;
-                    }
-                    let response = error_envelope(
-                        trace_id,
-                        Some(request_id),
-                        Some(req_context),
-                        retry_base("completed"),
-                        &error.code,
-                        error.message,
-                        false,
-                    );
-                    (StatusCode::BAD_GATEWAY, response, None)
-                }
-            };
 
             if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
                 state
@@ -1233,6 +1100,42 @@ pub async fn handle_call_capability(
             )
                 .into_response()
         }
+    }
+}
+
+struct RegisteredCall<'a> {
+    state: &'a AppState,
+    trace: &'a str,
+    request_id: &'a str,
+    context: &'a RequestContext,
+    key: Option<&'a str>,
+    claim: Option<IdempotencyClaim>,
+    retry: fn(&'static str) -> RetryMetadata,
+}
+
+impl RegisteredCall<'_> {
+    async fn reject(
+        &self,
+        status: StatusCode,
+        execution_state: &'static str,
+        code: &str,
+        message: impl Into<String>,
+        retryable: bool,
+    ) -> Response {
+        release_registered_call(self.state, self.request_id, self.key, self.claim).await;
+        (
+            status,
+            Json(error_envelope(
+                self.trace.to_owned(),
+                Some(self.request_id.to_owned()),
+                Some(self.context.clone()),
+                (self.retry)(execution_state),
+                code,
+                message,
+                retryable,
+            )),
+        )
+            .into_response()
     }
 }
 
@@ -1519,7 +1422,114 @@ struct CallAudit<'a> {
     idempotency_key: Option<&'a str>,
 }
 
+struct ToolDelivery<'a> {
+    args: &'a Value,
+    task: Option<&'a TaskRecord>,
+    redact_keys: &'a [String],
+    redacted_input: Value,
+    start_time: std::time::Instant,
+    retry: fn(&'static str) -> RetryMetadata,
+}
+
 impl CallAudit<'_> {
+    async fn deliver(
+        &self,
+        state: &AppState,
+        data: Value,
+        delivery: ToolDelivery<'_>,
+    ) -> (StatusCode, Value, Option<String>) {
+        let result = state
+            .sanitize_result(
+                self.server_id,
+                self.trace_id,
+                data,
+                crate::result_sanitization::Shape::Tool,
+            )
+            .await;
+        let elapsed_us = delivery.start_time.elapsed().as_micros() as u64;
+        state
+            .total_tool_duration_us
+            .fetch_add(elapsed_us, Ordering::Relaxed);
+        match result {
+            Ok(result) => {
+                self.delivered_response(state, result, delivery, elapsed_us)
+                    .await
+            }
+            Err(withheld) => {
+                self.withheld_response(state, withheld.into(), delivery)
+                    .await
+            }
+        }
+    }
+
+    async fn delivered_response(
+        &self,
+        state: &AppState,
+        result: crate::result_sanitization::Delivery,
+        delivery: ToolDelivery<'_>,
+        elapsed_us: u64,
+    ) -> (StatusCode, Value, Option<String>) {
+        let redacted_output = if result.revision.is_none() {
+            redact_value(result.value.clone(), delivery.redact_keys)
+        } else {
+            Value::Null
+        };
+        info!(trace_id = %self.trace_id, request_id = %self.request_id, capability_id = %self.capability_id, data = %redacted_output, "tool call success");
+        state.audit_handle.send(self.event(
+            delivery.redacted_input,
+            elapsed_us,
+            Ok(redacted_output),
+        ));
+        let options = crate::context_filter::DistillationOptions::from_args(Some(delivery.args));
+        let data = crate::context_filter::distill_value(result.value, &options);
+        if let Some(task) = delivery.task {
+            let _ = state
+                .task_registry
+                .complete_execution(&task.task_id, data.clone(), result.revision.clone())
+                .await;
+        }
+        (
+            StatusCode::OK,
+            json!({
+                "ok": true,
+                "request_id": self.request_id,
+                "context": self.context,
+                "trace_id": self.trace_id,
+                "data": data,
+                "error": null,
+                "retry": (delivery.retry)("completed"),
+            }),
+            result.revision,
+        )
+    }
+
+    async fn withheld_response(
+        &self,
+        state: &AppState,
+        error: crate::WarmplaneError,
+        delivery: ToolDelivery<'_>,
+    ) -> (StatusCode, Value, Option<String>) {
+        if let Some(task) = delivery.task {
+            state
+                .task_registry
+                .fail_execution(&task.task_id, &error.code, &error.message, "completed")
+                .await;
+        }
+        (
+            StatusCode::BAD_GATEWAY,
+            error_envelope(
+                self.trace_id.to_owned(),
+                Some(self.request_id.to_owned()),
+                Some(self.context.clone()),
+                (delivery.retry)("completed"),
+                &error.code,
+                error.message,
+                false,
+            ),
+            None,
+        )
+    }
+
     fn event(
         &self,
         sanitized_args: Value,
@@ -1751,32 +1761,11 @@ impl CallIdentity {
                 response,
                 from_cache,
             } => {
-                let default_role = state.rbac_engine.default_role();
-                let role = tenant.map_or(default_role.as_str(), |context| context.role.as_str());
-                if let Err(error) = state
-                    .validate_replay(key, &payload.capability_id, &response, &access, role)
+                if let Some(rejection) = self
+                    .authorize_cached_replay(state, payload, key, tenant, &response, &access)
                     .await
                 {
-                    let status = if error.code == "POLICY_DENIED" {
-                        StatusCode::FORBIDDEN
-                    } else {
-                        StatusCode::BAD_GATEWAY
-                    };
-                    return ControlFlow::Break(
-                        (
-                            status,
-                            Json(error_envelope(
-                                self.trace_id.clone(),
-                                Some(self.request_id.clone()),
-                                Some(self.req_context.clone()),
-                                (self.retry_base)("completed"),
-                                &error.code,
-                                error.message,
-                                false,
-                            )),
-                        )
-                            .into_response(),
-                    );
+                    return ControlFlow::Break(rejection);
                 }
                 if from_cache {
                     let logging_enabled = state.accepts_result_revision(None).await;
@@ -1795,6 +1784,45 @@ impl CallIdentity {
                 ControlFlow::Break((StatusCode::OK, headers, Json(response)).into_response())
             }
         }
+    }
+
+    async fn authorize_cached_replay(
+        &self,
+        state: &AppState,
+        payload: &CallCapabilityRequest,
+        key: &str,
+        tenant: Option<&TenantContext>,
+        response: &Value,
+        access: &crate::result_sanitization::ResultAccess,
+    ) -> Option<Response> {
+        let default_role = state.rbac_engine.default_role();
+        let role = tenant.map_or(default_role.as_str(), |context| context.role.as_str());
+        if let Err(error) = state
+            .validate_replay(key, &payload.capability_id, response, access, role)
+            .await
+        {
+            let status = if error.code == "POLICY_DENIED" {
+                StatusCode::FORBIDDEN
+            } else {
+                StatusCode::BAD_GATEWAY
+            };
+            return Some(
+                (
+                    status,
+                    Json(error_envelope(
+                        self.trace_id.clone(),
+                        Some(self.request_id.clone()),
+                        Some(self.req_context.clone()),
+                        (self.retry_base)("completed"),
+                        &error.code,
+                        error.message,
+                        false,
+                    )),
+                )
+                    .into_response(),
+            );
+        }
+        None
     }
 
     fn audit_cached_replay(

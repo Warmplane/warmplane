@@ -454,6 +454,33 @@ async fn connect_http_mcp_client(
     srv_cfg: &ServerConfig,
     handler: SupervisorHandler,
 ) -> Result<SupervisorClient> {
+    let target_url = resolve_http_target(state, server_id, srv_cfg).await?;
+    let headers = build_http_headers(server_id, srv_cfg)?;
+    let http_client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .with_context(|| format!("Failed to build HTTP client for {}", server_id))?;
+
+    let mut transport_config = StreamableHttpClientTransportConfig::with_uri(target_url);
+    if let Some(allow_stateless) = srv_cfg.allow_stateless {
+        transport_config.allow_stateless = allow_stateless;
+    }
+    let transport = StreamableHttpClientTransport::with_client(http_client, transport_config);
+    let mcp_client = handler.serve(transport).await.with_context(|| {
+        format!(
+            "Failed to negotiate streamable HTTP MCP connection for {}",
+            server_id
+        )
+    })?;
+
+    Ok(mcp_client)
+}
+
+async fn resolve_http_target(
+    state: &AppState,
+    server_id: &str,
+    srv_cfg: &ServerConfig,
+) -> Result<String> {
     let url = srv_cfg
         .url
         .as_ref()
@@ -504,100 +531,35 @@ async fn connect_http_mcp_client(
         target_url = format!("http://127.0.0.1:{}/proxy/{}/", proxy_port, server_id);
     }
 
-    let headers = build_http_headers(server_id, srv_cfg)?;
-    let http_client = reqwest::Client::builder()
-        .default_headers(headers)
-        .build()
-        .with_context(|| format!("Failed to build HTTP client for {}", server_id))?;
-
-    let mut transport_config = StreamableHttpClientTransportConfig::with_uri(target_url);
-    if let Some(allow_stateless) = srv_cfg.allow_stateless {
-        transport_config.allow_stateless = allow_stateless;
-    }
-    let transport = StreamableHttpClientTransport::with_client(http_client, transport_config);
-    let mcp_client = handler.serve(transport).await.with_context(|| {
-        format!(
-            "Failed to negotiate streamable HTTP MCP connection for {}",
-            server_id
-        )
-    })?;
-
-    Ok(mcp_client)
+    Ok(target_url)
 }
 
-/// Spawns an auto-restarting supervisor for an upstream stdio child process.
+/// Spawns an auto-restarting supervisor for the configured upstream transport.
 ///
-/// # Arguments
-/// * `state` - Shared application state reference.
-/// * `server_id` - Server identifier string.
-/// * `srv_cfg` - Server configuration and environment parameters.
-/// * `capability_aliases` - Aliases mapping for capabilities.
-/// * `resource_aliases` - Aliases mapping for resources.
-/// * `prompt_aliases` - Aliases mapping for prompts.
+/// # Errors
 ///
-/// # Returns
-/// Discovered initial capabilities, resources, and prompts, plus the server sender mailbox.
-pub async fn spawn_supervised_stdio_server(
+/// Returns an error if the configuration has no upstream transport selector.
+pub async fn spawn_configured_upstream(
     state: &AppState,
     server_id: &str,
     srv_cfg: &ServerConfig,
     capability_aliases: &HashMap<String, AliasTarget>,
     resource_aliases: &HashMap<String, AliasTarget>,
     prompt_aliases: &HashMap<String, AliasTarget>,
-) -> Result<(
-    Vec<(String, CapabilityMeta)>,
-    Vec<(String, ResourceMeta)>,
-    Vec<(String, PromptMeta)>,
-    mpsc::Sender<ServerMsg>,
-)> {
-    spawn_upstream(
-        state,
-        server_id,
-        srv_cfg,
-        capability_aliases,
-        resource_aliases,
-        prompt_aliases,
-        SupervisorTransport::Stdio,
-    )
-    .await
+) -> Result<InitialUpstream> {
+    let transport = match (&srv_cfg.command, &srv_cfg.url) {
+        (Some(_), None) => SupervisorTransport::Stdio,
+        (None, Some(_)) => SupervisorTransport::Http,
+        _ => anyhow::bail!("Server '{server_id}' must specify exactly one upstream transport"),
+    };
+    let aliases = (capability_aliases, resource_aliases, prompt_aliases);
+    spawn_upstream(state, server_id, srv_cfg, aliases, transport).await
 }
 
-/// Spawns an auto-restarting supervisor for an upstream Streamable HTTP / SSE MCP server.
-///
-/// # Arguments
-/// * `state` - Shared application state reference.
-/// * `server_id` - Server identifier string.
-/// * `srv_cfg` - Server configuration and authentication parameters.
-/// * `capability_aliases` - Aliases mapping for capabilities.
-/// * `resource_aliases` - Aliases mapping for resources.
-/// * `prompt_aliases` - Aliases mapping for prompts.
-///
-/// # Returns
-/// Discovered initial capabilities, resources, and prompts, plus the server sender mailbox.
-pub async fn spawn_supervised_http_server(
-    state: &AppState,
-    server_id: &str,
-    srv_cfg: &ServerConfig,
-    capability_aliases: &HashMap<String, AliasTarget>,
-    resource_aliases: &HashMap<String, AliasTarget>,
-    prompt_aliases: &HashMap<String, AliasTarget>,
-) -> Result<(
-    Vec<(String, CapabilityMeta)>,
-    Vec<(String, ResourceMeta)>,
-    Vec<(String, PromptMeta)>,
-    mpsc::Sender<ServerMsg>,
-)> {
-    spawn_upstream(
-        state,
-        server_id,
-        srv_cfg,
-        capability_aliases,
-        resource_aliases,
-        prompt_aliases,
-        SupervisorTransport::Http,
-    )
-    .await
-}
+/// Compatibility entry point for stdio upstreams.
+pub use spawn_configured_upstream as spawn_supervised_stdio_server;
+/// Compatibility entry point for HTTP upstreams.
+pub use spawn_configured_upstream as spawn_supervised_http_server;
 
 /// Determines whether an error string represents an unrecoverable connection closure, transport failure,
 /// or dropped process that necessitates supervisor restart/reconnection.
@@ -993,13 +955,17 @@ type InitialUpstream = (
     mpsc::Sender<ServerMsg>,
 );
 
+type AliasRefs<'a> = (
+    &'a HashMap<String, AliasTarget>,
+    &'a HashMap<String, AliasTarget>,
+    &'a HashMap<String, AliasTarget>,
+);
+
 async fn spawn_upstream(
     state: &AppState,
     server_id: &str,
     config: &ServerConfig,
-    capability_aliases: &HashMap<String, AliasTarget>,
-    resource_aliases: &HashMap<String, AliasTarget>,
-    prompt_aliases: &HashMap<String, AliasTarget>,
+    aliases: AliasRefs<'_>,
     transport: SupervisorTransport,
 ) -> Result<InitialUpstream> {
     let pinned = state
@@ -1020,11 +986,7 @@ async fn spawn_upstream(
         connect_supervised_client(state, server_id, config, transport, handler),
     )
     .await;
-    let aliases = (
-        capability_aliases.clone(),
-        resource_aliases.clone(),
-        prompt_aliases.clone(),
-    );
+    let aliases = (aliases.0.clone(), aliases.1.clone(), aliases.2.clone());
     let (client, capabilities, resources, prompts) = match connection {
         Ok(Ok(client)) => {
             let (caps, res, prompts) =
@@ -1131,6 +1093,23 @@ async fn forward_upstream_stderr(state: AppState, mut stderr: tokio::process::Ch
     }
 }
 
+async fn discard_closed_connection(
+    state: &AppState,
+    server: &str,
+    transport: SupervisorTransport,
+    client: &mut Option<SupervisorClient>,
+    monitor: &mut Option<PinMonitor>,
+) {
+    if client
+        .as_ref()
+        .is_some_and(|client| client.is_transport_closed())
+    {
+        monitor.take();
+        *client = None;
+        mark_disconnected(state, server, transport).await;
+    }
+}
+
 fn spawn_supervisor(
     state: &AppState,
     server_id: &str,
@@ -1177,14 +1156,15 @@ fn spawn_supervisor(
                 _ = health.tick(), if pinned.is_some() => None,
             };
 
-            if pinned.is_some()
-                && client_opt
-                    .as_ref()
-                    .is_some_and(|client| client.is_transport_closed())
-            {
-                monitor.take();
-                client_opt = None;
-                mark_disconnected(&state_clone, &server_id_owned, transport).await;
+            if pinned.is_some() {
+                discard_closed_connection(
+                    &state_clone,
+                    &server_id_owned,
+                    transport,
+                    &mut client_opt,
+                    &mut monitor,
+                )
+                .await;
             }
             let is_alive = match (client_opt.as_ref(), msg) {
                 (Some(client), Some(msg)) => handle_supervisor_msg!(
@@ -1267,36 +1247,14 @@ fn spawn_supervisor(
                             state_clone.circuit_breakers.reset(&server_id_owned).await;
                             restart_count = 0;
 
-                            let (new_caps, new_res, new_prompts) = discover_connection(
-                                &new_client,
+                            monitor = reconnected_catalog(
+                                &state_clone,
                                 &server_id_owned,
+                                &new_client,
                                 &aliases,
                                 pinned.as_ref(),
                             )
                             .await;
-
-                            reconcile_restarted_catalog(
-                                &state_clone,
-                                &server_id_owned,
-                                new_caps,
-                                new_res,
-                                new_prompts,
-                            )
-                            .await;
-
-                            {
-                                let mut statuses_guard = state_clone.server_statuses.write().await;
-                                if let Some(status_val) = statuses_guard.get_mut(&server_id_owned) {
-                                    if let Some(obj) = status_val.as_object_mut() {
-                                        obj.insert("status".to_string(), json!("connected"));
-                                        obj.remove("error");
-                                    }
-                                }
-                            }
-
-                            monitor = pinned
-                                .as_ref()
-                                .map(|pinned| pinned.start_monitor(&new_client, aliases.0.clone()));
                             client_opt = Some(new_client);
                         }
                         Ok(Err(err)) => {
@@ -1326,6 +1284,29 @@ fn spawn_supervisor(
     });
 
     tx
+}
+
+async fn reconnected_catalog(
+    state: &AppState,
+    server: &str,
+    client: &SupervisorClient,
+    aliases: &SupervisorAliases,
+    pinned: Option<&PinnedUpstream>,
+) -> Option<PinMonitor> {
+    let (capabilities, resources, prompts) =
+        discover_connection(client, server, aliases, pinned).await;
+    reconcile_restarted_catalog(state, server, capabilities, resources, prompts).await;
+    if let Some(status) = state
+        .server_statuses
+        .write()
+        .await
+        .get_mut(server)
+        .and_then(Value::as_object_mut)
+    {
+        status.insert("status".to_string(), json!("connected"));
+        status.remove("error");
+    }
+    pinned.map(|pinned| pinned.start_monitor(client, aliases.0.clone()))
 }
 
 async fn mark_disconnected(state: &AppState, server: &str, transport: SupervisorTransport) {

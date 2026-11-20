@@ -470,133 +470,50 @@ impl ControlPlaneHandle {
             RetryMetadata::unsafe_op
         };
 
-        if let Some(key) = idempotency_key.as_deref() {
-            if let Some(task) = self.state.task_registry.find_by_idempotency_key(key).await {
-                if task.emission.is_some() {
-                    if !self
-                        .state
-                        .hold_coordinator
-                        .can_access_task(
-                            &self.state,
-                            &task,
-                            self.tenant_id(),
-                            &self.caller_role(),
-                            prof_ctx.profile_id.as_deref(),
-                        )
-                        .await
-                    {
-                        return Envelope::failure(
-                            trace_id,
-                            Some(req_id),
-                            Some(req_ctx),
-                            WarmplaneError::new(
-                                "POLICY_DENIED",
-                                "Held task is not accessible to this caller",
-                                false,
-                            ),
-                            retry_base("not_started"),
-                        );
-                    }
-                    return Envelope::success(
-                        trace_id,
-                        Some(req_id),
-                        Some(req_ctx),
-                        serde_json::to_value(self.state.task_view(&task).await).unwrap_or_default(),
-                        retry_base(
-                            if matches!(
-                                task.status,
-                                crate::tasks::TaskStatus::Completed
-                                    | crate::tasks::TaskStatus::Failed
-                                    | crate::tasks::TaskStatus::Cancelled
-                            ) {
-                                "completed"
-                            } else {
-                                "in_progress"
-                            },
-                        ),
-                    );
-                }
-            }
-        }
-
-        // Check Idempotency Store
-        let idempotency_claim = if let Some(key) = idempotency_key.as_deref() {
-            let access = ResultAccess::new(self.tenant_id(), prof_ctx.profile_id.as_deref());
-            match self
-                .state
-                .idempotency_store
-                .claim_or_replay(key, capability_id, &trace_id, access.clone())
-                .await
-            {
-                crate::idempotency::ExecutionClaim::New(claim) => Some(claim),
-                crate::idempotency::ExecutionClaim::Replay { response, .. } => {
-                    if let Err(error) = self
-                        .state
-                        .validate_replay(
-                            key,
-                            capability_id,
-                            &response,
-                            &access,
-                            &self.caller_role(),
-                        )
-                        .await
-                    {
-                        return Envelope::failure(
-                            trace_id,
-                            Some(req_id),
-                            Some(req_ctx),
-                            error,
-                            retry_base("completed"),
-                        );
-                    }
-                    if let Ok(env) = serde_json::from_value::<Envelope<Value>>(response.clone()) {
-                        return env;
-                    }
-                    return Envelope::success(
-                        trace_id,
-                        Some(req_id),
-                        Some(req_ctx),
-                        response,
-                        retry_base("completed"),
-                    );
-                }
-            }
-        } else {
-            None
+        let identity = EmbeddedCallIdentity {
+            trace: &trace_id,
+            request: &req_id,
+            context: &req_ctx,
+            key: idempotency_key.as_deref(),
+            retry: retry_base,
+        };
+        let replay = EmbeddedToolReplay {
+            handle: self,
+            capability: capability_id,
+            profile: &prof_ctx,
+            identity,
+        };
+        let idempotency_claim = match replay.claim(idempotency_key.as_deref()).await {
+            std::ops::ControlFlow::Continue(claim) => claim,
+            std::ops::ControlFlow::Break(receipt) => return receipt,
         };
 
         if !args.is_object() {
-            self.state
-                .idempotency_store
-                .release_execution(idempotency_key.as_deref(), idempotency_claim)
+            return identity
+                .reject(
+                    &self.state,
+                    idempotency_claim,
+                    WarmplaneError::new("INVALID_ARGS", "'args' must be a JSON object", false),
+                    "not_started",
+                )
                 .await;
-            return Envelope::failure(
-                trace_id,
-                Some(req_id),
-                Some(req_ctx),
-                WarmplaneError::new("INVALID_ARGS", "'args' must be a JSON object", false),
-                retry_base("not_started"),
-            );
         }
 
         let (mut requires_approval, approval_timeout_secs, redact_keys) = {
             let pol = self.effective_policy(&prof_ctx).await;
             if !pol.allows(capability_id) {
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                return identity
+                    .reject(
+                        &self.state,
+                        idempotency_claim,
+                        WarmplaneError::new(
+                            "POLICY_DENIED",
+                            format!("Capability '{}' blocked by policy", capability_id),
+                            false,
+                        ),
+                        "not_started",
+                    )
                     .await;
-                return Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    WarmplaneError::new(
-                        "POLICY_DENIED",
-                        format!("Capability '{}' blocked by policy", capability_id),
-                        false,
-                    ),
-                    retry_base("not_started"),
-                );
             }
             (
                 pol.requires_approval(capability_id),
@@ -610,42 +527,36 @@ impl ControlPlaneHandle {
         let (server_id, tool_name, reversibility) = {
             let caps_guard = self.state.capabilities.read().await;
             let Some(meta) = caps_guard.get(capability_id) else {
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                return identity
+                    .reject(
+                        &self.state,
+                        idempotency_claim,
+                        WarmplaneError::new(
+                            "TOOL_NOT_FOUND",
+                            format!("Capability '{}' not found", capability_id),
+                            false,
+                        ),
+                        "not_started",
+                    )
                     .await;
-                return Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    WarmplaneError::new(
-                        "TOOL_NOT_FOUND",
-                        format!("Capability '{}' not found", capability_id),
-                        false,
-                    ),
-                    retry_base("not_started"),
-                );
             };
 
             if !prof_ctx.is_server_allowed(&meta.server) {
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                    .await;
-                return Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    WarmplaneError::new(
-                        "TOOL_NOT_IN_PROFILE",
-                        format!(
+                return identity
+                    .reject(
+                        &self.state,
+                        idempotency_claim,
+                        WarmplaneError::new(
+                            "TOOL_NOT_IN_PROFILE",
+                            format!(
                             "Capability '{}' belongs to server '{}' which is not in active profile",
                             capability_id, meta.server
                         ),
-                        false,
-                    ),
-                    retry_base("not_started"),
-                );
+                            false,
+                        ),
+                        "not_started",
+                    )
+                    .await;
             }
 
             (
@@ -658,17 +569,9 @@ impl ControlPlaneHandle {
         let tool_definition = match self.state.tool_pins.binding(&server_id, &tool_name) {
             Ok(definition) => definition,
             Err(denied) => {
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                return identity
+                    .reject(&self.state, idempotency_claim, denied.into(), "not_started")
                     .await;
-                return Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    denied.into(),
-                    retry_base("not_started"),
-                );
             }
         };
         let mut compensable_reserved = false;
@@ -677,21 +580,18 @@ impl ControlPlaneHandle {
             .filter(|contract| contract.class == crate::config::ReversibilityClass::Compensable)
         {
             if self.state.undo_ledger.is_none() {
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                return identity
+                    .reject(
+                        &self.state,
+                        idempotency_claim,
+                        WarmplaneError::new(
+                            "UNDO_STORAGE_UNAVAILABLE",
+                            "Persistent usage storage is required for compensable capabilities",
+                            false,
+                        ),
+                        "not_started",
+                    )
                     .await;
-                return Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    WarmplaneError::new(
-                        "UNDO_STORAGE_UNAVAILABLE",
-                        "Persistent usage storage is required for compensable capabilities",
-                        false,
-                    ),
-                    retry_base("not_started"),
-                );
             }
             if !requires_approval {
                 match undo::reserve_compensable(
@@ -708,21 +608,18 @@ impl ControlPlaneHandle {
                     Ok(true) => compensable_reserved = true,
                     Ok(false) => requires_approval = true,
                     Err(error) => {
-                        self.state
-                            .idempotency_store
-                            .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                        return identity
+                            .reject(
+                                &self.state,
+                                idempotency_claim,
+                                WarmplaneError::new(
+                                    "COMPENSABLE_LIMIT_STORAGE_FAILED",
+                                    error.to_string(),
+                                    true,
+                                ),
+                                "not_started",
+                            )
                             .await;
-                        return Envelope::failure(
-                            trace_id,
-                            Some(req_id),
-                            Some(req_ctx),
-                            WarmplaneError::new(
-                                "COMPENSABLE_LIMIT_STORAGE_FAILED",
-                                error.to_string(),
-                                true,
-                            ),
-                            retry_base("not_started"),
-                        );
                     }
                 }
             }
@@ -1255,21 +1152,18 @@ impl ControlPlaneHandle {
                         .ok()
                         != Some(true)
                     {
-                        self.state
-                            .idempotency_store
-                            .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                        return identity
+                            .reject(
+                                &self.state,
+                                idempotency_claim,
+                                WarmplaneError::new(
+                                    "APPROVAL_TASK_UNAVAILABLE",
+                                    "Approval task no longer permits execution",
+                                    false,
+                                ),
+                                "not_started",
+                            )
                             .await;
-                        return Envelope::failure(
-                            trace_id,
-                            Some(req_id),
-                            Some(req_ctx),
-                            WarmplaneError::new(
-                                "APPROVAL_TASK_UNAVAILABLE",
-                                "Approval task no longer permits execution",
-                                false,
-                            ),
-                            retry_base("not_started"),
-                        );
                     }
                     if let Some(args) = modified_args {
                         effective_args = args;
@@ -1289,17 +1183,9 @@ impl ControlPlaneHandle {
                     rejection
                         .arguments_for_task(&self.state, &rec.task_id, Value::Null)
                         .await;
-                    self.state
-                        .idempotency_store
-                        .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                    return identity
+                        .reject(&self.state, idempotency_claim, error, "not_started")
                         .await;
-                    return Envelope::failure(
-                        trace_id,
-                        Some(req_id),
-                        Some(req_ctx),
-                        error,
-                        retry_base("not_started"),
-                    );
                 }
             }
             Some(rec)
@@ -1325,21 +1211,18 @@ impl ControlPlaneHandle {
                 {
                     Ok(true) => {}
                     Ok(false) | Err(_) => {
-                        self.state
-                            .idempotency_store
-                            .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                        return identity
+                            .reject(
+                                &self.state,
+                                idempotency_claim,
+                                WarmplaneError::new(
+                                    "COMPENSABLE_LIMIT_STORAGE_FAILED",
+                                    "Could not reserve compensable invocation",
+                                    true,
+                                ),
+                                "not_started",
+                            )
                             .await;
-                        return Envelope::failure(
-                            trace_id,
-                            Some(req_id),
-                            Some(req_ctx),
-                            WarmplaneError::new(
-                                "COMPENSABLE_LIMIT_STORAGE_FAILED",
-                                "Could not reserve compensable invocation",
-                                true,
-                            ),
-                            retry_base("not_started"),
-                        );
                     }
                 }
             }
@@ -1386,21 +1269,18 @@ impl ControlPlaneHandle {
                         )
                         .await;
                 }
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                return identity
+                    .reject(
+                        &self.state,
+                        idempotency_claim,
+                        WarmplaneError::new(
+                            "SERVER_UNREACHABLE",
+                            format!("Server '{}' is unreachable", server_id),
+                            true,
+                        ),
+                        "not_started",
+                    )
                     .await;
-                return Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    WarmplaneError::new(
-                        "SERVER_UNREACHABLE",
-                        format!("Server '{}' is unreachable", server_id),
-                        true,
-                    ),
-                    retry_base("not_started"),
-                );
             };
             tx
         };
@@ -1423,17 +1303,14 @@ impl ControlPlaneHandle {
                     )
                     .await;
             }
-            self.state
-                .idempotency_store
-                .release_execution(idempotency_key.as_deref(), idempotency_claim)
+            return identity
+                .reject(
+                    &self.state,
+                    idempotency_claim,
+                    WarmplaneError::new("CIRCUIT_OPEN", cb_err.to_string(), false),
+                    "not_started",
+                )
                 .await;
-            return Envelope::failure(
-                trace_id,
-                Some(req_id),
-                Some(req_ctx),
-                WarmplaneError::new("CIRCUIT_OPEN", cb_err.to_string(), false),
-                retry_base("not_started"),
-            );
         }
 
         let (snapshot, snapshot_hash) = match capture_call_snapshot(
@@ -1447,19 +1324,16 @@ impl ControlPlaneHandle {
         {
             Ok(snapshot) => snapshot,
             Err(failure) => {
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                return identity
+                    .reject(
+                        &self.state,
+                        idempotency_claim,
+                        failure.into_error(
+                            "Persistent undo ledger is required for reversible capabilities",
+                        ),
+                        "not_started",
+                    )
                     .await;
-                return Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    failure.into_error(
-                        "Persistent undo ledger is required for reversible capabilities",
-                    ),
-                    retry_base("not_started"),
-                );
             }
         };
 
@@ -1490,212 +1364,65 @@ impl ControlPlaneHandle {
                     )
                     .await;
             }
-            self.state
-                .idempotency_store
-                .release_execution(idempotency_key.as_deref(), idempotency_claim)
+            return identity
+                .reject(
+                    &self.state,
+                    idempotency_claim,
+                    WarmplaneError::new(
+                        "SERVER_UNREACHABLE",
+                        format!("Server '{}' mailbox is closed", server_id),
+                        true,
+                    ),
+                    "not_started",
+                )
                 .await;
-            return Envelope::failure(
-                trace_id,
-                Some(req_id),
-                Some(req_ctx),
-                WarmplaneError::new(
-                    "SERVER_UNREACHABLE",
-                    format!("Server '{}' mailbox is closed", server_id),
-                    true,
-                ),
-                retry_base("not_started"),
-            );
         }
 
-        let result = reply_rx.await;
+        let completion = EmbeddedToolCompletion {
+            state: &self.state,
+            server: &server_id,
+            identity,
+            task: task_record.as_ref(),
+            claim: idempotency_claim,
+        };
+        let data = match reply_rx.await {
+            Ok(Ok(data)) => data,
+            Ok(Err(error)) => return completion.upstream_failure(Ok(error)).await,
+            Err(error) => return completion.upstream_failure(Err(error)).await,
+        };
+        self.state.circuit_breakers.record_success(&server_id).await;
+        self.state
+            .total_tool_duration_us
+            .fetch_add(start_time.elapsed().as_micros() as u64, Ordering::Relaxed);
 
-        match result {
-            Ok(Ok(data)) => {
-                self.state.circuit_breakers.record_success(&server_id).await;
-                let elapsed_us = start_time.elapsed().as_micros() as u64;
-                self.state
-                    .total_tool_duration_us
-                    .fetch_add(elapsed_us, Ordering::Relaxed);
-
-                if !suppress_undo_registration
-                    && !crate::result_sanitization::is_uninspectable_result(&data)
-                {
-                    if let Some(contract) = &reversibility {
-                        if let Err(error) = undo::register_inverse(
-                            &self.state,
-                            contract,
-                            undo::ForwardCall {
-                                capability: capability_id,
-                                args: &effective_args,
-                                result: &data,
-                                snapshot: &snapshot,
-                                snapshot_hash,
-                                context: &req_ctx,
-                                batch_id: None,
-                                tenant_id: self.tenant_id(),
-                                profile_id: prof_ctx.profile_id.as_deref(),
-                            },
-                            &prof_ctx,
-                            &self
-                                .state
-                                .policy
-                                .read()
-                                .await
-                                .merge_with_profile(prof_ctx.profile_policy.as_ref()),
-                        )
-                        .await
-                        {
-                            let message = self
-                                .state
-                                .safe_upstream_error(format!(
-                                "Forward call succeeded but inverse registration failed: {error}"
-                            ))
-                                .await;
-                            if let Some(ref rec) = task_record {
-                                self.state
-                                    .task_registry
-                                    .fail_execution(
-                                        &rec.task_id,
-                                        "UNDO_REGISTRATION_FAILED",
-                                        &message,
-                                        "completed",
-                                    )
-                                    .await;
-                            }
-                            let response = Envelope::failure(
-                                trace_id,
-                                Some(req_id),
-                                Some(req_ctx),
-                                WarmplaneError::new("UNDO_REGISTRATION_FAILED", message, false),
-                                retry_base("completed"),
-                            );
-                            if let Some((key, claim)) =
-                                idempotency_key.as_deref().zip(idempotency_claim)
-                            {
-                                if let Ok(value) = serde_json::to_value(&response) {
-                                    self.state
-                                        .idempotency_store
-                                        .complete(key, claim, value)
-                                        .await;
-                                }
-                            }
-                            return response;
-                        }
-                    }
-                }
-                let (outcome, revision) = self
-                    .state
-                    .complete_tool_delivery(
-                        &server_id,
-                        &trace_id,
-                        data,
-                        task_record.as_ref().map(|record| record.task_id.as_str()),
-                        &distill_opts,
-                    )
-                    .await;
-                let env = EnvelopeBuilder::new(trace_id, retry_base("completed"))
-                    .request_id(Some(req_id))
-                    .context(Some(req_ctx))
-                    .outcome(outcome);
-
-                if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-                    if let Ok(val) = serde_json::to_value(&env) {
-                        self.state
-                            .idempotency_store
-                            .complete_with_revision(key, claim, val, revision)
-                            .await;
-                    }
-                }
-
-                env
-            }
-            Ok(Err(UpstreamCallError::Timeout)) => {
-                self.state.circuit_breakers.record_failure(&server_id).await;
-                if let Some(ref rec) = task_record {
-                    let _ = self
-                        .state
-                        .task_registry
-                        .fail_task(
-                            &rec.task_id,
-                            serde_json::json!({"code": "UPSTREAM_TIMEOUT"}),
-                            Some(format!(
-                                "Tool call timed out after {}ms",
-                                self.state.tool_timeout_ms
-                            )),
-                        )
-                        .await;
-                }
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                    .await;
-                Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    WarmplaneError::new(
-                        "UPSTREAM_TIMEOUT",
-                        format!("Tool call timed out after {}ms", self.state.tool_timeout_ms),
-                        true,
-                    ),
-                    retry_base("unknown"),
-                )
-            }
-            Ok(Err(failure)) => {
-                let (error, execution_state) = self.state.tool_error(&server_id, failure).await;
-                if let Some(ref rec) = task_record {
-                    let _ = self
-                        .state
-                        .task_registry
-                        .fail_task(
-                            &rec.task_id,
-                            serde_json::json!({"code": &error.code, "message": &error.message}),
-                            Some(error.message.clone()),
-                        )
-                        .await;
-                }
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                    .await;
-                Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    error,
-                    retry_base(execution_state),
-                )
-            }
-            Err(_) => {
-                self.state.circuit_breakers.record_failure(&server_id).await;
-                if let Some(ref rec) = task_record {
-                    let _ = self
-                        .state
-                        .task_registry
-                        .fail_task(
-                            &rec.task_id,
-                            serde_json::json!({"code": "INTERNAL_ERROR"}),
-                            Some("Server actor task dropped reply channel".to_string()),
-                        )
-                        .await;
-                }
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                    .await;
-                Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    WarmplaneError::new(
-                        "INTERNAL_ERROR",
-                        "Server actor task dropped reply channel",
-                        true,
-                    ),
-                    retry_base("unknown"),
-                )
+        if let Some(contract) = reversibility.as_ref().filter(|_| {
+            !suppress_undo_registration
+                && !crate::result_sanitization::is_uninspectable_result(&data)
+        }) {
+            let forward = undo::ForwardCall {
+                capability: capability_id,
+                args: &effective_args,
+                result: &data,
+                snapshot: &snapshot,
+                snapshot_hash,
+                context: &req_ctx,
+                batch_id: None,
+                tenant_id: self.tenant_id(),
+                profile_id: prof_ctx.profile_id.as_deref(),
+            };
+            let policy = self
+                .state
+                .policy
+                .read()
+                .await
+                .merge_with_profile(prof_ctx.profile_policy.as_ref());
+            if let Err(error) =
+                undo::register_inverse(&self.state, contract, forward, &prof_ctx, &policy).await
+            {
+                return completion.inverse_failure(error).await;
             }
         }
+        completion.deliver(data, &distill_opts).await
     }
 
     /// Executes an ordered sequence of tool execution steps, interpolating prior step outputs.
@@ -2188,6 +1915,284 @@ impl ControlPlaneHandle {
     /// Gracefully initiates shutdown of all background supervisors and actor channels.
     pub async fn shutdown(&self) {
         self.state.shutdown().await;
+    }
+}
+
+#[derive(Clone, Copy)]
+struct EmbeddedCallIdentity<'a> {
+    trace: &'a str,
+    request: &'a str,
+    context: &'a RequestContext,
+    key: Option<&'a str>,
+    retry: fn(&'static str) -> RetryMetadata,
+}
+
+impl EmbeddedCallIdentity<'_> {
+    fn envelope(
+        &self,
+        outcome: Result<Value, WarmplaneError>,
+        status: &'static str,
+    ) -> Envelope<Value> {
+        EnvelopeBuilder::new(self.trace, (self.retry)(status))
+            .request_id(Some(self.request.to_owned()))
+            .context(Some(self.context.clone()))
+            .outcome(outcome)
+    }
+
+    async fn reject(
+        &self,
+        state: &AppState,
+        claim: Option<IdempotencyClaim>,
+        error: WarmplaneError,
+        status: &'static str,
+    ) -> Envelope<Value> {
+        state
+            .idempotency_store
+            .release_execution(self.key, claim)
+            .await;
+        self.envelope(Err(error), status)
+    }
+}
+
+struct EmbeddedToolReplay<'a> {
+    handle: &'a ControlPlaneHandle,
+    capability: &'a str,
+    profile: &'a ProfileContext,
+    identity: EmbeddedCallIdentity<'a>,
+}
+
+impl EmbeddedToolReplay<'_> {
+    async fn claim(
+        &self,
+        key: Option<&str>,
+    ) -> std::ops::ControlFlow<Envelope<Value>, Option<IdempotencyClaim>> {
+        use crate::idempotency::ExecutionClaim;
+        use std::ops::ControlFlow;
+
+        let Some(key) = key else {
+            return ControlFlow::Continue(None);
+        };
+        if let Some(receipt) = self.held_receipt(key).await {
+            return ControlFlow::Break(receipt);
+        }
+        let access = ResultAccess::new(self.handle.tenant_id(), self.profile.profile_id.as_deref());
+        match self
+            .handle
+            .state
+            .idempotency_store
+            .claim_or_replay(key, self.capability, self.identity.trace, access.clone())
+            .await
+        {
+            ExecutionClaim::New(claim) => ControlFlow::Continue(Some(claim)),
+            ExecutionClaim::Replay { response, .. } => {
+                ControlFlow::Break(self.cached_receipt(key, response, &access).await)
+            }
+        }
+    }
+
+    async fn held_receipt(&self, key: &str) -> Option<Envelope<Value>> {
+        let state = &self.handle.state;
+        let task = state.task_registry.find_by_idempotency_key(key).await?;
+        task.emission.as_ref()?;
+        if !state
+            .hold_coordinator
+            .can_access_task(
+                state,
+                &task,
+                self.handle.tenant_id(),
+                &self.handle.caller_role(),
+                self.profile.profile_id.as_deref(),
+            )
+            .await
+        {
+            return Some(self.identity.envelope(
+                Err(WarmplaneError::new(
+                    "POLICY_DENIED",
+                    "Held task is not accessible to this caller",
+                    false,
+                )),
+                "not_started",
+            ));
+        }
+        let status = if matches!(
+            task.status,
+            crate::tasks::TaskStatus::Completed
+                | crate::tasks::TaskStatus::Failed
+                | crate::tasks::TaskStatus::Cancelled
+        ) {
+            "completed"
+        } else {
+            "in_progress"
+        };
+        Some(self.identity.envelope(
+            Ok(serde_json::to_value(state.task_view(&task).await).unwrap_or_default()),
+            status,
+        ))
+    }
+
+    async fn cached_receipt(
+        &self,
+        key: &str,
+        response: Value,
+        access: &ResultAccess,
+    ) -> Envelope<Value> {
+        let allowed = self
+            .handle
+            .state
+            .validate_replay(
+                key,
+                self.capability,
+                &response,
+                access,
+                &self.handle.caller_role(),
+            )
+            .await;
+        if let Err(error) = allowed {
+            return self.identity.envelope(Err(error), "completed");
+        }
+        serde_json::from_value(response.clone())
+            .unwrap_or_else(|_| self.identity.envelope(Ok(response), "completed"))
+    }
+}
+
+struct EmbeddedToolCompletion<'a> {
+    state: &'a AppState,
+    server: &'a str,
+    identity: EmbeddedCallIdentity<'a>,
+    task: Option<&'a crate::tasks::TaskRecord>,
+    claim: Option<IdempotencyClaim>,
+}
+
+impl EmbeddedToolCompletion<'_> {
+    async fn finish_failure(
+        &self,
+        error: WarmplaneError,
+        execution_state: &'static str,
+        include_message: bool,
+    ) -> Envelope<Value> {
+        if let Some(task) = self.task {
+            let mut details = serde_json::json!({"code": error.code});
+            if include_message {
+                details["message"] = serde_json::json!(error.message);
+            }
+            let _ = self
+                .state
+                .task_registry
+                .fail_task(&task.task_id, details, Some(error.message.clone()))
+                .await;
+        }
+        self.state
+            .idempotency_store
+            .release_execution(self.identity.key, self.claim)
+            .await;
+        self.identity.envelope(Err(error), execution_state)
+    }
+
+    async fn upstream_failure(
+        &self,
+        result: Result<UpstreamCallError, oneshot::error::RecvError>,
+    ) -> Envelope<Value> {
+        let (error, execution_state, include_message) = match result {
+            Ok(UpstreamCallError::Timeout) => {
+                self.state
+                    .circuit_breakers
+                    .record_failure(self.server)
+                    .await;
+                (
+                    WarmplaneError::new(
+                        "UPSTREAM_TIMEOUT",
+                        format!("Tool call timed out after {}ms", self.state.tool_timeout_ms),
+                        true,
+                    ),
+                    "unknown",
+                    false,
+                )
+            }
+            Ok(failure) => {
+                let (error, execution_state) = self.state.tool_error(self.server, failure).await;
+                (error, execution_state, true)
+            }
+            Err(_) => {
+                self.state
+                    .circuit_breakers
+                    .record_failure(self.server)
+                    .await;
+                (
+                    WarmplaneError::new(
+                        "INTERNAL_ERROR",
+                        "Server actor task dropped reply channel",
+                        true,
+                    ),
+                    "unknown",
+                    false,
+                )
+            }
+        };
+        self.finish_failure(error, execution_state, include_message)
+            .await
+    }
+
+    async fn inverse_failure(&self, error: anyhow::Error) -> Envelope<Value> {
+        let message = self
+            .state
+            .safe_upstream_error(format!(
+                "Forward call succeeded but inverse registration failed: {error}"
+            ))
+            .await;
+        if let Some(task) = self.task {
+            self.state
+                .task_registry
+                .fail_execution(
+                    &task.task_id,
+                    "UNDO_REGISTRATION_FAILED",
+                    &message,
+                    "completed",
+                )
+                .await;
+        }
+        let envelope = self.identity.envelope(
+            Err(WarmplaneError::new(
+                "UNDO_REGISTRATION_FAILED",
+                message,
+                false,
+            )),
+            "completed",
+        );
+        self.cache(&envelope, None).await;
+        envelope
+    }
+
+    async fn cache(&self, envelope: &Envelope<Value>, revision: Option<String>) {
+        if let Some((key, claim)) = self.identity.key.zip(self.claim) {
+            if let Ok(value) = serde_json::to_value(envelope) {
+                self.state
+                    .idempotency_store
+                    .complete_with_revision(key, claim, value, revision)
+                    .await;
+            }
+        }
+    }
+
+    async fn deliver(&self, data: Value, options: &DistillationOptions) -> Envelope<Value> {
+        let (outcome, revision) = self
+            .state
+            .complete_tool_delivery(
+                self.server,
+                self.identity.trace,
+                data,
+                self.task.map(|record| record.task_id.as_str()),
+                options,
+            )
+            .await;
+        let envelope = EnvelopeBuilder::new(
+            self.identity.trace.to_owned(),
+            (self.identity.retry)("completed"),
+        )
+        .request_id(Some(self.identity.request.to_owned()))
+        .context(Some(self.identity.context.clone()))
+        .outcome(outcome);
+        self.cache(&envelope, revision).await;
+        envelope
     }
 }
 

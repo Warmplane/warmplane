@@ -914,6 +914,63 @@ struct CatalogCall {
     cancel_token: tokio_util::sync::CancellationToken,
 }
 
+impl CatalogCall {
+    async fn deliver(
+        self,
+        state: &AppState,
+        server_id: &str,
+        data: Value,
+        log: CatalogLog<'_>,
+    ) -> axum::response::Response {
+        let Self {
+            trace_id,
+            request_id,
+            req_context,
+            ..
+        } = self;
+        let data = match state
+            .sanitize_result(server_id, &trace_id, data, log.kind.result_shape())
+            .await
+        {
+            Ok(result) => {
+                if result.revision.is_none() {
+                    log.success(&trace_id, &request_id, &result.value);
+                }
+                result.value
+            }
+            Err(withheld) => {
+                let error = crate::WarmplaneError::from(withheld);
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(error_envelope(
+                        trace_id,
+                        Some(request_id),
+                        Some(req_context),
+                        crate::idempotency::RetryMetadata::safe("completed"),
+                        &error.code,
+                        error.message,
+                        false,
+                    )),
+                )
+                    .into_response();
+            }
+        };
+        (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "request_id": request_id,
+                "context": req_context,
+                "trace_id": trace_id,
+                "data": data,
+                "error": null,
+                "retry": crate::idempotency::RetryMetadata::safe("completed"),
+            })),
+        )
+            .into_response()
+    }
+}
+
 async fn dispatch_catalog_call(
     state: &AppState,
     server_id: &str,
@@ -970,46 +1027,14 @@ async fn dispatch_catalog_call(
 
     match result {
         Ok(Ok(data)) => {
-            let data = match state
-                .sanitize_result(server_id, &trace_id, data, log.kind.result_shape())
-                .await
-            {
-                Ok(result) => {
-                    if result.revision.is_none() {
-                        log.success(&trace_id, &request_id, &result.value);
-                    }
-                    result.value
-                }
-                Err(withheld) => {
-                    let error = crate::WarmplaneError::from(withheld);
-                    return (
-                        StatusCode::BAD_GATEWAY,
-                        Json(error_envelope(
-                            trace_id,
-                            Some(request_id),
-                            Some(req_context),
-                            crate::idempotency::RetryMetadata::safe("completed"),
-                            &error.code,
-                            error.message,
-                            false,
-                        )),
-                    )
-                        .into_response();
-                }
-            };
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "ok": true,
-                    "request_id": request_id,
-                    "context": req_context,
-                    "trace_id": trace_id,
-                    "data": data,
-                    "error": null,
-                    "retry": crate::idempotency::RetryMetadata::safe("completed"),
-                })),
-            )
-                .into_response()
+            CatalogCall {
+                trace_id,
+                request_id,
+                req_context,
+                cancel_token,
+            }
+            .deliver(state, server_id, data, log)
+            .await
         }
         Ok(Err(UpstreamCallError::Timeout)) => (
             StatusCode::GATEWAY_TIMEOUT,

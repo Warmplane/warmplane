@@ -191,6 +191,19 @@ pub async fn get_undo_entry(
     Ok(UndoEntrySummary::from(&entry))
 }
 
+fn validate_force_reason(
+    state: &AppState,
+    access: &UndoAccessContext,
+    reason: Option<&str>,
+    message: &str,
+) -> Result<(), UndoOperationError> {
+    require_permission(state, access, UndoPermission::ForceExpired)?;
+    if reason.is_none_or(|reason| reason.trim().is_empty()) {
+        return Err(operation_error("UNDO_FORCE_REASON_REQUIRED", message, 400));
+    }
+    Ok(())
+}
+
 /// Executes one undo entry with permission, tenant, expiry, and audit checks.
 pub async fn execute_undo(
     state: &AppState,
@@ -209,14 +222,12 @@ pub async fn execute_undo(
         ));
     }
     if force_expired {
-        require_permission(state, access, UndoPermission::ForceExpired)?;
-        if force_reason.is_none_or(|reason| reason.trim().is_empty()) {
-            return Err(operation_error(
-                "UNDO_FORCE_REASON_REQUIRED",
-                "A reason is required to force an expired undo",
-                400,
-            ));
-        }
+        validate_force_reason(
+            state,
+            access,
+            force_reason,
+            "A reason is required to force an expired undo",
+        )?;
         let entry = state
             .undo_ledger
             .as_ref()
@@ -265,14 +276,12 @@ pub async fn rollback_work_item(
     require_permission(state, access, UndoPermission::Rollback)?;
     ensure_grant_valid(access)?;
     if force_expired {
-        require_permission(state, access, UndoPermission::ForceExpired)?;
-        if force_reason.is_none_or(|reason| reason.trim().is_empty()) {
-            return Err(operation_error(
-                "UNDO_FORCE_REASON_REQUIRED",
-                "A reason is required to force expired entries",
-                400,
-            ));
-        }
+        validate_force_reason(
+            state,
+            access,
+            force_reason,
+            "A reason is required to force expired entries",
+        )?;
     }
     if state.undo_ledger.is_none() {
         return Err(operation_error(

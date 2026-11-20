@@ -151,24 +151,13 @@ pub async fn handle_cancel_task(
 ) -> impl IntoResponse {
     let task_opt = state.task_registry.get_task(&id).await;
     if let Some(task) = task_opt.as_ref() {
-        let tenant_id = req_ext
-            .0
-            .as_ref()
-            .map(|context| context.tenant_id.as_str())
-            .unwrap_or("default");
-        let default_role = state.rbac_engine.default_role();
-        let role = req_ext
-            .0
-            .as_ref()
-            .map(|context| context.role.as_str())
-            .unwrap_or(default_role.as_str());
-        let profile_id = prof_ext
-            .as_ref()
-            .and_then(|extension| extension.0.profile_id.as_deref());
-        if !state
-            .hold_coordinator
-            .can_access_task(&state, task, tenant_id, role, profile_id)
-            .await
+        if !crate::http_v1::helpers::can_access_emission_task(
+            &state,
+            task,
+            req_ext.0.as_ref(),
+            prof_ext.as_deref(),
+        )
+        .await
         {
             return (StatusCode::NOT_FOUND, Json(json!({"ok": false, "error": {"code": "TASK_NOT_FOUND", "message": format!("Task '{}' was not found", id)}}))).into_response();
         }
@@ -202,9 +191,17 @@ pub async fn handle_cancel_task(
                 .into_response();
         }
     }
-    match state.task_registry.cancel_task(&id, payload.reason.clone()).await {
+    cancel_regular_task(&state, &id, payload.reason).await
+}
+
+async fn cancel_regular_task(
+    state: &AppState,
+    id: &str,
+    reason: Option<String>,
+) -> axum::response::Response {
+    match state.task_registry.cancel_task(id, reason).await {
         Ok(true) => {
-            if let Some(ticket) = state.approval_registry.find_by_task(&id).await {
+            if let Some(ticket) = state.approval_registry.find_by_task(id).await {
                 state.approval_registry.expire_if_pending(&ticket.id).await;
             }
 

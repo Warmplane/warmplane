@@ -33,6 +33,24 @@ function renderApprovalActivity(approval: PendingApproval): string {
   `;
 }
 
+function renderApprovalPanel(state: AppState): string {
+  return `
+    <section class="bento-card" style="margin-bottom: 16px;">
+      <h2 class="stat-label">Approval activity</h2>
+      <form class="trust-auth-form" id="approval-auth-form">
+        <div class="form-group">
+          <label class="form-label" for="approval-operator-token">Approval operator token</label>
+          <input class="form-input" type="password" autocomplete="off" id="approval-operator-token">
+        </div>
+        <button class="btn btn-ghost" type="submit">Load approvals</button>
+      </form>
+      <p class="tool-pin-feedback" role="status">${escapeHtml(state.approvalError ?? (state.approvals.length ? '' : 'No approval tickets are visible.'))}</p>
+      ${state.approvals.map(renderApprovalActivity).join('')}
+    </section>
+    ${state.taskError ? `<p class="tool-pin-feedback" role="status">${escapeHtml(state.taskError)}</p>` : ''}
+  `;
+}
+
 export function renderTasks(state: AppState): string {
   const tasks = state.tasks || [];
   const filterStatus = state.taskFilterStatus || 'all';
@@ -259,19 +277,7 @@ export function renderTasks(state: AppState): string {
   }).join('');
 
   return `
-    <section class="bento-card" style="margin-bottom: 16px;">
-      <h2 class="stat-label">Approval activity</h2>
-      <form class="trust-auth-form" id="approval-auth-form">
-        <div class="form-group">
-          <label class="form-label" for="approval-operator-token">Approval operator token</label>
-          <input class="form-input" type="password" autocomplete="off" id="approval-operator-token">
-        </div>
-        <button class="btn btn-ghost" type="submit">Load approvals</button>
-      </form>
-      <p class="tool-pin-feedback" role="status">${escapeHtml(state.approvalError ?? (state.approvals.length ? '' : 'No approval tickets are visible.'))}</p>
-      ${state.approvals.map(renderApprovalActivity).join('')}
-    </section>
-    ${state.taskError ? `<p class="tool-pin-feedback" role="status">${escapeHtml(state.taskError)}</p>` : ''}
+    ${renderApprovalPanel(state)}
     <!-- Sub-header & Actions -->
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
       <div style="display: flex; align-items: center; gap: 10px;">

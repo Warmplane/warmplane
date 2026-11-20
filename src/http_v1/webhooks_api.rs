@@ -51,39 +51,9 @@ pub async fn handle_webhook_action(
     headers: HeaderMap,
     body_bytes: Bytes,
 ) -> impl IntoResponse {
-    let body = match std::str::from_utf8(&body_bytes) {
-        Ok(body) => body,
-        Err(_) => {
-            return action_error(
-                StatusCode::BAD_REQUEST,
-                "INVALID_PAYLOAD",
-                "Invalid UTF-8 payload",
-            )
-        }
-    };
-    let payload = if let Some(form_payload) = body.strip_prefix("payload=") {
-        let decoded = url_decode_str(form_payload);
-        match serde_json::from_str::<Value>(&decoded) {
-            Ok(value) => value,
-            Err(_) => {
-                return action_error(
-                    StatusCode::BAD_REQUEST,
-                    "INVALID_PAYLOAD",
-                    "Invalid platform payload",
-                )
-            }
-        }
-    } else {
-        match serde_json::from_slice::<Value>(&body_bytes) {
-            Ok(value) => value,
-            Err(_) => {
-                return action_error(
-                    StatusCode::BAD_REQUEST,
-                    "INVALID_PAYLOAD",
-                    "Invalid JSON payload",
-                )
-            }
-        }
+    let payload = match decode_action_payload(&body_bytes) {
+        Ok(payload) => payload,
+        Err(message) => return action_error(StatusCode::BAD_REQUEST, "INVALID_PAYLOAD", message),
     };
     let Some(token) = extract_action_token(&payload) else {
         return action_error(
@@ -295,6 +265,15 @@ pub async fn handle_webhook_action(
         }
     });
     accepted_action()
+}
+
+fn decode_action_payload(bytes: &[u8]) -> Result<Value, &'static str> {
+    let body = std::str::from_utf8(bytes).map_err(|_| "Invalid UTF-8 payload")?;
+    if let Some(form) = body.strip_prefix("payload=") {
+        serde_json::from_str(&url_decode_str(form)).map_err(|_| "Invalid platform payload")
+    } else {
+        serde_json::from_slice(bytes).map_err(|_| "Invalid JSON payload")
+    }
 }
 
 async fn signed_approval_callback(

@@ -80,9 +80,8 @@ pub async fn handle_upsert_server(
         }
     };
 
-    let current = config.mcp_servers.get(&payload.name);
-    if (payload.server.require_tool_pins || current.is_some_and(|server| server.require_tool_pins))
-        && !admin.is_some_and(|axum::extract::Extension(TrustAdmin(admin))| admin)
+    if !admin.is_some_and(|axum::extract::Extension(TrustAdmin(admin))| admin)
+        && requires_server_trust_admin(&config, &payload)
     {
         return trust_admin_required();
     }
@@ -121,6 +120,17 @@ pub async fn handle_upsert_server(
         })),
     )
         .into_response()
+}
+
+fn requires_server_trust_admin(
+    config: &crate::config::McpConfig,
+    payload: &UpsertServerRequest,
+) -> bool {
+    payload.server.require_tool_pins
+        || config
+            .mcp_servers
+            .get(&payload.name)
+            .is_some_and(|server| server.require_tool_pins)
 }
 
 fn persist_server_update(
@@ -620,13 +630,8 @@ pub async fn handle_update_policy(
     admin: Option<axum::extract::Extension<TrustAdmin>>,
     Json(mut payload): Json<crate::config::PolicyConfig>,
 ) -> impl IntoResponse {
-    if (payload.result_sanitization.is_some()
-        || payload
-            .webhook
-            .as_ref()
-            .is_some_and(crate::approval_chatops::subscribed)
-        || state.trust_controls_active().await)
-        && !admin.is_some_and(|axum::extract::Extension(TrustAdmin(admin))| admin)
+    if !admin.is_some_and(|axum::extract::Extension(TrustAdmin(admin))| admin)
+        && policy_requires_trust_admin(&state, &payload).await
     {
         return trust_admin_required();
     }
@@ -659,6 +664,24 @@ pub async fn handle_update_policy(
     state.notify_resources_changed();
     state.notify_prompts_changed();
 
+    audit_policy_update(&state, payload);
+
+    (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}
+
+async fn policy_requires_trust_admin(
+    state: &AppState,
+    payload: &crate::config::PolicyConfig,
+) -> bool {
+    payload.result_sanitization.is_some()
+        || payload
+            .webhook
+            .as_ref()
+            .is_some_and(crate::approval_chatops::subscribed)
+        || state.trust_controls_active().await
+}
+
+fn audit_policy_update(state: &AppState, payload: crate::config::PolicyConfig) {
     state.audit_handle.send(crate::audit::RawAuditEvent {
         event_type: crate::audit::AuditEventType::ConfigMutation,
         trace_id: "trace-policy-update".to_string(),
@@ -684,8 +707,6 @@ pub async fn handle_update_policy(
         idempotency_key: None,
         is_replay: None,
     });
-
-    (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
 }
 
 fn persist_policy_update(

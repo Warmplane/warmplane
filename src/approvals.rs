@@ -195,6 +195,87 @@ pub(crate) struct ApprovalActor {
     pub(crate) authorization_expires_at: Option<u64>,
 }
 
+fn replay_decision(
+    receipt: &DecisionReceipt,
+    owner: &ApprovalOwnership,
+    choice: Decision,
+    allow_replay: bool,
+) -> Result<(DecisionReceipt, bool), DecisionError> {
+    if allow_replay
+        && receipt.decision == choice
+        && receipt.argument_digest == owner.argument_digest
+    {
+        Ok((receipt.clone(), false))
+    } else {
+        Err(DecisionError::Conflict)
+    }
+}
+
+impl ApprovalActor {
+    fn check_permission(
+        &self,
+        rbac: &crate::rbac::RbacEngine,
+        now: u64,
+    ) -> Result<(), DecisionError> {
+        if rbac.can_resolve_approvals(&self.role)
+            && self
+                .authorization_expires_at
+                .is_none_or(|expiry| now < expiry)
+        {
+            Ok(())
+        } else {
+            Err(DecisionError::Forbidden)
+        }
+    }
+}
+
+impl PendingApproval {
+    fn verified_owner(
+        &self,
+        actor: &ApprovalActor,
+        now: u64,
+    ) -> Result<&ApprovalOwnership, DecisionError> {
+        let owner = self
+            .ownership
+            .as_ref()
+            .filter(|owner| owner.tenant_id == actor.tenant)
+            .ok_or(DecisionError::NotFound)?;
+        if now >= self.expires_at {
+            return Err(DecisionError::Conflict);
+        }
+        Ok(owner)
+    }
+}
+
+impl DecisionRequest {
+    fn receipt(
+        &self,
+        id: &str,
+        actor: &ApprovalActor,
+        owner: &ApprovalOwnership,
+        now: u64,
+    ) -> Result<DecisionReceipt, DecisionError> {
+        if self
+            .modified_args
+            .as_ref()
+            .is_some_and(|args| !args.is_object())
+        {
+            return Err(DecisionError::InvalidInput);
+        }
+        Ok(DecisionReceipt {
+            ticket_id: id.to_owned(),
+            decision: self.choice,
+            principal: actor.principal.clone(),
+            decided_at: now,
+            argument_digest: self
+                .modified_args
+                .as_ref()
+                .map(argument_digest)
+                .unwrap_or_else(|| owner.argument_digest.clone()),
+        })
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum DecisionError {
     NotFound,
@@ -712,30 +793,11 @@ impl ApprovalRegistry {
     ) -> Result<(DecisionReceipt, bool), DecisionError> {
         let mut tickets = self.pending.write().await;
         let now = approval_timestamp();
-        if !rbac.can_resolve_approvals(&actor.role)
-            || actor
-                .authorization_expires_at
-                .is_some_and(|expiry| now >= expiry)
-        {
-            return Err(DecisionError::Forbidden);
-        }
+        actor.check_permission(rbac, now)?;
         let ticket = tickets.get_mut(id).ok_or(DecisionError::NotFound)?;
-        let owner = ticket.ownership.as_ref().ok_or(DecisionError::NotFound)?;
-        if owner.tenant_id != actor.tenant {
-            return Err(DecisionError::NotFound);
-        }
-        if now >= ticket.expires_at {
-            return Err(DecisionError::Conflict);
-        }
+        let owner = ticket.verified_owner(actor, now)?;
         if let Some(receipt) = &ticket.decision_receipt {
-            return if allow_replay
-                && receipt.decision == request.choice
-                && receipt.argument_digest == owner.argument_digest
-            {
-                Ok((receipt.clone(), false))
-            } else {
-                Err(DecisionError::Conflict)
-            };
+            return replay_decision(receipt, owner, request.choice, allow_replay);
         }
         if ticket.status != ApprovalStatus::Pending {
             return Err(DecisionError::Conflict);
@@ -749,40 +811,33 @@ impl ApprovalRegistry {
         {
             return Err(DecisionError::Conflict);
         }
-        if request
-            .modified_args
-            .as_ref()
-            .is_some_and(|args| !args.is_object())
-        {
-            return Err(DecisionError::InvalidInput);
-        }
+        let receipt = request.receipt(id, actor, owner, now)?;
         let original = ticket.clone();
-        let receipt = DecisionReceipt {
-            ticket_id: id.to_owned(),
-            decision: request.choice,
-            principal: actor.principal.clone(),
-            decided_at: now,
-            argument_digest: request
-                .modified_args
-                .as_ref()
-                .map(argument_digest)
-                .unwrap_or_else(|| owner.argument_digest.clone()),
-        };
         let (status, resolution) = request.resolve(&receipt);
         ticket.status = status;
         ticket.decision_receipt = Some(receipt.clone());
-        if let Err(error) = self.persist(&tickets) {
-            tickets.insert(id.to_owned(), original);
-            if error.is::<ReplacementDurabilityUnknown>() {
-                let _ = self.persist(&tickets);
-            }
-            return Err(DecisionError::Persistence);
-        }
+        self.persist_decision(&mut tickets, id, original)?;
         drop(tickets);
         if let Some(waiter) = self.wait_channels.write().await.remove(id) {
             let _ = waiter.send(resolution);
         }
         Ok((receipt, true))
+    }
+
+    fn persist_decision(
+        &self,
+        tickets: &mut HashMap<String, PendingApproval>,
+        id: &str,
+        original: PendingApproval,
+    ) -> Result<(), DecisionError> {
+        if let Err(error) = self.persist(tickets) {
+            tickets.insert(id.to_owned(), original);
+            if error.is::<ReplacementDurabilityUnknown>() {
+                let _ = self.persist(tickets);
+            }
+            return Err(DecisionError::Persistence);
+        }
+        Ok(())
     }
 
     pub(crate) async fn find_by_task(&self, task_id: &str) -> Option<PendingApproval> {

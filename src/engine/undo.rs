@@ -108,6 +108,26 @@ pub(crate) async fn read_checked_state(
         .await
         .context("state-check call timed out")?
         .context("state-check upstream dropped its response")?;
+    let result = checked_snapshot_response(state, result).await?;
+
+    let snapshot = if let Some(path) = &config.capture_json_path {
+        crate::context_filter::distill_value(
+            result,
+            &crate::context_filter::DistillationOptions {
+                jsonpath: Some(path.clone()),
+                ..Default::default()
+            },
+        )
+    } else {
+        result
+    };
+    Ok(snapshot)
+}
+
+async fn checked_snapshot_response(
+    state: &AppState,
+    result: Result<Value, UpstreamCallError>,
+) -> Result<Value> {
     let result = match result {
         Ok(result) => result,
         Err(UpstreamCallError::Timeout) => bail!("state-check upstream timed out"),
@@ -124,18 +144,7 @@ pub(crate) async fn read_checked_state(
         bail!("state-check response could not be inspected");
     }
 
-    let snapshot = if let Some(path) = &config.capture_json_path {
-        crate::context_filter::distill_value(
-            result,
-            &crate::context_filter::DistillationOptions {
-                jsonpath: Some(path.clone()),
-                ..Default::default()
-            },
-        )
-    } else {
-        result
-    };
-    Ok(snapshot)
+    Ok(result)
 }
 
 /// Reserves use of a compensable capability within its configured rolling daily limit.

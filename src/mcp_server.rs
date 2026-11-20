@@ -261,33 +261,18 @@ impl ServerHandler for FacadeMcpServer {
         .await
         .map_err(|_| McpError::internal_error("Server mailbox closed", None))?;
 
-        match reply_rx.await {
-            Ok(Ok(value)) => {
-                let delivered = self
-                    .catalog_delivery(
-                        &server,
-                        value,
-                        crate::result_sanitization::Shape::ResourceRead,
-                    )
-                    .await?;
-                if delivered.get("resultType").and_then(Value::as_str) == Some("input_required") {
-                    return decode_upstream_result(delivered)
-                        .map(ReadResourceResponse::InputRequired);
-                }
-                decode_upstream_result::<ReadResourceResult>(delivered)
-                    .map(ReadResourceResponse::Complete)
-            }
-            Ok(Err(UpstreamCallError::Timeout)) => {
-                Err(McpError::internal_error("Resource read timed out", None))
-            }
-            Ok(Err(UpstreamCallError::Upstream(err))) => Err(McpError::internal_error(
-                self.state.safe_upstream_error(err).await,
-                None,
-            )),
-            Ok(Err(UpstreamCallError::ToolDefinitionChanged)) | Err(_) => {
-                Err(McpError::internal_error("Actor task died", None))
-            }
+        let value = self
+            .catalog_reply(
+                &server,
+                reply_rx,
+                crate::result_sanitization::Shape::ResourceRead,
+                "Resource read timed out",
+            )
+            .await?;
+        if value.get("resultType").and_then(Value::as_str) == Some("input_required") {
+            return decode_upstream_result(value).map(ReadResourceResponse::InputRequired);
         }
+        decode_upstream_result::<ReadResourceResult>(value).map(ReadResourceResponse::Complete)
     }
 
     async fn list_prompts(
@@ -347,28 +332,18 @@ impl ServerHandler for FacadeMcpServer {
         .await
         .map_err(|_| McpError::internal_error("Server mailbox closed", None))?;
 
-        match reply_rx.await {
-            Ok(Ok(value)) => {
-                let delivered = self
-                    .catalog_delivery(&server, value, crate::result_sanitization::Shape::Prompt)
-                    .await?;
-                if delivered.get("resultType").and_then(Value::as_str) == Some("input_required") {
-                    return decode_upstream_result(delivered).map(GetPromptResponse::InputRequired);
-                }
-                decode_upstream_result::<GetPromptResult>(delivered)
-                    .map(GetPromptResponse::Complete)
-            }
-            Ok(Err(UpstreamCallError::Timeout)) => {
-                Err(McpError::internal_error("Prompt get timed out", None))
-            }
-            Ok(Err(UpstreamCallError::Upstream(err))) => Err(McpError::internal_error(
-                self.state.safe_upstream_error(err).await,
-                None,
-            )),
-            Ok(Err(UpstreamCallError::ToolDefinitionChanged)) | Err(_) => {
-                Err(McpError::internal_error("Actor task died", None))
-            }
+        let value = self
+            .catalog_reply(
+                &server,
+                reply_rx,
+                crate::result_sanitization::Shape::Prompt,
+                "Prompt get timed out",
+            )
+            .await?;
+        if value.get("resultType").and_then(Value::as_str) == Some("input_required") {
+            return decode_upstream_result(value).map(GetPromptResponse::InputRequired);
         }
+        decode_upstream_result::<GetPromptResult>(value).map(GetPromptResponse::Complete)
     }
 }
 
@@ -413,442 +388,26 @@ impl FacadeMcpServer {
 
     async fn dispatch_facade_tool(
         &self,
-        request: CallToolRequestParams,
+        mut request: CallToolRequestParams,
     ) -> std::result::Result<CallToolResponse, McpError> {
-        let args = request.arguments.unwrap_or_default();
+        let args = request.arguments.take().unwrap_or_default();
 
         let output = match request.name.as_ref() {
-            TOOL_UNDO_EXECUTE => {
-                let profile = self.profile_context().await;
-                if !self.agent_self_undo_enabled(&profile).await {
-                    return Ok(CallToolResponse::Complete(
-                        CallToolResult::structured_error(invalid_args(
-                            "Agent self-undo is disabled for this role or profile",
-                        )),
-                    ));
-                }
-                let undo_id = args.get("undo_id").and_then(Value::as_str);
-                let work_item_id = args.get("work_item_id").and_then(Value::as_str);
-                if undo_id.is_none() && work_item_id.is_none() {
-                    return Ok(CallToolResponse::Complete(
-                        CallToolResult::structured_error(invalid_args(
-                            "Provide 'undo_id' or 'work_item_id'",
-                        )),
-                    ));
-                };
-                let role = self.state.rbac_engine.default_role();
-                let policy = self
-                    .state
-                    .policy
-                    .read()
-                    .await
-                    .clone()
-                    .merge_with_profile(profile.profile_policy.as_ref());
-                let access = crate::undo::UndoAccessContext {
-                    tenant_id: "default".to_string(),
-                    role,
-                    actor_id: None,
-                    request_context: Default::default(),
-                    policy,
-                    profile,
-                    grant_expires_at_epoch_secs: None,
-                    trace_id: next_trace_id(),
-                };
-                let handle = crate::engine::ControlPlaneHandle::new(self.state.clone());
-                let result = if let Some(work_item_id) = work_item_id {
-                    handle
-                        .execute_agent_self_undo_for_work_item(work_item_id, &access)
-                        .await
-                } else if let Some(undo_id) = undo_id {
-                    handle.execute_agent_self_undo(undo_id, &access).await
-                } else {
-                    return Ok(CallToolResponse::Complete(
-                        CallToolResult::structured_error(invalid_args(
-                            "Provide 'undo_id' or 'work_item_id'",
-                        )),
-                    ));
-                };
-                match result {
-                    Ok(result) => serde_json::to_value(result).map_err(|error| error.to_string()),
-                    Err(error) => {
-                        Ok(json!({"ok":false,"error":{"code":error.code,"message":error.message}}))
-                    }
-                }
-            }
+            TOOL_UNDO_EXECUTE => return self.facade_undo_execute(&args).await,
             TOOL_CAPABILITIES_LIST => self.list_capabilities_value().await,
-            TOOL_CAPABILITY_SEARCH => {
-                let query = args
-                    .get("query")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string);
-                let server_ids = args.get("server_ids").and_then(Value::as_array).map(|arr| {
-                    arr.iter()
-                        .filter_map(Value::as_str)
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                });
-                let tags = args.get("tags").and_then(Value::as_array).map(|arr| {
-                    arr.iter()
-                        .filter_map(Value::as_str)
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                });
-                let modes = args.get("modes").and_then(Value::as_array).map(|arr| {
-                    arr.iter()
-                        .filter_map(Value::as_str)
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                });
-                let limit = args
-                    .get("limit")
-                    .and_then(Value::as_u64)
-                    .map(|n| n as usize);
-
-                self.search_capabilities_value(query, server_ids, tags, modes, limit)
-                    .await
-            }
-            TOOL_CAPABILITY_DESCRIBE => {
-                let Some(id) = args.get("id").and_then(Value::as_str) else {
-                    return Ok(CallToolResponse::Complete(
-                        CallToolResult::structured_error(invalid_args(
-                            "Missing required field 'id'",
-                        )),
-                    ));
-                };
-                self.describe_capability_value(id.to_string()).await
-            }
-            TOOL_CAPABILITY_CALL => {
-                let Some(capability_id) = args.get("capability_id").and_then(Value::as_str) else {
-                    return Ok(CallToolResponse::Complete(
-                        CallToolResult::structured_error(invalid_args(
-                            "Missing required field 'capability_id'",
-                        )),
-                    ));
-                };
-                let Some(call_args) = args.get("args") else {
-                    return Ok(CallToolResponse::Complete(
-                        CallToolResult::structured_error(invalid_args(
-                            "Missing required field 'args'",
-                        )),
-                    ));
-                };
-                if !call_args.is_object() {
-                    return Ok(CallToolResponse::Complete(
-                        CallToolResult::structured_error(invalid_args(
-                            "'args' must be a JSON object",
-                        )),
-                    ));
-                }
-                let request_id = args
-                    .get("request_id")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string);
-                let context: Option<crate::context::RequestContext> = args
-                    .get("_meta")
-                    .or_else(|| args.get("context"))
-                    .and_then(|v| serde_json::from_value(v.clone()).ok());
-                let input_responses: Option<std::collections::BTreeMap<String, Value>> = args
-                    .get("input_responses")
-                    .and_then(|v| serde_json::from_value(v.clone()).ok())
-                    .or_else(|| request.input_responses.clone());
-                let request_state = args
-                    .get("request_state")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string)
-                    .or_else(|| request.request_state.clone());
-
-                self.call_capability_value(
-                    capability_id.to_string(),
-                    call_args.clone(),
-                    request_id,
-                    context,
-                    input_responses,
-                    request_state,
-                )
-                .await
-            }
+            TOOL_CAPABILITY_SEARCH => return self.facade_capability_search(&args).await,
+            TOOL_CAPABILITY_DESCRIBE => return self.facade_capability_describe(&args).await,
+            TOOL_CAPABILITY_CALL => return self.facade_capability_call(&args, &request).await,
             TOOL_CAPABILITIES_BATCH_CALL => {
-                let Some(steps_val) = args.get("steps") else {
-                    return Ok(CallToolResponse::Complete(
-                        CallToolResult::structured_error(invalid_args(
-                            "Missing required field 'steps'",
-                        )),
-                    ));
-                };
-                let Ok(steps) = serde_json::from_value::<Vec<crate::batch_executor::BatchStep>>(
-                    steps_val.clone(),
-                ) else {
-                    return Ok(CallToolResponse::Complete(
-                        CallToolResult::structured_error(invalid_args(
-                            "'steps' must be an array of BatchStep objects",
-                        )),
-                    ));
-                };
-                let auto_rollback_on_failure = match args.get("autoRollbackOnFailure") {
-                    None => false,
-                    Some(Value::Bool(enabled)) => *enabled,
-                    Some(_) => {
-                        return Ok(CallToolResponse::Complete(
-                            CallToolResult::structured_error(invalid_args(
-                                "'autoRollbackOnFailure' must be a boolean",
-                            )),
-                        ));
-                    }
-                };
-                let request_id = args
-                    .get("request_id")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string);
-                let context: Option<crate::context::RequestContext> = args
-                    .get("_meta")
-                    .or_else(|| args.get("context"))
-                    .and_then(|v| serde_json::from_value(v.clone()).ok());
-
-                let trace_id = next_trace_id();
-                let policy = self.state.policy.read().await.clone();
-                let prof_ctx = self.profile_context().await;
-                let caller_role = self.caller_role();
-                let policy = self
-                    .tenant
-                    .as_ref()
-                    .map_or(policy.clone(), |tenant| {
-                        self.state
-                            .rbac_engine
-                            .compute_effective_policy(&tenant.role, &policy)
-                    })
-                    .merge_with_profile(prof_ctx.profile_policy.as_ref());
-                let res = crate::batch_executor::execute_batch_for_tenant_with_rollback(
-                    &self.state,
-                    steps,
-                    trace_id,
-                    request_id,
-                    context,
-                    crate::batch_executor::BatchExecutionScope {
-                        policy: &policy,
-                        profile: &prof_ctx,
-                        tenant_id: self.tenant_id(),
-                        role: &caller_role,
-                        authorization_expires_at_epoch_secs: self
-                            .tenant
-                            .as_ref()
-                            .and_then(|tenant| tenant.grant_expires_at_epoch_secs),
-                        cancellation_token: tokio_util::sync::CancellationToken::new(),
-                    },
-                    auto_rollback_on_failure,
-                )
-                .await;
-                Ok(serde_json::to_value(res).unwrap_or_default())
+                return self.facade_capabilities_batch_call(&args).await
             }
-            TOOL_RESOURCES_LIST => self.list_resources_value().await,
-            TOOL_RESOURCE_READ => {
-                let Some(resource_id) = args.get("resource_id").and_then(Value::as_str) else {
-                    return Ok(CallToolResponse::Complete(
-                        CallToolResult::structured_error(invalid_args(
-                            "Missing required field 'resource_id'",
-                        )),
-                    ));
-                };
-                let request_id = args
-                    .get("request_id")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string);
-                let context: Option<crate::context::RequestContext> = args
-                    .get("_meta")
-                    .or_else(|| args.get("context"))
-                    .and_then(|v| serde_json::from_value(v.clone()).ok());
-                let input_responses: Option<std::collections::BTreeMap<String, Value>> = args
-                    .get("input_responses")
-                    .and_then(|v| serde_json::from_value(v.clone()).ok())
-                    .or_else(|| request.input_responses.clone());
-                let request_state = args
-                    .get("request_state")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string)
-                    .or_else(|| request.request_state.clone());
-
-                self.read_resource_value(
-                    resource_id.to_string(),
-                    request_id,
-                    context,
-                    input_responses,
-                    request_state,
-                )
-                .await
+            TOOL_RESOURCES_LIST | TOOL_RESOURCE_READ | TOOL_PROMPTS_LIST | TOOL_PROMPT_GET => {
+                return self.dispatch_catalog_tool(&args, &request).await;
             }
-            TOOL_PROMPTS_LIST => self.list_prompts_value().await,
-            TOOL_PROMPT_GET => {
-                let Some(prompt_id) = args.get("prompt_id").and_then(Value::as_str) else {
-                    return Ok(CallToolResponse::Complete(
-                        CallToolResult::structured_error(invalid_args(
-                            "Missing required field 'prompt_id'",
-                        )),
-                    ));
-                };
-                let request_id = args
-                    .get("request_id")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string);
-                let context: Option<crate::context::RequestContext> = args
-                    .get("_meta")
-                    .or_else(|| args.get("context"))
-                    .and_then(|v| serde_json::from_value(v.clone()).ok());
-                let arguments = args.get("arguments").cloned();
-                let input_responses: Option<std::collections::BTreeMap<String, Value>> = args
-                    .get("input_responses")
-                    .and_then(|v| serde_json::from_value(v.clone()).ok())
-                    .or_else(|| request.input_responses.clone());
-                let request_state = args
-                    .get("request_state")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string)
-                    .or_else(|| request.request_state.clone());
-
-                self.get_prompt_value(
-                    prompt_id.to_string(),
-                    arguments,
-                    request_id,
-                    context,
-                    input_responses,
-                    request_state,
-                )
-                .await
-            }
-            TOOL_COMPLETION_COMPLETE => {
-                let ref_type = args.get("ref_type").and_then(|v| v.as_str()).unwrap_or("");
-                let ref_name = args.get("ref_name").and_then(|v| v.as_str()).unwrap_or("");
-                let arg_name = args
-                    .get("argument_name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let arg_val = args
-                    .get("argument_value")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                Ok(json!({
-                    "ok": true,
-                    "trace_id": next_trace_id(),
-                    "data": {
-                        "ref_type": ref_type,
-                        "ref_name": ref_name,
-                        "argument_name": arg_name,
-                        "argument_value": arg_val,
-                        "values": [],
-                        "total": 0
-                    }
-                }))
-            }
-            TOOL_SUBSCRIPTIONS_LISTEN => {
-                let after = args.get("after").and_then(Value::as_str);
-                let (events, next_cursor) = self.state.event_store.get_events_after(after);
-                let catalog_ver = self.state.tool_catalog().await.version;
-                Ok(json!({
-                    "ok": true,
-                    "catalog_version": catalog_ver,
-                    "cursor": next_cursor,
-                    "events": events,
-                }))
-            }
-            TOOL_TASK_GET => {
-                let Some(task_id) = args
-                    .get("taskId")
-                    .or_else(|| args.get("task_id"))
-                    .and_then(Value::as_str)
-                else {
-                    return Ok(CallToolResponse::Complete(
-                        CallToolResult::structured_error(invalid_args(
-                            "Missing required field 'taskId'",
-                        )),
-                    ));
-                };
-                if let Some(record) = self.state.task_registry.get_task(task_id).await {
-                    if !self
-                        .state
-                        .hold_coordinator
-                        .can_access_task(
-                            &self.state,
-                            &record,
-                            self.tenant_id(),
-                            &self.caller_role(),
-                            self.profile.as_deref(),
-                        )
-                        .await
-                    {
-                        return Ok(CallToolResponse::Complete(
-                            CallToolResult::structured_error(invalid_args(
-                                "Task is not accessible to this profile",
-                            )),
-                        ));
-                    }
-                    let resp = self.state.task_view(&record).await;
-                    Ok(json!({
-                        "ok": true,
-                        "resultType": "complete",
-                        "task": resp,
-                    }))
-                } else {
-                    return Ok(CallToolResponse::Complete(
-                        CallToolResult::structured_error(invalid_args(format!(
-                            "Task '{}' not found",
-                            task_id
-                        ))),
-                    ));
-                }
-            }
-            TOOL_TASK_UPDATE => {
-                let Some(task_id) = args
-                    .get("taskId")
-                    .or_else(|| args.get("task_id"))
-                    .and_then(Value::as_str)
-                else {
-                    return Ok(CallToolResponse::Complete(
-                        CallToolResult::structured_error(invalid_args(
-                            "Missing required field 'taskId'",
-                        )),
-                    ));
-                };
-                let input_responses: std::collections::BTreeMap<String, Value> = args
-                    .get("inputResponses")
-                    .or_else(|| args.get("input_responses"))
-                    .and_then(|v| serde_json::from_value(v.clone()).ok())
-                    .unwrap_or_default();
-
-                match self
-                    .state
-                    .submit_task_input(
-                        task_id,
-                        input_responses,
-                        self.tenant.as_ref(),
-                        self.profile.as_deref(),
-                    )
-                    .await
-                {
-                    Ok(receipt) => Ok(json!({
-                        "ok": true,
-                        "resultType": "complete",
-                        "receipt": receipt,
-                    })),
-                    Err(error) => {
-                        Ok(json!({"ok": false, "error": crate::approvals::decision_error(error)}))
-                    }
-                }
-            }
-            TOOL_TASK_CANCEL => {
-                let Some(task_id) = args
-                    .get("taskId")
-                    .or_else(|| args.get("task_id"))
-                    .and_then(Value::as_str)
-                else {
-                    return Ok(CallToolResponse::Complete(
-                        CallToolResult::structured_error(invalid_args(
-                            "Missing required field 'taskId'",
-                        )),
-                    ));
-                };
-                let reason = args
-                    .get("reason")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string);
-                Ok(self.cancel_task_value(task_id, reason).await)
+            TOOL_COMPLETION_COMPLETE => return self.facade_completion_complete(&args).await,
+            TOOL_SUBSCRIPTIONS_LISTEN => return self.facade_subscriptions_listen(&args).await,
+            TOOL_TASK_GET | TOOL_TASK_UPDATE | TOOL_TASK_CANCEL => {
+                return self.dispatch_task_tool(request.name.as_ref(), &args).await;
             }
             _ => {
                 let tool_name = request.name.as_ref();
@@ -866,13 +425,533 @@ impl FacadeMcpServer {
             }
         };
 
-        match output {
-            Ok(value) => Ok(CallToolResponse::Complete(CallToolResult::structured(
-                value,
-            ))),
-            Err(e) => Ok(CallToolResponse::Complete(CallToolResult::error(vec![
-                ContentBlock::text(e),
-            ]))),
+        facade_output(output)
+    }
+
+    async fn dispatch_task_tool(
+        &self,
+        name: &str,
+        args: &Map<String, Value>,
+    ) -> Result<CallToolResponse, McpError> {
+        match name {
+            TOOL_TASK_GET => self.facade_task_get(args).await,
+            TOOL_TASK_UPDATE => self.facade_task_update(args).await,
+            TOOL_TASK_CANCEL => self.facade_task_cancel(args).await,
+            _ => Err(McpError::invalid_params("Unknown task tool", None)),
+        }
+    }
+
+    async fn dispatch_catalog_tool(
+        &self,
+        args: &Map<String, Value>,
+        request: &CallToolRequestParams,
+    ) -> Result<CallToolResponse, McpError> {
+        let output = match request.name.as_ref() {
+            TOOL_RESOURCES_LIST => self.list_resources_value().await,
+            TOOL_RESOURCE_READ => return self.facade_resource_read(args, request).await,
+            TOOL_PROMPTS_LIST => self.list_prompts_value().await,
+            TOOL_PROMPT_GET => return self.facade_prompt_get(args, request).await,
+            _ => return Err(McpError::invalid_params("Unknown catalog tool", None)),
+        };
+        facade_output(output)
+    }
+
+    async fn facade_undo_execute(
+        &self,
+        args: &Map<String, Value>,
+    ) -> Result<CallToolResponse, McpError> {
+        let output = {
+            let profile = self.profile_context().await;
+            if !self.agent_self_undo_enabled(&profile).await {
+                return Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(invalid_args(
+                        "Agent self-undo is disabled for this role or profile",
+                    )),
+                ));
+            }
+            let undo_id = args.get("undo_id").and_then(Value::as_str);
+            let work_item_id = args.get("work_item_id").and_then(Value::as_str);
+            if undo_id.is_none() && work_item_id.is_none() {
+                return Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(invalid_args(
+                        "Provide 'undo_id' or 'work_item_id'",
+                    )),
+                ));
+            };
+            let role = self.state.rbac_engine.default_role();
+            let policy = self
+                .state
+                .policy
+                .read()
+                .await
+                .clone()
+                .merge_with_profile(profile.profile_policy.as_ref());
+            let access = crate::undo::UndoAccessContext {
+                tenant_id: "default".to_string(),
+                role,
+                actor_id: None,
+                request_context: Default::default(),
+                policy,
+                profile,
+                grant_expires_at_epoch_secs: None,
+                trace_id: next_trace_id(),
+            };
+            let handle = crate::engine::ControlPlaneHandle::new(self.state.clone());
+            let result = if let Some(work_item_id) = work_item_id {
+                handle
+                    .execute_agent_self_undo_for_work_item(work_item_id, &access)
+                    .await
+            } else if let Some(undo_id) = undo_id {
+                handle.execute_agent_self_undo(undo_id, &access).await
+            } else {
+                return Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(invalid_args(
+                        "Provide 'undo_id' or 'work_item_id'",
+                    )),
+                ));
+            };
+            match result {
+                Ok(result) => serde_json::to_value(result).map_err(|error| error.to_string()),
+                Err(error) => {
+                    Ok(json!({"ok":false,"error":{"code":error.code,"message":error.message}}))
+                }
+            }
+        };
+        facade_output(output)
+    }
+
+    async fn facade_capability_search(
+        &self,
+        args: &Map<String, Value>,
+    ) -> Result<CallToolResponse, McpError> {
+        let output = {
+            let query = args
+                .get("query")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            let server_ids = args.get("server_ids").and_then(Value::as_array).map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            });
+            let tags = args.get("tags").and_then(Value::as_array).map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            });
+            let modes = args.get("modes").and_then(Value::as_array).map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            });
+            let limit = args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize);
+
+            self.search_capabilities_value(query, server_ids, tags, modes, limit)
+                .await
+        };
+        facade_output(output)
+    }
+
+    async fn facade_capability_describe(
+        &self,
+        args: &Map<String, Value>,
+    ) -> Result<CallToolResponse, McpError> {
+        let output = {
+            let Some(id) = args.get("id").and_then(Value::as_str) else {
+                return Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(invalid_args("Missing required field 'id'")),
+                ));
+            };
+            self.describe_capability_value(id.to_string()).await
+        };
+        facade_output(output)
+    }
+
+    async fn facade_capability_call(
+        &self,
+        args: &Map<String, Value>,
+        request: &CallToolRequestParams,
+    ) -> Result<CallToolResponse, McpError> {
+        let output = {
+            let Some(capability_id) = args.get("capability_id").and_then(Value::as_str) else {
+                return Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(invalid_args(
+                        "Missing required field 'capability_id'",
+                    )),
+                ));
+            };
+            let Some(call_args) = args.get("args") else {
+                return Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(invalid_args("Missing required field 'args'")),
+                ));
+            };
+            if !call_args.is_object() {
+                return Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(invalid_args("'args' must be a JSON object")),
+                ));
+            }
+            let FacadeCallInput {
+                request_id,
+                context,
+                input_responses,
+                request_state,
+            } = FacadeCallInput::from_request(args, request);
+
+            self.call_capability_value(
+                capability_id.to_string(),
+                call_args.clone(),
+                request_id,
+                context,
+                input_responses,
+                request_state,
+            )
+            .await
+        };
+        facade_output(output)
+    }
+
+    async fn facade_capabilities_batch_call(
+        &self,
+        args: &Map<String, Value>,
+    ) -> Result<CallToolResponse, McpError> {
+        let output = {
+            let Some(steps_val) = args.get("steps") else {
+                return Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(invalid_args(
+                        "Missing required field 'steps'",
+                    )),
+                ));
+            };
+            let Ok(steps) =
+                serde_json::from_value::<Vec<crate::batch_executor::BatchStep>>(steps_val.clone())
+            else {
+                return Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(invalid_args(
+                        "'steps' must be an array of BatchStep objects",
+                    )),
+                ));
+            };
+            let auto_rollback_on_failure = match args.get("autoRollbackOnFailure") {
+                None => false,
+                Some(Value::Bool(enabled)) => *enabled,
+                Some(_) => {
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "'autoRollbackOnFailure' must be a boolean",
+                        )),
+                    ));
+                }
+            };
+            let request_id = args
+                .get("request_id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            let context: Option<crate::context::RequestContext> = args
+                .get("_meta")
+                .or_else(|| args.get("context"))
+                .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+            let trace_id = next_trace_id();
+            let policy = self.state.policy.read().await.clone();
+            let prof_ctx = self.profile_context().await;
+            let caller_role = self.caller_role();
+            let policy = self
+                .tenant
+                .as_ref()
+                .map_or(policy.clone(), |tenant| {
+                    self.state
+                        .rbac_engine
+                        .compute_effective_policy(&tenant.role, &policy)
+                })
+                .merge_with_profile(prof_ctx.profile_policy.as_ref());
+            let res = crate::batch_executor::execute_batch_for_tenant_with_rollback(
+                &self.state,
+                steps,
+                trace_id,
+                request_id,
+                context,
+                crate::batch_executor::BatchExecutionScope {
+                    policy: &policy,
+                    profile: &prof_ctx,
+                    tenant_id: self.tenant_id(),
+                    role: &caller_role,
+                    authorization_expires_at_epoch_secs: self
+                        .tenant
+                        .as_ref()
+                        .and_then(|tenant| tenant.grant_expires_at_epoch_secs),
+                    cancellation_token: tokio_util::sync::CancellationToken::new(),
+                },
+                auto_rollback_on_failure,
+            )
+            .await;
+            Ok(serde_json::to_value(res).unwrap_or_default())
+        };
+        facade_output(output)
+    }
+
+    async fn facade_resource_read(
+        &self,
+        args: &Map<String, Value>,
+        request: &CallToolRequestParams,
+    ) -> Result<CallToolResponse, McpError> {
+        let output = {
+            let Some(resource_id) = args.get("resource_id").and_then(Value::as_str) else {
+                return Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(invalid_args(
+                        "Missing required field 'resource_id'",
+                    )),
+                ));
+            };
+            let FacadeCallInput {
+                request_id,
+                context,
+                input_responses,
+                request_state,
+            } = FacadeCallInput::from_request(args, request);
+
+            self.read_resource_value(
+                resource_id.to_string(),
+                request_id,
+                context,
+                input_responses,
+                request_state,
+            )
+            .await
+        };
+        facade_output(output)
+    }
+
+    async fn facade_prompt_get(
+        &self,
+        args: &Map<String, Value>,
+        request: &CallToolRequestParams,
+    ) -> Result<CallToolResponse, McpError> {
+        let output = {
+            let Some(prompt_id) = args.get("prompt_id").and_then(Value::as_str) else {
+                return Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(invalid_args(
+                        "Missing required field 'prompt_id'",
+                    )),
+                ));
+            };
+            let FacadeCallInput {
+                request_id,
+                context,
+                input_responses,
+                request_state,
+            } = FacadeCallInput::from_request(args, request);
+            let arguments = args.get("arguments").cloned();
+
+            self.get_prompt_value(
+                prompt_id.to_string(),
+                arguments,
+                request_id,
+                context,
+                input_responses,
+                request_state,
+            )
+            .await
+        };
+        facade_output(output)
+    }
+
+    async fn facade_completion_complete(
+        &self,
+        args: &Map<String, Value>,
+    ) -> Result<CallToolResponse, McpError> {
+        let output = {
+            let ref_type = args.get("ref_type").and_then(|v| v.as_str()).unwrap_or("");
+            let ref_name = args.get("ref_name").and_then(|v| v.as_str()).unwrap_or("");
+            let arg_name = args
+                .get("argument_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let arg_val = args
+                .get("argument_value")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            Ok(json!({
+                "ok": true,
+                "trace_id": next_trace_id(),
+                "data": {
+                    "ref_type": ref_type,
+                    "ref_name": ref_name,
+                    "argument_name": arg_name,
+                    "argument_value": arg_val,
+                    "values": [],
+                    "total": 0
+                }
+            }))
+        };
+        facade_output(output)
+    }
+
+    async fn facade_subscriptions_listen(
+        &self,
+        args: &Map<String, Value>,
+    ) -> Result<CallToolResponse, McpError> {
+        let output = {
+            let after = args.get("after").and_then(Value::as_str);
+            let (events, next_cursor) = self.state.event_store.get_events_after(after);
+            let catalog_ver = self.state.tool_catalog().await.version;
+            Ok(json!({
+                "ok": true,
+                "catalog_version": catalog_ver,
+                "cursor": next_cursor,
+                "events": events,
+            }))
+        };
+        facade_output(output)
+    }
+
+    async fn facade_task_get(
+        &self,
+        args: &Map<String, Value>,
+    ) -> Result<CallToolResponse, McpError> {
+        let output = {
+            let Some(task_id) = args
+                .get("taskId")
+                .or_else(|| args.get("task_id"))
+                .and_then(Value::as_str)
+            else {
+                return Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(invalid_args(
+                        "Missing required field 'taskId'",
+                    )),
+                ));
+            };
+            if let Some(record) = self.state.task_registry.get_task(task_id).await {
+                if !self
+                    .state
+                    .hold_coordinator
+                    .can_access_task(
+                        &self.state,
+                        &record,
+                        self.tenant_id(),
+                        &self.caller_role(),
+                        self.profile.as_deref(),
+                    )
+                    .await
+                {
+                    return Ok(CallToolResponse::Complete(
+                        CallToolResult::structured_error(invalid_args(
+                            "Task is not accessible to this profile",
+                        )),
+                    ));
+                }
+                let resp = self.state.task_view(&record).await;
+                Ok(json!({
+                    "ok": true,
+                    "resultType": "complete",
+                    "task": resp,
+                }))
+            } else {
+                return Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(invalid_args(format!(
+                        "Task '{}' not found",
+                        task_id
+                    ))),
+                ));
+            }
+        };
+        facade_output(output)
+    }
+
+    async fn facade_task_update(
+        &self,
+        args: &Map<String, Value>,
+    ) -> Result<CallToolResponse, McpError> {
+        let output = {
+            let Some(task_id) = args
+                .get("taskId")
+                .or_else(|| args.get("task_id"))
+                .and_then(Value::as_str)
+            else {
+                return Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(invalid_args(
+                        "Missing required field 'taskId'",
+                    )),
+                ));
+            };
+            let input_responses: std::collections::BTreeMap<String, Value> = args
+                .get("inputResponses")
+                .or_else(|| args.get("input_responses"))
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+
+            match self
+                .state
+                .submit_task_input(
+                    task_id,
+                    input_responses,
+                    self.tenant.as_ref(),
+                    self.profile.as_deref(),
+                )
+                .await
+            {
+                Ok(receipt) => Ok(json!({
+                    "ok": true,
+                    "resultType": "complete",
+                    "receipt": receipt,
+                })),
+                Err(error) => {
+                    Ok(json!({"ok": false, "error": crate::approvals::decision_error(error)}))
+                }
+            }
+        };
+        facade_output(output)
+    }
+
+    async fn facade_task_cancel(
+        &self,
+        args: &Map<String, Value>,
+    ) -> Result<CallToolResponse, McpError> {
+        let output = {
+            let Some(task_id) = args
+                .get("taskId")
+                .or_else(|| args.get("task_id"))
+                .and_then(Value::as_str)
+            else {
+                return Ok(CallToolResponse::Complete(
+                    CallToolResult::structured_error(invalid_args(
+                        "Missing required field 'taskId'",
+                    )),
+                ));
+            };
+            let reason = args
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            Ok(self.cancel_task_value(task_id, reason).await)
+        };
+        facade_output(output)
+    }
+
+    async fn catalog_reply(
+        &self,
+        server: &str,
+        reply: oneshot::Receiver<Result<Value, UpstreamCallError>>,
+        shape: crate::result_sanitization::Shape,
+        timeout_message: &str,
+    ) -> Result<Value, McpError> {
+        match reply.await {
+            Ok(Ok(value)) => self.catalog_delivery(server, value, shape).await,
+            Ok(Err(UpstreamCallError::Timeout)) => {
+                Err(McpError::internal_error(timeout_message.to_owned(), None))
+            }
+            Ok(Err(UpstreamCallError::Upstream(message))) => Err(McpError::internal_error(
+                self.state.safe_upstream_error(message).await,
+                None,
+            )),
+            Ok(Err(UpstreamCallError::ToolDefinitionChanged)) | Err(_) => {
+                Err(McpError::internal_error("Actor task died", None))
+            }
         }
     }
 
@@ -1074,49 +1153,37 @@ impl FacadeMcpServer {
         args: Value,
     ) -> Option<std::result::Result<Value, String>> {
         let caps_guard = self.state.capabilities.read().await;
-        let mut target_id = caps_guard
+        let direct = caps_guard
             .contains_key(tool_name)
-            .then(|| tool_name.to_string());
-        if target_id.is_none() {
-            if let Ok(config) = crate::config::load_or_default_config(&self.state.config_path) {
-                for (alias, alias_target) in &config.capability_aliases {
-                    if !alias_target.is_passthrough() {
-                        continue;
-                    }
-                    let sanitized: String = alias
-                        .chars()
-                        .map(|character| {
-                            if character.is_ascii_alphanumeric()
-                                || character == '_'
-                                || character == '-'
-                            {
-                                character
-                            } else {
-                                '_'
-                            }
-                        })
-                        .take(64)
-                        .collect();
-                    if alias == tool_name || sanitized == tool_name {
-                        target_id = Some(if caps_guard.contains_key(alias) {
-                            alias.clone()
-                        } else {
-                            alias_target.target().to_string()
-                        });
-                        break;
-                    }
-                }
-            }
-        }
+            .then(|| tool_name.to_owned());
+        let target = direct.or_else(|| self.passthrough_alias(tool_name, &caps_guard))?;
         drop(caps_guard);
+        Some(
+            self.call_capability_value(target, args, None, None, None, None)
+                .await,
+        )
+    }
 
-        match target_id {
-            Some(target) => Some(
-                self.call_capability_value(target, args, None, None, None, None)
-                    .await,
-            ),
-            None => None,
-        }
+    fn passthrough_alias(
+        &self,
+        tool: &str,
+        capabilities: &std::collections::HashMap<String, crate::daemon::CapabilityMeta>,
+    ) -> Option<String> {
+        let config = crate::config::load_or_default_config(&self.state.config_path).ok()?;
+        config
+            .capability_aliases
+            .iter()
+            .find_map(|(alias, target)| {
+                if !target.is_passthrough() || (alias != tool && exported_tool_name(alias) != tool)
+                {
+                    return None;
+                }
+                Some(if capabilities.contains_key(alias) {
+                    alias.clone()
+                } else {
+                    target.target().to_owned()
+                })
+            })
     }
 
     async fn list_resources_value(&self) -> std::result::Result<Value, String> {
@@ -1229,6 +1296,66 @@ impl FacadeMcpServer {
             .await;
         serde_json::to_value(env).map_err(|e| e.to_string())
     }
+}
+
+struct FacadeCallInput {
+    request_id: Option<String>,
+    context: Option<crate::context::RequestContext>,
+    input_responses: Option<std::collections::BTreeMap<String, Value>>,
+    request_state: Option<String>,
+}
+
+impl FacadeCallInput {
+    fn from_request(args: &Map<String, Value>, request: &CallToolRequestParams) -> Self {
+        let request_id = args
+            .get("request_id")
+            .and_then(Value::as_str)
+            .map(ToString::to_string);
+        let context: Option<crate::context::RequestContext> = args
+            .get("_meta")
+            .or_else(|| args.get("context"))
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+        let input_responses: Option<std::collections::BTreeMap<String, Value>> = args
+            .get("input_responses")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .or_else(|| request.input_responses.clone());
+        let request_state = args
+            .get("request_state")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .or_else(|| request.request_state.clone());
+
+        Self {
+            request_id,
+            context,
+            input_responses,
+            request_state,
+        }
+    }
+}
+
+fn facade_output(output: Result<Value, String>) -> Result<CallToolResponse, McpError> {
+    match output {
+        Ok(value) => Ok(CallToolResponse::Complete(CallToolResult::structured(
+            value,
+        ))),
+        Err(e) => Ok(CallToolResponse::Complete(CallToolResult::error(vec![
+            ContentBlock::text(e),
+        ]))),
+    }
+}
+fn exported_tool_name(alias: &str) -> String {
+    alias
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '_' || character == '-' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .take(64)
+        .collect()
 }
 
 fn invalid_args(message: impl Into<String>) -> Value {

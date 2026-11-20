@@ -2,7 +2,7 @@
 
 //! Dynamic server mounting, unmounting, and configuration reconciliation lifecycle operations.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use serde_json::json;
 use std::collections::HashMap;
 use tracing::{info, warn};
@@ -99,8 +99,8 @@ impl AppState {
             "http"
         };
 
-        let (new_capabilities, new_resources, new_prompts, tx) = if srv_cfg.command.is_some() {
-            crate::supervisor::spawn_supervised_stdio_server(
+        let (new_capabilities, new_resources, new_prompts, tx) =
+            crate::supervisor::spawn_configured_upstream(
                 self,
                 server_id,
                 srv_cfg,
@@ -108,23 +108,7 @@ impl AppState {
                 resource_aliases,
                 prompt_aliases,
             )
-            .await?
-        } else if srv_cfg.url.is_some() {
-            crate::supervisor::spawn_supervised_http_server(
-                self,
-                server_id,
-                srv_cfg,
-                capability_aliases,
-                resource_aliases,
-                prompt_aliases,
-            )
-            .await?
-        } else {
-            return Err(anyhow!(
-                "Server '{}' missing transport selector: set exactly one of 'command' or 'url'",
-                server_id
-            ));
-        };
+            .await?;
 
         let resilience_cfg = srv_cfg.resilience.clone().unwrap_or_default();
         self.circuit_breakers
