@@ -668,6 +668,9 @@ try {
 | `APPROVAL_PENDING` | 202 | Intercepted by HITL — awaiting operator decision |
 | `CIRCUIT_OPEN` | 503 | Upstream circuit breaker tripped |
 | `UPSTREAM_TIMEOUT` | 504 | Upstream exceeded `toolTimeoutMs` |
+| `RESULT_WITHHELD` | 502 | The result policy withheld a live or stored payload |
+
+With `policy.resultSanitization` enabled, `RESULT_WITHHELD` can carry a completed upstream execution state. Keep the original idempotency key if you check a withheld mutation again. Task status and ledger metadata can remain visible while the stored result is withheld after a policy change.
 
 See the [User Guide](USER-GUIDE.md) for the complete error code table and the [Whitepaper](WHITEPAPER.md) for architectural context.
 

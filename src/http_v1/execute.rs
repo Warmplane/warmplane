@@ -143,22 +143,28 @@ pub async fn handle_call_capability(
 
         let (task_record, _task_rx) = state
             .task_registry
-            .create_task(crate::tasks::CreateTaskParams {
-                capability_id: payload.capability_id.clone(),
-                server_id: server_id.clone(),
-                args: payload.args.clone(),
-                request_id: Some(request_id.clone()),
-                context: Some(req_context.clone()),
-                idempotency_key: idempotency_key.clone(),
-                initial_status: crate::tasks::TaskStatus::InputRequired,
-                status_message: Some(format!(
-                    "Execution suspended awaiting operator approval for capability '{}'",
-                    payload.capability_id
+            .create_scoped_task(
+                crate::tasks::CreateTaskParams {
+                    capability_id: payload.capability_id.clone(),
+                    server_id: server_id.clone(),
+                    args: payload.args.clone(),
+                    request_id: Some(request_id.clone()),
+                    context: Some(req_context.clone()),
+                    idempotency_key: idempotency_key.clone(),
+                    initial_status: crate::tasks::TaskStatus::InputRequired,
+                    status_message: Some(format!(
+                        "Execution suspended awaiting operator approval for capability '{}'",
+                        payload.capability_id
+                    )),
+                    input_requests: Some(input_requests),
+                    ttl_ms: Some(approval_timeout_secs * 1000),
+                    poll_interval_ms: Some(1000),
+                },
+                Some(crate::result_sanitization::ResultAccess::new(
+                    &tenant_id,
+                    prof_ctx.profile_id.as_deref(),
                 )),
-                input_requests: Some(input_requests),
-                ttl_ms: Some(approval_timeout_secs * 1000),
-                poll_interval_ms: Some(1000),
-            })
+            )
             .await;
 
         let approval_request = crate::approvals::CreateApprovalRequest {
@@ -462,11 +468,14 @@ pub async fn handle_call_capability(
                                 return;
                             }
                         }
-                        let distilled_data =
-                            crate::context_filter::distill_value(data, &distill_opts);
-                        let outcome = state_clone
-                            .task_registry
-                            .complete_execution(&task_id_clone, distilled_data)
+                        let (outcome, revision) = state_clone
+                            .complete_tool_delivery(
+                                &server_id_clone,
+                                &trace_id_clone,
+                                data,
+                                Some(&task_id_clone),
+                                &distill_opts,
+                            )
                             .await;
 
                         let response_json = match outcome {
@@ -495,7 +504,7 @@ pub async fn handle_call_capability(
                         {
                             state_clone
                                 .idempotency_store
-                                .complete(key, claim, response_json)
+                                .complete_with_revision(key, claim, response_json, revision)
                                 .await;
                         }
                     }
@@ -521,6 +530,7 @@ pub async fn handle_call_capability(
                             .await;
                     }
                     Ok(Err(UpstreamCallError::Upstream(err))) => {
+                        let err = state_clone.safe_upstream_error(err).await;
                         state_clone
                             .circuit_breakers
                             .record_failure(&server_id_clone)
@@ -1025,45 +1035,76 @@ pub async fn handle_call_capability(
                         .into_response();
                 }
             }
-            let redacted_output = redact_value(data.clone(), &redact_keys);
-            info!(
-                trace_id = %trace_id,
-                request_id = %request_id,
-                capability_id = %payload.capability_id,
-                data = %redacted_output,
-                "tool call success"
-            );
+            let delivery = state
+                .sanitize_result(
+                    &server_id,
+                    &trace_id,
+                    data,
+                    crate::result_sanitization::Shape::Tool,
+                )
+                .await;
             let elapsed_us = start_time.elapsed().as_micros() as u64;
             state
                 .total_tool_duration_us
                 .fetch_add(elapsed_us, Ordering::Relaxed);
+            let (status, response_json, revision) = match delivery {
+                Ok(delivery) => {
+                    let redacted_output = if delivery.revision.is_none() {
+                        redact_value(delivery.value.clone(), &redact_keys)
+                    } else {
+                        Value::Null
+                    };
+                    info!(
+                        trace_id = %trace_id,
+                        request_id = %request_id,
+                        capability_id = %payload.capability_id,
+                        data = %redacted_output,
+                        "tool call success"
+                    );
+                    state.audit_handle.send(audit.event(
+                        redacted_input,
+                        elapsed_us,
+                        Ok(redacted_output),
+                    ));
 
-            state
-                .audit_handle
-                .send(audit.event(redacted_input, elapsed_us, Ok(redacted_output)));
-
-            let distill_opts =
-                crate::context_filter::DistillationOptions::from_args(Some(&payload.args));
-            let distilled_data = crate::context_filter::distill_value(data, &distill_opts);
-
-            let response_json = json!({
-                "ok": true,
-                "request_id": request_id,
-                "context": req_context,
-                "trace_id": trace_id,
-                "data": distilled_data,
-                "error": null,
-                "retry": retry_base("completed"),
-            });
+                    let distill_opts =
+                        crate::context_filter::DistillationOptions::from_args(Some(&payload.args));
+                    let distilled_data =
+                        crate::context_filter::distill_value(delivery.value, &distill_opts);
+                    let response = json!({
+                        "ok": true,
+                        "request_id": request_id,
+                        "context": req_context,
+                        "trace_id": trace_id,
+                        "data": distilled_data,
+                        "error": null,
+                        "retry": retry_base("completed"),
+                    });
+                    (StatusCode::OK, response, delivery.revision)
+                }
+                Err(withheld) => {
+                    let error = crate::WarmplaneError::from(withheld);
+                    let response = error_envelope(
+                        trace_id,
+                        Some(request_id),
+                        Some(req_context),
+                        retry_base("completed"),
+                        &error.code,
+                        error.message,
+                        false,
+                    );
+                    (StatusCode::BAD_GATEWAY, response, None)
+                }
+            };
 
             if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
                 state
                     .idempotency_store
-                    .complete(key, claim, response_json.clone())
+                    .complete_with_revision(key, claim, response_json.clone(), revision)
                     .await;
             }
 
-            (StatusCode::OK, Json(response_json)).into_response()
+            (status, Json(response_json)).into_response()
         }
         Ok(Err(UpstreamCallError::Timeout)) => {
             state.circuit_breakers.record_failure(&server_id).await;
@@ -1095,6 +1136,7 @@ pub async fn handle_call_capability(
                 .into_response()
         }
         Ok(Err(UpstreamCallError::Upstream(err))) => {
+            let err = state.safe_upstream_error(err).await;
             state.circuit_breakers.record_failure(&server_id).await;
             let elapsed_us = start_time.elapsed().as_micros() as u64;
             state
@@ -1265,7 +1307,8 @@ impl HeldCall<'_> {
                 return response;
             }
         }
-        self.identity.held_receipt(StatusCode::ACCEPTED, &task)
+        self.identity
+            .held_receipt(StatusCode::ACCEPTED, self.state.task_view(&task).await)
     }
 
     async fn hold_deadline(
@@ -1368,14 +1411,14 @@ impl HeldCall<'_> {
             .hold_coordinator
             .wait_for_terminal(self.state, task_id, wait)
             .await?;
-        self.completed_response(task)
+        self.completed_response(self.state.task_view(&task).await)
     }
 
-    fn completed_response(&self, task: TaskRecord) -> Option<Response> {
+    fn completed_response(&self, task: TaskResponse) -> Option<Response> {
         let id = &self.identity;
         let retry = (id.retry_base)("completed");
         match task.status {
-            TaskStatus::Completed => Some(
+            TaskStatus::Completed if task.error.is_none() => Some(
                 (
                     StatusCode::OK,
                     Json(json!({
@@ -1390,7 +1433,7 @@ impl HeldCall<'_> {
                 )
                     .into_response(),
             ),
-            TaskStatus::Failed | TaskStatus::Cancelled => {
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled => {
                 let code = task
                     .error
                     .as_ref()
@@ -1619,16 +1662,16 @@ impl CallIdentity {
         } else {
             StatusCode::ACCEPTED
         };
-        Some(self.held_receipt(status, &task))
+        Some(self.held_receipt(status, state.task_view(&task).await))
     }
 
-    fn held_receipt(&self, status: StatusCode, task: &TaskRecord) -> Response {
+    fn held_receipt(&self, status: StatusCode, task: TaskResponse) -> Response {
         (
             status,
             Json(json!({
                 "ok": true,
                 "resultType": "task",
-                "task": TaskResponse::from(task),
+                "task": task,
                 "request_id": self.request_id,
                 "trace_id": self.trace_id,
             })),
@@ -1649,9 +1692,13 @@ impl CallIdentity {
         if let Some(response) = self.replay_held_call(state, key, tenant, profile).await {
             return ControlFlow::Break(response);
         }
+        let access = crate::result_sanitization::ResultAccess::new(
+            tenant.map_or("default", |context| context.tenant_id.as_str()),
+            profile.and_then(|profile| profile.profile_id.as_deref()),
+        );
         match state
             .idempotency_store
-            .claim_or_replay(key, &payload.capability_id, &self.trace_id)
+            .claim_or_replay(key, &payload.capability_id, &self.trace_id, access.clone())
             .await
         {
             ExecutionClaim::New(claim) => ControlFlow::Continue(Some(claim)),
@@ -1659,8 +1706,41 @@ impl CallIdentity {
                 response,
                 from_cache,
             } => {
+                let default_role = state.rbac_engine.default_role();
+                let role = tenant.map_or(default_role.as_str(), |context| context.role.as_str());
+                if let Err(error) = state
+                    .validate_replay(key, &payload.capability_id, &response, &access, role)
+                    .await
+                {
+                    let status = if error.code == "POLICY_DENIED" {
+                        StatusCode::FORBIDDEN
+                    } else {
+                        StatusCode::BAD_GATEWAY
+                    };
+                    return ControlFlow::Break(
+                        (
+                            status,
+                            Json(error_envelope(
+                                self.trace_id.clone(),
+                                Some(self.request_id.clone()),
+                                Some(self.req_context.clone()),
+                                (self.retry_base)("completed"),
+                                &error.code,
+                                error.message,
+                                false,
+                            )),
+                        )
+                            .into_response(),
+                    );
+                }
                 if from_cache {
-                    self.audit_cached_replay(state, key, payload, &response);
+                    let logging_enabled = state.accepts_result_revision(None).await;
+                    self.audit_cached_replay(
+                        state,
+                        key,
+                        payload,
+                        logging_enabled.then_some(&response),
+                    );
                 }
                 let mut headers = HeaderMap::new();
                 headers.insert(
@@ -1677,7 +1757,7 @@ impl CallIdentity {
         state: &AppState,
         key: &str,
         payload: &CallCapabilityRequest,
-        response: &Value,
+        response: Option<&Value>,
     ) {
         state.audit_handle.send(crate::audit::RawAuditEvent {
             event_type: crate::audit::AuditEventType::ToolExecution,
@@ -1690,7 +1770,7 @@ impl CallIdentity {
             capability_id: Some(payload.capability_id.clone()),
             resource_uri: None,
             sanitized_args: Some(payload.args.clone()),
-            sanitized_response: Some(response.clone()),
+            sanitized_response: response.cloned(),
             execution_latency_us: Some(self.start_time.elapsed().as_micros() as u64),
             status: crate::audit::AuditEventStatus::Success,
             error_code: None,

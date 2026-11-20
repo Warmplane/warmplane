@@ -238,6 +238,8 @@ To eliminate duplicate side-effect execution caused by agent retry loops, transi
 4. **WORM Audit Trail Linkage**: Deduplicated replays are recorded in the append-only cryptographic audit chain with `is_replay: true` and the associated `idempotency_key`, maintaining a complete audit ledger linking initial attempts, timeouts, and replays.
 5. **Effect History Inspection (`/v1/idempotency/records`)**: Exposes queryable inspection endpoints and CLI tooling (`warmplane idempotency list/get`) to inspect replay counts and active deduplication records.
 
+The optional global result policy inspects upstream results before facade shaping, ordinary storage, and batch interpolation. A stored result carries the effective policy revision. Delivery checks both current access and that revision. A withheld result preserves the known upstream execution outcome and its deduplication claim. Undo snapshots and resolved inverse arguments remain in protected operational state.
+
 ---
 
 ## 4. Performance Profile and Micro-Benchmarks

@@ -971,7 +971,33 @@ async fn dispatch_catalog_call(
 
     match result {
         Ok(Ok(data)) => {
-            log.success(&trace_id, &request_id, &data);
+            let data = match state
+                .sanitize_result(server_id, &trace_id, data, log.kind.result_shape())
+                .await
+            {
+                Ok(result) => {
+                    if result.revision.is_none() {
+                        log.success(&trace_id, &request_id, &result.value);
+                    }
+                    result.value
+                }
+                Err(withheld) => {
+                    let error = crate::WarmplaneError::from(withheld);
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        Json(error_envelope(
+                            trace_id,
+                            Some(request_id),
+                            Some(req_context),
+                            crate::idempotency::RetryMetadata::safe("completed"),
+                            &error.code,
+                            error.message,
+                            false,
+                        )),
+                    )
+                        .into_response();
+                }
+            };
             (
                 StatusCode::OK,
                 Json(json!({
@@ -1007,7 +1033,7 @@ async fn dispatch_catalog_call(
                 Some(req_context),
                 crate::idempotency::RetryMetadata::safe("unknown"),
                 "UPSTREAM_ERROR",
-                err,
+                state.safe_upstream_error(err).await,
                 false,
             )),
         )
@@ -1195,6 +1221,17 @@ impl CatalogCall {
 enum CatalogKind {
     Resource,
     Prompt,
+}
+
+impl CatalogKind {
+    fn result_shape(self) -> crate::result_sanitization::Shape {
+        use crate::result_sanitization::Shape;
+
+        match self {
+            Self::Resource => Shape::ResourceRead,
+            Self::Prompt => Shape::Prompt,
+        }
+    }
 }
 
 impl std::fmt::Display for CatalogKind {

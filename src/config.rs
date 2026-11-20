@@ -598,6 +598,13 @@ pub struct PolicyConfig {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub redact_keys: Vec<String>,
+    /// Compiled global policy for sanitizing upstream results before delivery.
+    #[serde(
+        default,
+        rename = "resultSanitization",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub result_sanitization: Option<crate::result_sanitization::ResultSanitization>,
     /// List of capability ID patterns requiring human operator approval before execution.
     #[serde(
         default,
@@ -1021,6 +1028,7 @@ pub fn resolve_client_port(
 }
 
 fn validate_config(config: &McpConfig) -> Result<()> {
+    validate_result_sanitization(config)?;
     validate_policy_holds_and_webhooks(config)?;
     validate_reversibility_contracts(&config.capability_aliases)?;
     for (server_id, server) in &config.mcp_servers {
@@ -1044,6 +1052,31 @@ fn validate_hold_window(value: Option<u64>, context: &str) -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+pub(crate) fn validate_result_sanitization(config: &McpConfig) -> Result<()> {
+    if let Some(rules) = config
+        .policy
+        .as_ref()
+        .and_then(|policy| policy.result_sanitization.as_ref())
+    {
+        for server in rules.exception_servers() {
+            anyhow::ensure!(
+                config.mcp_servers.contains_key(server),
+                "resultSanitization exception references unknown server '{server}'"
+            );
+        }
+    }
+    anyhow::ensure!(
+        !config.profiles.values().any(|profile| {
+            profile
+                .policy
+                .as_ref()
+                .is_some_and(|policy| policy.result_sanitization.is_some())
+        }),
+        "resultSanitization is supported only in the global policy"
+    );
     Ok(())
 }
 

@@ -59,6 +59,7 @@ fn create_test_rbac_state() -> AppState {
             redact_keys: vec![],
             undo_permissions: Default::default(),
             allow_agent_self_undo: false,
+            manage_trust_controls: false,
         },
     );
     roles.insert(
@@ -76,6 +77,7 @@ fn create_test_rbac_state() -> AppState {
             redact_keys: vec!["password".to_string(), "ssn".to_string()],
             undo_permissions: Default::default(),
             allow_agent_self_undo: false,
+            manage_trust_controls: false,
         },
     );
     roles.insert(
@@ -88,6 +90,7 @@ fn create_test_rbac_state() -> AppState {
             redact_keys: vec![],
             undo_permissions: Default::default(),
             allow_agent_self_undo: false,
+            manage_trust_controls: false,
         },
     );
 

@@ -566,6 +566,10 @@ See the [User Guide](USER-GUIDE.md) for the complete error code table and the [W
 
 ### Direct idempotency store use
 
+Use `ControlPlaneHandle::call_capability` and the handle's task methods for policy-aware delivery. When the daemon or embedded engine enforces `policy.resultSanitization`, results can return `RESULT_WITHHELD` with `retry.upstream_execution_state == "completed"`. Reuse the original idempotency key when checking that execution. Raw registry and storage APIs are intended for trusted in-process operators.
+
+Embedded hosts configure their own logging. Filter the `rmcp` tracing target in the host subscriber to keep protocol payloads out of logs before Warmplane inspects them. The standalone daemon filters that target in its telemetry setup.
+
 `IdempotencyStore::check_or_start` and `check_or_start_with_meta` return
 `DeduplicateResult::New(claim)` when the caller owns the execution. Pass that
 claim and the key to `complete` when publishing a result or to `remove` when

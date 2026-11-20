@@ -417,6 +417,7 @@ async fn dispatch_inverse(
     let audit_error = error
         .as_ref()
         .map(|_| "inverse call failed; see the operator response");
+    let audit_output = state.accepts_result_revision(None).await.then_some(&output);
     let audit_payload = json!({
         "undoId": entry.undo_id,
         "parentOperationId": entry.operation_id,
@@ -425,7 +426,7 @@ async fn dispatch_inverse(
         "forceExpiredReason": force_expired_reason,
         "outcome": if ok { "executed" } else { "failed" },
         "error": audit_error,
-        "result": output,
+        "result": audit_output,
     });
     let audit_result = state
         .audit_handle

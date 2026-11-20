@@ -39,6 +39,7 @@ fn sample_rbac_config() -> RbacConfig {
             redact_keys: vec![],
             undo_permissions: Default::default(),
             allow_agent_self_undo: false,
+            manage_trust_controls: false,
         },
     );
     roles.insert(
@@ -51,6 +52,7 @@ fn sample_rbac_config() -> RbacConfig {
             redact_keys: vec!["ssn".to_string(), "password".to_string()],
             undo_permissions: Default::default(),
             allow_agent_self_undo: false,
+            manage_trust_controls: false,
         },
     );
 

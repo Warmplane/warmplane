@@ -57,7 +57,7 @@ pub async fn handle_list_tasks(
         )
         .await
         {
-            responses.push(TaskResponse::from(record));
+            responses.push(state.task_view(record).await);
         }
     }
     let total = responses.len();
@@ -90,7 +90,7 @@ pub async fn handle_get_task(
         {
             return (StatusCode::NOT_FOUND, Json(json!({"ok": false, "error": {"code": "TASK_NOT_FOUND", "message": format!("Task '{}' was not found", id)}}))).into_response();
         }
-        let resp = TaskResponse::from(&record);
+        let resp = state.task_view(&record).await;
         (
             StatusCode::OK,
             Json(json!({

@@ -24,6 +24,7 @@ pub mod models;
 pub mod oauth2;
 pub mod operations;
 pub mod rbac;
+pub mod result_sanitization;
 pub mod sampling;
 pub mod search;
 pub mod storage;

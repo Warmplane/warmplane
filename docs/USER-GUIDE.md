@@ -422,6 +422,28 @@ The `policy` block enforces global security boundaries, human approval gates, an
 - **Webhook HMAC Signing**: Outbound webhook requests are signed with HMAC-SHA256 in the `X-Warmplane-Signature-256` header using `secret` or `secretEnv`.
 - **SSRF Prevention & Allowlist**: Simulated test webhooks (`/v1/webhooks/test`) require HTTP/HTTPS and only send to `policy.webhook.url` or destinations explicitly listed in `policy.webhook.allowedUrls`.
 
+#### Sanitize results before delivery
+
+Set `policy.resultSanitization` in `mcp_servers.json` to inspect upstream tool, resource, and prompt results on REST, MCP, and embedded clients. Configure it on the global policy.
+
+```json
+{
+  "fieldNames": ["customerToken", "privateNote"],
+  "patterns": ["customer-[0-9]+"],
+  "opaqueExceptions": [
+    {"server": "reports", "kind": "image", "mimeType": "image/png"}
+  ]
+}
+```
+
+Field names match case-insensitively in structured results and JSON carried in MCP text. A regex match replaces the entire text value with `[REDACTED]`. Warmplane withholds results when a rule matches a required protocol field, a payload exceeds 1 MiB of decoded inspection data or 64 levels of nesting, or opaque content lacks an exact server, kind, and MIME match. Supported opaque kinds are `image`, `audio`, and `blob`. An empty object enables inspection and blocks opaque content. `redactKeys` continues to control log redaction.
+
+Warmplane sanitizes before output shaping, task storage, and batch interpolation. A batch cannot forward a result value containing the redaction marker. `RESULT_WITHHELD` with `upstream_execution_state: completed` means the upstream call returned and the policy withheld its payload. Keep the same idempotency key when checking that execution again.
+
+Enabling or changing the policy withholds previously stored responses that lack the current revision. The task and idempotency stores retain their execution records until their existing expiration or local retention procedures remove them. Back up the state directory before retiring pre-existing raw records. Keep old idempotency records for their normal TTL when clients may retry completed mutations. Historical audit logs follow their existing retention and integrity rules.
+
+With RBAC enabled, grant `manageTrustControls: true` to an operator role and authenticate its requests to edit trust controls through REST. When RBAC is disabled, set the daemon token to manage trust controls through REST. Filesystem operators can edit local configuration directly.
+
 ---
 
 ### 4.4 WORM Audit Trail and SIEM Export Configuration

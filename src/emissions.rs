@@ -70,7 +70,14 @@ impl HoldCoordinator {
         profile_id: Option<&str>,
     ) -> bool {
         let Some(emission) = record.emission.as_ref() else {
-            return true;
+            if state.accepts_result_revision(None).await {
+                return true;
+            }
+            let access = crate::result_sanitization::ResultAccess::new(tenant_id, profile_id);
+            return record.result_access.as_ref() == Some(&access)
+                && access
+                    .permits_capability(state, &record.capability_id, role)
+                    .await;
         };
         if emission
             .authorization_expires_at_epoch_secs
@@ -419,7 +426,9 @@ impl HoldCoordinator {
                     crate::daemon::UpstreamCallError::Timeout => {
                         "Upstream call timed out".to_string()
                     }
-                    crate::daemon::UpstreamCallError::Upstream(message) => message,
+                    crate::daemon::UpstreamCallError::Upstream(message) => {
+                        state.safe_upstream_error(message).await
+                    }
                 };
                 self.finish_failure(&state, &record, "UPSTREAM_CALL_FAILED", message)
                     .await;
@@ -459,12 +468,31 @@ impl HoldCoordinator {
         record: &TaskRecord,
         result: serde_json::Value,
     ) {
-        let outcome = state
-            .task_registry
-            .complete_execution(&record.task_id, result.clone())
+        let (outcome, revision) = state
+            .complete_tool_delivery(
+                &record.server_id,
+                record.request_id.as_deref().unwrap_or(&record.task_id),
+                result,
+                Some(&record.task_id),
+                &crate::context_filter::DistillationOptions::default(),
+            )
             .await;
-        self.audit_execution(state, record, Some(result.clone()), None)
-            .await;
+        match &outcome {
+            Ok(result) => {
+                let audit_result = revision.is_none().then(|| result.clone());
+                self.audit_execution(state, record, audit_result, None)
+                    .await;
+            }
+            Err(error) => {
+                self.audit_execution(
+                    state,
+                    record,
+                    None,
+                    Some((&error.code, error.message.clone())),
+                )
+                .await
+            }
+        }
         if let (Some(key), Some(claim)) = (
             record.idempotency_key.as_deref(),
             record
@@ -483,7 +511,10 @@ impl HoldCoordinator {
             .context(record.context.clone())
             .outcome(outcome);
             if let Ok(value) = serde_json::to_value(envelope) {
-                state.idempotency_store.complete(key, claim, value).await;
+                state
+                    .idempotency_store
+                    .complete_with_revision(key, claim, value, revision)
+                    .await;
             }
         }
     }

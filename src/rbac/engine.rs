@@ -80,6 +80,15 @@ impl RbacEngine {
             .is_some_and(|config| config.allow_agent_self_undo)
     }
 
+    pub(crate) fn can_manage_trust_controls(&self, tenant: &TenantContext) -> bool {
+        tenant.grant_id.is_some()
+            && self
+                .read_state()
+                .roles
+                .get(&tenant.role)
+                .is_some_and(|role| role.manage_trust_controls)
+    }
+
     /// Returns whether a role can be resolved under the active RBAC configuration.
     pub fn recognizes_role(&self, role: &str) -> bool {
         let config = self.read_state();

@@ -36,6 +36,7 @@ fn engine_with_token(token: &str) -> RbacEngine {
             redact_keys: vec![],
             undo_permissions: Default::default(),
             allow_agent_self_undo: false,
+            manage_trust_controls: false,
         },
     );
 

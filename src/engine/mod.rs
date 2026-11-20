@@ -20,7 +20,7 @@ use crate::{
     batch_executor::{execute_batch, BatchCallResponse, BatchStep},
     config::{McpConfig, ReversibilityClass, ReversibilityConfig},
     context::{ProfileContext, RequestContext},
-    context_filter::{distill_value, DistillationOptions},
+    context_filter::DistillationOptions,
     daemon::{
         initialize_state,
         state::AppState,
@@ -28,6 +28,7 @@ use crate::{
         Policy,
     },
     idempotency::{IdempotencyClaim, RetryMetadata},
+    result_sanitization::{ResultAccess, Shape},
     tasks::{CreateTaskParams, EmissionPhase, EmissionRecord},
 };
 
@@ -458,8 +459,7 @@ impl ControlPlaneHandle {
                         trace_id,
                         Some(req_id),
                         Some(req_ctx),
-                        serde_json::to_value(crate::tasks::TaskResponse::from(&task))
-                            .unwrap_or_default(),
+                        serde_json::to_value(self.state.task_view(&task).await).unwrap_or_default(),
                         retry_base(
                             if matches!(
                                 task.status,
@@ -479,14 +479,34 @@ impl ControlPlaneHandle {
 
         // Check Idempotency Store
         let idempotency_claim = if let Some(key) = idempotency_key.as_deref() {
+            let access = ResultAccess::new("default", prof_ctx.profile_id.as_deref());
             match self
                 .state
                 .idempotency_store
-                .claim_or_replay(key, capability_id, &trace_id)
+                .claim_or_replay(key, capability_id, &trace_id, access.clone())
                 .await
             {
                 crate::idempotency::ExecutionClaim::New(claim) => Some(claim),
                 crate::idempotency::ExecutionClaim::Replay { response, .. } => {
+                    if let Err(error) = self
+                        .state
+                        .validate_replay(
+                            key,
+                            capability_id,
+                            &response,
+                            &access,
+                            &self.state.rbac_engine.default_role(),
+                        )
+                        .await
+                    {
+                        return Envelope::failure(
+                            trace_id,
+                            Some(req_id),
+                            Some(req_ctx),
+                            error,
+                            retry_base("completed"),
+                        );
+                    }
                     if let Ok(env) = serde_json::from_value::<Envelope<Value>>(response.clone()) {
                         return env;
                     }
@@ -689,19 +709,22 @@ impl ControlPlaneHandle {
             let (task_record, task_rx) = self
                 .state
                 .task_registry
-                .create_task(crate::tasks::CreateTaskParams {
-                    capability_id: capability_id.to_string(),
-                    server_id: server_id.clone(),
-                    args: args.clone(),
-                    request_id: Some(req_id.clone()),
-                    context: Some(req_ctx.clone()),
-                    idempotency_key: idempotency_key.clone(),
-                    initial_status,
-                    status_message: status_msg,
-                    input_requests,
-                    ttl_ms: Some(approval_timeout_secs * 1000),
-                    poll_interval_ms: Some(1000),
-                })
+                .create_scoped_task(
+                    crate::tasks::CreateTaskParams {
+                        capability_id: capability_id.to_string(),
+                        server_id: server_id.clone(),
+                        args: args.clone(),
+                        request_id: Some(req_id.clone()),
+                        context: Some(req_ctx.clone()),
+                        idempotency_key: idempotency_key.clone(),
+                        initial_status,
+                        status_message: status_msg,
+                        input_requests,
+                        ttl_ms: Some(approval_timeout_secs * 1000),
+                        poll_interval_ms: Some(1000),
+                    },
+                    Some(ResultAccess::new("default", prof_ctx.profile_id.as_deref())),
+                )
                 .await;
 
             let handle = self.clone();
@@ -1000,11 +1023,15 @@ impl ControlPlaneHandle {
                                 }
                             }
                         }
-                        let distilled_data = distill_value(data, &distill_opts);
-                        let outcome = handle
+                        let (outcome, revision) = handle
                             .state
-                            .task_registry
-                            .complete_execution(&task_id_clone, distilled_data)
+                            .complete_tool_delivery(
+                                &server_id_clone,
+                                &trace_id_clone,
+                                data,
+                                Some(&task_id_clone),
+                                &distill_opts,
+                            )
                             .await;
 
                         let env = EnvelopeBuilder::new(trace_id_clone, retry_base("completed"))
@@ -1018,7 +1045,7 @@ impl ControlPlaneHandle {
                                 handle
                                     .state
                                     .idempotency_store
-                                    .complete(key, claim, val)
+                                    .complete_with_revision(key, claim, val, revision)
                                     .await;
                             }
                         }
@@ -1045,6 +1072,7 @@ impl ControlPlaneHandle {
                             .await;
                     }
                     Ok(Err(UpstreamCallError::Upstream(err))) => {
+                        let err = handle.state.safe_upstream_error(err).await;
                         handle
                             .state
                             .circuit_breakers
@@ -1118,22 +1146,25 @@ impl ControlPlaneHandle {
             let (rec, trx) = self
                 .state
                 .task_registry
-                .create_task(crate::tasks::CreateTaskParams {
-                    capability_id: capability_id.to_string(),
-                    server_id: server_id.clone(),
-                    args: args.clone(),
-                    request_id: Some(req_id.clone()),
-                    context: Some(req_ctx.clone()),
-                    idempotency_key: idempotency_key.clone(),
-                    initial_status: crate::tasks::TaskStatus::InputRequired,
-                    status_message: Some(format!(
-                        "Execution suspended awaiting operator approval for capability '{}'",
-                        capability_id
-                    )),
-                    input_requests: Some(input_requests),
-                    ttl_ms: Some(approval_timeout_secs * 1000),
-                    poll_interval_ms: Some(1000),
-                })
+                .create_scoped_task(
+                    crate::tasks::CreateTaskParams {
+                        capability_id: capability_id.to_string(),
+                        server_id: server_id.clone(),
+                        args: args.clone(),
+                        request_id: Some(req_id.clone()),
+                        context: Some(req_ctx.clone()),
+                        idempotency_key: idempotency_key.clone(),
+                        initial_status: crate::tasks::TaskStatus::InputRequired,
+                        status_message: Some(format!(
+                            "Execution suspended awaiting operator approval for capability '{}'",
+                            capability_id
+                        )),
+                        input_requests: Some(input_requests),
+                        ttl_ms: Some(approval_timeout_secs * 1000),
+                        poll_interval_ms: Some(1000),
+                    },
+                    Some(ResultAccess::new("default", prof_ctx.profile_id.as_deref())),
+                )
                 .await;
 
             let (_approval_id, rx) = self
@@ -1490,16 +1521,16 @@ impl ControlPlaneHandle {
                         }
                     }
                 }
-                let distilled_data = distill_value(data, &distill_opts);
-                let outcome = match task_record.as_ref() {
-                    Some(record) => {
-                        self.state
-                            .task_registry
-                            .complete_execution(&record.task_id, distilled_data)
-                            .await
-                    }
-                    None => Ok(distilled_data),
-                };
+                let (outcome, revision) = self
+                    .state
+                    .complete_tool_delivery(
+                        &server_id,
+                        &trace_id,
+                        data,
+                        task_record.as_ref().map(|record| record.task_id.as_str()),
+                        &distill_opts,
+                    )
+                    .await;
                 let env = EnvelopeBuilder::new(trace_id, retry_base("completed"))
                     .request_id(Some(req_id))
                     .context(Some(req_ctx))
@@ -1507,7 +1538,10 @@ impl ControlPlaneHandle {
 
                 if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
                     if let Ok(val) = serde_json::to_value(&env) {
-                        self.state.idempotency_store.complete(key, claim, val).await;
+                        self.state
+                            .idempotency_store
+                            .complete_with_revision(key, claim, val, revision)
+                            .await;
                     }
                 }
 
@@ -1546,6 +1580,7 @@ impl ControlPlaneHandle {
                 )
             }
             Ok(Err(UpstreamCallError::Upstream(err))) => {
+                let err = self.state.safe_upstream_error(err).await;
                 self.state.circuit_breakers.record_failure(&server_id).await;
                 if let Some(ref rec) = task_record {
                     let _ = self
@@ -1699,7 +1734,7 @@ impl ControlPlaneHandle {
             trace_id,
             req_id,
             req_ctx,
-            "Resource read",
+            Shape::ResourceRead,
             |reply| ServerMsg::ReadResource {
                 uri,
                 input_responses: options.input_responses,
@@ -1772,7 +1807,7 @@ impl ControlPlaneHandle {
         let arguments = options
             .arguments
             .and_then(|value| value.as_object().cloned());
-        self.dispatch_catalog_call(server, trace_id, req_id, req_ctx, "Prompt get", |reply| {
+        self.dispatch_catalog_call(server, trace_id, req_id, req_ctx, Shape::Prompt, |reply| {
             ServerMsg::GetPrompt {
                 name,
                 arguments,
@@ -1790,7 +1825,7 @@ impl ControlPlaneHandle {
         trace_id: String,
         req_id: String,
         req_ctx: RequestContext,
-        operation: &str,
+        shape: Shape,
         message: impl FnOnce(
             oneshot::Sender<std::result::Result<Value, UpstreamCallError>>,
         ) -> ServerMsg,
@@ -1829,13 +1864,18 @@ impl ControlPlaneHandle {
         }
 
         match reply_rx.await {
-            Ok(Ok(data)) => Envelope::success(
-                trace_id,
-                Some(req_id),
-                Some(req_ctx),
-                data,
-                RetryMetadata::safe("completed"),
-            ),
+            Ok(Ok(data)) => {
+                let outcome = self
+                    .state
+                    .sanitize_result(&server, &trace_id, data, shape)
+                    .await
+                    .map(|result| result.value)
+                    .map_err(WarmplaneError::from);
+                EnvelopeBuilder::new(trace_id, RetryMetadata::safe("completed"))
+                    .request_id(Some(req_id))
+                    .context(Some(req_ctx))
+                    .outcome(outcome)
+            }
             Ok(Err(UpstreamCallError::Timeout)) => Envelope::failure(
                 trace_id,
                 Some(req_id),
@@ -1843,7 +1883,7 @@ impl ControlPlaneHandle {
                 WarmplaneError::new(
                     "UPSTREAM_TIMEOUT",
                     format!(
-                        "{operation} timed out after {}ms",
+                        "Upstream request timed out after {}ms",
                         self.state.tool_timeout_ms
                     ),
                     true,
@@ -1854,7 +1894,11 @@ impl ControlPlaneHandle {
                 trace_id,
                 Some(req_id),
                 Some(req_ctx),
-                WarmplaneError::new("UPSTREAM_ERROR", err, false),
+                WarmplaneError::new(
+                    "UPSTREAM_ERROR",
+                    self.state.safe_upstream_error(err).await,
+                    false,
+                ),
                 RetryMetadata::safe("unknown"),
             ),
             Err(_) => Envelope::failure(
@@ -1872,8 +1916,19 @@ impl ControlPlaneHandle {
     /// # Returns
     /// A vector of [`TaskResponse`] wire representations sorted from newest to oldest.
     pub async fn list_tasks(&self) -> Vec<TaskResponse> {
+        self.list_tasks_for_profile(None).await
+    }
+
+    /// Lists tasks visible to the embedded caller in the selected profile.
+    pub async fn list_tasks_for_profile(&self, profile: Option<&str>) -> Vec<TaskResponse> {
         let tasks = self.state.task_registry.list_tasks().await;
-        tasks.iter().map(TaskResponse::from).collect()
+        let mut responses = Vec::with_capacity(tasks.len());
+        for task in &tasks {
+            if self.can_read_task_result(task, profile).await {
+                responses.push(self.state.task_view(task).await);
+            }
+        }
+        responses
     }
 
     /// Retrieves a task by its task ID, performing TTL checks.
@@ -1884,28 +1939,57 @@ impl ControlPlaneHandle {
     /// # Returns
     /// An [`Envelope`] containing the [`TaskResponse`] if found, or an error envelope if not found.
     pub async fn get_task(&self, task_id: &str) -> Envelope<TaskResponse> {
+        self.get_task_for_profile(task_id, None).await
+    }
+
+    /// Retrieves the task result visible to the embedded caller in the selected profile.
+    pub async fn get_task_for_profile(
+        &self,
+        task_id: &str,
+        profile: Option<&str>,
+    ) -> Envelope<TaskResponse> {
         let trace_id = next_trace_id();
         if let Some(record) = self.state.task_registry.get_task(task_id).await {
-            Envelope::success(
-                trace_id,
-                record.request_id.clone(),
-                record.context.clone(),
-                TaskResponse::from(&record),
-                RetryMetadata::safe("completed"),
-            )
-        } else {
-            Envelope::failure(
-                trace_id,
-                None,
-                None,
-                WarmplaneError::new(
-                    "TASK_NOT_FOUND",
-                    format!("Task '{}' not found", task_id),
-                    false,
-                ),
-                RetryMetadata::safe("not_started"),
-            )
+            if self.can_read_task_result(&record, profile).await {
+                return Envelope::success(
+                    trace_id,
+                    record.request_id.clone(),
+                    record.context.clone(),
+                    self.state.task_view(&record).await,
+                    RetryMetadata::safe("completed"),
+                );
+            }
         }
+        Envelope::failure(
+            trace_id,
+            None,
+            None,
+            WarmplaneError::new(
+                "TASK_NOT_FOUND",
+                format!("Task '{}' not found", task_id),
+                false,
+            ),
+            RetryMetadata::safe("not_started"),
+        )
+    }
+
+    async fn can_read_task_result(
+        &self,
+        task: &crate::tasks::TaskRecord,
+        profile: Option<&str>,
+    ) -> bool {
+        self.state.accepts_result_revision(None).await
+            || self
+                .state
+                .hold_coordinator
+                .can_access_task(
+                    &self.state,
+                    task,
+                    "default",
+                    &self.state.rbac_engine.default_role(),
+                    profile,
+                )
+                .await
     }
 
     /// Resolves an `InputRequired` task by submitting client input responses.
@@ -2152,7 +2236,7 @@ impl HeldCapabilityCall<'_> {
             );
         };
         if let Some(outcome) = self.wait_for_result(&task.task_id, hold_ms).await {
-            return self.complete(outcome).await;
+            return self.into_envelope(outcome, "completed");
         }
         let receipt = crate::tasks::TaskResponse::from(&task);
         self.into_envelope(
@@ -2236,36 +2320,25 @@ impl HeldCapabilityCall<'_> {
             .hold_coordinator
             .wait_for_terminal(state, task_id, wait)
             .await?;
-        match task.status {
-            TaskStatus::Completed => Some(Ok(task.result.unwrap_or(Value::Null))),
-            TaskStatus::Failed | TaskStatus::Cancelled => {
-                let code = task
+        let view = state.task_view(&task).await;
+        match view.status {
+            TaskStatus::Completed if view.error.is_none() => {
+                Some(Ok(view.result.unwrap_or(Value::Null)))
+            }
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled => {
+                let code = view
                     .error
                     .as_ref()
                     .and_then(|error| error.get("code"))
                     .and_then(Value::as_str)
                     .unwrap_or("EMISSION_FAILED");
-                let message = task
+                let message = view
                     .status_message
                     .unwrap_or_else(|| "Held emission did not complete".to_string());
                 Some(Err(WarmplaneError::new(code, message, false)))
             }
             _ => None,
         }
-    }
-
-    async fn complete(self, result: Result<Value, WarmplaneError>) -> Envelope<Value> {
-        let state = self.emission.state;
-        let claim = self.idempotency_key.zip(self.emission.claim);
-        let envelope = self.into_envelope(result, "completed");
-        if envelope.ok {
-            if let Some((key, claim)) = claim {
-                if let Ok(value) = serde_json::to_value(&envelope) {
-                    state.idempotency_store.complete(key, claim, value).await;
-                }
-            }
-        }
-        envelope
     }
 
     fn into_envelope(

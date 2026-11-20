@@ -82,6 +82,7 @@
           "items": { "type": "string" },
           "default": []
         },
+        "resultSanitization": { "$ref": "#/$defs/resultSanitization" },
         "requireApproval": {
           "type": "array",
           "items": { "type": "string" },
@@ -131,7 +132,8 @@
                 },
                 "additionalProperties": false
               },
-              "allowAgentSelfUndo": { "type": "boolean", "default": false }
+              "allowAgentSelfUndo": { "type": "boolean", "default": false },
+              "manageTrustControls": { "type": "boolean", "default": false }
             }
           }
         }
@@ -254,6 +256,27 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "resultSanitization": {
+      "type": "object",
+      "properties": {
+        "fieldNames": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "patterns": { "type": "array", "items": { "type": "string" } },
+        "opaqueExceptions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "server": { "type": "string", "minLength": 1 },
+              "kind": { "enum": ["image", "audio", "blob"] },
+              "mimeType": { "type": "string", "minLength": 3 }
+            },
+            "required": ["server", "kind", "mimeType"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "policyConfig": {
       "type": "object",
       "properties": {

@@ -31,6 +31,7 @@ pub async fn initialize_state(
     config: McpConfig,
     config_path: impl Into<String>,
 ) -> Result<AppState> {
+    crate::config::validate_result_sanitization(&config)?;
     let config_path_str = config_path.into();
     let tool_timeout_ms = config.tool_timeout_ms.unwrap_or(DEFAULT_TOOL_TIMEOUT_MS);
     let policy = Policy::from_config(config.policy.clone());
@@ -525,6 +526,15 @@ pub async fn security_guard_middleware(
         }
     }
 
+    let trust_admin = check_trust_admin(&state, tenant_ctx.as_ref(), path);
+    if path.starts_with("/v1/config/")
+        && !req.method().is_safe()
+        && !trust_admin
+        && !state.accepts_result_revision(None).await
+    {
+        return http_v1::trust_admin_required();
+    }
+
     // 4. Resolve ProfileContext
     if path.starts_with("/v1/") {
         let query_profile = req.uri().query().and_then(|q| {
@@ -553,11 +563,31 @@ pub async fn security_guard_middleware(
             .insert(crate::context::ProfileContext::unrestricted());
     }
 
+    req.extensions_mut()
+        .insert(http_v1::TrustAdmin(trust_admin));
     req.extensions_mut().insert(tenant_ctx);
 
     next.run(req).await
 }
 
+fn check_trust_admin(
+    state: &AppState,
+    tenant: Option<&crate::rbac::TenantContext>,
+    path: &str,
+) -> bool {
+    if !path.starts_with("/v1/config/") {
+        return false;
+    }
+    if state.rbac_engine.is_enabled() {
+        tenant.is_some_and(|tenant| state.rbac_engine.can_manage_trust_controls(tenant))
+    } else {
+        // The middleware has already verified the configured token for this path.
+        state
+            .auth_token
+            .as_ref()
+            .is_some_and(|token| !token.trim().is_empty())
+    }
+}
 fn configured_chatops_callback_host(config_path: &str, host_header: &str) -> bool {
     let Ok(config) = crate::config::load_or_default_config(config_path) else {
         return false;

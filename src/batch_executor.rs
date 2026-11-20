@@ -427,7 +427,14 @@ struct BatchStepExecution<'a, 'batch> {
 
 impl BatchStepExecution<'_, '_> {
     async fn run(&self, outputs: &HashMap<String, Value>) -> Result<Value, StepFailure> {
-        let mut args = interpolate_step_references(&self.step.args, outputs);
+        let state = self.batch.state;
+        let enforcing = state.policy.read().await.result_sanitization.is_some();
+        let mut args = crate::engine::interpolation::interpolate_batch_args(
+            &self.step.args,
+            outputs,
+            enforcing,
+        )
+        .map_err(|error| StepFailure::Regular(error.to_string()))?;
         let target = self.resolve_target().await.map_err(StepFailure::Regular)?;
         let approved = self
             .apply_approval(&target, &mut args)
@@ -460,7 +467,12 @@ impl BatchStepExecution<'_, '_> {
                 .circuit_breakers
                 .record_success(&target.server)
                 .await;
-            self.audit_success(&target.server, args, &value, Some(&task.task_id));
+            self.audit_success(
+                &target.server,
+                args,
+                (!enforcing).then_some(&value),
+                Some(&task.task_id),
+            );
             return Ok(value);
         }
 
@@ -468,8 +480,24 @@ impl BatchStepExecution<'_, '_> {
             .call_and_register_inverse(&target, &args)
             .await
             .map_err(StepFailure::Regular)?;
-        self.audit_success(&target.server, args, &value, None);
-        Ok(value)
+        let delivery = state
+            .sanitize_result(
+                &target.server,
+                self.batch.trace_id,
+                value,
+                crate::result_sanitization::Shape::Tool,
+            )
+            .await
+            .map_err(|withheld| {
+                StepFailure::Regular(crate::WarmplaneError::from(withheld).message)
+            })?;
+        self.audit_success(
+            &target.server,
+            args,
+            delivery.revision.is_none().then_some(&delivery.value),
+            None,
+        );
+        Ok(delivery.value)
     }
 
     async fn resolve_target(&self) -> Result<StepTarget, String> {
@@ -669,10 +697,11 @@ impl BatchStepExecution<'_, '_> {
             };
             return Err(StepFailure::Stop(message.to_string()));
         };
-        match terminal.status {
-            TaskStatus::Completed => Ok(terminal.result.unwrap_or(Value::Null)),
-            TaskStatus::Failed | TaskStatus::Cancelled => {
-                Err(StepFailure::Held(terminal.status_message))
+        let view = batch.state.task_view(&terminal).await;
+        match view.status {
+            TaskStatus::Completed if view.error.is_none() => Ok(view.result.unwrap_or(Value::Null)),
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled => {
+                Err(StepFailure::Held(view.status_message))
             }
             _ => {
                 let cancelled = self
@@ -775,16 +804,23 @@ impl BatchStepExecution<'_, '_> {
         result
     }
 
-    fn audit_success(&self, server: &str, args: Value, result: &Value, held_task_id: Option<&str>) {
+    fn audit_success(
+        &self,
+        server: &str,
+        args: Value,
+        result: Option<&Value>,
+        held_task_id: Option<&str>,
+    ) {
         let batch = self.batch;
         let redact_keys = &batch.scope.policy.redact_keys;
-        let sanitized_response = crate::http_v1::helpers::redact_value(result.clone(), redact_keys);
+        let sanitized_response =
+            result.map(|value| crate::http_v1::helpers::redact_value(value.clone(), redact_keys));
         let (sanitized_response, idempotency_key) = match held_task_id {
             Some(task_id) => (
                 serde_json::json!({"taskId": task_id, "result": sanitized_response}),
                 self.idempotency_key.clone(),
             ),
-            None => (sanitized_response, None),
+            None => (sanitized_response.unwrap_or(Value::Null), None),
         };
         batch.state.audit_handle.send(crate::audit::RawAuditEvent {
             event_type: crate::audit::AuditEventType::ToolExecution,
@@ -838,7 +874,7 @@ async fn send_step_call(
     match receiver.await {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(UpstreamCallError::Timeout)) => Err("Tool execution timed out".to_string()),
-        Ok(Err(UpstreamCallError::Upstream(error))) => Err(error),
+        Ok(Err(UpstreamCallError::Upstream(error))) => Err(state.safe_upstream_error(error).await),
         Err(_) => Err("Daemon actor task died".to_string()),
     }
 }

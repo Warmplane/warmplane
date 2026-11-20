@@ -126,6 +126,11 @@ export interface PolicyConfig {
   deny?: string[];
   redactKeys?: string[];
   redact_keys?: string[];
+  resultSanitization?: {
+    fieldNames?: string[];
+    patterns?: string[];
+    opaqueExceptions?: { server: string; kind: 'image' | 'audio' | 'blob'; mimeType: string }[];
+  };
   requireApproval?: string[];
   require_approval?: string[];
   approvalTimeoutSecs?: number;
@@ -330,6 +335,7 @@ export interface RolePolicyConfig {
   require_approval?: string[];
   redactKeys?: string[];
   redact_keys?: string[];
+  manageTrustControls?: boolean;
 }
 
 export interface TokenAssignment {
@@ -602,6 +608,7 @@ export class WarmplaneClient {
       allow: policy.allow || [],
       deny: policy.deny || [],
       redactKeys: policy.redact_keys || policy.redactKeys || [],
+      resultSanitization: policy.resultSanitization,
       requireApproval: policy.require_approval || policy.requireApproval || [],
       approvalTimeoutSecs: policy.approvalTimeoutSecs || policy.approval_timeout_secs || 300,
       webhook: policy.webhook

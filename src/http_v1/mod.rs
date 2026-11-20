@@ -40,6 +40,7 @@ pub use config_api::{
     handle_update_alias, handle_update_policy, handle_upsert_profile, handle_upsert_secret,
     handle_upsert_server,
 };
+pub(crate) use config_api::{trust_admin_required, TrustAdmin};
 pub use execute::{
     handle_batch_call_capabilities, handle_call_capability, handle_cancel_operation,
 };

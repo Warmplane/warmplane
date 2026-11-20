@@ -103,13 +103,15 @@ pub(crate) async fn read_checked_state(
     let result = tokio::time::timeout(timeout, reply_rx)
         .await
         .context("state-check call timed out")?
-        .context("state-check upstream dropped its response")?
-        .map_err(|error| match error {
-            UpstreamCallError::Timeout => anyhow::anyhow!("state-check upstream timed out"),
-            UpstreamCallError::Upstream(message) => {
-                anyhow::anyhow!("state-check failed: {message}")
-            }
-        })?;
+        .context("state-check upstream dropped its response")?;
+    let result = match result {
+        Ok(result) => result,
+        Err(UpstreamCallError::Timeout) => bail!("state-check upstream timed out"),
+        Err(UpstreamCallError::Upstream(message)) => {
+            let message = state.safe_upstream_error(message).await;
+            bail!("state-check failed: {message}");
+        }
+    };
 
     let snapshot = if let Some(path) = &config.capture_json_path {
         crate::context_filter::distill_value(

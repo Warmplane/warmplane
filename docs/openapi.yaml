@@ -1592,11 +1592,33 @@ components:
           type: array
           items:
             type: string
+        resultSanitization:
+          $ref: "#/components/schemas/ResultSanitization"
         holdWindowSecs:
           type: integer
           minimum: 1
         webhook:
           $ref: "#/components/schemas/WebhookConfig"
+    ResultSanitization:
+      type: object
+      additionalProperties: false
+      properties:
+        fieldNames:
+          type: array
+          items: {type: string, minLength: 1}
+        patterns:
+          type: array
+          items: {type: string}
+        opaqueExceptions:
+          type: array
+          items:
+            type: object
+            required: [server, kind, mimeType]
+            additionalProperties: false
+            properties:
+              server: {type: string}
+              kind: {type: string, enum: [image, audio, blob]}
+              mimeType: {type: string}
     ApprovalStatus:
       type: object
       required: [status]
@@ -1720,6 +1742,7 @@ components:
                 - INVALID_ARGS
                 - UPSTREAM_TIMEOUT
                 - UPSTREAM_ERROR
+                - RESULT_WITHHELD
                 - POLICY_DENIED
                 - APPROVAL_PENDING
                 - APPROVAL_TIMEOUT
@@ -1844,7 +1867,15 @@ components:
           description: Target capability ID
         response:
           type: object
-          description: Cached execution response payload
+          description: Cached execution response or a policy withholding error
+        result_policy_revision:
+          type: string
+          description: Sanitization revision used to produce the stored response
+        result_access:
+          type: object
+          properties:
+            tenant_id: {type: string}
+            profile_id: {type: [string, "null"]}
         created_at_epoch_secs:
           type: integer
           description: Unix timestamp when key was initialized

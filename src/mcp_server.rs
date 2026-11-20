@@ -548,7 +548,7 @@ impl ServerHandler for FacadeMcpServer {
                             )),
                         ));
                     }
-                    let resp = crate::tasks::TaskResponse::from(&record);
+                    let resp = self.state.task_view(&record).await;
                     Ok(json!({
                         "ok": true,
                         "resultType": "complete",
@@ -710,7 +710,14 @@ impl ServerHandler for FacadeMcpServer {
 
         match reply_rx.await {
             Ok(Ok(value)) => {
-                let res: ReadResourceResult = serde_json::from_value(value).map_err(|e| {
+                let delivered = self
+                    .catalog_delivery(
+                        &server,
+                        value,
+                        crate::result_sanitization::Shape::ResourceRead,
+                    )
+                    .await?;
+                let res: ReadResourceResult = serde_json::from_value(delivered).map_err(|e| {
                     McpError::internal_error(format!("Invalid resource payload: {e}"), None)
                 })?;
                 Ok(ReadResourceResponse::Complete(res))
@@ -718,7 +725,10 @@ impl ServerHandler for FacadeMcpServer {
             Ok(Err(UpstreamCallError::Timeout)) => {
                 Err(McpError::internal_error("Resource read timed out", None))
             }
-            Ok(Err(UpstreamCallError::Upstream(err))) => Err(McpError::internal_error(err, None)),
+            Ok(Err(UpstreamCallError::Upstream(err))) => Err(McpError::internal_error(
+                self.state.safe_upstream_error(err).await,
+                None,
+            )),
             Err(_) => Err(McpError::internal_error("Actor task died", None)),
         }
     }
@@ -781,7 +791,10 @@ impl ServerHandler for FacadeMcpServer {
 
         match reply_rx.await {
             Ok(Ok(value)) => {
-                let res: GetPromptResult = serde_json::from_value(value).map_err(|e| {
+                let delivered = self
+                    .catalog_delivery(&server, value, crate::result_sanitization::Shape::Prompt)
+                    .await?;
+                let res: GetPromptResult = serde_json::from_value(delivered).map_err(|e| {
                     McpError::internal_error(format!("Invalid prompt payload: {e}"), None)
                 })?;
                 Ok(GetPromptResponse::Complete(res))
@@ -789,13 +802,33 @@ impl ServerHandler for FacadeMcpServer {
             Ok(Err(UpstreamCallError::Timeout)) => {
                 Err(McpError::internal_error("Prompt get timed out", None))
             }
-            Ok(Err(UpstreamCallError::Upstream(err))) => Err(McpError::internal_error(err, None)),
+            Ok(Err(UpstreamCallError::Upstream(err))) => Err(McpError::internal_error(
+                self.state.safe_upstream_error(err).await,
+                None,
+            )),
             Err(_) => Err(McpError::internal_error("Actor task died", None)),
         }
     }
 }
 
 impl FacadeMcpServer {
+    async fn catalog_delivery(
+        &self,
+        server: &str,
+        value: Value,
+        shape: crate::result_sanitization::Shape,
+    ) -> Result<Value, McpError> {
+        let trace_id = crate::engine::next_trace_id();
+        self.state
+            .sanitize_result(server, &trace_id, value, shape)
+            .await
+            .map(|delivery| delivery.value)
+            .map_err(|failure| {
+                let error = crate::WarmplaneError::from(failure);
+                McpError::internal_error(error.message, Some(json!({"code": error.code})))
+            })
+    }
+
     async fn agent_self_undo_enabled(&self, profile: &crate::context::ProfileContext) -> bool {
         self.state
             .rbac_engine

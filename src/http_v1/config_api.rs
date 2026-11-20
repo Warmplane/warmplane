@@ -16,6 +16,10 @@ use crate::{
     http_v1::types::{ImportConfigRequest, UpdateAliasRequest, UpsertServerRequest},
 };
 
+/// Authorization verified by the HTTP security middleware for trust management.
+#[derive(Clone, Copy)]
+pub struct TrustAdmin(pub(crate) bool);
+
 /// Handles GET `/v1/config` returning the active configuration and operational metrics.
 pub async fn handle_get_config(State(state): State<AppState>) -> impl IntoResponse {
     let total_reqs = state.total_catalog_requests.load(Ordering::Relaxed);
@@ -591,8 +595,14 @@ pub async fn handle_update_alias(
 /// Handles POST `/v1/config/policy` updating security policies.
 pub async fn handle_update_policy(
     State(state): State<AppState>,
+    admin: Option<axum::extract::Extension<TrustAdmin>>,
     Json(payload): Json<crate::config::PolicyConfig>,
 ) -> impl IntoResponse {
+    if (payload.result_sanitization.is_some() || !state.accepts_result_revision(None).await)
+        && !admin.is_some_and(|axum::extract::Extension(TrustAdmin(admin))| admin)
+    {
+        return trust_admin_required();
+    }
     let mut config = match crate::config::load_or_default_config(&state.config_path) {
         Ok(c) => c,
         Err(e) => {
@@ -650,6 +660,18 @@ pub async fn handle_update_policy(
     });
 
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}
+
+pub(crate) fn trust_admin_required() -> axum::response::Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "ok": false,
+            "error": "TRUST_ADMIN_REQUIRED",
+            "message": "Authenticated trust control administrator required",
+        })),
+    )
+        .into_response()
 }
 
 /// Handles POST `/v1/config/profiles` to add or update a profile constellation.

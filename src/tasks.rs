@@ -117,6 +117,12 @@ pub struct TaskRecord {
     /// Final execution result on success.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
+    /// Effective sanitization policy revision used to produce the stored result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_policy_revision: Option<String>,
+    /// Authenticated scope associated with this task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_access: Option<crate::result_sanitization::ResultAccess>,
     /// Error payload if task failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<Value>,
@@ -349,6 +355,14 @@ impl TaskRegistry {
         &self,
         params: CreateTaskParams,
     ) -> (TaskRecord, Option<TaskWaitReceiver>) {
+        self.create_scoped_task(params, None).await
+    }
+
+    pub(crate) async fn create_scoped_task(
+        &self,
+        params: CreateTaskParams,
+        access: Option<crate::result_sanitization::ResultAccess>,
+    ) -> (TaskRecord, Option<TaskWaitReceiver>) {
         let now = SystemTime::now();
         let now_secs = now
             .duration_since(UNIX_EPOCH)
@@ -367,6 +381,7 @@ impl TaskRegistry {
         let mut params = params;
         params.ttl_ms = params.ttl_ms.or(Some(300_000));
         let mut record = new_task_record(task_id, params, now_secs, iso_time, None);
+        record.result_access = access;
 
         let mut guard = self.tasks.write().await;
         while guard.contains_key(&record.task_id) {
@@ -716,6 +731,15 @@ impl TaskRegistry {
     /// # Errors
     /// Returns an error if a new completed state could not replace the stored state.
     pub async fn complete_task(&self, task_id: &str, result: Value) -> Result<Option<TaskRecord>> {
+        self.store_completed_task(task_id, result, None).await
+    }
+
+    async fn store_completed_task(
+        &self,
+        task_id: &str,
+        result: Value,
+        revision: Option<String>,
+    ) -> Result<Option<TaskRecord>> {
         let mut guard = self.tasks.write().await;
         let Some(record) = guard.get_mut(task_id) else {
             return Ok(None);
@@ -739,6 +763,7 @@ impl TaskRegistry {
         record.status = TaskStatus::Completed;
         record.status_message = Some("Execution completed successfully".to_string());
         record.result = Some(result);
+        record.result_policy_revision = revision;
         record.last_updated_at = format_iso_time(SystemTime::now());
         let completed = record.clone();
         if let Some(storage) = &self.storage {
@@ -759,8 +784,12 @@ impl TaskRegistry {
         &self,
         task_id: &str,
         upstream_result: Value,
+        revision: Option<String>,
     ) -> std::result::Result<Value, WarmplaneError> {
-        let record = match self.complete_task(task_id, upstream_result).await {
+        let record = match self
+            .store_completed_task(task_id, upstream_result, revision)
+            .await
+        {
             Ok(Some(record)) => record,
             Ok(None) => {
                 return Err(WarmplaneError::new(
@@ -919,6 +948,8 @@ fn new_task_record(
         input_requests: params.input_requests.unwrap_or_default(),
         input_responses: BTreeMap::new(),
         result: None,
+        result_policy_revision: None,
+        result_access: None,
         error: None,
         created_at: iso_time.clone(),
         last_updated_at: iso_time,
