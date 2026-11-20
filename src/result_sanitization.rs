@@ -20,6 +20,15 @@ use crate::{
 pub(crate) const REDACTED: &str = "[REDACTED]";
 const MAX_BYTES: usize = 1024 * 1024;
 const MAX_DEPTH: usize = 64;
+const UNINSPECTABLE: &str = "warmplane-uninspectable";
+
+pub(crate) fn uninspectable_result() -> Value {
+    json!({"resultType": UNINSPECTABLE})
+}
+
+pub(crate) fn is_uninspectable_result(value: &Value) -> bool {
+    value.get("resultType").and_then(Value::as_str) == Some(UNINSPECTABLE)
+}
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
@@ -246,13 +255,8 @@ impl AppState {
             Err(withheld) => {
                 let error = WarmplaneError::from(withheld);
                 if let Some(task_id) = task_id {
-                    let _ = self
-                        .task_registry
-                        .fail_task(
-                            task_id,
-                            json!({"code": error.code, "upstreamExecutionState": "completed"}),
-                            Some(error.message.clone()),
-                        )
+                    self.task_registry
+                        .fail_execution(task_id, &error.code, &error.message, "completed")
                         .await;
                 }
                 return (Err(error), None);
@@ -279,6 +283,9 @@ impl AppState {
     ) -> Result<Delivery, Withheld> {
         let rule = self.policy.read().await.result_sanitization.clone();
         let Some(rule) = rule else {
+            if is_uninspectable_result(&value) {
+                return Err(Withheld);
+            }
             return Ok(Delivery {
                 value,
                 revision: None,
@@ -293,12 +300,12 @@ impl AppState {
         match inspection {
             Ok((value, exceptions)) => {
                 if !exceptions.is_empty() {
-                    self.audit_handle.send(result_audit(
+                    self.audit_handle.send_confirmed(result_audit(
                         server,
                         trace_id,
                         json!({"opaqueExceptions": exceptions, "policyRevision": rule.revision()}),
                         None,
-                    ));
+                    )).await.map_err(|_| Withheld)?;
                 }
                 Ok(Delivery {
                     value,
@@ -341,7 +348,7 @@ impl AppState {
         access: &ResultAccess,
         role: &str,
     ) -> Result<(), WarmplaneError> {
-        if self.accepts_result_revision(None).await {
+        if !self.trust_controls_active().await {
             return Ok(());
         }
         let record = self.idempotency_store.get_record(key).await;
@@ -602,6 +609,14 @@ fn opaque_field(
     fields: &Map<String, Value>,
     shape: Shape,
 ) -> Result<Option<(&'static str, OpaqueKind)>, Withheld> {
+    if matches!(shape, Shape::Tool | Shape::Prompt | Shape::ResourceRead)
+        && fields
+            .get("resultType")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| !matches!(kind, "complete" | "input_required" | "task"))
+    {
+        return Err(Withheld);
+    }
     match shape {
         Shape::Content => match fields.get("type").and_then(Value::as_str) {
             Some("text" | "resource" | "resource_link") => Ok(None),
@@ -633,6 +648,32 @@ pub(crate) fn contains_redaction(value: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "manual latency measurement"]
+    fn result_sanitization_latency() {
+        use std::{hint::black_box, time::Instant};
+
+        let rule: ResultSanitization = serde_json::from_value(json!({
+            "fieldNames": ["privateNote"],
+            "patterns": ["customer-[0-9]+"],
+        }))
+        .unwrap();
+        let text = json!({"content": [{"type": "text", "text": "output line with context\n".repeat(2400)}]});
+        let rows = (0..256)
+            .map(|row| json!({"id": row, "privateNote": "sensitive", "label": "customer-123"}))
+            .collect::<Vec<_>>();
+        let structured = json!({"structuredContent": {"rows": rows}});
+        for (label, sample) in [("text", text), ("structured", structured)] {
+            let (p50, p95) = crate::test_support::latency_percentiles(1_000, || {
+                let value = sample.clone();
+                let start = Instant::now();
+                black_box(rule.sanitize("bench", value, Shape::Tool).unwrap());
+                start.elapsed()
+            });
+            eprintln!("sanitization {label}: p50={p50:?} p95={p95:?}");
+        }
+    }
 
     #[test]
     fn compile_rejects_invalid_rules() {

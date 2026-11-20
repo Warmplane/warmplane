@@ -83,6 +83,7 @@ impl EmbeddedWarmplane {
 #[derive(Clone)]
 pub struct ControlPlaneHandle {
     state: AppState,
+    tenant: Option<crate::rbac::TenantContext>,
 }
 
 // Keep the thin undo facade methods and their context forwarding consistent.
@@ -98,7 +99,43 @@ macro_rules! forward_undo_entry {
 impl ControlPlaneHandle {
     /// Creates a new `ControlPlaneHandle` wrapping an active `AppState`.
     pub fn new(state: AppState) -> Self {
-        Self { state }
+        Self {
+            state,
+            tenant: None,
+        }
+    }
+
+    pub(crate) fn with_tenant_context(
+        mut self,
+        tenant: Option<crate::rbac::TenantContext>,
+    ) -> Self {
+        self.tenant = tenant;
+        self
+    }
+
+    fn tenant_id(&self) -> &str {
+        self.tenant
+            .as_ref()
+            .map_or("default", |tenant| tenant.tenant_id.as_str())
+    }
+
+    fn caller_role(&self) -> String {
+        self.tenant.as_ref().map_or_else(
+            || self.state.rbac_engine.default_role(),
+            |tenant| tenant.role.clone(),
+        )
+    }
+
+    async fn effective_policy(&self, profile: &ProfileContext) -> Policy {
+        let base = self.state.policy.read().await.clone();
+        self.tenant
+            .as_ref()
+            .map_or(base.clone(), |tenant| {
+                self.state
+                    .rbac_engine
+                    .compute_effective_policy(&tenant.role, &base)
+            })
+            .merge_with_profile(profile.profile_policy.as_ref())
     }
 
     /// Returns a reference to the underlying daemon `AppState`.
@@ -368,7 +405,7 @@ impl ControlPlaneHandle {
         let filter = filter_builder.build();
 
         let catalog = self.state.tool_catalog().await;
-        let pol = self.state.policy.read().await;
+        let pol = self.effective_policy(&prof_ctx).await;
         let catalog_ver = crate::http_v1::helpers::get_profile_scoped_catalog_version(
             &catalog.version,
             &prof_ctx,
@@ -407,7 +444,11 @@ impl ControlPlaneHandle {
             .request_id
             .clone()
             .unwrap_or_else(|| trace_id.clone());
-        let req_ctx = options.context.clone().unwrap_or_default();
+        let mut req_ctx = options.context.clone().unwrap_or_default();
+        if let Some(tenant) = &self.tenant {
+            req_ctx.actor_id.clone_from(&tenant.actor_id);
+            req_ctx.grant_id.clone_from(&tenant.grant_id);
+        }
         let suppress_undo_registration = options.suppress_undo_registration;
         let explicit_key = options.idempotency_key.clone();
         let idempotency_key = explicit_key.or_else(|| {
@@ -438,8 +479,8 @@ impl ControlPlaneHandle {
                         .can_access_task(
                             &self.state,
                             &task,
-                            "default",
-                            &self.state.rbac_engine.default_role(),
+                            self.tenant_id(),
+                            &self.caller_role(),
                             prof_ctx.profile_id.as_deref(),
                         )
                         .await
@@ -480,7 +521,7 @@ impl ControlPlaneHandle {
 
         // Check Idempotency Store
         let idempotency_claim = if let Some(key) = idempotency_key.as_deref() {
-            let access = ResultAccess::new("default", prof_ctx.profile_id.as_deref());
+            let access = ResultAccess::new(self.tenant_id(), prof_ctx.profile_id.as_deref());
             match self
                 .state
                 .idempotency_store
@@ -496,7 +537,7 @@ impl ControlPlaneHandle {
                             capability_id,
                             &response,
                             &access,
-                            &self.state.rbac_engine.default_role(),
+                            &self.caller_role(),
                         )
                         .await
                     {
@@ -538,8 +579,8 @@ impl ControlPlaneHandle {
             );
         }
 
-        let (mut requires_approval, approval_timeout_secs, webhook_cfg, redact_keys) = {
-            let pol = self.state.policy.read().await;
+        let (mut requires_approval, approval_timeout_secs, redact_keys) = {
+            let pol = self.effective_policy(&prof_ctx).await;
             if !pol.allows(capability_id) {
                 self.state
                     .idempotency_store
@@ -560,10 +601,11 @@ impl ControlPlaneHandle {
             (
                 pol.requires_approval(capability_id),
                 pol.approval_timeout_secs,
-                pol.webhook.clone(),
                 pol.redact_keys.clone(),
             )
         };
+
+        let webhook_cfg = self.state.policy.read().await.webhook.clone();
 
         let (server_id, tool_name, reversibility) = {
             let caps_guard = self.state.capabilities.read().await;
@@ -656,7 +698,7 @@ impl ControlPlaneHandle {
                     &self.state,
                     contract,
                     capability_id,
-                    "default",
+                    self.tenant_id(),
                     prof_ctx.profile_id.as_deref(),
                     idempotency_key.as_deref(),
                     false,
@@ -740,10 +782,43 @@ impl ControlPlaneHandle {
                         ttl_ms: Some(approval_timeout_secs * 1000),
                         poll_interval_ms: Some(1000),
                     },
-                    Some(ResultAccess::new("default", prof_ctx.profile_id.as_deref())),
+                    Some(ResultAccess::new(
+                        self.tenant_id(),
+                        prof_ctx.profile_id.as_deref(),
+                    )),
                 )
                 .await;
 
+            let approval = if requires_approval {
+                let (_, receiver) = self
+                    .state
+                    .approval_registry
+                    .create_scoped_approval(
+                        crate::approvals::CreateApprovalRequest {
+                            capability_id: capability_id.to_owned(),
+                            server_id: server_id.clone(),
+                            args: args.clone(),
+                            sanitized_args: crate::http_v1::helpers::redact_value(
+                                args.clone(),
+                                &redact_keys,
+                            ),
+                            request_id: Some(req_id.clone()),
+                            context: Some(req_ctx.clone()),
+                            timeout_secs: approval_timeout_secs,
+                            webhook: webhook_cfg.as_ref(),
+                        },
+                        Some(crate::approvals::ApprovalOwnership::new(
+                            self.tenant_id(),
+                            Some(&task_record.task_id),
+                            &args,
+                            tool_definition.as_deref(),
+                        )),
+                    )
+                    .await;
+                Some(receiver)
+            } else {
+                None
+            };
             let handle = self.clone();
             let task_id_clone = task_record.task_id.clone();
             let server_id_clone = server_id.clone();
@@ -758,67 +833,26 @@ impl ControlPlaneHandle {
             let capability_id_clone = capability_id.to_string();
             let compensable_reserved_clone = compensable_reserved;
             let suppress_undo_registration_clone = suppress_undo_registration;
-            let policy_for_undo = {
-                let policy = self.state.policy.read().await;
-                policy.merge_with_profile(prof_ctx.profile_policy.as_ref())
-            };
+            let policy_for_undo = self.effective_policy(&prof_ctx).await;
 
             tokio::spawn(async move {
-                let mut worker_args = args_clone.clone();
-                if requires_approval {
-                    if let Some(trx) = task_rx {
-                        match trx.await {
-                            Ok(responses) => {
-                                if let Some(appr) = responses.get("hitl_approval") {
-                                    if appr.get("approved").and_then(Value::as_bool) == Some(true) {
-                                        if let Some(mod_args) = appr.get("modified_args").cloned() {
-                                            worker_args = mod_args;
-                                        }
-                                    } else {
-                                        let reason = appr
-                                            .get("reason")
-                                            .and_then(Value::as_str)
-                                            .map(ToString::to_string);
-                                        let _ = handle
-                                            .state
-                                            .task_registry
-                                            .cancel_task(&task_id_clone, reason)
-                                            .await;
-                                        handle
-                                            .state
-                                            .idempotency_store
-                                            .release_execution(
-                                                idempotency_key_clone.as_deref(),
-                                                idempotency_claim,
-                                            )
-                                            .await;
-                                        return;
-                                    }
-                                }
-                            }
-                            Err(_) => {
-                                let _ = handle
-                                    .state
-                                    .task_registry
-                                    .fail_task(
-                                        &task_id_clone,
-                                        serde_json::json!({"code": "APPROVAL_TIMEOUT"}),
-                                        Some("Approval request timed out or cancelled".to_string()),
-                                    )
-                                    .await;
-                                handle
-                                    .state
-                                    .idempotency_store
-                                    .release_execution(
-                                        idempotency_key_clone.as_deref(),
-                                        idempotency_claim,
-                                    )
-                                    .await;
-                                return;
-                            }
-                        }
-                    }
-                }
+                let worker_args = if let Some(approval) = approval {
+                    let resolution = crate::approvals::wait_for_decision(approval, task_rx).await;
+                    let Some(args) = resolution
+                        .arguments_for_task(&handle.state, &task_id_clone, args_clone.clone())
+                        .await
+                    else {
+                        handle
+                            .state
+                            .idempotency_store
+                            .release_execution(idempotency_key_clone.as_deref(), idempotency_claim)
+                            .await;
+                        return;
+                    };
+                    args
+                } else {
+                    args_clone.clone()
+                };
 
                 if !compensable_reserved_clone {
                     if let Some(contract) = reversibility_clone.as_ref().filter(|contract| {
@@ -828,7 +862,7 @@ impl ControlPlaneHandle {
                             &handle.state,
                             contract,
                             &capability_id_clone,
-                            "default",
+                            handle.tenant_id(),
                             profile_context_clone.profile_id.as_deref(),
                             idempotency_key_clone.as_deref(),
                             true,
@@ -866,6 +900,7 @@ impl ControlPlaneHandle {
                 {
                     EmbeddedEmission {
                         state: &handle.state,
+                        tenant: handle.tenant.as_ref(),
                         profile: &profile_context_clone,
                         tool_name: &tool_name_clone,
                         tool_definition: tool_definition.as_deref(),
@@ -983,7 +1018,9 @@ impl ControlPlaneHandle {
                             .circuit_breakers
                             .record_success(&server_id_clone)
                             .await;
-                        if !suppress_undo_registration_clone {
+                        if !suppress_undo_registration_clone
+                            && !crate::result_sanitization::is_uninspectable_result(&data)
+                        {
                             if let Some(contract) = &reversibility_clone {
                                 if let Err(error) = undo::register_inverse(
                                     &handle.state,
@@ -996,7 +1033,7 @@ impl ControlPlaneHandle {
                                         snapshot_hash,
                                         context: &req_ctx_clone,
                                         batch_id: None,
-                                        tenant_id: "default",
+                                        tenant_id: handle.tenant_id(),
                                         profile_id: profile_context_clone.profile_id.as_deref(),
                                     },
                                     &profile_context_clone,
@@ -1177,99 +1214,92 @@ impl ControlPlaneHandle {
                         ttl_ms: Some(approval_timeout_secs * 1000),
                         poll_interval_ms: Some(1000),
                     },
-                    Some(ResultAccess::new("default", prof_ctx.profile_id.as_deref())),
+                    Some(ResultAccess::new(
+                        self.tenant_id(),
+                        prof_ctx.profile_id.as_deref(),
+                    )),
                 )
                 .await;
 
             let (_approval_id, rx) = self
                 .state
                 .approval_registry
-                .create_approval(crate::approvals::CreateApprovalRequest {
-                    capability_id: capability_id.to_string(),
-                    server_id: server_id.clone(),
-                    args: args.clone(),
-                    sanitized_args: sanitized,
-                    request_id: Some(req_id.clone()),
-                    context: Some(req_ctx.clone()),
-                    timeout_secs: approval_timeout_secs,
-                    webhook: webhook_cfg.as_ref(),
-                })
+                .create_scoped_approval(
+                    crate::approvals::CreateApprovalRequest {
+                        capability_id: capability_id.to_string(),
+                        server_id: server_id.clone(),
+                        args: args.clone(),
+                        sanitized_args: sanitized,
+                        request_id: Some(req_id.clone()),
+                        context: Some(req_ctx.clone()),
+                        timeout_secs: approval_timeout_secs,
+                        webhook: webhook_cfg.as_ref(),
+                    },
+                    Some(crate::approvals::ApprovalOwnership::new(
+                        self.tenant_id(),
+                        Some(&rec.task_id),
+                        &args,
+                        tool_definition.as_deref(),
+                    )),
+                )
                 .await;
 
-            // Wait for either the HITL approval channel or task input responses
-            tokio::select! {
-                resolution = rx => {
-                    let res = match resolution {
-                        Ok(r) => r,
-                        Err(_) => crate::approvals::ApprovalResolution::Expired,
-                    };
-                    match res {
-                        crate::approvals::ApprovalResolution::Approved { modified_args, .. } => {
-                            if let Some(mod_args) = modified_args {
-                                effective_args = mod_args;
-                            }
-                        }
-                        crate::approvals::ApprovalResolution::Rejected { operator, reason } => {
-                            let _ = self.state.task_registry.cancel_task(&rec.task_id, reason.clone()).await;
-                            self.state.idempotency_store
-                                .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                                .await;
-                            return Envelope::failure(
-                                trace_id,
-                                Some(req_id),
-                                Some(req_ctx),
-                                WarmplaneError::operator_rejected(operator, reason),
-                                retry_base("not_started"),
-                            );
-                        }
-                        crate::approvals::ApprovalResolution::Expired => {
-                            let _ = self.state.task_registry.fail_task(&rec.task_id, serde_json::json!({"code": "APPROVAL_TIMEOUT"}), Some("Approval request timed out".to_string())).await;
-                            self.state.idempotency_store
-                                .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                                .await;
-                            return Envelope::failure(
-                                trace_id,
-                                Some(req_id),
-                                Some(req_ctx),
-                                WarmplaneError::new(
-                                    "APPROVAL_TIMEOUT",
-                                    format!("Approval request timed out after {}s", approval_timeout_secs),
-                                    true,
-                                ),
-                                retry_base("not_started"),
-                            );
-                        }
+            use crate::approvals::ApprovalResolution;
+            match crate::approvals::wait_for_decision(rx, trx).await {
+                ApprovalResolution::Approved { modified_args, .. } => {
+                    if self
+                        .state
+                        .task_registry
+                        .update_task(&rec.task_id, Default::default())
+                        .await
+                        .ok()
+                        != Some(true)
+                    {
+                        self.state
+                            .idempotency_store
+                            .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                            .await;
+                        return Envelope::failure(
+                            trace_id,
+                            Some(req_id),
+                            Some(req_ctx),
+                            WarmplaneError::new(
+                                "APPROVAL_TASK_UNAVAILABLE",
+                                "Approval task no longer permits execution",
+                                false,
+                            ),
+                            retry_base("not_started"),
+                        );
+                    }
+                    if let Some(args) = modified_args {
+                        effective_args = args;
                     }
                 }
-                task_res = async {
-                    if let Some(trx) = trx {
-                        trx.await.ok()
-                    } else {
-                        None
-                    }
-                } => {
-                    if let Some(responses) = task_res {
-                        if let Some(appr) = responses.get("hitl_approval") {
-                            if appr.get("approved").and_then(Value::as_bool) == Some(true) {
-                                if let Some(mod_args) = appr.get("modified_args").cloned() {
-                                    effective_args = mod_args;
-                                }
-                            } else {
-                                let reason = appr.get("reason").and_then(Value::as_str).map(ToString::to_string);
-                                let _ = self.state.task_registry.cancel_task(&rec.task_id, reason.clone()).await;
-                                self.state.idempotency_store
-                                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                                    .await;
-                                return Envelope::failure(
-                                    trace_id,
-                                    Some(req_id),
-                                    Some(req_ctx),
-                                    WarmplaneError::operator_rejected("client-agent", reason),
-                                    retry_base("not_started"),
-                                );
-                            }
+                rejection => {
+                    let error = match &rejection {
+                        ApprovalResolution::Rejected { operator, reason } => {
+                            WarmplaneError::operator_rejected(operator.clone(), reason.clone())
                         }
-                    }
+                        _ => WarmplaneError::new(
+                            "APPROVAL_TIMEOUT",
+                            "Approval request timed out or was cancelled",
+                            true,
+                        ),
+                    };
+                    rejection
+                        .arguments_for_task(&self.state, &rec.task_id, Value::Null)
+                        .await;
+                    self.state
+                        .idempotency_store
+                        .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                        .await;
+                    return Envelope::failure(
+                        trace_id,
+                        Some(req_id),
+                        Some(req_ctx),
+                        error,
+                        retry_base("not_started"),
+                    );
                 }
             }
             Some(rec)
@@ -1286,7 +1316,7 @@ impl ControlPlaneHandle {
                     &self.state,
                     contract,
                     capability_id,
-                    "default",
+                    self.tenant_id(),
                     prof_ctx.profile_id.as_deref(),
                     idempotency_key.as_deref(),
                     true,
@@ -1322,6 +1352,7 @@ impl ControlPlaneHandle {
             return HeldCapabilityCall {
                 emission: EmbeddedEmission {
                     state: &self.state,
+                    tenant: self.tenant.as_ref(),
                     profile: &prof_ctx,
                     tool_name: &tool_name,
                     tool_definition: tool_definition.as_deref(),
@@ -1486,7 +1517,9 @@ impl ControlPlaneHandle {
                     .total_tool_duration_us
                     .fetch_add(elapsed_us, Ordering::Relaxed);
 
-                if !suppress_undo_registration {
+                if !suppress_undo_registration
+                    && !crate::result_sanitization::is_uninspectable_result(&data)
+                {
                     if let Some(contract) = &reversibility {
                         if let Err(error) = undo::register_inverse(
                             &self.state,
@@ -1499,7 +1532,7 @@ impl ControlPlaneHandle {
                                 snapshot_hash,
                                 context: &req_ctx,
                                 batch_id: None,
-                                tenant_id: "default",
+                                tenant_id: self.tenant_id(),
                                 profile_id: prof_ctx.profile_id.as_deref(),
                             },
                             &prof_ctx,
@@ -1512,28 +1545,41 @@ impl ControlPlaneHandle {
                         )
                         .await
                         {
+                            let message = self
+                                .state
+                                .safe_upstream_error(format!(
+                                "Forward call succeeded but inverse registration failed: {error}"
+                            ))
+                                .await;
                             if let Some(ref rec) = task_record {
-                                let _ = self
-                                    .state
+                                self.state
                                     .task_registry
-                                    .fail_task(
+                                    .fail_execution(
                                         &rec.task_id,
-                                        serde_json::json!({"code": "UNDO_REGISTRATION_FAILED"}),
-                                        Some(error.to_string()),
+                                        "UNDO_REGISTRATION_FAILED",
+                                        &message,
+                                        "completed",
                                     )
                                     .await;
                             }
-                            return Envelope::failure(
+                            let response = Envelope::failure(
                                 trace_id,
                                 Some(req_id),
                                 Some(req_ctx),
-                                WarmplaneError::new(
-                                    "UNDO_REGISTRATION_FAILED",
-                                    format!("Forward call succeeded but inverse registration failed: {error}"),
-                                    false,
-                                ),
+                                WarmplaneError::new("UNDO_REGISTRATION_FAILED", message, false),
                                 retry_base("completed"),
                             );
+                            if let Some((key, claim)) =
+                                idempotency_key.as_deref().zip(idempotency_claim)
+                            {
+                                if let Ok(value) = serde_json::to_value(&response) {
+                                    self.state
+                                        .idempotency_store
+                                        .complete(key, claim, value)
+                                        .await;
+                                }
+                            }
+                            return response;
                         }
                     }
                 }
@@ -1694,7 +1740,7 @@ impl ControlPlaneHandle {
         let req_id = options.request_id.unwrap_or_else(|| trace_id.clone());
         let req_ctx = options.context.unwrap_or_default();
 
-        if !self.state.policy.read().await.allows(resource_id) {
+        if !self.effective_policy(&prof_ctx).await.allows(resource_id) {
             return Envelope::failure(
                 trace_id,
                 Some(req_id),
@@ -1769,7 +1815,7 @@ impl ControlPlaneHandle {
         let req_id = options.request_id.unwrap_or_else(|| trace_id.clone());
         let req_ctx = options.context.unwrap_or_default();
 
-        if !self.state.policy.read().await.allows(prompt_id) {
+        if !self.effective_policy(&prof_ctx).await.allows(prompt_id) {
             return Envelope::failure(
                 trace_id,
                 Some(req_id),
@@ -1993,15 +2039,15 @@ impl ControlPlaneHandle {
         task: &crate::tasks::TaskRecord,
         profile: Option<&str>,
     ) -> bool {
-        self.state.accepts_result_revision(None).await
+        !self.state.trust_controls_active().await
             || self
                 .state
                 .hold_coordinator
                 .can_access_task(
                     &self.state,
                     task,
-                    "default",
-                    &self.state.rbac_engine.default_role(),
+                    self.tenant_id(),
+                    &self.caller_role(),
                     profile,
                 )
                 .await
@@ -2023,33 +2069,29 @@ impl ControlPlaneHandle {
         let trace_id = next_trace_id();
         match self
             .state
-            .task_registry
-            .update_task(task_id, input_responses)
+            .submit_task_input(task_id, input_responses, self.tenant.as_ref())
             .await
         {
-            Ok(true) => {
+            Ok(_) => {
                 Envelope::success(trace_id, None, None, true, RetryMetadata::safe("completed"))
             }
-            Ok(false) => Envelope::failure(
+            Err(crate::approvals::DecisionError::TaskNotInputRequired) => Envelope::failure(
                 trace_id,
                 None,
                 None,
                 WarmplaneError::new(
                     "TASK_UPDATE_REJECTED",
-                    format!(
-                        "Task '{}' is not in 'input_required' status or does not exist",
-                        task_id
-                    ),
+                    "Task is unavailable or no longer requires input",
                     false,
                 ),
                 RetryMetadata::safe("not_started"),
             ),
-            Err(e) => Envelope::failure(
+            Err(error) => Envelope::failure(
                 trace_id,
                 None,
                 None,
-                WarmplaneError::new("INTERNAL_ERROR", e.to_string(), false),
-                RetryMetadata::safe("unknown"),
+                crate::approvals::decision_error(error),
+                RetryMetadata::safe("not_started"),
             ),
         }
     }
@@ -2140,6 +2182,7 @@ impl ControlPlaneHandle {
 
 struct EmbeddedEmission<'a> {
     state: &'a AppState,
+    tenant: Option<&'a crate::rbac::TenantContext>,
     profile: &'a ProfileContext,
     tool_name: &'a str,
     tool_definition: Option<&'a str>,
@@ -2160,9 +2203,16 @@ impl EmbeddedEmission<'_> {
             input_responses: self.options.input_responses.clone(),
             request_state: self.options.request_state.clone(),
             profile_id: self.profile.profile_id.clone(),
-            tenant_id: "default".to_string(),
-            role: self.state.rbac_engine.default_role(),
-            authorization_expires_at_epoch_secs: None,
+            tenant_id: self
+                .tenant
+                .map_or_else(|| "default".to_owned(), |tenant| tenant.tenant_id.clone()),
+            role: self.tenant.map_or_else(
+                || self.state.rbac_engine.default_role(),
+                |tenant| tenant.role.clone(),
+            ),
+            authorization_expires_at_epoch_secs: self
+                .tenant
+                .and_then(|tenant| tenant.grant_expires_at_epoch_secs),
             approval_completed: self.approval_completed,
             batch_id: None,
             step_id: None,

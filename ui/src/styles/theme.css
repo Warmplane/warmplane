@@ -427,7 +427,7 @@ select option {
   margin-top: 4px;
 }
 
-.tool-pin-auth {
+.trust-auth-form {
   display: flex;
   align-items: end;
   flex-wrap: wrap;
@@ -435,7 +435,7 @@ select option {
   margin: 12px 0;
 }
 
-.tool-pin-auth .form-group { margin: 0; min-width: min(18rem, 100%); }
+.trust-auth-form .form-group { margin: 0; min-width: min(18rem, 100%); }
 .tool-pin-feedback { color: var(--text-muted); font-size: 12px; }
 .tool-pin-review { border-top: 1px solid var(--border-subtle); padding: 10px 0; }
 .tool-pin-review summary { cursor: pointer; }
@@ -463,3 +463,7 @@ select option {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
+
+.approval-details { font-size: 12px; margin: 0; }
+.approval-details dt { color: var(--text-muted); margin-bottom: 2px; }
+.approval-details dd { margin: 0 0 8px; overflow-wrap: anywhere; }

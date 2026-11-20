@@ -268,7 +268,8 @@ pub struct UpsertProfileRequest {
 /// Request body for approving a pending capability execution.
 #[derive(Deserialize, Debug, Clone)]
 pub struct ApproveTicketRequest {
-    /// Identifier of the human operator approving the action.
+    /// Legacy display field. The principal is derived from authenticated credentials.
+    #[serde(default)]
     pub operator: String,
     /// Optional modified arguments to execute instead of original payload.
     #[serde(default)]
@@ -278,7 +279,8 @@ pub struct ApproveTicketRequest {
 /// Request body for rejecting a pending capability execution.
 #[derive(Deserialize, Debug, Clone)]
 pub struct RejectTicketRequest {
-    /// Identifier of the human operator rejecting the action.
+    /// Legacy display field. The principal is derived from authenticated credentials.
+    #[serde(default)]
     pub operator: String,
     /// Reason explaining why the action was rejected.
     #[serde(default)]

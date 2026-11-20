@@ -217,7 +217,7 @@ async fn inspect_idempotency_record(
     tenant: Option<&TenantContext>,
     profile: Option<&ProfileContext>,
 ) -> Option<PersistedIdempotencyRecord> {
-    if state.accepts_result_revision(None).await {
+    if !state.trust_controls_active().await {
         return Some(record);
     }
     let profile_id = profile.and_then(|profile| profile.profile_id.as_deref());

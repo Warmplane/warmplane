@@ -14,6 +14,7 @@ use crate::{
     approvals::ApprovalResolution,
     config::{ReversibilityClass, ReversibilityConfig},
     daemon::{AppState, ServerMsg, UpstreamCallError},
+    result_sanitization::Delivery,
     tasks::{
         CreateTaskParams, EmissionCancelResult, EmissionPhase, EmissionRecord, TaskRecord,
         TaskStatus,
@@ -287,6 +288,7 @@ impl BatchExecution<'_> {
     ) -> (bool, Vec<BatchStepResult>) {
         let mut outputs = HashMap::new();
         let mut results = Vec::new();
+        let mut revisions = Vec::new();
         let mut ok = true;
         for step in steps {
             let start = Instant::now();
@@ -306,11 +308,14 @@ impl BatchExecution<'_> {
                 Err(failure) => Err(failure),
             };
             let (step_ok, data, error, stop) = match outcome {
-                Ok(value) => {
-                    outputs.insert(step.id.clone(), value.clone());
+                Ok(delivery) => {
+                    revisions.push(delivery.revision.clone());
+                    let value = delivery.value.clone();
+                    outputs.insert(step.id.clone(), delivery);
                     (true, Some(value), None, false)
                 }
                 Err(failure) => {
+                    revisions.push(None);
                     ok = false;
                     let (error, stop) = self.handle_step_failure(failure, &step, auto_rollback);
                     (false, None, error, stop)
@@ -326,6 +331,19 @@ impl BatchExecution<'_> {
             });
             if stop {
                 break;
+            }
+        }
+        let policy = self.state.policy.read().await;
+        if let Some(rules) = &policy.result_sanitization {
+            for (result, revision) in results.iter_mut().zip(revisions) {
+                if result.ok && revision.as_deref() != Some(rules.revision()) {
+                    result.ok = false;
+                    result.data = None;
+                    result.error = Some(
+                        crate::WarmplaneError::from(crate::result_sanitization::Withheld).message,
+                    );
+                    ok = false;
+                }
             }
         }
         (ok, results)
@@ -427,20 +445,42 @@ struct BatchStepExecution<'a, 'batch> {
 }
 
 impl BatchStepExecution<'_, '_> {
-    async fn run(&self, outputs: &HashMap<String, Value>) -> Result<Value, StepFailure> {
+    async fn run(&self, outputs: &HashMap<String, Delivery>) -> Result<Delivery, StepFailure> {
         let state = self.batch.state;
-        let enforcing = state.policy.read().await.result_sanitization.is_some();
+        let rules = state.policy.read().await.result_sanitization.clone();
+        let revision = rules.as_ref().map(|rules| rules.revision());
         let mut args = crate::engine::interpolation::interpolate_batch_args(
             &self.step.args,
             outputs,
-            enforcing,
+            revision,
         )
         .map_err(|error| StepFailure::Regular(error.to_string()))?;
         let target = self.resolve_target().await.map_err(StepFailure::Regular)?;
-        let approved = self
+        let approval_task = self
             .apply_approval(&target, &mut args)
             .await
             .map_err(StepFailure::Regular)?;
+        if !outputs.is_empty() && !state.accepts_result_revision(revision).await {
+            return Err(StepFailure::Regular(
+                "Batch result policy changed before dispatch".to_owned(),
+            ));
+        }
+        let outcome = self
+            .dispatch_approved(&target, args, approval_task.as_deref())
+            .await;
+        if let Some(task_id) = approval_task.as_deref() {
+            self.record_approval_execution(task_id, &outcome).await;
+        }
+        outcome
+    }
+
+    async fn dispatch_approved(
+        &self,
+        target: &StepTarget,
+        args: Value,
+        approval_task: Option<&str>,
+    ) -> Result<Delivery, StepFailure> {
+        let state = self.batch.state;
         self.batch
             .state
             .circuit_breakers
@@ -459,10 +499,10 @@ impl BatchStepExecution<'_, '_> {
             .filter(|contract| contract.class == ReversibilityClass::Delayable)
         {
             let task = self
-                .accept_emission(&target, &args, contract, approved)
+                .accept_emission(target, &args, contract, approval_task)
                 .await
                 .map_err(StepFailure::Regular)?;
-            let value = self.wait_for_emission(&task.task_id).await?;
+            let delivery = self.wait_for_emission(&task.task_id).await?;
             self.batch
                 .state
                 .circuit_breakers
@@ -471,14 +511,14 @@ impl BatchStepExecution<'_, '_> {
             self.audit_success(
                 &target.server,
                 args,
-                (!enforcing).then_some(&value),
+                delivery.revision.is_none().then_some(&delivery.value),
                 Some(&task.task_id),
             );
-            return Ok(value);
+            return Ok(delivery);
         }
 
         let value = self
-            .call_and_register_inverse(&target, &args)
+            .call_and_register_inverse(target, &args)
             .await
             .map_err(StepFailure::Regular)?;
         let delivery = state
@@ -498,7 +538,28 @@ impl BatchStepExecution<'_, '_> {
             delivery.revision.is_none().then_some(&delivery.value),
             None,
         );
-        Ok(delivery.value)
+        Ok(delivery)
+    }
+
+    async fn record_approval_execution(
+        &self,
+        task_id: &str,
+        outcome: &Result<Delivery, StepFailure>,
+    ) {
+        let tasks = &self.batch.state.task_registry;
+        match outcome {
+            Ok(delivery) => {
+                let _ = tasks
+                    .complete_execution(task_id, delivery.value.clone(), delivery.revision.clone())
+                    .await;
+            }
+            Err(StepFailure::Regular(message) | StepFailure::Stop(message)) => {
+                tasks
+                    .fail_execution(task_id, "BATCH_STEP_FAILED", message, "unknown")
+                    .await;
+            }
+            Err(StepFailure::Held(_)) => {}
+        }
     }
 
     async fn resolve_target(&self) -> Result<StepTarget, String> {
@@ -529,7 +590,11 @@ impl BatchStepExecution<'_, '_> {
         })
     }
 
-    async fn apply_approval(&self, target: &StepTarget, args: &mut Value) -> Result<bool, String> {
+    async fn apply_approval(
+        &self,
+        target: &StepTarget,
+        args: &mut Value,
+    ) -> Result<Option<String>, String> {
         let compensable = target
             .reversibility
             .as_ref()
@@ -545,16 +610,15 @@ impl BatchStepExecution<'_, '_> {
                 .policy
                 .requires_approval(&self.step.capability_id)
         {
-            return Ok(false);
+            return Ok(None);
         }
 
-        if let Some(modified_args) = self.request_approval(&target.server, args).await? {
-            *args = modified_args;
-        }
+        let (task_id, approved_args) = self.request_approval(target, args).await?;
+        *args = approved_args;
         if let Some(contract) = compensable.filter(|_| !reserved) {
             self.reserve_compensable(contract, true).await?;
         }
-        Ok(true)
+        Ok(Some(task_id))
     }
 
     fn require_undo_ledger(&self) -> Result<(), String> {
@@ -586,47 +650,88 @@ impl BatchStepExecution<'_, '_> {
         .map_err(|error| error.to_string())
     }
 
-    async fn request_approval(&self, server: &str, args: &Value) -> Result<Option<Value>, String> {
+    async fn request_approval(
+        &self,
+        target: &StepTarget,
+        args: &Value,
+    ) -> Result<(String, Value), String> {
         let batch = self.batch;
         let policy = batch.scope.policy;
+        let webhook = batch.state.policy.read().await.webhook.clone();
+        let sanitized_args =
+            crate::http_v1::helpers::redact_value(args.clone(), &policy.redact_keys);
+        let (task, task_rx) = batch.state.task_registry.create_scoped_task(
+            CreateTaskParams {
+                capability_id: self.step.capability_id.clone(),
+                server_id: target.server.clone(),
+                args: args.clone(),
+                request_id: batch.request_id.map(str::to_owned),
+                context: batch.context.cloned(),
+                idempotency_key: self.idempotency_key.clone(),
+                initial_status: TaskStatus::InputRequired,
+                status_message: Some("Awaiting batch step approval".to_owned()),
+                input_requests: Some(std::collections::BTreeMap::from([(
+                    "hitl_approval".to_owned(),
+                    serde_json::json!({"type": "approval_review", "sanitized_args": sanitized_args}),
+                )])),
+                ttl_ms: Some(policy.approval_timeout_secs.saturating_mul(1000)),
+                poll_interval_ms: None,
+            },
+            Some(crate::result_sanitization::ResultAccess::new(
+                batch.scope.tenant_id, batch.scope.profile.profile_id.as_deref(),
+            )),
+        ).await;
         let request = crate::approvals::CreateApprovalRequest {
             capability_id: self.step.capability_id.clone(),
-            server_id: server.to_owned(),
+            server_id: target.server.clone(),
             args: args.clone(),
-            sanitized_args: crate::http_v1::helpers::redact_value(
-                args.clone(),
-                &policy.redact_keys,
-            ),
+            sanitized_args,
             request_id: batch.request_id.map(str::to_owned),
             context: batch.context.cloned(),
             timeout_secs: policy.approval_timeout_secs,
-            webhook: policy.webhook.as_ref(),
+            webhook: webhook.as_ref(),
         };
         let (_, receiver, event) = batch
             .state
             .approval_registry
-            .create_audited_approval(request, batch.trace_id.to_owned(), self.start)
+            .create_audited_approval(
+                request,
+                batch.trace_id.to_owned(),
+                self.start,
+                crate::approvals::ApprovalOwnership::new(
+                    batch.scope.tenant_id,
+                    Some(&task.task_id),
+                    args,
+                    target.tool_definition.as_deref(),
+                ),
+            )
             .await;
         batch.state.audit_handle.send(event);
 
         let resolution = tokio::select! {
             _ = batch.scope.cancellation_token.cancelled() => ApprovalResolution::Expired,
-            result = tokio::time::timeout(batch.remaining_budget(), receiver) => {
+            result = tokio::time::timeout(batch.remaining_budget(), crate::approvals::wait_for_decision(receiver, task_rx)) => {
                 match result {
-                    Ok(Ok(resolution)) => resolution,
+                    Ok(resolution) => resolution,
                     _ => ApprovalResolution::Expired,
                 }
             }
         };
-        match resolution {
-            ApprovalResolution::Approved { modified_args, .. } => Ok(modified_args),
-            ApprovalResolution::Rejected { reason, operator } => Err(format!(
-                "HITL approval rejected by operator '{}': {}",
-                operator,
-                reason.unwrap_or_else(|| "No reason provided".to_string())
-            )),
-            ApprovalResolution::Expired => Err(batch.approval_expiry_message().to_string()),
-        }
+        let error_message = match &resolution {
+            ApprovalResolution::Approved { .. } => {
+                "Approved batch task is no longer available".to_owned()
+            }
+            ApprovalResolution::Rejected { reason, operator } => format!(
+                "HITL approval rejected by operator '{operator}': {}",
+                reason.as_deref().unwrap_or("No reason provided")
+            ),
+            ApprovalResolution::Expired => batch.approval_expiry_message().to_owned(),
+        };
+        resolution
+            .arguments_for_task(batch.state, &task.task_id, args.clone())
+            .await
+            .map(|args| (task.task_id, args))
+            .ok_or(error_message)
     }
 
     async fn accept_emission(
@@ -634,7 +739,7 @@ impl BatchStepExecution<'_, '_> {
         target: &StepTarget,
         args: &Value,
         contract: &ReversibilityConfig,
-        approved: bool,
+        approval_task: Option<&str>,
     ) -> Result<TaskRecord, String> {
         let batch = self.batch;
         let scope = &batch.scope;
@@ -656,10 +761,19 @@ impl BatchStepExecution<'_, '_> {
             tenant_id: scope.tenant_id.to_owned(),
             role: scope.role.to_owned(),
             authorization_expires_at_epoch_secs: scope.authorization_expires_at_epoch_secs,
-            approval_completed: approved,
+            approval_completed: approval_task.is_some(),
             batch_id: batch.request_id.map(str::to_owned),
             step_id: Some(self.step.id.clone()),
         };
+        if let Some(id) = approval_task {
+            return batch
+                .state
+                .hold_coordinator
+                .queue_existing(batch.state, id, args.clone(), emission)
+                .await
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "Approved batch task is no longer available".to_owned());
+        }
         batch
             .state
             .hold_coordinator
@@ -686,7 +800,7 @@ impl BatchStepExecution<'_, '_> {
             .map_err(|error| format!("Could not persist held emission: {error}"))
     }
 
-    async fn wait_for_emission(&self, task_id: &str) -> Result<Value, StepFailure> {
+    async fn wait_for_emission(&self, task_id: &str) -> Result<Delivery, StepFailure> {
         let batch = self.batch;
         let terminal = tokio::select! {
             _ = batch.scope.cancellation_token.cancelled() => None,
@@ -707,7 +821,10 @@ impl BatchStepExecution<'_, '_> {
         };
         let view = batch.state.task_view(&terminal).await;
         match view.status {
-            TaskStatus::Completed if view.error.is_none() => Ok(view.result.unwrap_or(Value::Null)),
+            TaskStatus::Completed if view.error.is_none() => Ok(Delivery {
+                value: view.result.unwrap_or(Value::Null),
+                revision: terminal.result_policy_revision,
+            }),
             TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled => {
                 Err(StepFailure::Held(view.status_message))
             }
@@ -774,7 +891,9 @@ impl BatchStepExecution<'_, '_> {
         let contract = target.reversibility.as_ref();
         let (snapshot, snapshot_hash) = self.capture_snapshot(contract, args).await?;
         let value = self.call_upstream(target, args).await?;
-        if let Some(contract) = contract {
+        if let Some(contract) =
+            contract.filter(|_| !crate::result_sanitization::is_uninspectable_result(&value))
+        {
             let fallback_context = crate::context::RequestContext::default();
             crate::engine::undo::register_inverse(
                 batch.state,

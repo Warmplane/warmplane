@@ -239,6 +239,15 @@ export interface PendingApproval {
   operator?: string;
   reason?: string;
   modified_args?: Record<string, any>;
+  task_id?: string | null;
+  decision_receipt?: {
+    decision: 'approve' | 'reject';
+    principal: string;
+    decided_at: number;
+  } | null;
+  receipt_delivery?: 'delivered' | 'failed' | null;
+  execution_status?: string | null;
+  upstream_execution_state?: string | null;
 }
 
 export interface AuditEventItem {
@@ -481,9 +490,21 @@ export interface EcosystemSource {
 
 export class WarmplaneClient {
   private baseUrl: string;
+  private approvalToken = '';
 
   constructor(baseUrl: string = '') {
     this.baseUrl = baseUrl;
+  }
+
+  setApprovalToken(token: string) {
+    this.approvalToken = token;
+  }
+
+  private approvalHeaders(jsonBody = false): Headers {
+    const headers = new Headers();
+    if (this.approvalToken) headers.set('Authorization', `Bearer ${this.approvalToken}`);
+    if (jsonBody) headers.set('Content-Type', 'application/json');
+    return headers;
   }
 
   async listToolPins(token: string): Promise<{ pins?: ToolPinReview[]; error?: string }> {
@@ -658,7 +679,7 @@ export class WarmplaneClient {
   }
 
   async listTasks(): Promise<ListTasksResponse> {
-    const res = await fetch(`${this.baseUrl}/v1/tasks`);
+    const res = await fetch(`${this.baseUrl}/v1/tasks`, { headers: this.approvalHeaders() });
     return res.json();
   }
 
@@ -689,14 +710,14 @@ export class WarmplaneClient {
   }
 
   async getTask(id: string): Promise<{ ok: boolean; resultType?: string; task?: TaskItem; error?: any }> {
-    const res = await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(id)}`);
+    const res = await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(id)}`, { headers: this.approvalHeaders() });
     return res.json();
   }
 
   async updateTask(id: string, inputResponses: Record<string, any>): Promise<{ ok: boolean; resultType?: string; message?: string; error?: any }> {
     const res = await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(id)}/update`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.approvalHeaders(true),
       body: JSON.stringify({ inputResponses })
     });
     return res.json();
@@ -705,31 +726,31 @@ export class WarmplaneClient {
   async cancelTask(id: string, reason?: string): Promise<{ ok: boolean; resultType?: string; cancelled?: boolean; message?: string; error?: any }> {
     const res = await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(id)}/cancel`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.approvalHeaders(true),
       body: JSON.stringify({ reason })
     });
     return res.json();
   }
 
-  async listApprovals(): Promise<{ ok: boolean; approvals: PendingApproval[]; total: number }> {
-    const res = await fetch(`${this.baseUrl}/v1/approvals`);
+  async listApprovals(): Promise<{ ok: boolean; approvals: PendingApproval[]; total: number; error?: { message?: string } }> {
+    const res = await fetch(`${this.baseUrl}/v1/approvals`, { headers: this.approvalHeaders() });
     return res.json();
   }
 
-  async approveTicket(id: string, operator: string, modifiedArgs?: Record<string, any>): Promise<{ ok: boolean; message?: string; error?: string }> {
+  async approveTicket(id: string, modifiedArgs?: Record<string, any>): Promise<{ ok: boolean; error?: { message?: string } }> {
     const res = await fetch(`${this.baseUrl}/v1/approvals/${encodeURIComponent(id)}/approve`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ operator, modified_args: modifiedArgs })
+      headers: this.approvalHeaders(true),
+      body: JSON.stringify({ modified_args: modifiedArgs })
     });
     return res.json();
   }
 
-  async rejectTicket(id: string, operator: string, reason?: string): Promise<{ ok: boolean; message?: string; error?: string }> {
+  async rejectTicket(id: string, reason?: string): Promise<{ ok: boolean; error?: { message?: string } }> {
     const res = await fetch(`${this.baseUrl}/v1/approvals/${encodeURIComponent(id)}/reject`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ operator, reason })
+      headers: this.approvalHeaders(true),
+      body: JSON.stringify({ reason })
     });
     return res.json();
   }

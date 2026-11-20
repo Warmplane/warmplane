@@ -258,3 +258,90 @@ async fn stdio_pin_gates_paginated_discovery_stale_review_and_held_dispatch() {
     assert_eq!(save_pin(&reviews(&router).await)["status"], "matching");
     ControlPlaneHandle::new(restarted).shutdown().await;
 }
+
+async fn fake_mcp_http(
+    axum::extract::State(description): axum::extract::State<
+        std::sync::Arc<tokio::sync::RwLock<String>>,
+    >,
+    axum::Json(msg): axum::Json<Value>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let Some(id) = msg.get("id") else {
+        return StatusCode::ACCEPTED.into_response();
+    };
+    let result = match msg["method"].as_str().unwrap() {
+        "initialize" => json!({
+            "protocolVersion": "2025-11-25",
+            "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
+            "serverInfo": {"name": "http-pin-fixture", "version": "1"}
+        }),
+        "tools/list" => json!({"tools": [{
+            "name": "save", "description": description.read().await.as_str(), "inputSchema": {"type":"object"}
+        }], "ttlMs": 120000, "cacheScope": "public"}),
+        "tools/call" => json!({"content":[{"type":"text", "text":"fixture-secret-42"}]}),
+        "resources/list" => json!({"resources":[]}),
+        "prompts/list" => json!({"prompts":[]}),
+        method => panic!("unexpected fixture method {method}"),
+    };
+    axum::Json(json!({"jsonrpc":"2.0", "id":id, "result":result})).into_response()
+}
+
+#[tokio::test]
+async fn http_fallback_refresh_observes_definition_changes_and_enforces_result_delivery() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let description = std::sync::Arc::new(tokio::sync::RwLock::new("original".to_owned()));
+    let fixture = Router::new()
+        .route("/mcp", axum::routing::post(fake_mcp_http))
+        .with_state(description.clone());
+    let server_task = tokio::spawn(async move { axum::serve(listener, fixture).await.unwrap() });
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    let config: McpConfig = serde_json::from_value(json!({
+        "authToken": TOKEN,
+        "state": {"enabled": true, "dir": directory.path().join("state")},
+        "policy": {"resultSanitization": {"patterns":["fixture-secret-[0-9]+"]}},
+        "mcpServers": {"fixture": {"url": url, "allowStateless": true, "requireToolPins": true}},
+    }))
+    .unwrap();
+    save_config(path.to_str().unwrap(), &config).unwrap();
+    let state = initialize_state(config, path.to_str().unwrap())
+        .await
+        .unwrap();
+    let router = build_router(state.clone());
+    let handle = ControlPlaneHandle::new(state);
+    let initial = reviews(&router).await;
+    let original = save_pin(&initial);
+    assert_eq!(approve(&router, original).await, StatusCode::OK);
+    let result = handle
+        .call_capability("fixture.save", json!({}), ExecutionOptions::new())
+        .await;
+    assert!(result.ok, "{result:?}");
+    assert_eq!(result.data.unwrap()["content"][0]["text"], "[REDACTED]");
+    *description.write().await = "changed without notification".to_owned();
+    let after_poll = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let latest = reviews(&router).await;
+            if save_pin(&latest)["status"] == "changed" {
+                break latest;
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        save_pin(&after_poll)["current"]["value"]["description"],
+        "changed without notification"
+    );
+    assert!(handle
+        .list_capabilities(None)
+        .await
+        .unwrap()
+        .capabilities
+        .is_empty());
+    handle.shutdown().await;
+    server_task.abort();
+}

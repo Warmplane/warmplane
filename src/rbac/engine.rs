@@ -89,6 +89,15 @@ impl RbacEngine {
                 .is_some_and(|role| role.manage_trust_controls)
     }
 
+    pub(crate) fn can_resolve_approvals(&self, role: &str) -> bool {
+        let state = self.read_state();
+        !state.enabled
+            || state
+                .roles
+                .get(role)
+                .is_some_and(|role| role.resolve_approvals)
+    }
+
     /// Returns whether a role can be resolved under the active RBAC configuration.
     pub fn recognizes_role(&self, role: &str) -> bool {
         let config = self.read_state();

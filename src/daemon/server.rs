@@ -32,6 +32,13 @@ pub async fn initialize_state(
     config_path: impl Into<String>,
 ) -> Result<AppState> {
     crate::config::validate_result_sanitization(&config)?;
+    if let Some(webhook) = config
+        .policy
+        .as_ref()
+        .and_then(|policy| policy.webhook.as_ref())
+    {
+        crate::approval_chatops::validate_approval_webhook(webhook, config.rbac.as_ref())?;
+    }
     let config_path_str = config_path.into();
     let tool_timeout_ms = config.tool_timeout_ms.unwrap_or(DEFAULT_TOOL_TIMEOUT_MS);
     let policy = Policy::from_config(config.policy.clone());
@@ -422,6 +429,8 @@ pub async fn security_guard_middleware(
     let headers = req.headers();
     let path = req.uri().path();
     let signed_chatops_action = path == "/v1/webhooks/actions";
+    let legacy_chatops_callback = path == "/v1/webhooks/callbacks";
+    let public_chatops_route = signed_chatops_action || legacy_chatops_callback;
 
     // 1. Host Validation (prevents DNS rebinding against 127.0.0.1)
     if let Some(host_hdr) = headers.get("host").and_then(|h| h.to_str().ok()) {
@@ -432,7 +441,7 @@ pub async fn security_guard_middleware(
             || host_name == "[::1]";
 
         let configured_chatops_host =
-            signed_chatops_action && configured_chatops_callback_host(&state.config_path, host_hdr);
+            public_chatops_route && configured_chatops_callback_host(&state.config_path, host_hdr);
         if !is_valid_host && !configured_chatops_host {
             return (
                 StatusCode::FORBIDDEN,
@@ -467,88 +476,36 @@ pub async fn security_guard_middleware(
         }
     }
 
-    // 3. RBAC & Auth Token verification
-    let mut tenant_ctx = None;
-    // ChatOps actions authenticate with a purpose- and target-bound HMAC token in the payload.
-    // This is the only `/v1` exception to the ordinary bearer/RBAC middleware.
-
-    if state.rbac_engine.is_enabled() {
-        if path.starts_with("/v1/") && !signed_chatops_action {
-            let token = headers
-                .get("authorization")
-                .and_then(|h| h.to_str().ok())
-                .and_then(|v| {
-                    v.strip_prefix("Bearer ")
-                        .or_else(|| v.strip_prefix("bearer "))
-                })
-                .or_else(|| headers.get("x-warmplane-key").and_then(|h| h.to_str().ok()));
-
-            let base_pol = state.policy.read().await.clone();
-            match state.rbac_engine.authenticate(token, &base_pol) {
-                Ok(ctx) => {
-                    tenant_ctx = Some(ctx);
-                }
-                Err(err_code) => {
-                    return (
-                        StatusCode::UNAUTHORIZED,
-                        Json(serde_json::json!({
-                            "ok": false,
-                            "error": err_code,
-                            "message": "Valid Bearer token, JWT, or X-Warmplane-Key required"
-                        })),
-                    )
-                        .into_response();
-                }
-            }
-        }
-    } else if let Some(ref expected_token) = state.auth_token {
-        if !expected_token.trim().is_empty() && path.starts_with("/v1/") && !signed_chatops_action {
-            let is_authed = headers
-                .get("authorization")
-                .and_then(|h| h.to_str().ok())
-                .and_then(|v| {
-                    v.strip_prefix("Bearer ")
-                        .or_else(|| v.strip_prefix("bearer "))
-                })
-                .map(|t| {
-                    use subtle::ConstantTimeEq;
-                    t.as_bytes().ct_eq(expected_token.as_bytes()).into()
-                })
-                .unwrap_or(false)
-                || headers
-                    .get("x-warmplane-key")
-                    .and_then(|h| h.to_str().ok())
-                    .map(|t| {
-                        use subtle::ConstantTimeEq;
-                        t.as_bytes().ct_eq(expected_token.as_bytes()).into()
-                    })
-                    .unwrap_or(false);
-
-            if !is_authed {
+    let tenant_ctx = if path.starts_with("/v1/") && !public_chatops_route {
+        match authenticate_api_request(&state, headers).await {
+            Ok(tenant) => tenant,
+            Err(code) => {
                 return (
                     StatusCode::UNAUTHORIZED,
                     Json(serde_json::json!({
                         "ok": false,
-                        "error": "UNAUTHORIZED",
-                        "message": "Valid Bearer token or X-Warmplane-Key required"
+                        "error": code,
+                        "message": "Valid Bearer token or X-Warmplane-Key required",
                     })),
                 )
                     .into_response();
             }
         }
-    }
+    } else {
+        None
+    };
 
     let trust_admin = check_trust_admin(&state, tenant_ctx.as_ref(), path);
     if path.starts_with("/v1/config/")
         && !req.method().is_safe()
         && !trust_admin
-        && (!state.accepts_result_revision(None).await || state.tool_pins.has_required_servers())
+        && state.trust_controls_active().await
     {
         return http_v1::trust_admin_required();
     }
 
     // 4. Resolve ProfileContext
-    if path.starts_with("/v1/") {
+    if path.starts_with("/v1/") && !public_chatops_route {
         let query_profile = req.uri().query().and_then(|q| {
             for param in q.split('&') {
                 if let Some((k, v)) = param.split_once('=') {
@@ -580,6 +537,45 @@ pub async fn security_guard_middleware(
     req.extensions_mut().insert(tenant_ctx);
 
     next.run(req).await
+}
+
+pub(crate) async fn authenticate_api_request(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+) -> Result<Option<crate::rbac::TenantContext>, String> {
+    let bearer = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .strip_prefix("Bearer ")
+                .or_else(|| value.strip_prefix("bearer "))
+        });
+    let api_key = headers
+        .get("x-warmplane-key")
+        .and_then(|value| value.to_str().ok());
+    if state.rbac_engine.is_enabled() {
+        let policy = state.policy.read().await.clone();
+        return state
+            .rbac_engine
+            .authenticate(bearer.or(api_key), &policy)
+            .map(Some);
+    }
+    if let Some(expected) = state
+        .auth_token
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+    {
+        use subtle::ConstantTimeEq;
+        if !bearer
+            .into_iter()
+            .chain(api_key)
+            .any(|token| bool::from(token.as_bytes().ct_eq(expected.as_bytes())))
+        {
+            return Err("UNAUTHORIZED".to_owned());
+        }
+    }
+    Ok(None)
 }
 
 fn check_trust_admin(

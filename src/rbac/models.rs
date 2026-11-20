@@ -152,6 +152,13 @@ pub struct RolePolicyConfig {
     /// Allows authenticated operators to manage global trust controls.
     #[serde(default, rename = "manageTrustControls")]
     pub manage_trust_controls: bool,
+    /// Allows authenticated or explicitly delegated operators to resolve approval tickets.
+    #[serde(
+        default,
+        rename = "resolveApprovals",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub resolve_approvals: bool,
 }
 
 /// Role-level permissions for listing and executing undo actions.

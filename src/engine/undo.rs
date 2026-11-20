@@ -120,6 +120,10 @@ pub(crate) async fn read_checked_state(
         }
     };
 
+    if crate::result_sanitization::is_uninspectable_result(&result) {
+        bail!("state-check response could not be inspected");
+    }
+
     let snapshot = if let Some(path) = &config.capture_json_path {
         crate::context_filter::distill_value(
             result,

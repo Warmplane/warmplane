@@ -7,7 +7,6 @@ import { renderServers } from './components/servers';
 import { renderPlayground, renderResourceList, renderPromptList, generateSampleArgsFromSchema } from './components/playground';
 import { renderTasks } from './components/tasks';
 import { renderUndoFeed } from './components/undo';
-import { renderApprovals } from './components/approvals';
 import { renderAudit } from './components/audit';
 import { renderPolicy } from './components/policy';
 import { mountToolPinReview } from './components/tool-pins';
@@ -32,6 +31,7 @@ class WarmplaneApp {
     await this.refreshData();
     this.initSSE();
     this.bindUndoFeedActions();
+    this.bindApprovalActions();
     this.render();
 
     store.subscribe(() => {
@@ -70,6 +70,26 @@ class WarmplaneApp {
       } else if (action === 'execute' && targetId) {
         void this.executeUndo(targetId);
       }
+    });
+  }
+
+  private bindApprovalActions() {
+    const main = document.getElementById('app-main');
+    main?.addEventListener('submit', event => {
+      if (!(event.target instanceof HTMLFormElement) || event.target.id !== 'approval-auth-form') return;
+      event.preventDefault();
+      const token = event.target.querySelector<HTMLInputElement>('#approval-operator-token');
+      api.setApprovalToken(token?.value ?? '');
+      if (token) token.value = '';
+      void Promise.all([this.refreshApprovals(), this.refreshTasks()]);
+    });
+    main?.addEventListener('click', event => {
+      if (!(event.target instanceof Element)) return;
+      const button = event.target.closest<HTMLButtonElement>('[data-approval-target]');
+      const id = button?.dataset.approvalTarget;
+      if (!id) return;
+      if (button.dataset.approvalChoice === 'approve') void this.submitApproval(id);
+      if (button.dataset.approvalChoice === 'reject') void this.promptReject(id);
     });
   }
 
@@ -333,7 +353,10 @@ class WarmplaneApp {
   }
 
   async refreshApprovals() {
-    await this.refreshCollection(() => api.listApprovals(), res => res && Array.isArray(res.approvals) ? { approvals: res.approvals } : null, 'Failed to refresh approvals:');
+    await this.refreshCollection(() => api.listApprovals(), res => ({
+      approvals: res.approvals ?? [],
+      approvalError: res.ok ? null : (res.error?.message ?? 'Sign in to review approval tickets.')
+    }), 'Failed to refresh approvals:');
   }
 
   initSSE() {
@@ -656,9 +679,9 @@ class WarmplaneApp {
         if (reqDef && reqDef.type === 'approval_review') {
           const decisionEl = document.getElementById(`task-input-${taskId}-${k}-decision`) as HTMLSelectElement | null;
           const argsEl = document.getElementById(`task-input-${taskId}-${k}`) as HTMLTextAreaElement | null;
-          const isApproved = decisionEl ? decisionEl.value === 'true' : true;
+          const isApproved = decisionEl?.value === 'true';
           let modArgs: any = undefined;
-          if (argsEl && argsEl.value.trim()) {
+          if (isApproved && argsEl && argsEl.value.trim()) {
             try {
               modArgs = JSON.parse(argsEl.value.trim());
             } catch {
@@ -698,7 +721,7 @@ class WarmplaneApp {
     try {
       const res = await api.updateTask(taskId, responses);
       if (res.ok) {
-        await this.refreshTasks();
+        await Promise.all([this.refreshTasks(), this.refreshApprovals()]);
       } else {
         alert(`Task update failed: ${res.error?.message || res.error || 'Unknown error'}`);
       }
@@ -884,11 +907,8 @@ class WarmplaneApp {
     }
   }
 
-  // HITL Approval Actions (Legacy compatibility)
   async submitApproval(id: string) {
-    const operatorInput = document.getElementById(`appr-operator-${id}`) as HTMLInputElement | null;
     const argsInput = document.getElementById(`appr-args-${id}`) as HTMLTextAreaElement | null;
-    const operator = operatorInput?.value.trim() || 'security-operator';
 
     let modifiedArgs: any = undefined;
     if (argsInput && argsInput.value.trim()) {
@@ -900,27 +920,24 @@ class WarmplaneApp {
       }
     }
 
-    const res = await api.approveTicket(id, operator, modifiedArgs);
+    const res = await api.approveTicket(id, modifiedArgs);
     if (res.ok) {
       await this.refreshApprovals();
       await this.refreshTasks();
     } else {
-      alert(`Approval failed: ${res.error || 'Unknown error'}`);
+      alert(`Approval failed: ${res.error?.message || 'Unknown error'}`);
     }
   }
 
   async promptReject(id: string) {
     const reason = prompt('Reason for rejection (will be returned to the calling agent):');
     if (reason === null) return;
-    const operatorInput = document.getElementById(`appr-operator-${id}`) as HTMLInputElement | null;
-    const operator = operatorInput?.value.trim() || 'security-operator';
-
-    const res = await api.rejectTicket(id, operator, reason);
+    const res = await api.rejectTicket(id, reason);
     if (res.ok) {
       await this.refreshApprovals();
       await this.refreshTasks();
     } else {
-      alert(`Rejection failed: ${res.error || 'Unknown error'}`);
+      alert(`Rejection failed: ${res.error?.message || 'Unknown error'}`);
     }
   }
 

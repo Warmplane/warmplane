@@ -297,7 +297,7 @@ pub struct CreateTaskParams {
 }
 
 type TaskWaitSender = oneshot::Sender<BTreeMap<String, Value>>;
-type TaskWaitReceiver = oneshot::Receiver<BTreeMap<String, Value>>;
+pub(crate) type TaskWaitReceiver = oneshot::Receiver<BTreeMap<String, Value>>;
 
 /// Result of attempting to cancel a held emission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -870,6 +870,19 @@ impl TaskRegistry {
 
         drop(guard);
         Ok(())
+    }
+    pub(crate) async fn fail_execution(
+        &self,
+        task_id: &str,
+        code: &str,
+        message: &str,
+        upstream_state: &str,
+    ) {
+        let _ = self.fail_task(
+            task_id,
+            serde_json::json!({"code": code, "message": message, "upstreamExecutionState": upstream_state}),
+            Some(message.to_owned()),
+        ).await;
     }
 }
 

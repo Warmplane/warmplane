@@ -445,11 +445,7 @@ async fn compensable_daily_limit_requires_approval_before_another_forward_call()
         "hitl_approval".to_string(),
         json!({"approved": true}),
     )]);
-    assert!(state
-        .task_registry
-        .update_task(&task_id, responses)
-        .await
-        .unwrap());
+    assert!(handle.update_task(&task_id, responses).await.ok);
     let Some(ServerMsg::CallTool { reply, .. }) =
         tokio::time::timeout(std::time::Duration::from_secs(2), upstream_rx.recv())
             .await

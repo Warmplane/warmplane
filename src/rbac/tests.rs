@@ -40,6 +40,7 @@ fn sample_rbac_config() -> RbacConfig {
             undo_permissions: Default::default(),
             allow_agent_self_undo: false,
             manage_trust_controls: false,
+            resolve_approvals: false,
         },
     );
     roles.insert(
@@ -53,6 +54,7 @@ fn sample_rbac_config() -> RbacConfig {
             undo_permissions: Default::default(),
             allow_agent_self_undo: false,
             manage_trust_controls: false,
+            resolve_approvals: false,
         },
     );
 

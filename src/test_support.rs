@@ -8,6 +8,15 @@ use crate::{
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
+pub(crate) fn latency_percentiles(
+    samples: usize,
+    mut measure: impl FnMut() -> std::time::Duration,
+) -> (std::time::Duration, std::time::Duration) {
+    let mut measured = (0..samples).map(|_| measure()).collect::<Vec<_>>();
+    measured.sort_unstable();
+    (measured[samples / 2], measured[samples * 95 / 100])
+}
+
 /// Creates a mail capability with an explicit hold and a receiving upstream mailbox.
 pub(crate) fn delayable_mail(
     hold_secs: u64,

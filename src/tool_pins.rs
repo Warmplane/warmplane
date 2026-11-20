@@ -20,7 +20,7 @@ use crate::{
     audit::{AuditEventStatus, AuditEventType, RawAuditEvent},
     daemon::{AppState, CapabilityMeta},
     idempotency::canonicalize_json,
-    storage::{AtomicFile, ReplacementDurabilityUnknown},
+    storage::AtomicFile,
 };
 
 pub(crate) const REFRESH_INTERVAL: Duration = Duration::from_secs(15);
@@ -28,6 +28,7 @@ const MAX_OBSERVATION_AGE: Duration = Duration::from_secs(30);
 
 type Definitions = BTreeMap<String, Definition>;
 type ApprovedDefinitions = BTreeMap<String, Definitions>;
+type PendingApprovals = BTreeSet<(String, String)>;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct Definition {
@@ -260,7 +261,7 @@ impl Observation {
 struct PinState {
     observations: BTreeMap<String, Observation>,
     approved: ApprovedDefinitions,
-    uncertain: BTreeSet<(String, String)>,
+    uncertain: PendingApprovals,
 }
 
 impl PinState {
@@ -318,19 +319,24 @@ impl PinState {
 pub(crate) struct ToolPins {
     inner: RwLock<PinState>,
     storage: Option<AtomicFile<ApprovedDefinitions>>,
+    pending_storage: Option<AtomicFile<PendingApprovals>>,
     approvals: Mutex<()>,
 }
 
 impl ToolPins {
     pub(crate) fn open(path: &Path) -> anyhow::Result<Self> {
         let storage = AtomicFile::new(path);
+        let pending_storage = AtomicFile::new(path.with_extension("pending.json"));
         let approved = storage.load_opt()?.unwrap_or_default();
+        let uncertain = pending_storage.load_opt()?.unwrap_or_default();
         Ok(Self {
             inner: RwLock::new(PinState {
                 approved,
+                uncertain,
                 ..Default::default()
             }),
             storage: Some(storage),
+            pending_storage: Some(pending_storage),
             approvals: Mutex::new(()),
         })
     }
@@ -522,6 +528,10 @@ impl ToolPins {
             return Err(PinApprovalError::Stale);
         }
         let storage = self.storage.as_ref().ok_or(PinApprovalError::Storage)?;
+        let pending_storage = self
+            .pending_storage
+            .as_ref()
+            .ok_or(PinApprovalError::Storage)?;
         app.audit_handle
             .send_confirmed(pin_audit(request, actor))
             .await
@@ -536,14 +546,22 @@ impl ToolPins {
             .or_default()
             .insert(request.tool.clone(), definition);
         let key = (request.server.clone(), request.tool.clone());
-        if let Err(error) = storage.save(&approved) {
-            if error.is::<ReplacementDurabilityUnknown>() {
-                state.uncertain.insert(key);
-            }
-            return Err(PinApprovalError::Storage);
-        }
+        let mut pending = state.uncertain.clone();
+        pending.insert(key.clone());
+        pending_storage
+            .save(&pending)
+            .map_err(|_| PinApprovalError::Storage)?;
+        // The durable marker also quarantines a candidate visible after an uncertain write.
+        state.uncertain = pending.clone();
+        storage
+            .save(&approved)
+            .map_err(|_| PinApprovalError::Storage)?;
+        pending.remove(&key);
+        pending_storage
+            .save(&pending)
+            .map_err(|_| PinApprovalError::Storage)?;
         state.approved = approved;
-        state.uncertain.remove(&key);
+        state.uncertain = pending;
         Ok(state.review(&request.server, &request.tool))
     }
 
@@ -595,6 +613,31 @@ fn pin_audit(request: &ApprovePin, actor_id: Option<String>) -> RawAuditEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "manual pin gate latency measurement"]
+    async fn pin_guard_latency() {
+        use std::hint::black_box;
+
+        let directory = tempfile::tempdir().unwrap();
+        let pins = ToolPins::open(&directory.path().join("pins.json")).unwrap();
+        let (session, request) = observed(&pins);
+        let app = AppState::builder().build();
+        pins.approve(&app, &request, None).await.unwrap();
+        let binding = pins.binding("source", "write").unwrap().unwrap();
+        for (server, session, expected) in [
+            ("unpinned", None, None),
+            ("source", Some(session), Some(binding.as_str())),
+        ] {
+            let (p50, p95) = crate::test_support::latency_percentiles(20_000, || {
+                let time = std::time::Instant::now();
+                black_box(pins.verify_dispatch(black_box(server), session, "write", expected))
+                    .unwrap();
+                time.elapsed()
+            });
+            eprintln!("dispatch guard {server}: p50={p50:?} p95={p95:?}");
+        }
+    }
 
     fn observed(pins: &ToolPins) -> (PinSession, ApprovePin) {
         let session = pins.begin_session("source", true).unwrap();
@@ -681,9 +724,10 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn pin_with_uncertain_directory_sync_is_never_published_in_memory() {
+    async fn pin_with_uncertain_directory_sync_stays_quarantined_after_reopen() {
         let dir = tempfile::tempdir().unwrap();
-        let pins = ToolPins::open(&dir.path().join("pins.json")).unwrap();
+        let path = dir.path().join("pins.json");
+        let pins = ToolPins::open(&path).unwrap();
         let (_, request) = observed(&pins);
         pins.storage.as_ref().unwrap().fail_next_directory_sync();
         let app = AppState::builder().build();
@@ -691,6 +735,9 @@ mod tests {
             pins.approve(&app, &request, None).await,
             Err(PinApprovalError::Storage)
         ));
+        assert!(pins.binding("source", "write").is_err());
+        let pins = ToolPins::open(&path).unwrap();
+        observed(&pins);
         assert!(pins.binding("source", "write").is_err());
         assert_eq!(
             pins.approve(&app, &request, None).await.unwrap().status,

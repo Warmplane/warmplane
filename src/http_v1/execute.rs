@@ -112,7 +112,7 @@ pub async fn handle_call_capability(
         Err((status, error)) => return identity.rejected(status, error),
     };
     let approval_timeout_secs = effective_policy.approval_timeout_secs;
-    let webhook_cfg = effective_policy.webhook.clone();
+    let webhook_cfg = state.policy.read().await.webhook.clone();
     let redact_keys = effective_policy.redact_keys.clone();
     let CallIdentity {
         trace_id,
@@ -125,6 +125,7 @@ pub async fn handle_call_capability(
     } = identity;
 
     let mut effective_args = payload.args.clone();
+    let mut approval_task = None;
 
     // Human-in-the-Loop (HITL) Interception Flow
     if requires_approval {
@@ -142,7 +143,7 @@ pub async fn handle_call_capability(
             }),
         );
 
-        let (task_record, _task_rx) = state
+        let (task_record, task_rx) = state
             .task_registry
             .create_scoped_task(
                 crate::tasks::CreateTaskParams {
@@ -180,7 +181,17 @@ pub async fn handle_call_capability(
         };
         let (approval_id, rx, mut event) = state
             .approval_registry
-            .create_audited_approval(approval_request, trace_id.clone(), start_time)
+            .create_audited_approval(
+                approval_request,
+                trace_id.clone(),
+                start_time,
+                crate::approvals::ApprovalOwnership::new(
+                    &tenant_id,
+                    Some(&task_record.task_id),
+                    &payload.args,
+                    tool_definition.as_deref(),
+                ),
+            )
             .await;
         event.client_ip = client_ip.clone();
         event.idempotency_key = idempotency_key.clone();
@@ -218,55 +229,17 @@ pub async fn handle_call_capability(
             let reserved_clone = compensable_reserved;
 
             tokio::spawn(async move {
-                let mut worker_args = effective_args_clone;
-                if let Some(trx) = _task_rx {
-                    match trx.await {
-                        Ok(responses) => {
-                            if let Some(appr) = responses.get("hitl_approval") {
-                                if appr.get("approved").and_then(Value::as_bool) == Some(true) {
-                                    if let Some(mod_args) = appr.get("modified_args").cloned() {
-                                        worker_args = mod_args;
-                                    }
-                                } else {
-                                    let reason = appr
-                                        .get("reason")
-                                        .and_then(Value::as_str)
-                                        .map(ToString::to_string);
-                                    let _ = state_clone
-                                        .task_registry
-                                        .cancel_task(&task_id_clone, reason)
-                                        .await;
-                                    state_clone
-                                        .idempotency_store
-                                        .release_execution(
-                                            idempotency_key_clone.as_deref(),
-                                            idempotency_claim,
-                                        )
-                                        .await;
-                                    return;
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            let _ = state_clone
-                                .task_registry
-                                .fail_task(
-                                    &task_id_clone,
-                                    serde_json::json!({"code": "APPROVAL_TIMEOUT"}),
-                                    Some("Approval request timed out or cancelled".to_string()),
-                                )
-                                .await;
-                            state_clone
-                                .idempotency_store
-                                .release_execution(
-                                    idempotency_key_clone.as_deref(),
-                                    idempotency_claim,
-                                )
-                                .await;
-                            return;
-                        }
-                    }
-                }
+                let resolution = crate::approvals::wait_for_decision(rx, task_rx).await;
+                let Some(worker_args) = resolution
+                    .arguments_for_task(&state_clone, &task_id_clone, effective_args_clone)
+                    .await
+                else {
+                    state_clone
+                        .idempotency_store
+                        .release_execution(idempotency_key_clone.as_deref(), idempotency_claim)
+                        .await;
+                    return;
+                };
 
                 if !reserved_clone {
                     if let Some(contract) = reversibility_clone.as_ref().filter(|contract| {
@@ -601,14 +574,40 @@ pub async fn handle_call_capability(
                     )),
                 ).into_response();
             }
-            res = rx => match res {
-                Ok(r) => r,
-                Err(_) => crate::approvals::ApprovalResolution::Expired,
-            }
+            resolution = crate::approvals::wait_for_decision(rx, task_rx) => resolution,
         };
 
         match resolution {
             crate::approvals::ApprovalResolution::Approved { modified_args, .. } => {
+                if state
+                    .task_registry
+                    .update_task(&task_record.task_id, Default::default())
+                    .await
+                    .ok()
+                    != Some(true)
+                {
+                    release_registered_call(
+                        &state,
+                        &request_id,
+                        idempotency_key.as_deref(),
+                        idempotency_claim,
+                    )
+                    .await;
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(error_envelope(
+                            trace_id,
+                            Some(request_id),
+                            Some(req_context),
+                            retry_base("not_started"),
+                            "APPROVAL_TASK_UNAVAILABLE",
+                            "Approval task no longer permits execution",
+                            false,
+                        )),
+                    )
+                        .into_response();
+                }
+                approval_task = Some(task_record);
                 if let Some(mod_args) = modified_args {
                     info!(
                         approval_id = %approval_id,
@@ -619,6 +618,10 @@ pub async fn handle_call_capability(
                 }
             }
             crate::approvals::ApprovalResolution::Rejected { operator, reason } => {
+                let _ = state
+                    .task_registry
+                    .cancel_task(&task_record.task_id, reason.clone())
+                    .await;
                 release_registered_call(
                     &state,
                     &request_id,
@@ -668,6 +671,9 @@ pub async fn handle_call_capability(
                     .into_response();
             }
             crate::approvals::ApprovalResolution::Expired => {
+                crate::approvals::ApprovalResolution::Expired
+                    .arguments_for_task(&state, &task_record.task_id, Value::Null)
+                    .await;
                 release_registered_call(
                     &state,
                     &request_id,
@@ -788,7 +794,12 @@ pub async fn handle_call_capability(
                 claim: idempotency_claim,
             },
         }
-        .schedule(contract, effective_args, requires_approval, &headers)
+        .schedule(
+            contract,
+            effective_args,
+            approval_task.as_ref().map(|task| task.task_id.as_str()),
+            &headers,
+        )
         .await;
     }
 
@@ -980,7 +991,10 @@ pub async fn handle_call_capability(
     match result {
         Ok(Ok(data)) => {
             state.circuit_breakers.record_success(&server_id).await;
-            if let Some(contract) = reversibility.as_ref() {
+            if let Some(contract) = reversibility
+                .as_ref()
+                .filter(|_| !crate::result_sanitization::is_uninspectable_result(&data))
+            {
                 if let Err(error) = crate::engine::undo::register_inverse(
                     &state,
                     contract,
@@ -1072,6 +1086,16 @@ pub async fn handle_call_capability(
                         crate::context_filter::DistillationOptions::from_args(Some(&payload.args));
                     let distilled_data =
                         crate::context_filter::distill_value(delivery.value, &distill_opts);
+                    if let Some(task) = &approval_task {
+                        let _ = state
+                            .task_registry
+                            .complete_execution(
+                                &task.task_id,
+                                distilled_data.clone(),
+                                delivery.revision.clone(),
+                            )
+                            .await;
+                    }
                     let response = json!({
                         "ok": true,
                         "request_id": request_id,
@@ -1085,6 +1109,12 @@ pub async fn handle_call_capability(
                 }
                 Err(withheld) => {
                     let error = crate::WarmplaneError::from(withheld);
+                    if let Some(task) = &approval_task {
+                        state
+                            .task_registry
+                            .fail_execution(&task.task_id, &error.code, &error.message, "completed")
+                            .await;
+                    }
                     let response = error_envelope(
                         trace_id,
                         Some(request_id),
@@ -1108,6 +1138,17 @@ pub async fn handle_call_capability(
             (status, Json(response_json)).into_response()
         }
         Ok(Err(UpstreamCallError::Timeout)) => {
+            if let Some(task) = approval_task.as_ref() {
+                state
+                    .task_registry
+                    .fail_execution(
+                        &task.task_id,
+                        "UPSTREAM_TIMEOUT",
+                        "Tool call timed out",
+                        "unknown",
+                    )
+                    .await;
+            }
             state.circuit_breakers.record_failure(&server_id).await;
             let elapsed_us = start_time.elapsed().as_micros() as u64;
             state
@@ -1138,6 +1179,12 @@ pub async fn handle_call_capability(
         }
         Ok(Err(failure)) => {
             let (error, execution_state) = state.tool_error(&server_id, failure).await;
+            if let Some(task) = approval_task.as_ref() {
+                state
+                    .task_registry
+                    .fail_execution(&task.task_id, &error.code, &error.message, execution_state)
+                    .await;
+            }
             let (status, code) = if execution_state == "not_started" {
                 (StatusCode::FORBIDDEN, crate::tool_pins::PinDenied::CODE)
             } else {
@@ -1280,15 +1327,15 @@ impl HeldCall<'_> {
         &self,
         contract: &ReversibilityConfig,
         args: Value,
-        approval_completed: bool,
+        approval_task: Option<&str>,
         headers: &HeaderMap,
     ) -> Response {
         let (hold_ms, release_at_ms) = match self.hold_deadline(contract).await {
             Ok(deadline) => deadline,
             Err(error) => return self.reject(StatusCode::BAD_REQUEST, error).await,
         };
-        let emission = self.origin.record(release_at_ms, approval_completed);
-        let task = match self.persist(args, emission).await {
+        let emission = self.origin.record(release_at_ms, approval_task.is_some());
+        let task = match self.persist(args, emission, approval_task).await {
             Ok(Some(task)) => task,
             Ok(None) => {
                 return self
@@ -1340,22 +1387,13 @@ impl HeldCall<'_> {
         &self,
         args: Value,
         emission: EmissionRecord,
+        approval_task: Option<&str>,
     ) -> anyhow::Result<Option<TaskRecord>> {
         let id = &self.identity;
         let coordinator = &self.state.hold_coordinator;
-        let existing = self
-            .state
-            .task_registry
-            .list_tasks()
-            .await
-            .into_iter()
-            .find(|task| {
-                task.request_id.as_deref() == Some(id.request_id.as_str())
-                    && task.emission.is_none()
-            });
-        if let Some(task) = existing {
+        if let Some(task_id) = approval_task {
             return coordinator
-                .queue_existing(self.state, &task.task_id, args, emission)
+                .queue_existing(self.state, task_id, args, emission)
                 .await
                 .context("failed to persist approved emission");
         }

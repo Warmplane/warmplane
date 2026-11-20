@@ -57,6 +57,7 @@ export interface AppState {
   selectedTaskId: string | null;
   taskFilterStatus: string;
   approvals: PendingApproval[];
+  approvalError: string | null;
   auditEvents: AuditEventItem[];
   auditTotal: number;
   auditFilters: AuditFiltersState;
@@ -116,6 +117,7 @@ class Store {
     selectedTaskId: null,
     taskFilterStatus: 'all',
     approvals: [],
+    approvalError: null,
     auditEvents: [],
     auditTotal: 0,
     auditFilters: {

@@ -64,19 +64,20 @@ macro_rules! handle_supervisor_msg {
                     req = req.with_request_state(req_st);
                 }
 
-                let result = timeout($tool_timeout, $mcp_client.call_tool(req)).await;
-                let (res, is_alive) = match result {
-                    Ok(Ok(call_res)) => (
-                        Ok(serde_json::to_value(call_res).unwrap_or(Value::Null)),
-                        true,
-                    ),
-                    Ok(Err(err)) => {
-                        let err_str = err.to_string();
-                        let dead = is_connection_closed_error(&err_str);
-                        (Err(UpstreamCallError::Upstream(err_str)), !dead)
+                let enforcing = !$state.accepts_result_revision(None).await;
+                let result = timeout($tool_timeout, async {
+                    if enforcing {
+                        $mcp_client
+                            .call_tool_once(req)
+                            .await
+                            .map(rmcp::model::ServerResult::from)
+                            .map(encode_upstream)
+                    } else {
+                        $mcp_client.call_tool(req).await.map(encode_upstream)
                     }
-                    Err(_) => (Err(UpstreamCallError::Timeout), true),
-                };
+                })
+                .await;
+                let (res, is_alive) = relay_response(result, enforcing);
                 let _ = reply.send(res);
                 is_alive
             }
@@ -94,19 +95,20 @@ macro_rules! handle_supervisor_msg {
                     req = req.with_request_state(req_st);
                 }
 
-                let result = timeout($tool_timeout, $mcp_client.read_resource(req)).await;
-                let (res, is_alive) = match result {
-                    Ok(Ok(read_res)) => (
-                        Ok(serde_json::to_value(read_res).unwrap_or(Value::Null)),
-                        true,
-                    ),
-                    Ok(Err(err)) => {
-                        let err_str = err.to_string();
-                        let dead = is_connection_closed_error(&err_str);
-                        (Err(UpstreamCallError::Upstream(err_str)), !dead)
+                let enforcing = !$state.accepts_result_revision(None).await;
+                let result = timeout($tool_timeout, async {
+                    if enforcing {
+                        $mcp_client
+                            .read_resource_once(req)
+                            .await
+                            .map(rmcp::model::ServerResult::from)
+                            .map(encode_upstream)
+                    } else {
+                        $mcp_client.read_resource(req).await.map(encode_upstream)
                     }
-                    Err(_) => (Err(UpstreamCallError::Timeout), true),
-                };
+                })
+                .await;
+                let (res, is_alive) = relay_response(result, enforcing);
                 let _ = reply.send(res);
                 is_alive
             }
@@ -128,24 +130,47 @@ macro_rules! handle_supervisor_msg {
                     req = req.with_request_state(req_st);
                 }
 
-                let result = timeout($tool_timeout, $mcp_client.get_prompt(req)).await;
-                let (res, is_alive) = match result {
-                    Ok(Ok(prompt_res)) => (
-                        Ok(serde_json::to_value(prompt_res).unwrap_or(Value::Null)),
-                        true,
-                    ),
-                    Ok(Err(err)) => {
-                        let err_str = err.to_string();
-                        let dead = is_connection_closed_error(&err_str);
-                        (Err(UpstreamCallError::Upstream(err_str)), !dead)
+                let enforcing = !$state.accepts_result_revision(None).await;
+                let result = timeout($tool_timeout, async {
+                    if enforcing {
+                        $mcp_client
+                            .get_prompt_once(req)
+                            .await
+                            .map(rmcp::model::ServerResult::from)
+                            .map(encode_upstream)
+                    } else {
+                        $mcp_client.get_prompt(req).await.map(encode_upstream)
                     }
-                    Err(_) => (Err(UpstreamCallError::Timeout), true),
-                };
+                })
+                .await;
+                let (res, is_alive) = relay_response(result, enforcing);
                 let _ = reply.send(res);
                 is_alive
             }
         }
     };
+}
+
+fn encode_upstream(result: impl serde::Serialize) -> Value {
+    serde_json::to_value(result).unwrap_or(Value::Null)
+}
+
+fn relay_response(
+    result: Result<Result<Value, rmcp::service::ServiceError>, tokio::time::error::Elapsed>,
+    enforcing: bool,
+) -> (Result<Value, UpstreamCallError>, bool) {
+    match result {
+        Ok(Ok(value)) => (Ok(value), true),
+        Ok(Err(rmcp::service::ServiceError::UnexpectedResponse)) if enforcing => {
+            (Ok(crate::result_sanitization::uninspectable_result()), true)
+        }
+        Ok(Err(error)) => {
+            let message = error.to_string();
+            let dead = is_connection_closed_error(&message);
+            (Err(UpstreamCallError::Upstream(message)), !dead)
+        }
+        Err(_) => (Err(UpstreamCallError::Timeout), true),
+    }
 }
 
 /// Derives a compact, LLM-friendly call signature from JSON Schema input properties.
@@ -318,8 +343,8 @@ macro_rules! discover_supervisor_items {
                     }
                 }
             }
-            Ok(Err(err)) => {
-                tracing::warn!(server_id = %$server_id, error = %err, "supervisor failed to list resources during discovery");
+            Ok(Err(_)) => {
+                tracing::warn!(server_id = %$server_id, "supervisor failed to list resources during discovery");
             }
             Err(_) => {
                 tracing::warn!(server_id = %$server_id, timeout_ms = 3000, "supervisor timed out listing resources during discovery");
@@ -399,8 +424,8 @@ macro_rules! discover_supervisor_items {
                     }
                 }
             }
-            Ok(Err(err)) => {
-                tracing::warn!(server_id = %$server_id, error = %err, "supervisor failed to list prompts during discovery");
+            Ok(Err(_)) => {
+                tracing::warn!(server_id = %$server_id, "supervisor failed to list prompts during discovery");
             }
             Err(_) => {
                 tracing::warn!(server_id = %$server_id, timeout_ms = 3000, "supervisor timed out listing prompts during discovery");
@@ -774,7 +799,7 @@ impl PinnedUpstream {
         client: &rmcp::service::Peer<rmcp::RoleClient>,
     ) -> Option<PinnedDiscovery> {
         let epoch = self.state.tool_pins.epoch(&self.server, self.session)?;
-        match timeout(Duration::from_secs(3), client.list_all_tools()).await {
+        match timeout(Duration::from_secs(3), fetch_tool_definitions(client)).await {
             Ok(Ok(tools)) => Some(PinnedDiscovery { epoch, tools }),
             _ => {
                 self.invalidate();
@@ -878,6 +903,36 @@ impl PinnedUpstream {
     }
 }
 
+async fn fetch_tool_definitions(
+    peer: &rmcp::service::Peer<rmcp::RoleClient>,
+) -> Result<Vec<rmcp::model::Tool>> {
+    use rmcp::model::{ClientRequest, ListToolsRequest, PaginatedRequestParams, ServerResult};
+
+    let mut definitions = Vec::new();
+    let mut cursors = std::collections::HashSet::new();
+    let mut params = None;
+    loop {
+        // A peer's discovery cache and stale fallback cannot constitute a new observation.
+        let request = ClientRequest::ListToolsRequest(ListToolsRequest {
+            method: Default::default(),
+            params,
+            extensions: Default::default(),
+        });
+        let ServerResult::ListToolsResult(page) = peer.send_request(request).await? else {
+            anyhow::bail!("unexpected tool discovery response");
+        };
+        definitions.extend(page.tools);
+        let Some(cursor) = page.next_cursor else {
+            return Ok(definitions);
+        };
+        anyhow::ensure!(
+            cursors.insert(cursor.clone()),
+            "repeated tool discovery cursor"
+        );
+        params = Some(PaginatedRequestParams::default().with_cursor(Some(cursor)));
+    }
+}
+
 struct PinMonitor {
     pinned: PinnedUpstream,
     stop: tokio_util::sync::CancellationToken,
@@ -958,6 +1013,9 @@ async fn spawn_upstream(
             session,
             changes: Arc::new(Notify::new()),
         });
+    if pinned.is_some() {
+        state.notify_tools_changed();
+    }
     let handler = SupervisorHandler(pinned.clone());
     let connection = timeout(
         Duration::from_secs(5),
@@ -1046,10 +1104,31 @@ async fn connect_supervised_client(
             process
                 .args(&config.args)
                 .envs(environment)
-                .stderr(std::process::Stdio::inherit())
                 .kill_on_drop(true);
-            let process = TokioChildProcess::new(process)?;
+            let (process, stderr) = TokioChildProcess::builder(process)
+                .stderr(std::process::Stdio::piped())
+                .spawn()?;
+            if let Some(stderr) = stderr {
+                tokio::spawn(forward_upstream_stderr(state.clone(), stderr));
+            }
             Ok(handler.serve(process).await?)
+        }
+    }
+}
+
+async fn forward_upstream_stderr(state: AppState, mut stderr: tokio::process::ChildStderr) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut output = tokio::io::stderr();
+    let mut chunk = [0; 4096];
+    while let Ok(size) = stderr.read(&mut chunk).await {
+        if size == 0 {
+            return;
+        }
+        if state.accepts_result_revision(None).await
+            && output.write_all(&chunk[..size]).await.is_err()
+        {
+            return;
         }
     }
 }
@@ -1223,9 +1302,10 @@ fn spawn_supervisor(
                             client_opt = Some(new_client);
                         }
                         Ok(Err(err)) => {
+                            let message = state_clone.safe_upstream_error(err.to_string()).await;
                             error!(
                                 server_id = %server_id_owned,
-                                error = %err,
+                                error = %message,
                                 "supervisor failed to reconnect MCP server"
                             );
                         }

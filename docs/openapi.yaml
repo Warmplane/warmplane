@@ -640,7 +640,11 @@ paths:
               $ref: "#/components/schemas/ApproveTicketRequest"
       responses:
         "200":
-          description: Ticket approved and execution resumed
+          description: Approval decision persisted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecisionReceiptResponse"
         "409":
           description: Ticket is not pending or already resolved
   /v1/approvals/{id}/reject:
@@ -661,9 +665,51 @@ paths:
               $ref: "#/components/schemas/RejectTicketRequest"
       responses:
         "200":
-          description: Ticket rejected
+          description: Rejection decision persisted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecisionReceiptResponse"
         "409":
           description: Ticket is not pending or already resolved
+  /v1/webhooks/actions:
+    post:
+      summary: Resolve a purpose-bound signed ChatOps action
+      operationId: resolveSignedAction
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action_token]
+              properties:
+                action_token: {type: string}
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                payload: {type: string}
+      responses:
+        "200":
+          description: Verified Slack callback acknowledged or a JSON decision receipt returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecisionReceiptResponse"
+        "401":
+          description: Signed action or Slack request authentication failed
+        "409":
+          description: Competing decision or expired approval
+        "503":
+          description: Decision could not be durably persisted
+  /v1/webhooks/callbacks:
+    post:
+      summary: Retired approval callback
+      operationId: retiredApprovalCallback
+      deprecated: true
+      responses:
+        "410":
+          description: Use /v1/webhooks/actions
   /v1/audit/events:
     get:
       summary: Query paginated WORM audit events with filters
@@ -1642,6 +1688,13 @@ components:
           format: uri
         actionRole:
           type: string
+        approvalTenant:
+          type: string
+        slackSigningSecret:
+          type: string
+          writeOnly: true
+        slackSigningSecretEnv:
+          type: string
     PolicyConfig:
       type: object
       properties:
@@ -1690,43 +1743,41 @@ components:
               server: {type: string}
               kind: {type: string, enum: [image, audio, blob]}
               mimeType: {type: string}
-    ApprovalStatus:
+    DecisionReceipt:
       type: object
-      required: [status]
+      required: [ticket_id, decision, principal, decided_at, argument_digest]
       properties:
-        status:
-          type: string
-          enum: [pending, approved, rejected, expired]
-        operator:
-          type: string
-        timestamp:
-          type: integer
-        reason:
-          type: string
-        modified_args:
-          type: object
+        ticket_id: {type: string}
+        decision: {type: string, enum: [approve, reject]}
+        principal: {type: string}
+        decided_at: {type: integer}
+        argument_digest: {type: string}
+    DecisionReceiptResponse:
+      type: object
+      required: [ok, receipt]
+      properties:
+        ok: {type: boolean}
+        receipt:
+          $ref: "#/components/schemas/DecisionReceipt"
     ApprovalTicket:
       type: object
-      required: [id, capability_id, server_id, args, sanitized_args, status, created_at, expires_at]
+      required: [id, capability_id, server_id, sanitized_args, status, created_at, expires_at]
       properties:
-        id:
-          type: string
-        capability_id:
-          type: string
-        server_id:
-          type: string
-        args:
-          type: object
-        sanitized_args:
-          type: object
-        request_id:
-          type: [string, "null"]
-        status:
-          $ref: "#/components/schemas/ApprovalStatus"
-        created_at:
-          type: integer
-        expires_at:
-          type: integer
+        id: {type: string}
+        capability_id: {type: string}
+        server_id: {type: string}
+        sanitized_args: {type: object}
+        task_id: {type: [string, "null"]}
+        status: {type: string, enum: [pending, approved, rejected, expired]}
+        created_at: {type: integer}
+        expires_at: {type: integer}
+        decision_receipt:
+          oneOf:
+            - $ref: "#/components/schemas/DecisionReceipt"
+            - type: "null"
+        receipt_delivery: {type: [string, "null"], enum: [delivered, failed, null]}
+        execution_status: {type: [string, "null"]}
+        upstream_execution_state: {type: [string, "null"]}
     ListApprovalsResponse:
       type: object
       required: [ok, approvals, total]
@@ -1749,18 +1800,18 @@ components:
           $ref: "#/components/schemas/ApprovalTicket"
     ApproveTicketRequest:
       type: object
-      required: [operator]
       properties:
         operator:
           type: string
+          deprecated: true
         modified_args:
           type: object
     RejectTicketRequest:
       type: object
-      required: [operator]
       properties:
         operator:
           type: string
+          deprecated: true
         reason:
           type: string
     SuccessEnvelope:

@@ -119,94 +119,21 @@ pub async fn handle_get_task(
 pub async fn handle_update_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    tenant: Option<axum::extract::Extension<Option<crate::rbac::TenantContext>>>,
     Json(payload): Json<UpdateTaskRequest>,
-) -> impl IntoResponse {
-    let task_opt = state.task_registry.get_task(&id).await;
-    let input_responses = payload.input_responses;
-
-    match state.task_registry.update_task(&id, input_responses.clone()).await {
-        Ok(true) => {
-            // If the task corresponds to an approval request (either explicitly via hitl_approval or linked request_id),
-            // cross-resolve the ApprovalRegistry so synchronous callers awaiting approval unblock immediately.
-            if let Some(task) = task_opt {
-                let req_id = task.request_id.as_deref().unwrap_or(&id);
-                if let Some(pending_appr) = state.approval_registry.get_pending_by_request_id(req_id).await {
-                    let webhook_cfg = state.policy.read().await.webhook.clone();
-                    if let Some(appr_resp) = input_responses.get("hitl_approval") {
-                        // Only an explicit boolean decides the ticket. A missing or
-                        // non-boolean value must not default to approval, or a caller
-                        // could turn an explicit denial such as `"false"` into one.
-                        let Some(is_approved) = appr_resp.get("approved").and_then(Value::as_bool) else {
-                            return (
-                                StatusCode::BAD_REQUEST,
-                                Json(json!({
-                                    "ok": false,
-                                    "error": {
-                                        "code": "INVALID_APPROVAL_DECISION",
-                                        "message": "hitl_approval.approved must be a boolean"
-                                    }
-                                })),
-                            )
-                                .into_response();
-                        };
-                        let mod_args = appr_resp.get("modified_args").cloned();
-                        let operator = appr_resp
-                            .get("operator")
-                            .and_then(Value::as_str)
-                            .unwrap_or("security-operator")
-                            .to_string();
-                        let reason = appr_resp.get("reason").and_then(Value::as_str).map(ToString::to_string);
-
-                        if is_approved {
-                            let _ = state
-                                .approval_registry
-                                .approve(&pending_appr.id, operator, mod_args, webhook_cfg.as_ref())
-                                .await;
-                        } else {
-                            let _ = state
-                                .approval_registry
-                                .reject(&pending_appr.id, operator, reason, webhook_cfg.as_ref())
-                                .await;
-                        }
-                    }
-                    // No decision was supplied. A general input response resumes the task
-                    // without approving: the ticket stays pending so a gated call cannot
-                    // execute on a request that never decided.
-                }
-            }
-
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "ok": true,
-                    "resultType": "complete",
-                    "message": format!("Task '{}' updated with input responses", id),
-                })),
-            )
-                .into_response()
-        }
-        Ok(false) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "ok": false,
-                "error": {
-                    "code": "INVALID_TASK_STATE",
-                    "message": format!("Task '{}' is not in 'input_required' state or not found", id),
-                }
-            })),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "ok": false,
-                "error": {
-                    "code": "TASK_UPDATE_FAILED",
-                    "message": e.to_string(),
-                }
-            })),
-        )
-            .into_response(),
+) -> axum::response::Response {
+    let tenant = tenant.as_ref().and_then(|tenant| tenant.0.as_ref());
+    match state
+        .submit_task_input(&id, payload.input_responses, tenant)
+        .await
+    {
+        Ok(receipt) => Json(json!({
+            "ok": true,
+            "resultType": "complete",
+            "receipt": receipt,
+        }))
+        .into_response(),
+        Err(error) => crate::http_v1::approvals_api::decision_error(error),
     }
 }
 
@@ -273,20 +200,8 @@ pub async fn handle_cancel_task(
     }
     match state.task_registry.cancel_task(&id, payload.reason.clone()).await {
         Ok(true) => {
-            if let Some(task) = task_opt {
-                let req_id = task.request_id.as_deref().unwrap_or(&id);
-                if let Some(pending_appr) = state.approval_registry.get_pending_by_request_id(req_id).await {
-                    let webhook_cfg = state.policy.read().await.webhook.clone();
-                    let _ = state
-                        .approval_registry
-                        .reject(
-                            &pending_appr.id,
-                            "security-operator".to_string(),
-                            payload.reason.or_else(|| Some("Task cancelled by operator".to_string())),
-                            webhook_cfg.as_ref(),
-                        )
-                        .await;
-                }
+            if let Some(ticket) = state.approval_registry.find_by_task(&id).await {
+                state.approval_registry.expire_if_pending(&ticket.id).await;
             }
 
             (

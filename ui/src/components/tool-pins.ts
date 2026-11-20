@@ -38,7 +38,7 @@ function pinReview(pin: ToolPinReview, index: number): string {
 export function mountToolPinReview(panel: HTMLElement) {
   panel.innerHTML = `
     <h2 class="stat-label">Tool definition pins</h2>
-    <form class="tool-pin-auth">
+    <form class="trust-auth-form">
       <div class="form-group">
         <label for="tool-pin-token" class="form-label">Trust administrator token</label>
         <input id="tool-pin-token" class="form-input" type="password" autocomplete="off">

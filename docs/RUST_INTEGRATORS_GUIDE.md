@@ -572,6 +572,8 @@ Embedded hosts configure their own logging. Filter the `rmcp` tracing target in 
 
 Use `list_tasks_for_profile` and `get_task_for_profile` to inspect tasks created in an embedded profile under result sanitization. With `requireToolPins` set on an upstream, catalog methods omit quarantined tools. `TOOL_DEFINITION_UNAPPROVED` means the tool needs a current review or the prepared revision no longer matches.
 
+Send approval decisions through `ControlPlaneHandle::update_task` or the authenticated REST resolver. The task registry's raw input API alone cannot approve an invocation. Under RBAC, use an authenticated REST operator with `resolveApprovals` to decide a ticket. Approval summaries expose task linkage, the decision receipt, and delivery status.
+
 `IdempotencyStore::check_or_start` and `check_or_start_with_meta` return
 `DeduplicateResult::New(claim)` when the caller owns the execution. Pass that
 claim and the key to `complete` when publishing a result or to `remove` when

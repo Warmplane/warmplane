@@ -553,6 +553,27 @@ pub struct WebhookConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub action_role: Option<String>,
+    /// Tenant delegated to receive and resolve approval cards.
+    #[serde(
+        default,
+        rename = "approvalTenant",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub approval_tenant: Option<String>,
+    /// Slack app signing secret for authenticating interactive callback requests.
+    #[serde(
+        default,
+        rename = "slackSigningSecret",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub slack_signing_secret: Option<String>,
+    /// Environment variable holding the Slack app signing secret.
+    #[serde(
+        default,
+        rename = "slackSigningSecretEnv",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub slack_signing_secret_env: Option<String>,
     /// Optional custom HTTP headers map.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headers: Option<HashMap<String, String>>,
@@ -585,6 +606,13 @@ impl WebhookConfig {
     /// Resolves the HMAC signing secret from env var or direct value.
     pub fn resolve_secret(&self) -> Option<String> {
         resolve_env_or_direct(self.secret_env.as_deref(), self.secret.as_deref())
+    }
+
+    pub(crate) fn resolve_slack_signing_secret(&self) -> Option<String> {
+        resolve_env_or_direct(
+            self.slack_signing_secret_env.as_deref(),
+            self.slack_signing_secret.as_deref(),
+        )
     }
 }
 
@@ -840,6 +868,9 @@ impl WebhookConfig {
         }
         if self.auth_header.is_some() {
             self.auth_header = Some("********".to_string());
+        }
+        if self.slack_signing_secret.is_some() {
+            self.slack_signing_secret = Some("********".to_owned());
         }
     }
 }
@@ -1109,6 +1140,7 @@ fn validate_action_webhook(
     webhook: &WebhookConfig,
     rbac: Option<&crate::rbac::RbacConfig>,
 ) -> Result<()> {
+    crate::approval_chatops::validate_approval_webhook(webhook, rbac)?;
     anyhow::ensure!(
         !webhook
             .events

@@ -947,6 +947,7 @@ async fn test_ui_and_config_rest_api() {
 
     let upsert_res = handle_upsert_server(
         State(state.clone()),
+        None,
         Json(UpsertServerRequest {
             name: "node_srv".to_string(),
             server: new_server,
@@ -1316,7 +1317,7 @@ async fn test_hitl_approval_flow_and_endpoints() {
     let approval_id = payload["approval_id"].as_str().unwrap().to_string();
 
     // 2. Test List Approvals contains our ticket
-    let list_res = handle_list_approvals(State(state.clone()))
+    let list_res = handle_list_approvals(State(state.clone()), None)
         .await
         .into_response();
     assert_eq!(list_res.status(), StatusCode::OK);
@@ -1338,6 +1339,7 @@ async fn test_hitl_approval_flow_and_endpoints() {
         let appr_res = handle_approve_ticket(
             State(state_clone.clone()),
             axum::extract::Path(approval_id_clone),
+            None,
             Json(ApproveTicketRequest {
                 operator: "sec-admin".to_string(),
                 modified_args: Some(json!({"image": "ubuntu", "command": "echo safe"})),
@@ -1374,6 +1376,7 @@ async fn test_hitl_approval_flow_and_endpoints() {
             let _ = handle_approve_ticket(
                 State(state_for_sync.clone()),
                 axum::extract::Path(second_ticket.id.clone()),
+                None,
                 Json(ApproveTicketRequest {
                     operator: "sec-admin".to_string(),
                     modified_args: Some(json!({"image": "ubuntu", "command": "echo safe"})),
@@ -1443,6 +1446,7 @@ async fn test_hitl_rejection_returns_structured_envelope() {
             let _ = handle_reject_ticket(
                 State(state_clone.clone()),
                 axum::extract::Path(ticket.id.clone()),
+                None,
                 Json(RejectTicketRequest {
                     operator: "lead-dba".to_string(),
                     reason: Some("Cannot drop production table".to_string()),
@@ -1476,7 +1480,7 @@ async fn test_hitl_rejection_returns_structured_envelope() {
         .as_str()
         .unwrap()
         .contains("Cannot drop production table"));
-    assert_eq!(payload["error"]["operator"], "lead-dba");
+    assert_eq!(payload["error"]["operator"], "local-operator");
 }
 
 #[tokio::test]
@@ -1879,22 +1883,6 @@ async fn test_ui_config_profiles_crud() {
 async fn test_task_update_bridges_to_approval_resolution() {
     let state = AppState::builder().build();
 
-    // 1. Create a pending approval ticket
-    let (appr_id, _rx) = state
-        .approval_registry
-        .create_approval(crate::approvals::CreateApprovalRequest {
-            capability_id: "sqlite.list_tables".to_string(),
-            server_id: "sqlite".to_string(),
-            args: json!({}),
-            sanitized_args: json!({}),
-            request_id: Some("req-test-bridge-1".to_string()),
-            context: None,
-            timeout_secs: 60,
-            webhook: None,
-        })
-        .await;
-
-    // 2. Create matching Task with the same request_id
     let mut input_requests = std::collections::BTreeMap::new();
     input_requests.insert(
         "hitl_approval".to_string(),
@@ -1924,6 +1912,29 @@ async fn test_task_update_bridges_to_approval_resolution() {
         })
         .await;
 
+    // 1. Create a pending approval ticket
+    let (appr_id, _rx) = state
+        .approval_registry
+        .create_scoped_approval(
+            crate::approvals::CreateApprovalRequest {
+                capability_id: "sqlite.list_tables".to_string(),
+                server_id: "sqlite".to_string(),
+                args: json!({}),
+                sanitized_args: json!({}),
+                request_id: Some("req-test-bridge-1".to_string()),
+                context: None,
+                timeout_secs: 60,
+                webhook: None,
+            },
+            Some(crate::approvals::ApprovalOwnership::new(
+                "default",
+                Some(&task_record.task_id),
+                &json!({}),
+                None,
+            )),
+        )
+        .await;
+
     // Verify both are pending
     let ticket_before = state.approval_registry.get(&appr_id).await.unwrap();
     assert_eq!(
@@ -1945,6 +1956,7 @@ async fn test_task_update_bridges_to_approval_resolution() {
     let update_res = crate::http_v1::tasks_api::handle_update_task(
         State(state.clone()),
         Path(task_record.task_id.clone()),
+        None,
         Json(crate::http_v1::tasks_api::UpdateTaskRequest {
             input_responses: responses,
         }),
@@ -1962,7 +1974,7 @@ async fn test_task_update_bridges_to_approval_resolution() {
             modified_args,
             ..
         } => {
-            assert_eq!(operator, "test-admin");
+            assert_eq!(operator, "local-operator");
             assert_eq!(modified_args, Some(json!({ "table": "users" })));
         }
         _ => panic!(

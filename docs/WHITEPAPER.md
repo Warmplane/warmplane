@@ -242,6 +242,8 @@ The optional global result policy inspects upstream results before facade shapin
 
 Opt-in tool definition pinning binds a raw upstream tool to an operator-approved canonical digest. Mount and reconnect publish complete discovery generations, and approval requires a committed audit authorization followed by durable state replacement. Catalog views and dispatch fail closed when observation freshness expires. Prepared invocations carry the observed revision through holds and reviews.
 
+Signed ChatOps approval tokens bind a ticket to a tenant, delegated role, expiry, reviewed argument digest, and tool definition revision. The approval registry commits the first authorized decision before releasing the invocation waiter. Callback acknowledgment and receipt delivery use separate paths from execution.
+
 ---
 
 ## 4. Performance Profile and Micro-Benchmarks

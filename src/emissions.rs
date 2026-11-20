@@ -70,7 +70,7 @@ impl HoldCoordinator {
         profile_id: Option<&str>,
     ) -> bool {
         let Some(emission) = record.emission.as_ref() else {
-            if state.accepts_result_revision(None).await {
+            if !state.trust_controls_active().await {
                 return true;
             }
             let access = crate::result_sanitization::ResultAccess::new(tenant_id, profile_id);
@@ -533,13 +533,13 @@ impl HoldCoordinator {
         code: &str,
         message: String,
     ) {
-        let _ = state
+        let execution = match code {
+            "UPSTREAM_CALL_FAILED" | "UPSTREAM_DROPPED" | "TOOL_TIMEOUT" => "unknown",
+            _ => "not_started",
+        };
+        state
             .task_registry
-            .fail_task(
-                &record.task_id,
-                json!({"code": code, "message": message}),
-                Some(message.clone()),
-            )
+            .fail_execution(&record.task_id, code, &message, execution)
             .await;
         self.audit_execution(state, record, None, Some((code, message.clone())))
             .await;
@@ -558,7 +558,7 @@ impl HoldCoordinator {
                 record.request_id.clone(),
                 record.context.clone(),
                 crate::engine::WarmplaneError::new(code, message, false),
-                crate::idempotency::RetryMetadata::idempotent("completed"),
+                crate::idempotency::RetryMetadata::idempotent(execution),
             );
             if let Ok(value) = serde_json::to_value(envelope) {
                 state.idempotency_store.complete(key, claim, value).await;

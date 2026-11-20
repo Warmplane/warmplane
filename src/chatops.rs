@@ -155,7 +155,7 @@ fn build_slack_payload(event_type: &str, data: &Value, callback_url: Option<&str
                 },
                 {
                     "type": "mrkdwn",
-                    "text": "*Expires In:*\n300 seconds"
+                    "text": data.get("expires_at").and_then(Value::as_u64).map(|time| format!("*Expires:*\n<!date^{time}^{{time}}|{time}>")).unwrap_or_else(|| "*Expires:*\nSee Control Deck".to_owned())
                 }
             ]
         }));
@@ -168,40 +168,14 @@ fn build_slack_payload(event_type: &str, data: &Value, callback_url: Option<&str
             }
         }));
 
-        if let Some(cb_url) = callback_url {
+        if let Some((approve, reject)) = approval_tokens(data) {
             blocks.push(json!({
                 "type": "actions",
                 "elements": [
-                    {
-                        "type": "button",
-                        "text": {
-                            "type": "plain_text",
-                            "text": "✅ Approve",
-                            "emoji": true
-                        },
-                        "style": "primary",
-                        "value": json!({
-                            "action": "approve",
-                            "ticket_id": ticket_id,
-                            "callback_url": cb_url
-                        }).to_string(),
-                        "action_id": "warmplane_approve_btn"
-                    },
-                    {
-                        "type": "button",
-                        "text": {
-                            "type": "plain_text",
-                            "text": "❌ Reject",
-                            "emoji": true
-                        },
-                        "style": "danger",
-                        "value": json!({
-                            "action": "reject",
-                            "ticket_id": ticket_id,
-                            "callback_url": cb_url
-                        }).to_string(),
-                        "action_id": "warmplane_reject_btn"
-                    }
+                    {"type": "button", "text": {"type": "plain_text", "text": "Approve"},
+                     "style": "primary", "value": approve, "action_id": "warmplane_approve_btn"},
+                    {"type": "button", "text": {"type": "plain_text", "text": "Reject"},
+                     "style": "danger", "value": reject, "action_id": "warmplane_reject_btn"}
                 ]
             }));
         }
@@ -302,34 +276,14 @@ fn build_discord_payload(event_type: &str, data: &Value, callback_url: Option<&s
         "embeds": [embed]
     });
 
-    if let Some(cb_url) = callback_url {
+    if callback_url.is_some() {
         if event_type == "approval.requested" {
-            let ticket_id = data.get("id").and_then(Value::as_str).unwrap_or("unknown");
-            payload["components"] = json!([
-                {
-                    "type": 1,
-                    "components": [
-                        {
-                            "type": 2,
-                            "style": 3,
-                            "label": "Approve",
-                            "custom_id": format!("approve:{}", ticket_id)
-                        },
-                        {
-                            "type": 2,
-                            "style": 4,
-                            "label": "Reject",
-                            "custom_id": format!("reject:{}", ticket_id)
-                        },
-                        {
-                            "type": 2,
-                            "style": 5,
-                            "label": "Open Control Deck",
-                            "url": cb_url
-                        }
-                    ]
-                }
-            ]);
+            if let Some((approve, reject)) = approval_tokens(data) {
+                payload["components"] = json!([{"type":1,"components":[
+                    {"type":2,"style":3,"label":"Approve","custom_id":approve},
+                    {"type":2,"style":4,"label":"Reject","custom_id":reject}
+                ]}]);
+            }
         } else if matches!(event_type, "undo.action_available" | "emission.held") {
             if let Some(token) = data.get("action_token").and_then(Value::as_str) {
                 payload["components"] = json!([{"type":1,"components":[{
@@ -401,32 +355,14 @@ fn build_teams_payload(event_type: &str, data: &Value, callback_url: Option<&str
         ]
     });
 
-    if let Some(cb_url) = callback_url {
+    if callback_url.is_some() {
         if event_type == "approval.requested" {
-            let ticket_id = data.get("id").and_then(Value::as_str).unwrap_or("unknown");
-            card["attachments"][0]["content"]["actions"] = json!([
-                {
-                    "type": "Action.Submit",
-                    "title": "Approve",
-                    "data": {
-                        "action": "approve",
-                        "ticket_id": ticket_id
-                    }
-                },
-                {
-                    "type": "Action.Submit",
-                    "title": "Reject",
-                    "data": {
-                        "action": "reject",
-                        "ticket_id": ticket_id
-                    }
-                },
-                {
-                    "type": "Action.OpenUrl",
-                    "title": "Open Control Deck",
-                    "url": cb_url
-                }
-            ]);
+            if let Some((approve, reject)) = approval_tokens(data) {
+                card["attachments"][0]["content"]["actions"] = json!([
+                    {"type":"Action.Submit","title":"Approve","data":{"action_token":approve}},
+                    {"type":"Action.Submit","title":"Reject","data":{"action_token":reject}}
+                ]);
+            }
         } else if matches!(event_type, "undo.action_available" | "emission.held") {
             if let Some(token) = data.get("action_token").and_then(Value::as_str) {
                 card["attachments"][0]["content"]["actions"] = json!([{
@@ -439,6 +375,13 @@ fn build_teams_payload(event_type: &str, data: &Value, callback_url: Option<&str
     }
 
     card
+}
+
+fn approval_tokens(data: &Value) -> Option<(&str, &str)> {
+    Some((
+        data.get("approve_token")?.as_str()?,
+        data.get("reject_token")?.as_str()?,
+    ))
 }
 
 /// Verifies an HMAC-SHA256 signature for incoming webhook payloads.
@@ -553,6 +496,8 @@ mod tests {
         let data = json!({
             "id": "appr-123",
             "capability_id": "db.drop_database",
+        "approve_token": "approve-fixture-token",
+        "reject_token": "reject-fixture-token",
             "server_id": "production_db",
             "sanitized_args": { "db": "users" }
         });

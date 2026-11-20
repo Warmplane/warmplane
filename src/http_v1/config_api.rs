@@ -66,8 +66,14 @@ pub async fn handle_get_config(State(state): State<AppState>) -> impl IntoRespon
 /// Handles POST `/v1/config/servers` to add or update an upstream server.
 pub async fn handle_upsert_server(
     State(state): State<AppState>,
+    admin: Option<axum::extract::Extension<TrustAdmin>>,
     Json(payload): Json<UpsertServerRequest>,
 ) -> impl IntoResponse {
+    if payload.server.require_tool_pins
+        && !admin.is_some_and(|axum::extract::Extension(TrustAdmin(admin))| admin)
+    {
+        return trust_admin_required();
+    }
     let mut config = match crate::config::load_or_default_config(&state.config_path) {
         Ok(c) => c,
         Err(e) => {
@@ -598,7 +604,12 @@ pub async fn handle_update_policy(
     admin: Option<axum::extract::Extension<TrustAdmin>>,
     Json(payload): Json<crate::config::PolicyConfig>,
 ) -> impl IntoResponse {
-    if (payload.result_sanitization.is_some() || !state.accepts_result_revision(None).await)
+    if (payload.result_sanitization.is_some()
+        || payload
+            .webhook
+            .as_ref()
+            .is_some_and(crate::approval_chatops::subscribed)
+        || state.trust_controls_active().await)
         && !admin.is_some_and(|axum::extract::Extension(TrustAdmin(admin))| admin)
     {
         return trust_admin_required();

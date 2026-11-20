@@ -133,7 +133,8 @@
                 "additionalProperties": false
               },
               "allowAgentSelfUndo": { "type": "boolean", "default": false },
-              "manageTrustControls": { "type": "boolean", "default": false }
+              "manageTrustControls": { "type": "boolean", "default": false },
+              "resolveApprovals": { "type": "boolean", "default": false }
             }
           }
         }
@@ -374,6 +375,8 @@
         "url": { "type": "string", "format": "uri" },
         "secret": { "type": "string" },
         "secretEnv": { "type": "string" },
+        "slackSigningSecret": { "type": "string" },
+        "slackSigningSecretEnv": { "type": "string" },
         "authHeader": { "type": "string" },
         "headers": {
           "type": "object",
@@ -388,9 +391,10 @@
         "events": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Optional event filter for legacy approval notifications. ChatOps action events require explicit opt-in even when this list is empty."
+          "description": "Explicitly subscribed ChatOps events, including signed approval.requested cards."
         },
         "callbackUrl": { "type": "string", "format": "uri" },
+        "approvalTenant": { "type": "string", "minLength": 1 },
         "actionRole": { "type": "string", "minLength": 1, "description": "RBAC role assigned to signed ChatOps action buttons." }
       },
       "additionalProperties": false

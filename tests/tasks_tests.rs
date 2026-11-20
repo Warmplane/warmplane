@@ -126,6 +126,7 @@ async fn test_tasks_lifecycle_and_hitl_integration() {
     let update_resp = handle_update_task(
         State(state.clone()),
         axum::extract::Path(task_id.clone()),
+        None,
         Json(UpdateTaskRequest {
             input_responses: responses,
         }),

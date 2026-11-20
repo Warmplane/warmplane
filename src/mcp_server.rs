@@ -59,6 +59,7 @@ static TRACE_COUNTER: AtomicU64 = AtomicU64::new(1);
 pub struct FacadeMcpServer {
     state: AppState,
     profile: Option<String>,
+    tenant: Option<crate::rbac::TenantContext>,
     supported_protocol_versions: Option<Vec<rmcp::model::ProtocolVersion>>,
 }
 
@@ -68,6 +69,7 @@ impl FacadeMcpServer {
         Self {
             state,
             profile,
+            tenant: None,
             supported_protocol_versions: None,
         }
     }
@@ -194,7 +196,224 @@ impl ServerHandler for FacadeMcpServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<CallToolResponse, McpError> {
+        self.for_request(&context)
+            .await?
+            .dispatch_facade_tool(request)
+            .await
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<ListResourcesResult, McpError> {
+        let res_guard = self.state.resources.read().await;
+        let items = res_guard
+            .values()
+            .map(|r| {
+                let mut res = Resource::new(r.uri.clone(), r.name.clone());
+                if let Some(desc) = &r.description {
+                    res = res.with_description(desc.clone());
+                }
+                if let Some(mime) = &r.mime_type {
+                    res = res.with_mime_type(mime.clone());
+                }
+                res
+            })
+            .collect::<Vec<_>>();
+        Ok(ListResourcesResult::with_all_items(items))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<ReadResourceResponse, McpError> {
+        self.for_request(&context).await?;
+        let (server, uri) = {
+            let res_guard = self.state.resources.read().await;
+            let Some((_, meta)) = res_guard.iter().find(|(_, m)| m.uri == request.uri) else {
+                return Err(McpError::invalid_params(
+                    format!("Resource URI '{}' not found", request.uri),
+                    None,
+                ));
+            };
+            (meta.server.clone(), meta.uri.clone())
+        };
+
+        let tx = {
+            let servers_guard = self.state.servers.read().await;
+            servers_guard
+                .get(&server)
+                .cloned()
+                .ok_or_else(|| McpError::internal_error("Target server unreachable", None))?
+        };
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(ServerMsg::ReadResource {
+            uri,
+            input_responses: request.input_responses,
+            request_state: request.request_state,
+            reply: reply_tx,
+        })
+        .await
+        .map_err(|_| McpError::internal_error("Server mailbox closed", None))?;
+
+        match reply_rx.await {
+            Ok(Ok(value)) => {
+                let delivered = self
+                    .catalog_delivery(
+                        &server,
+                        value,
+                        crate::result_sanitization::Shape::ResourceRead,
+                    )
+                    .await?;
+                if delivered.get("resultType").and_then(Value::as_str) == Some("input_required") {
+                    return decode_upstream_result(delivered)
+                        .map(ReadResourceResponse::InputRequired);
+                }
+                decode_upstream_result::<ReadResourceResult>(delivered)
+                    .map(ReadResourceResponse::Complete)
+            }
+            Ok(Err(UpstreamCallError::Timeout)) => {
+                Err(McpError::internal_error("Resource read timed out", None))
+            }
+            Ok(Err(UpstreamCallError::Upstream(err))) => Err(McpError::internal_error(
+                self.state.safe_upstream_error(err).await,
+                None,
+            )),
+            Ok(Err(UpstreamCallError::ToolDefinitionChanged)) | Err(_) => {
+                Err(McpError::internal_error("Actor task died", None))
+            }
+        }
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<rmcp::model::ListPromptsResult, McpError> {
+        let prompts_guard = self.state.prompts.read().await;
+        let prompts = prompts_guard
+            .values()
+            .map(|p| {
+                let args = serde_json::from_value(Value::Array(p.arguments.clone())).ok();
+                let mut prompt = Prompt::new(p.name.clone(), p.description.clone(), args);
+                if let Some(title) = &p.title {
+                    prompt = prompt.with_title(title.clone());
+                }
+                prompt
+            })
+            .collect::<Vec<_>>();
+        Ok(rmcp::model::ListPromptsResult::with_all_items(prompts))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> std::result::Result<GetPromptResponse, McpError> {
+        self.for_request(&context).await?;
+        let server = {
+            let prompts_guard = self.state.prompts.read().await;
+            let Some((_, prompt_meta)) = prompts_guard.iter().find(|(_, p)| p.name == request.name)
+            else {
+                return Err(McpError::invalid_params(
+                    format!("Prompt '{}' not found", request.name),
+                    None,
+                ));
+            };
+            prompt_meta.server.clone()
+        };
+
+        let tx = {
+            let servers_guard = self.state.servers.read().await;
+            servers_guard
+                .get(&server)
+                .cloned()
+                .ok_or_else(|| McpError::internal_error("Target server unreachable", None))?
+        };
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(ServerMsg::GetPrompt {
+            name: request.name,
+            arguments: request.arguments,
+            input_responses: request.input_responses,
+            request_state: request.request_state,
+            reply: reply_tx,
+        })
+        .await
+        .map_err(|_| McpError::internal_error("Server mailbox closed", None))?;
+
+        match reply_rx.await {
+            Ok(Ok(value)) => {
+                let delivered = self
+                    .catalog_delivery(&server, value, crate::result_sanitization::Shape::Prompt)
+                    .await?;
+                if delivered.get("resultType").and_then(Value::as_str) == Some("input_required") {
+                    return decode_upstream_result(delivered).map(GetPromptResponse::InputRequired);
+                }
+                decode_upstream_result::<GetPromptResult>(delivered)
+                    .map(GetPromptResponse::Complete)
+            }
+            Ok(Err(UpstreamCallError::Timeout)) => {
+                Err(McpError::internal_error("Prompt get timed out", None))
+            }
+            Ok(Err(UpstreamCallError::Upstream(err))) => Err(McpError::internal_error(
+                self.state.safe_upstream_error(err).await,
+                None,
+            )),
+            Ok(Err(UpstreamCallError::ToolDefinitionChanged)) | Err(_) => {
+                Err(McpError::internal_error("Actor task died", None))
+            }
+        }
+    }
+}
+
+fn decode_upstream_result<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, McpError> {
+    serde_json::from_value(value)
+        .map_err(|_| McpError::internal_error("Invalid upstream result", None))
+}
+
+impl FacadeMcpServer {
+    fn tenant_id(&self) -> &str {
+        self.tenant
+            .as_ref()
+            .map_or("default", |tenant| tenant.tenant_id.as_str())
+    }
+
+    fn caller_role(&self) -> String {
+        self.tenant.as_ref().map_or_else(
+            || self.state.rbac_engine.default_role(),
+            |tenant| tenant.role.clone(),
+        )
+    }
+
+    async fn for_request(
+        &self,
+        context: &rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<Self, McpError> {
+        let mut facade = self.clone();
+        let Some(parts) = context.extensions.get::<axum::http::request::Parts>() else {
+            return Ok(facade);
+        };
+        if !self.state.trust_controls_active().await {
+            return Ok(facade);
+        }
+        facade.tenant =
+            crate::daemon::server::authenticate_api_request(&self.state, &parts.headers)
+                .await
+                .map_err(|_| {
+                    McpError::invalid_request("Valid Warmplane credentials required", None)
+                })?;
+        Ok(facade)
+    }
+
+    async fn dispatch_facade_tool(
+        &self,
+        request: CallToolRequestParams,
     ) -> std::result::Result<CallToolResponse, McpError> {
         let args = request.arguments.unwrap_or_default();
 
@@ -388,7 +607,16 @@ impl ServerHandler for FacadeMcpServer {
                 let trace_id = next_trace_id();
                 let policy = self.state.policy.read().await.clone();
                 let prof_ctx = self.profile_context().await;
-                let default_role = self.state.rbac_engine.default_role();
+                let caller_role = self.caller_role();
+                let policy = self
+                    .tenant
+                    .as_ref()
+                    .map_or(policy.clone(), |tenant| {
+                        self.state
+                            .rbac_engine
+                            .compute_effective_policy(&tenant.role, &policy)
+                    })
+                    .merge_with_profile(prof_ctx.profile_policy.as_ref());
                 let res = crate::batch_executor::execute_batch_for_tenant_with_rollback(
                     &self.state,
                     steps,
@@ -398,9 +626,12 @@ impl ServerHandler for FacadeMcpServer {
                     crate::batch_executor::BatchExecutionScope {
                         policy: &policy,
                         profile: &prof_ctx,
-                        tenant_id: "default",
-                        role: &default_role,
-                        authorization_expires_at_epoch_secs: None,
+                        tenant_id: self.tenant_id(),
+                        role: &caller_role,
+                        authorization_expires_at_epoch_secs: self
+                            .tenant
+                            .as_ref()
+                            .and_then(|tenant| tenant.grant_expires_at_epoch_secs),
                         cancellation_token: tokio_util::sync::CancellationToken::new(),
                     },
                     auto_rollback_on_failure,
@@ -537,8 +768,8 @@ impl ServerHandler for FacadeMcpServer {
                         .can_access_task(
                             &self.state,
                             &record,
-                            "default",
-                            &self.state.rbac_engine.default_role(),
+                            self.tenant_id(),
+                            &self.caller_role(),
                             self.profile.as_deref(),
                         )
                         .await
@@ -584,29 +815,17 @@ impl ServerHandler for FacadeMcpServer {
 
                 match self
                     .state
-                    .task_registry
-                    .update_task(task_id, input_responses)
+                    .submit_task_input(task_id, input_responses, self.tenant.as_ref())
                     .await
                 {
-                    Ok(true) => Ok(json!({
+                    Ok(receipt) => Ok(json!({
                         "ok": true,
                         "resultType": "complete",
-                        "message": format!("Task '{}' updated with input responses", task_id),
+                        "receipt": receipt,
                     })),
-                    Ok(false) => Ok(json!({
-                        "ok": false,
-                        "error": {
-                            "code": "INVALID_TASK_STATE",
-                            "message": format!("Task '{}' is not in 'input_required' state or not found", task_id),
-                        }
-                    })),
-                    Err(e) => Ok(json!({
-                        "ok": false,
-                        "error": {
-                            "code": "TASK_UPDATE_FAILED",
-                            "message": e.to_string(),
-                        }
-                    })),
+                    Err(error) => {
+                        Ok(json!({"ok": false, "error": crate::approvals::decision_error(error)}))
+                    }
                 }
             }
             TOOL_TASK_CANCEL => {
@@ -653,170 +872,6 @@ impl ServerHandler for FacadeMcpServer {
         }
     }
 
-    async fn list_resources(
-        &self,
-        _request: Option<rmcp::model::PaginatedRequestParams>,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> std::result::Result<ListResourcesResult, McpError> {
-        let res_guard = self.state.resources.read().await;
-        let items = res_guard
-            .values()
-            .map(|r| {
-                let mut res = Resource::new(r.uri.clone(), r.name.clone());
-                if let Some(desc) = &r.description {
-                    res = res.with_description(desc.clone());
-                }
-                if let Some(mime) = &r.mime_type {
-                    res = res.with_mime_type(mime.clone());
-                }
-                res
-            })
-            .collect::<Vec<_>>();
-        Ok(ListResourcesResult::with_all_items(items))
-    }
-
-    async fn read_resource(
-        &self,
-        request: ReadResourceRequestParams,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> std::result::Result<ReadResourceResponse, McpError> {
-        let (server, uri) = {
-            let res_guard = self.state.resources.read().await;
-            let Some((_, meta)) = res_guard.iter().find(|(_, m)| m.uri == request.uri) else {
-                return Err(McpError::invalid_params(
-                    format!("Resource URI '{}' not found", request.uri),
-                    None,
-                ));
-            };
-            (meta.server.clone(), meta.uri.clone())
-        };
-
-        let tx = {
-            let servers_guard = self.state.servers.read().await;
-            servers_guard
-                .get(&server)
-                .cloned()
-                .ok_or_else(|| McpError::internal_error("Target server unreachable", None))?
-        };
-
-        let (reply_tx, reply_rx) = oneshot::channel();
-        tx.send(ServerMsg::ReadResource {
-            uri,
-            input_responses: request.input_responses,
-            request_state: request.request_state,
-            reply: reply_tx,
-        })
-        .await
-        .map_err(|_| McpError::internal_error("Server mailbox closed", None))?;
-
-        match reply_rx.await {
-            Ok(Ok(value)) => {
-                let delivered = self
-                    .catalog_delivery(
-                        &server,
-                        value,
-                        crate::result_sanitization::Shape::ResourceRead,
-                    )
-                    .await?;
-                let res: ReadResourceResult = serde_json::from_value(delivered).map_err(|e| {
-                    McpError::internal_error(format!("Invalid resource payload: {e}"), None)
-                })?;
-                Ok(ReadResourceResponse::Complete(res))
-            }
-            Ok(Err(UpstreamCallError::Timeout)) => {
-                Err(McpError::internal_error("Resource read timed out", None))
-            }
-            Ok(Err(UpstreamCallError::Upstream(err))) => Err(McpError::internal_error(
-                self.state.safe_upstream_error(err).await,
-                None,
-            )),
-            Ok(Err(UpstreamCallError::ToolDefinitionChanged)) | Err(_) => {
-                Err(McpError::internal_error("Actor task died", None))
-            }
-        }
-    }
-
-    async fn list_prompts(
-        &self,
-        _request: Option<rmcp::model::PaginatedRequestParams>,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> std::result::Result<rmcp::model::ListPromptsResult, McpError> {
-        let prompts_guard = self.state.prompts.read().await;
-        let prompts = prompts_guard
-            .values()
-            .map(|p| {
-                let args = serde_json::from_value(Value::Array(p.arguments.clone())).ok();
-                let mut prompt = Prompt::new(p.name.clone(), p.description.clone(), args);
-                if let Some(title) = &p.title {
-                    prompt = prompt.with_title(title.clone());
-                }
-                prompt
-            })
-            .collect::<Vec<_>>();
-        Ok(rmcp::model::ListPromptsResult::with_all_items(prompts))
-    }
-
-    async fn get_prompt(
-        &self,
-        request: GetPromptRequestParams,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> std::result::Result<GetPromptResponse, McpError> {
-        let server = {
-            let prompts_guard = self.state.prompts.read().await;
-            let Some((_, prompt_meta)) = prompts_guard.iter().find(|(_, p)| p.name == request.name)
-            else {
-                return Err(McpError::invalid_params(
-                    format!("Prompt '{}' not found", request.name),
-                    None,
-                ));
-            };
-            prompt_meta.server.clone()
-        };
-
-        let tx = {
-            let servers_guard = self.state.servers.read().await;
-            servers_guard
-                .get(&server)
-                .cloned()
-                .ok_or_else(|| McpError::internal_error("Target server unreachable", None))?
-        };
-
-        let (reply_tx, reply_rx) = oneshot::channel();
-        tx.send(ServerMsg::GetPrompt {
-            name: request.name,
-            arguments: request.arguments,
-            input_responses: request.input_responses,
-            request_state: request.request_state,
-            reply: reply_tx,
-        })
-        .await
-        .map_err(|_| McpError::internal_error("Server mailbox closed", None))?;
-
-        match reply_rx.await {
-            Ok(Ok(value)) => {
-                let delivered = self
-                    .catalog_delivery(&server, value, crate::result_sanitization::Shape::Prompt)
-                    .await?;
-                let res: GetPromptResult = serde_json::from_value(delivered).map_err(|e| {
-                    McpError::internal_error(format!("Invalid prompt payload: {e}"), None)
-                })?;
-                Ok(GetPromptResponse::Complete(res))
-            }
-            Ok(Err(UpstreamCallError::Timeout)) => {
-                Err(McpError::internal_error("Prompt get timed out", None))
-            }
-            Ok(Err(UpstreamCallError::Upstream(err))) => Err(McpError::internal_error(
-                self.state.safe_upstream_error(err).await,
-                None,
-            )),
-            Ok(Err(UpstreamCallError::ToolDefinitionChanged)) | Err(_) => {
-                Err(McpError::internal_error("Actor task died", None))
-            }
-        }
-    }
-}
-
-impl FacadeMcpServer {
     async fn catalog_delivery(
         &self,
         server: &str,
@@ -909,6 +964,7 @@ impl FacadeMcpServer {
 
     fn engine_handle(&self) -> crate::engine::ControlPlaneHandle {
         crate::engine::ControlPlaneHandle::new(self.state.clone())
+            .with_tenant_context(self.tenant.clone())
     }
 
     async fn cancel_task_value(&self, task_id: &str, reason: Option<String>) -> Value {
@@ -919,8 +975,8 @@ impl FacadeMcpServer {
                 .can_access_task(
                     &self.state,
                     &record,
-                    "default",
-                    &self.state.rbac_engine.default_role(),
+                    self.tenant_id(),
+                    &self.caller_role(),
                     self.profile.as_deref(),
                 )
                 .await

@@ -60,6 +60,7 @@ fn create_test_rbac_state() -> AppState {
             undo_permissions: Default::default(),
             allow_agent_self_undo: false,
             manage_trust_controls: false,
+            resolve_approvals: false,
         },
     );
     roles.insert(
@@ -78,6 +79,7 @@ fn create_test_rbac_state() -> AppState {
             undo_permissions: Default::default(),
             allow_agent_self_undo: false,
             manage_trust_controls: false,
+            resolve_approvals: false,
         },
     );
     roles.insert(
@@ -91,6 +93,7 @@ fn create_test_rbac_state() -> AppState {
             undo_permissions: Default::default(),
             allow_agent_self_undo: false,
             manage_trust_controls: false,
+            resolve_approvals: false,
         },
     );
 

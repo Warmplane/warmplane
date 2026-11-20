@@ -448,9 +448,36 @@ With RBAC enabled, grant `manageTrustControls: true` to an operator role and aut
 
 Set `requireToolPins: true` on an upstream in `mcpServers` and enable persistent state. In **Security Governance & Redaction**, enter a trust administrator token under **Tool definition pins**. Expand a tool, compare its observed and approved definitions, and approve the observed digest. The same approval covers aliases and native exports of that upstream tool. An outdated review returns `409 TOOL_PIN_STALE`. Load definitions again before making a new decision.
 
+If pin storage returns an error after authorization, refresh the definitions and review the pin again before retrying. Warmplane retains quarantine when an approval write could not be confirmed, including after reopening state.
+
 Tools without a matching approval are quarantined from discovery, search, and execution. Warmplane refreshes pinned servers every 15 seconds and on supported tool-list notifications. It withholds tools if discovery fails or the observation is older than 30 seconds. The worker checks the prepared definition again immediately before dispatch. If that revision changed while the tool was held or awaiting approval, submit a new invocation after reviewing the change. Held calls from an earlier daemon process require a fresh request when their observation cannot be verified.
 
 Subscribe to `tool_pin.quarantined` in `policy.webhook.events` and set `secret` or `secretEnv` to receive signed notices with the server ID and quarantine reason.
+
+#### Migrate ChatOps approvals to signed actions
+
+Set the callback route to `/v1/webhooks/actions` and explicitly subscribe to `approval.requested`. The old `/v1/webhooks/callbacks` route returns `410`. Request a fresh invocation for old cards and pending approvals carried over from an earlier daemon process.
+
+```json
+{
+  "url": "https://example.invalid/incoming",
+  "format": "slack",
+  "events": ["approval.requested"],
+  "callbackUrl": "https://warmplane.example.invalid/v1/webhooks/actions",
+  "secretEnv": "WARMPLANE_WEBHOOK_SECRET",
+  "slackSigningSecretEnv": "WARMPLANE_SLACK_SIGNING_SECRET",
+  "actionRole": "approval-operator",
+  "approvalTenant": "engineering"
+}
+```
+
+With RBAC enabled, specify one `approvalTenant` and give `actionRole` the `resolveApprovals` permission. Warmplane sends cards only for that tenant. In Control Deck, load **Approval activity** using an operator credential with the same permission. For REST task input, submit an explicit Boolean in `inputResponses.hitl_approval.approved`. The operator identity comes from the authenticated credential or delegation.
+
+- **Slack.** Set the app's Interactivity Request URL to the signed callback URL. Set the Slack app signing secret separately from the Warmplane webhook secret. Warmplane verifies Slack's timestamp and signature, acknowledges the request immediately, and posts the decision receipt to the configured destination.
+- **Teams.** Use a Workflow that posts the Adaptive Card and waits for its response, or an authenticated bot relay. Read `action_token` from the submitted action data and POST `{"action_token":"…"}` to the configured callback URL. Use incoming Workflows or a bot for the configured receipt destination.
+- **Generic.** Read `data.approve_token` and `data.reject_token` from the signed event and POST the chosen token as `action_token`. The server returns the persisted receipt. A repeated valid token for the same decision returns that receipt, and a conflicting decision returns `409`.
+
+The signed action uses the arguments on the card's ticket. Use Control Deck to explicitly review and replace arguments. The approval decision, upstream task outcome, and ChatOps receipt delivery appear separately in **Approval activity**. A failed receipt delivery leaves the stored decision in place.
 
 ---
 

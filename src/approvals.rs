@@ -18,7 +18,9 @@ use tracing::{error, info, warn};
 
 use crate::config::WebhookConfig;
 use crate::context::RequestContext;
-use crate::storage::AtomicFile;
+use crate::storage::{AtomicFile, ReplacementDurabilityUnknown};
+use serde_json::{json, Value};
+use sha2::Digest;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -69,6 +71,315 @@ pub struct PendingApproval {
     /// Active status.
     #[serde(flatten)]
     pub status: ApprovalStatus,
+    /// Verified tenant and linkage captured when the invocation was prepared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ownership: Option<ApprovalOwnership>,
+    /// Persisted decision separate from delivery and execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_receipt: Option<DecisionReceipt>,
+    /// Most recent outcome when delivering the decision to ChatOps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_delivery: Option<ReceiptDelivery>,
+}
+
+/// Tenant, task, and immutable definition provenance for an approval.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ApprovalOwnership {
+    pub(crate) tenant_id: String,
+    pub(crate) task_id: Option<String>,
+    pub(crate) argument_digest: String,
+    pub(crate) tool_definition: Option<String>,
+}
+
+impl ApprovalOwnership {
+    /// Captures trusted tenant and task linkage for an invocation under review.
+    pub fn new(tenant: &str, task: Option<&str>, args: &Value, definition: Option<&str>) -> Self {
+        Self {
+            tenant_id: tenant.to_owned(),
+            task_id: task.map(str::to_owned),
+            argument_digest: argument_digest(args),
+            tool_definition: definition.map(str::to_owned),
+        }
+    }
+}
+
+fn argument_digest(args: &Value) -> String {
+    hex::encode(Sha256::digest(crate::idempotency::canonicalize_json(args)))
+}
+
+/// Final operator decision, independent of execution and notification delivery.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Decision {
+    /// Permit the suspended invocation.
+    Approve,
+    /// Deny the suspended invocation.
+    Reject,
+}
+
+/// Safe receipt describing one committed approval decision.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct DecisionReceipt {
+    /// Ticket this receipt resolves.
+    pub ticket_id: String,
+    /// Committed operator decision.
+    pub decision: Decision,
+    /// Verified or delegated principal that decided the ticket.
+    pub principal: String,
+    /// Unix time, in seconds, when the decision was committed.
+    pub decided_at: u64,
+    /// Digest of the reviewed invocation or the explicitly approved replacement arguments.
+    #[serde(default)]
+    pub argument_digest: String,
+}
+
+/// Delivery outcome for a decision receipt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiptDelivery {
+    /// A configured receiver accepted the receipt.
+    Delivered,
+    /// Warmplane could not deliver the receipt.
+    Failed,
+}
+
+pub(crate) struct DecisionRequest {
+    pub(crate) choice: Decision,
+    pub(crate) modified_args: Option<Value>,
+    pub(crate) reason: Option<String>,
+}
+
+impl DecisionRequest {
+    pub(crate) fn unchanged(choice: Decision) -> Self {
+        Self {
+            choice,
+            modified_args: None,
+            reason: None,
+        }
+    }
+
+    fn resolve(self, receipt: &DecisionReceipt) -> (ApprovalStatus, ApprovalResolution) {
+        let operator = receipt.principal.clone();
+        let timestamp = receipt.decided_at;
+        match self.choice {
+            Decision::Approve => (
+                ApprovalStatus::Approved {
+                    operator: operator.clone(),
+                    timestamp,
+                    modified_args: self.modified_args.clone(),
+                },
+                ApprovalResolution::Approved {
+                    operator,
+                    modified_args: self.modified_args,
+                },
+            ),
+            Decision::Reject => (
+                ApprovalStatus::Rejected {
+                    operator: operator.clone(),
+                    timestamp,
+                    reason: self.reason.clone(),
+                },
+                ApprovalResolution::Rejected {
+                    operator,
+                    reason: self.reason,
+                },
+            ),
+        }
+    }
+}
+
+pub(crate) struct ApprovalActor {
+    pub(crate) tenant: String,
+    pub(crate) principal: String,
+    pub(crate) role: String,
+    pub(crate) authorization_expires_at: Option<u64>,
+}
+
+#[derive(Debug)]
+pub(crate) enum DecisionError {
+    NotFound,
+    Forbidden,
+    Conflict,
+    InvalidInput,
+    Persistence,
+    TaskNotInputRequired,
+}
+
+pub(crate) fn decision_error(error: DecisionError) -> crate::WarmplaneError {
+    let (code, message) = match error {
+        DecisionError::NotFound => (
+            "APPROVAL_NOT_FOUND",
+            "No active approval belongs to this target",
+        ),
+        DecisionError::Forbidden => (
+            "APPROVAL_PERMISSION_REQUIRED",
+            "An authenticated approval operator is required",
+        ),
+        DecisionError::Conflict => ("APPROVAL_NOT_PENDING", "The approval is no longer pending"),
+        DecisionError::InvalidInput => (
+            "INVALID_APPROVAL_DECISION",
+            "Supply an explicit Boolean decision and optional object arguments",
+        ),
+        DecisionError::Persistence => (
+            "APPROVAL_PERSISTENCE_FAILED",
+            "Could not durably store the decision",
+        ),
+        DecisionError::TaskNotInputRequired => (
+            "INVALID_TASK_STATE",
+            "The task is unavailable or no longer requires input",
+        ),
+    };
+    crate::WarmplaneError::new(code, message, false)
+}
+
+impl crate::daemon::AppState {
+    pub(crate) fn approval_actor(
+        &self,
+        tenant: Option<&crate::rbac::TenantContext>,
+    ) -> Result<ApprovalActor, DecisionError> {
+        if !self.rbac_engine.is_enabled() {
+            return Ok(ApprovalActor {
+                tenant: "default".to_owned(),
+                role: self.rbac_engine.default_role(),
+                principal: "local-operator".to_owned(),
+                authorization_expires_at: None,
+            });
+        }
+        let tenant = tenant
+            .filter(|tenant| tenant.grant_id.is_some())
+            .ok_or(DecisionError::Forbidden)?;
+        Ok(ApprovalActor {
+            tenant: tenant.tenant_id.clone(),
+            role: tenant.role.clone(),
+            principal: tenant
+                .actor_id
+                .clone()
+                .unwrap_or_else(|| format!("role:{}", tenant.role)),
+            authorization_expires_at: tenant.grant_expires_at_epoch_secs,
+        })
+    }
+
+    pub(crate) async fn decide_approval(
+        &self,
+        id: &str,
+        actor: &ApprovalActor,
+        request: DecisionRequest,
+        allow_replay: bool,
+    ) -> Result<DecisionReceipt, DecisionError> {
+        if !self.rbac_engine.can_resolve_approvals(&actor.role) {
+            return Err(DecisionError::Forbidden);
+        }
+        let ticket = self
+            .approval_registry
+            .get(id)
+            .await
+            .filter(|ticket| {
+                ticket
+                    .ownership
+                    .as_ref()
+                    .is_some_and(|owner| owner.tenant_id == actor.tenant)
+            })
+            .ok_or(DecisionError::NotFound)?;
+        let task_id = ticket
+            .ownership
+            .as_ref()
+            .and_then(|owner| owner.task_id.as_deref());
+        if let (None, Some(task_id)) = (&ticket.decision_receipt, task_id) {
+            if !self
+                .task_registry
+                .get_task(task_id)
+                .await
+                .is_some_and(|task| task.status == crate::tasks::TaskStatus::InputRequired)
+            {
+                return Err(DecisionError::Conflict);
+            }
+        }
+        let (receipt, committed) = self
+            .approval_registry
+            .resolve_decision(id, actor, request, allow_replay, &self.rbac_engine)
+            .await?;
+        if committed {
+            self.audit_handle.send(decision_audit(&receipt));
+            self.schedule_approval_receipt(actor.tenant.clone(), receipt.clone());
+        }
+        Ok(receipt)
+    }
+
+    pub(crate) async fn submit_task_input(
+        &self,
+        task_id: &str,
+        input: std::collections::BTreeMap<String, Value>,
+        tenant: Option<&crate::rbac::TenantContext>,
+    ) -> Result<Option<DecisionReceipt>, DecisionError> {
+        let decision = input
+            .get("hitl_approval")
+            .map(parse_task_decision)
+            .transpose()?;
+        if let Some(decision) = decision {
+            let actor = self.approval_actor(tenant)?;
+            let ticket = self
+                .approval_registry
+                .find_by_task(task_id)
+                .await
+                .ok_or(DecisionError::NotFound)?;
+            let receipt = self
+                .decide_approval(&ticket.id, &actor, decision, false)
+                .await?;
+            return Ok(Some(receipt));
+        }
+        if self.approval_registry.find_by_task(task_id).await.is_some() {
+            return Err(DecisionError::InvalidInput);
+        }
+        match self.task_registry.update_task(task_id, input).await {
+            Ok(true) => Ok(None),
+            Ok(false) => Err(DecisionError::TaskNotInputRequired),
+            Err(_) => Err(DecisionError::Persistence),
+        }
+    }
+}
+
+fn parse_task_decision(value: &Value) -> Result<DecisionRequest, DecisionError> {
+    let choice = match value.get("approved").and_then(Value::as_bool) {
+        Some(true) => Decision::Approve,
+        Some(false) => Decision::Reject,
+        None => return Err(DecisionError::InvalidInput),
+    };
+    Ok(DecisionRequest {
+        choice,
+        modified_args: value.get("modified_args").cloned(),
+        reason: value
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    })
+}
+
+fn decision_audit(receipt: &DecisionReceipt) -> crate::audit::RawAuditEvent {
+    use crate::audit::{AuditEventStatus, AuditEventType, RawAuditEvent};
+    RawAuditEvent {
+        event_type: match receipt.decision {
+            Decision::Approve => AuditEventType::ApprovalGranted,
+            Decision::Reject => AuditEventType::ApprovalRejected,
+        },
+        trace_id: crate::engine::next_trace_id(),
+        request_id: None,
+        actor_id: None,
+        work_item_id: None,
+        client_ip: None,
+        server_id: None,
+        capability_id: None,
+        resource_uri: None,
+        sanitized_args: None,
+        sanitized_response: Some(json!(receipt)),
+        execution_latency_us: None,
+        status: AuditEventStatus::Success,
+        error_code: None,
+        error_message: None,
+        operator_id: Some(receipt.principal.clone()),
+        approval_ticket_id: Some(receipt.ticket_id.clone()),
+        idempotency_key: None,
+        is_replay: None,
+    }
 }
 
 /// Resolution returned through the internal wait channel to the suspended caller.
@@ -86,6 +397,58 @@ pub enum ApprovalResolution {
     },
     /// Timed out while waiting.
     Expired,
+}
+
+pub(crate) async fn wait_for_decision(
+    approval: oneshot::Receiver<ApprovalResolution>,
+    task: Option<crate::tasks::TaskWaitReceiver>,
+) -> ApprovalResolution {
+    tokio::select! {
+        result = approval => result.unwrap_or(ApprovalResolution::Expired),
+        _ = async {
+            match task {
+                Some(waiter) => { let _ = waiter.await; }
+                None => std::future::pending().await,
+            }
+        } => ApprovalResolution::Expired,
+    }
+}
+
+impl ApprovalResolution {
+    pub(crate) async fn arguments_for_task(
+        self,
+        state: &crate::daemon::AppState,
+        task_id: &str,
+        original: Value,
+    ) -> Option<Value> {
+        match self {
+            Self::Approved { modified_args, .. } => {
+                match state
+                    .task_registry
+                    .update_task(task_id, Default::default())
+                    .await
+                {
+                    Ok(true) => Some(modified_args.unwrap_or(original)),
+                    _ => None,
+                }
+            }
+            Self::Rejected { reason, .. } => {
+                let _ = state.task_registry.cancel_task(task_id, reason).await;
+                None
+            }
+            Self::Expired => {
+                let _ = state
+                    .task_registry
+                    .fail_task(
+                        task_id,
+                        json!({"code": "APPROVAL_TIMEOUT"}),
+                        Some("Approval request timed out or was cancelled".to_owned()),
+                    )
+                    .await;
+                None
+            }
+        }
+    }
 }
 
 /// Global registry managing pending human approvals and active wait channels.
@@ -126,13 +489,14 @@ impl ApprovalRegistry {
         request: CreateApprovalRequest<'_>,
         trace_id: String,
         started: std::time::Instant,
+        owner: ApprovalOwnership,
     ) -> (
         String,
         oneshot::Receiver<ApprovalResolution>,
         crate::audit::RawAuditEvent,
     ) {
         let mut event = request.audit_event(trace_id);
-        let (id, receiver) = self.create_approval(request).await;
+        let (id, receiver) = self.create_scoped_approval(request, Some(owner)).await;
         event.approval_ticket_id = Some(id.clone());
         event.execution_latency_us = Some(started.elapsed().as_micros() as u64);
         (id, receiver, event)
@@ -167,7 +531,7 @@ impl ApprovalRegistry {
 
         for (id, ticket) in loaded.iter_mut() {
             if ticket.status == ApprovalStatus::Pending {
-                if now >= ticket.expires_at {
+                if now >= ticket.expires_at || ticket.ownership.is_some() {
                     ticket.status = ApprovalStatus::Expired { timestamp: now };
                     expired_any = true;
                 } else {
@@ -211,13 +575,18 @@ impl ApprovalRegistry {
         &self,
         req: CreateApprovalRequest<'_>,
     ) -> (String, oneshot::Receiver<ApprovalResolution>) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let expires_at = now + req.timeout_secs;
-        let suffix: u32 = rand::random::<u32>() % 9000 + 1000;
-        let id = format!("appr-{}-{}", now, suffix);
+        self.create_scoped_approval(req, None).await
+    }
+
+    /// Creates an approval bound to trusted ownership and a prepared invocation.
+    pub async fn create_scoped_approval(
+        &self,
+        req: CreateApprovalRequest<'_>,
+        ownership: Option<ApprovalOwnership>,
+    ) -> (String, oneshot::Receiver<ApprovalResolution>) {
+        let now = approval_timestamp();
+        let expires_at = now.saturating_add(req.timeout_secs);
+        let id = format!("appr-{now}-{:032x}", rand::random::<u128>());
 
         let approval = PendingApproval {
             id: id.clone(),
@@ -230,6 +599,9 @@ impl ApprovalRegistry {
             created_at: now,
             expires_at,
             status: ApprovalStatus::Pending,
+            ownership,
+            decision_receipt: None,
+            receipt_delivery: None,
         };
 
         let (tx, rx) = oneshot::channel();
@@ -242,8 +614,11 @@ impl ApprovalRegistry {
                 });
             }
             pending_guard.insert(id.clone(), approval.clone());
-        }
-        {
+            if self.persist(&pending_guard).is_err() {
+                pending_guard.remove(&id);
+                tracing::error!(approval_id = %id, "could not persist pending approval");
+                return (id, rx);
+            }
             let mut chan_guard = self.wait_channels.write().await;
             chan_guard.insert(id.clone(), tx);
         }
@@ -257,20 +632,139 @@ impl ApprovalRegistry {
             self_clone.expire_if_pending(&ticket_id).await;
         });
 
-        // Persist ticket to disk
-        self.sync_to_disk().await;
-
-        // Dispatch outbound webhook if configured
         if let Some(cfg) = req.webhook {
-            let webhook_cfg = cfg.clone();
-            let approval_data = approval.clone();
-            tokio::spawn(async move {
-                dispatch_webhook(&webhook_cfg, "approval.requested", &approval_data).await;
-            });
+            crate::approval_chatops::issue_card(cfg.clone(), approval);
         }
 
         info!(approval_id = %id, capability_id = %req.capability_id, "created pending approval ticket");
         (id, rx)
+    }
+
+    fn persist(&self, tickets: &HashMap<String, PendingApproval>) -> Result<()> {
+        if let Some(storage) = &self.storage {
+            storage.save(tickets)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn resolve_decision(
+        &self,
+        id: &str,
+        actor: &ApprovalActor,
+        request: DecisionRequest,
+        allow_replay: bool,
+        rbac: &crate::rbac::RbacEngine,
+    ) -> Result<(DecisionReceipt, bool), DecisionError> {
+        let mut tickets = self.pending.write().await;
+        let now = approval_timestamp();
+        if !rbac.can_resolve_approvals(&actor.role)
+            || actor
+                .authorization_expires_at
+                .is_some_and(|expiry| now >= expiry)
+        {
+            return Err(DecisionError::Forbidden);
+        }
+        let ticket = tickets.get_mut(id).ok_or(DecisionError::NotFound)?;
+        let owner = ticket.ownership.as_ref().ok_or(DecisionError::NotFound)?;
+        if owner.tenant_id != actor.tenant {
+            return Err(DecisionError::NotFound);
+        }
+        if now >= ticket.expires_at {
+            return Err(DecisionError::Conflict);
+        }
+        if let Some(receipt) = &ticket.decision_receipt {
+            return if allow_replay
+                && receipt.decision == request.choice
+                && receipt.argument_digest == owner.argument_digest
+            {
+                Ok((receipt.clone(), false))
+            } else {
+                Err(DecisionError::Conflict)
+            };
+        }
+        if ticket.status != ApprovalStatus::Pending {
+            return Err(DecisionError::Conflict);
+        }
+        if !self
+            .wait_channels
+            .read()
+            .await
+            .get(id)
+            .is_some_and(|waiter| !waiter.is_closed())
+        {
+            return Err(DecisionError::Conflict);
+        }
+        if request
+            .modified_args
+            .as_ref()
+            .is_some_and(|args| !args.is_object())
+        {
+            return Err(DecisionError::InvalidInput);
+        }
+        let original = ticket.clone();
+        let receipt = DecisionReceipt {
+            ticket_id: id.to_owned(),
+            decision: request.choice,
+            principal: actor.principal.clone(),
+            decided_at: now,
+            argument_digest: request
+                .modified_args
+                .as_ref()
+                .map(argument_digest)
+                .unwrap_or_else(|| owner.argument_digest.clone()),
+        };
+        let (status, resolution) = request.resolve(&receipt);
+        ticket.status = status;
+        ticket.decision_receipt = Some(receipt.clone());
+        if let Err(error) = self.persist(&tickets) {
+            tickets.insert(id.to_owned(), original);
+            if error.is::<ReplacementDurabilityUnknown>() {
+                let _ = self.persist(&tickets);
+            }
+            return Err(DecisionError::Persistence);
+        }
+        drop(tickets);
+        if let Some(waiter) = self.wait_channels.write().await.remove(id) {
+            let _ = waiter.send(resolution);
+        }
+        Ok((receipt, true))
+    }
+
+    pub(crate) async fn find_by_task(&self, task_id: &str) -> Option<PendingApproval> {
+        self.pending
+            .read()
+            .await
+            .values()
+            .find(|ticket| {
+                ticket
+                    .ownership
+                    .as_ref()
+                    .and_then(|owner| owner.task_id.as_deref())
+                    == Some(task_id)
+            })
+            .cloned()
+    }
+
+    pub(crate) async fn record_receipt_delivery(
+        &self,
+        id: &str,
+        delivery: ReceiptDelivery,
+    ) -> Result<()> {
+        let mut tickets = self.pending.write().await;
+        let Some(ticket) = tickets
+            .get_mut(id)
+            .filter(|ticket| ticket.decision_receipt.is_some())
+        else {
+            return Ok(());
+        };
+        let previous = ticket.receipt_delivery.replace(delivery);
+        if let Err(error) = self.persist(&tickets) {
+            if let Some(ticket) = tickets.get_mut(id) {
+                ticket.receipt_delivery = previous;
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Atomically approves a pending ticket, notifying the suspended caller.

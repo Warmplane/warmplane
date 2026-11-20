@@ -320,3 +320,219 @@ async fn task_polling_retains_completion_and_withholds_a_stale_result() {
     assert!(after.result.is_none());
     assert_eq!(after.error.unwrap()["code"], "RESULT_WITHHELD");
 }
+
+#[tokio::test]
+async fn enforcing_results_keep_raw_payloads_and_errors_out_of_logs_audit_and_siem() {
+    use tracing::instrument::WithSubscriber;
+    use warmplane::{
+        audit::{spawn_audit_worker, SiemDispatcher},
+        config::{SiemConfig, SiemTargetConfig},
+        daemon::UpstreamCallError,
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let (mut state, mut upstream) = state(&directory.path().join("cache.json"));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/audit", listener.local_addr().unwrap());
+    let (exports, mut observed) = mpsc::channel(8);
+    let receiver = Router::new().route(
+        "/audit",
+        axum::routing::post(move |axum::Json(events): axum::Json<Value>| {
+            let exports = exports.clone();
+            async move {
+                exports.send(events).await.unwrap();
+                StatusCode::OK
+            }
+        }),
+    );
+    let collector = tokio::spawn(async move { axum::serve(listener, receiver).await.unwrap() });
+    let siem = SiemDispatcher::new(Some(SiemConfig {
+        targets: vec![SiemTargetConfig::Webhook {
+            url,
+            auth_header: None,
+            headers: HashMap::new(),
+        }],
+    }));
+    state.audit_handle = spawn_audit_worker(state.audit_store.clone(), Some(siem), 64, 5, 32);
+    let router = warmplane::daemon::server::build_router(state.clone());
+
+    let worker = tokio::spawn(async move {
+        let ServerMsg::CallTool { reply, .. } = upstream.recv().await.unwrap() else {
+            panic!("expected a tool call");
+        };
+        reply
+            .send(Ok(json!({
+                "structuredContent": {"Private": "secret-response-758"},
+                "content": [{"type":"text", "text":"sensitive-12345"}]
+            })))
+            .unwrap();
+        let ServerMsg::CallTool { reply, .. } = upstream.recv().await.unwrap() else {
+            panic!("expected a tool call");
+        };
+        reply
+            .send(Err(UpstreamCallError::Upstream(
+                "secret-upstream-error-329".to_owned(),
+            )))
+            .unwrap();
+    });
+
+    let log = directory.path().join("trace.log");
+    let output = std::fs::File::create(&log).unwrap();
+    let tracing = tracing_subscriber::fmt()
+        .with_writer(std::sync::Mutex::new(output))
+        .with_max_level(tracing::Level::TRACE)
+        .finish();
+    let (success, failure) = async {
+        let success = rest(
+            router.clone(),
+            Method::POST,
+            "/v1/tools/call",
+            json!({
+                "capability_id": "fixture.save", "args": {"attempt": 1}
+            }),
+        )
+        .await;
+        let failure = rest(
+            router,
+            Method::POST,
+            "/v1/tools/call",
+            json!({
+                "capability_id": "fixture.save", "args": {"attempt": 2}
+            }),
+        )
+        .await;
+        (success, failure)
+    }
+    .with_subscriber(tracing)
+    .await;
+
+    assert_eq!(success.0, StatusCode::OK);
+    assert_eq!(
+        success.1["data"]["structuredContent"]["Private"],
+        "[REDACTED]"
+    );
+    assert_eq!(failure.0, StatusCode::BAD_GATEWAY);
+    assert_eq!(failure.1["error"]["message"], "Upstream call failed");
+    worker.await.unwrap();
+
+    state.audit_handle.shutdown().await;
+    let (audit, _) = state.audit_store.query(&Default::default()).await;
+    assert_eq!(audit.len(), 2);
+    let mut exported = Vec::new();
+    while let Ok(batch) = observed.try_recv() {
+        exported.extend(batch.as_array().unwrap().iter().cloned());
+    }
+    assert_eq!(exported.len(), 2);
+    let exposures = [
+        std::fs::read_to_string(log).unwrap(),
+        serde_json::to_string(&audit).unwrap(),
+        serde_json::to_string(&exported).unwrap(),
+    ];
+    for text in exposures {
+        assert!(!text.contains("secret-response-758"));
+        assert!(!text.contains("sensitive-12345"));
+        assert!(!text.contains("secret-upstream-error-329"));
+    }
+    collector.abort();
+}
+
+#[tokio::test]
+async fn mcp_http_uses_verified_tenant_scope_for_a_cached_result() {
+    use rmcp::{
+        model::CallToolRequestParams,
+        service::{RoleClient, RunningService},
+        transport::{
+            streamable_http_client::StreamableHttpClientTransportConfig,
+            streamable_http_server::{
+                session::local::LocalSessionManager, StreamableHttpServerConfig,
+                StreamableHttpService,
+            },
+            StreamableHttpClientTransport,
+        },
+        ServiceExt,
+    };
+
+    async fn connect(url: &str, token: &'static str) -> RunningService<RoleClient, ()> {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "X-Warmplane-Key",
+            reqwest::header::HeaderValue::from_static(token),
+        );
+        let client = reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .unwrap();
+        let config = StreamableHttpClientTransportConfig::with_uri(url.to_owned());
+        let transport = StreamableHttpClientTransport::with_client(client, config);
+        ().serve(transport).await.unwrap()
+    }
+
+    async fn request(client: &RunningService<RoleClient, ()>) -> Value {
+        let arguments = json!({
+            "capability_id":"fixture.save",
+            "args":{},
+            "request_id":"same-client-key",
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let reply = client
+            .call_tool(CallToolRequestParams::new("capability_call").with_arguments(arguments))
+            .await
+            .unwrap();
+        reply.structured_content.unwrap()
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let (mut state, mut upstream) = state(&directory.path().join("cache.json"));
+    let rbac = serde_json::from_value(json!({
+        "enabled":true,
+        "defaultRole":"anonymous",
+        "roles":{"caller":{}},
+        "tokens":{
+            "fixture-token-a":{"role":"caller","tenantId":"tenant-a","actorId":"same-actor"},
+            "fixture-token-b":{"role":"caller","tenantId":"tenant-b","actorId":"same-actor"}
+        },
+    }))
+    .unwrap();
+    state.rbac_engine = warmplane::rbac::RbacEngine::new(Some(rbac));
+    let facade = StreamableHttpService::new(
+        move || {
+            Ok(warmplane::mcp_server::FacadeMcpServer::new(
+                state.clone(),
+                None,
+            ))
+        },
+        Arc::new(LocalSessionManager::default()),
+        StreamableHttpServerConfig::default(),
+    );
+    let app = Router::new().route_service("/mcp", facade);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let owner = connect(&url, "fixture-token-a").await;
+    let other = connect(&url, "fixture-token-b").await;
+    let worker = tokio::spawn(async move {
+        let ServerMsg::CallTool { reply, .. } = upstream.recv().await.unwrap() else {
+            panic!("expected a tool call");
+        };
+        reply
+            .send(Ok(
+                json!({"structuredContent": {"private":"confidential-value"}}),
+            ))
+            .unwrap();
+        upstream
+    });
+    let first = tokio::time::timeout(Duration::from_secs(3), request(&owner))
+        .await
+        .unwrap();
+    assert_eq!(
+        first["data"]["structuredContent"]["private"], "[REDACTED]",
+        "{first}"
+    );
+    assert_eq!(request(&owner).await, first);
+    let refused = request(&other).await;
+    assert_eq!(refused["error"]["code"], "POLICY_DENIED");
+    assert!(worker.await.unwrap().try_recv().is_err());
+    server.abort();
+}

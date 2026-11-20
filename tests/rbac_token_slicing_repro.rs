@@ -37,6 +37,7 @@ fn engine_with_token(token: &str) -> RbacEngine {
             undo_permissions: Default::default(),
             allow_agent_self_undo: false,
             manage_trust_controls: false,
+            resolve_approvals: false,
         },
     );
 
