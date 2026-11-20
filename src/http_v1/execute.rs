@@ -1154,17 +1154,6 @@ struct EmissionOrigin<'a> {
 }
 
 impl EmissionOrigin<'_> {
-    async fn hold_seconds(&self, state: &AppState, contract: &ReversibilityConfig) -> u64 {
-        let global_window = state.policy.read().await.hold_window_secs;
-        let profile_window = self
-            .profile
-            .profile_policy
-            .as_ref()
-            .and_then(|policy| policy.hold_window_secs);
-        crate::emissions::effective_hold_window_secs(contract, profile_window, global_window)
-            .unwrap_or(30)
-    }
-
     fn record(&self, release_at_ms: u64, approval_completed: bool) -> EmissionRecord {
         EmissionRecord {
             idempotency_claim: self.claim,
@@ -1192,7 +1181,8 @@ impl EmissionOrigin<'_> {
         args: Value,
         idempotency_key: Option<&str>,
     ) {
-        let hold_secs = self.hold_seconds(state, contract).await;
+        let hold_secs =
+            crate::emissions::resolve_call_hold_window_secs(state, self.profile, contract).await;
         let release_at_ms = match crate::emissions::release_deadline_ms(hold_secs) {
             Ok(release_at_ms) => release_at_ms,
             Err(error) => {
@@ -1282,7 +1272,12 @@ impl HeldCall<'_> {
         &self,
         contract: &ReversibilityConfig,
     ) -> Result<(u64, u64), CallRejection> {
-        let seconds = self.origin.hold_seconds(self.state, contract).await;
+        let seconds = crate::emissions::resolve_call_hold_window_secs(
+            self.state,
+            self.origin.profile,
+            contract,
+        )
+        .await;
         let hold_ms = seconds.checked_mul(1_000).ok_or_else(|| {
             CallRejection::new("INVALID_HOLD_WINDOW", "Hold window overflows milliseconds")
         })?;

@@ -29,6 +29,19 @@ pub fn effective_hold_window_secs(
     })
 }
 
+pub(crate) async fn resolve_call_hold_window_secs(
+    state: &AppState,
+    profile: &crate::context::ProfileContext,
+    contract: &ReversibilityConfig,
+) -> u64 {
+    let global_window = state.policy.read().await.hold_window_secs;
+    let profile_window = profile
+        .profile_policy
+        .as_ref()
+        .and_then(|policy| policy.hold_window_secs);
+    effective_hold_window_secs(contract, profile_window, global_window).unwrap_or(30)
+}
+
 /// Converts a hold duration to an absolute Unix deadline, checking overflow.
 pub fn release_deadline_ms(duration_secs: u64) -> Result<u64> {
     let duration_ms = duration_secs

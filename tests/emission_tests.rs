@@ -995,6 +995,71 @@ async fn batch_waits_for_held_result_before_interpolating_the_next_step() {
 }
 
 #[tokio::test]
+async fn automatic_rollback_stops_the_batch_when_a_held_step_fails() {
+    let (state, mut upstream) = create_state();
+    let batch_state = state.clone();
+    let mut batch = tokio::spawn(async move {
+        use warmplane::batch_executor::{
+            execute_batch_for_tenant_with_rollback, BatchExecutionScope, BatchStep,
+        };
+
+        let steps = ["first", "second"].map(|id| BatchStep {
+            id: id.to_string(),
+            capability_id: "mail.send".to_string(),
+            args: json!({"body": id}),
+            continue_on_error: true,
+        });
+        let policy = warmplane::daemon::Policy::default();
+        let profile = warmplane::context::ProfileContext::unrestricted();
+        let role = batch_state.rbac_engine.default_role();
+        execute_batch_for_tenant_with_rollback(
+            &batch_state,
+            steps.into(),
+            "trace-held-rollback".to_string(),
+            Some("batch-held-rollback".to_string()),
+            None,
+            BatchExecutionScope {
+                policy: &policy,
+                profile: &profile,
+                tenant_id: "default",
+                role: &role,
+                authorization_expires_at_epoch_secs: None,
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
+            },
+            true,
+        )
+        .await
+    });
+
+    let Some(ServerMsg::CallTool { params, reply, .. }) =
+        tokio::time::timeout(Duration::from_secs(3), upstream.recv())
+            .await
+            .unwrap()
+    else {
+        panic!("expected the first batch step to dispatch");
+    };
+    assert_eq!(params["body"], "first");
+    reply
+        .send(Err(warmplane::daemon::UpstreamCallError::Upstream(
+            "message delivery failed".to_string(),
+        )))
+        .unwrap();
+
+    let result = tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::select! {
+            result = &mut batch => result.unwrap(),
+            _ = upstream.recv() => panic!("a later batch step reached the upstream after failure"),
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!result.ok);
+    assert_eq!(result.results.len(), 1);
+    assert_eq!(result.results[0].id, "first");
+    assert_eq!(state.task_registry.list_tasks().await.len(), 1);
+}
+
+#[tokio::test]
 async fn cancelling_batch_operation_stops_the_current_hold_and_later_steps() {
     let (state, mut upstream) = create_state();
     let batch_state = state.clone();
