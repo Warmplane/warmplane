@@ -277,11 +277,10 @@ impl UndoLedgerStore {
         status: crate::undo::UndoEntryStatus,
     ) -> Result<UndoEntry> {
         let previous = std::mem::replace(&mut ledger.entries[index].status, status);
-        self.storage.save(ledger).map_err(|error| {
+        self.storage.save(ledger).inspect_err(|error| {
             if !error.is::<ReplacementDurabilityUnknown>() {
                 ledger.entries[index].status = previous;
             }
-            error
         })?;
         Ok(ledger.entries[index].clone())
     }
