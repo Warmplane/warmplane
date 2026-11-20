@@ -1021,50 +1021,37 @@ pub fn resolve_client_port(
 }
 
 fn validate_config(config: &McpConfig) -> Result<()> {
-    fn validate_hold_window(value: Option<u64>, context: &str) -> Result<()> {
-        if let Some(seconds) = value {
-            if seconds == 0 || seconds.checked_mul(1000).is_none() {
-                anyhow::bail!(
-                    "{} must be between 1 and {} seconds",
-                    context,
-                    u64::MAX / 1000
-                );
-            }
+    validate_policy_holds_and_webhooks(config)?;
+    validate_reversibility_contracts(&config.capability_aliases)?;
+    for (server_id, server) in &config.mcp_servers {
+        validate_server_transport(server_id, server)?;
+        if let Some(auth) = &server.auth {
+            validate_server_auth(server_id, auth)?;
         }
-        Ok(())
     }
+    validate_rbac(config.rbac.as_ref())?;
+    validate_profile_references(config)?;
+    validate_mcp_http_server(config)
+}
 
+fn validate_hold_window(value: Option<u64>, context: &str) -> Result<()> {
+    if let Some(seconds) = value {
+        if seconds == 0 || seconds.checked_mul(1000).is_none() {
+            anyhow::bail!(
+                "{} must be between 1 and {} seconds",
+                context,
+                u64::MAX / 1000
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_policy_holds_and_webhooks(config: &McpConfig) -> Result<()> {
     if let Some(policy) = &config.policy {
         validate_hold_window(policy.hold_window_secs, "policy.holdWindowSecs")?;
         if let Some(webhook) = &policy.webhook {
-            for event in ["undo.action_available", "emission.held"] {
-                if webhook.events.iter().any(|configured| configured == event) {
-                    if webhook.secret.is_none() && webhook.secret_env.is_none() {
-                        anyhow::bail!("policy.webhook.secret or secretEnv is required when subscribing to {event}");
-                    }
-                    if webhook.callback_url.as_deref().is_none_or(str::is_empty) {
-                        anyhow::bail!(
-                            "policy.webhook.callbackUrl is required when subscribing to {event}"
-                        );
-                    }
-                    let role = webhook
-                        .action_role
-                        .as_deref()
-                        .filter(|role| !role.trim().is_empty())
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "policy.webhook.actionRole is required when subscribing to {event}"
-                            )
-                        })?;
-                    if config.rbac.as_ref().is_some_and(|rbac| rbac.enabled) {
-                        let role_config =
-                            config.rbac.as_ref().and_then(|rbac| rbac.roles.get(role));
-                        if !role_config.is_some_and(|role| role.undo_permissions.execute) {
-                            anyhow::bail!("policy.webhook.actionRole must name an RBAC role with undoPermissions.execute for {event}");
-                        }
-                    }
-                }
-            }
+            validate_action_webhook(webhook, config.rbac.as_ref())?;
         }
     }
     for (name, profile) in &config.profiles {
@@ -1075,125 +1062,61 @@ fn validate_config(config: &McpConfig) -> Result<()> {
             )?;
         }
     }
-    for (alias, target) in &config.capability_aliases {
+    Ok(())
+}
+
+fn validate_action_webhook(
+    webhook: &WebhookConfig,
+    rbac: Option<&crate::rbac::RbacConfig>,
+) -> Result<()> {
+    for event in ["undo.action_available", "emission.held"] {
+        if webhook.events.iter().any(|configured| configured == event) {
+            validate_webhook_subscription(event, webhook, rbac)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_webhook_subscription(
+    event: &str,
+    webhook: &WebhookConfig,
+    rbac: Option<&crate::rbac::RbacConfig>,
+) -> Result<()> {
+    if webhook.secret.is_none() && webhook.secret_env.is_none() {
+        anyhow::bail!("policy.webhook.secret or secretEnv is required when subscribing to {event}");
+    }
+    if webhook.callback_url.as_deref().is_none_or(str::is_empty) {
+        anyhow::bail!("policy.webhook.callbackUrl is required when subscribing to {event}");
+    }
+    let role = webhook
+        .action_role
+        .as_deref()
+        .filter(|role| !role.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("policy.webhook.actionRole is required when subscribing to {event}")
+        })?;
+    if let Some(rbac) = rbac.filter(|rbac| rbac.enabled) {
+        let role_config = rbac.roles.get(role);
+        if !role_config.is_some_and(|role| role.undo_permissions.execute) {
+            anyhow::bail!("policy.webhook.actionRole must name an RBAC role with undoPermissions.execute for {event}");
+        }
+    }
+    Ok(())
+}
+
+fn validate_reversibility_contracts(
+    capability_aliases: &HashMap<String, AliasTarget>,
+) -> Result<()> {
+    for (alias, target) in capability_aliases {
         if let Some(contract) = target.reversibility() {
-            validate_hold_window(
-                contract.hold_window_secs,
-                &format!("capabilityAliases.{}.reversibility.holdWindowSecs", alias),
-            )?;
-            validate_hold_window(
-                contract.ttl_secs,
-                &format!("capabilityAliases.{}.reversibility.ttlSecs", alias),
-            )?;
-            if contract.daily_limit == Some(0) {
-                anyhow::bail!(
-                    "capabilityAliases.{}.reversibility.dailyLimit must be greater than zero",
-                    alias
-                );
-            }
-            if contract.hold_window_secs.is_some()
-                && contract.class != ReversibilityClass::Delayable
-            {
-                anyhow::bail!(
-                    "capabilityAliases.{}.reversibility.holdWindowSecs is only valid for delayable class",
-                    alias
-                );
-            }
-            if contract.daily_limit.is_some() && contract.class != ReversibilityClass::Compensable {
-                anyhow::bail!(
-                    "capabilityAliases.{}.reversibility.dailyLimit is only valid for compensable class",
-                    alias
-                );
-            }
-            if contract.ttl_secs.is_some()
-                && !matches!(
-                    contract.class,
-                    ReversibilityClass::Reversible | ReversibilityClass::Compensable
-                )
-            {
-                anyhow::bail!(
-                    "capabilityAliases.{}.reversibility.ttlSecs is only valid for reversible and compensable classes",
-                    alias
-                );
-            }
-            if matches!(
-                contract.class,
-                ReversibilityClass::Reversible | ReversibilityClass::Compensable
-            ) && contract.inverse.is_none()
-            {
-                anyhow::bail!("capabilityAliases.{}.reversibility.inverse is required for reversible and compensable classes", alias);
-            }
-            if contract.inverse.is_some()
-                && !matches!(
-                    contract.class,
-                    ReversibilityClass::Reversible | ReversibilityClass::Compensable
-                )
-            {
-                anyhow::bail!(
-                    "capabilityAliases.{}.reversibility.inverse is only valid for reversible and compensable classes",
-                    alias
-                );
-            }
-            if contract.class == ReversibilityClass::Compensable && contract.daily_limit.is_none() {
-                anyhow::bail!("capabilityAliases.{}.reversibility.dailyLimit is required for compensable class", alias);
-            }
-            if contract.pre_snapshot.is_some()
-                && !matches!(
-                    contract.class,
-                    ReversibilityClass::Reversible | ReversibilityClass::Compensable
-                )
-            {
-                anyhow::bail!(
-                    "capabilityAliases.{}.reversibility.preSnapshot is only valid for reversible and compensable classes",
-                    alias
-                );
-            }
-            if contract.pre_undo_check.is_some()
-                && !matches!(
-                    contract.class,
-                    ReversibilityClass::Reversible | ReversibilityClass::Compensable
-                )
-            {
-                anyhow::bail!(
-                    "capabilityAliases.{}.reversibility.preUndoCheck is only valid for reversible and compensable classes",
-                    alias
-                );
-            }
-            if let Some(check) = &contract.pre_undo_check {
-                if check.capability.trim().is_empty() || !check.args.is_object() {
-                    anyhow::bail!("capabilityAliases.{}.reversibility.preUndoCheck requires a capability and object args", alias);
-                }
-            }
-            if contract.test_target.is_some()
-                && !matches!(
-                    contract.class,
-                    ReversibilityClass::Reversible | ReversibilityClass::Compensable
-                )
-            {
-                anyhow::bail!("capabilityAliases.{}.reversibility.testTarget is only valid for reversible and compensable classes", alias);
-            }
-            if let Some(test_target) = &contract.test_target {
-                if test_target.server.trim().is_empty() || !test_target.args.is_object() {
-                    anyhow::bail!("capabilityAliases.{}.reversibility.testTarget requires a server and object args", alias);
-                }
-                if contract.pre_snapshot.is_none() {
-                    anyhow::bail!("capabilityAliases.{}.reversibility.testTarget requires preSnapshot to verify observational equivalence", alias);
-                }
-            }
-            if let Some(snapshot) = &contract.pre_snapshot {
-                if snapshot.capability.trim().is_empty() || !snapshot.args.is_object() {
-                    anyhow::bail!("capabilityAliases.{}.reversibility.preSnapshot requires a capability and object args", alias);
-                }
-            }
-            if let Some(inverse) = &contract.inverse {
-                if inverse.capability.trim().is_empty() || !inverse.args.is_object() {
-                    anyhow::bail!("capabilityAliases.{}.reversibility.inverse requires a capability and object args", alias);
-                }
-            }
+            validate_contract_limits(alias, contract)?;
+            validate_contract_requirements(alias, contract)?;
+            validate_contract_verification(alias, contract)?;
+            validate_snapshot_and_inverse(alias, contract)?;
         }
     }
     let mut contracts = HashMap::new();
-    for (alias, target) in &config.capability_aliases {
+    for (alias, target) in capability_aliases {
         if let Some(contract) = target.reversibility() {
             match contracts.insert(target.target(), contract) {
                 Some(existing) if existing != contract => anyhow::bail!(
@@ -1204,124 +1127,246 @@ fn validate_config(config: &McpConfig) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
 
-    for (server_id, server) in &config.mcp_servers {
-        let has_command = server
-            .command
-            .as_ref()
-            .map(|s| !s.trim().is_empty())
-            .unwrap_or(false);
-        let has_url = server
-            .url
-            .as_ref()
-            .map(|s| !s.trim().is_empty())
-            .unwrap_or(false);
+fn requires_inverse(contract: &ReversibilityConfig) -> bool {
+    matches!(
+        contract.class,
+        ReversibilityClass::Reversible | ReversibilityClass::Compensable
+    )
+}
 
-        match (has_command, has_url) {
-            (true, true) => {
-                anyhow::bail!(
-                    "Server '{}' is ambiguous: configure exactly one of 'command' or 'url'",
-                    server_id
-                );
-            }
-            (false, false) => {
-                anyhow::bail!(
-                    "Server '{}' is invalid: configure exactly one of 'command' or 'url'",
-                    server_id
-                );
-            }
-            _ => {}
+fn validate_contract_limits(alias: &str, contract: &ReversibilityConfig) -> Result<()> {
+    validate_hold_window(
+        contract.hold_window_secs,
+        &format!("capabilityAliases.{}.reversibility.holdWindowSecs", alias),
+    )?;
+    validate_hold_window(
+        contract.ttl_secs,
+        &format!("capabilityAliases.{}.reversibility.ttlSecs", alias),
+    )?;
+    if contract.daily_limit == Some(0) {
+        anyhow::bail!(
+            "capabilityAliases.{}.reversibility.dailyLimit must be greater than zero",
+            alias
+        );
+    }
+    if contract.hold_window_secs.is_some() && contract.class != ReversibilityClass::Delayable {
+        anyhow::bail!(
+            "capabilityAliases.{}.reversibility.holdWindowSecs is only valid for delayable class",
+            alias
+        );
+    }
+    if contract.daily_limit.is_some() && contract.class != ReversibilityClass::Compensable {
+        anyhow::bail!(
+            "capabilityAliases.{}.reversibility.dailyLimit is only valid for compensable class",
+            alias
+        );
+    }
+    if contract.ttl_secs.is_some() && !requires_inverse(contract) {
+        anyhow::bail!(
+            "capabilityAliases.{}.reversibility.ttlSecs is only valid for reversible and compensable classes",
+            alias
+        );
+    }
+    Ok(())
+}
+
+fn validate_contract_requirements(alias: &str, contract: &ReversibilityConfig) -> Result<()> {
+    let requires_inverse = requires_inverse(contract);
+    match (requires_inverse, contract.inverse.is_some()) {
+        (true, false) => anyhow::bail!(
+            "capabilityAliases.{}.reversibility.inverse is required for reversible and compensable classes",
+            alias
+        ),
+        (false, true) => anyhow::bail!(
+            "capabilityAliases.{}.reversibility.inverse is only valid for reversible and compensable classes",
+            alias
+        ),
+        _ => {}
+    }
+    if contract.class == ReversibilityClass::Compensable && contract.daily_limit.is_none() {
+        anyhow::bail!(
+            "capabilityAliases.{}.reversibility.dailyLimit is required for compensable class",
+            alias
+        );
+    }
+    if contract.pre_snapshot.is_some() && !requires_inverse {
+        anyhow::bail!(
+            "capabilityAliases.{}.reversibility.preSnapshot is only valid for reversible and compensable classes",
+            alias
+        );
+    }
+    if contract.pre_undo_check.is_some() && !requires_inverse {
+        anyhow::bail!(
+            "capabilityAliases.{}.reversibility.preUndoCheck is only valid for reversible and compensable classes",
+            alias
+        );
+    }
+    Ok(())
+}
+
+fn validate_contract_verification(alias: &str, contract: &ReversibilityConfig) -> Result<()> {
+    if let Some(check) = &contract.pre_undo_check {
+        if check.capability.trim().is_empty() || !check.args.is_object() {
+            anyhow::bail!("capabilityAliases.{}.reversibility.preUndoCheck requires a capability and object args", alias);
         }
+    }
+    if contract.test_target.is_some() && !requires_inverse(contract) {
+        anyhow::bail!("capabilityAliases.{}.reversibility.testTarget is only valid for reversible and compensable classes", alias);
+    }
+    if let Some(test_target) = &contract.test_target {
+        if test_target.server.trim().is_empty() || !test_target.args.is_object() {
+            anyhow::bail!(
+                "capabilityAliases.{}.reversibility.testTarget requires a server and object args",
+                alias
+            );
+        }
+        if contract.pre_snapshot.is_none() {
+            anyhow::bail!("capabilityAliases.{}.reversibility.testTarget requires preSnapshot to verify observational equivalence", alias);
+        }
+    }
+    Ok(())
+}
 
-        if has_command {
-            if server.auth.is_some() {
+fn validate_snapshot_and_inverse(alias: &str, contract: &ReversibilityConfig) -> Result<()> {
+    if let Some(snapshot) = &contract.pre_snapshot {
+        if snapshot.capability.trim().is_empty() || !snapshot.args.is_object() {
+            anyhow::bail!("capabilityAliases.{}.reversibility.preSnapshot requires a capability and object args", alias);
+        }
+    }
+    if let Some(inverse) = &contract.inverse {
+        if inverse.capability.trim().is_empty() || !inverse.args.is_object() {
+            anyhow::bail!(
+                "capabilityAliases.{}.reversibility.inverse requires a capability and object args",
+                alias
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_server_transport(server_id: &str, server: &ServerConfig) -> Result<()> {
+    let has_command = server
+        .command
+        .as_ref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let has_url = server
+        .url
+        .as_ref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+
+    match (has_command, has_url) {
+        (true, true) => {
+            anyhow::bail!(
+                "Server '{}' is ambiguous: configure exactly one of 'command' or 'url'",
+                server_id
+            );
+        }
+        (false, false) => {
+            anyhow::bail!(
+                "Server '{}' is invalid: configure exactly one of 'command' or 'url'",
+                server_id
+            );
+        }
+        _ => {}
+    }
+
+    if has_command {
+        if server.auth.is_some() {
+            anyhow::bail!(
+                "Server '{}' uses stdio ('command') and cannot define 'auth'",
+                server_id
+            );
+        }
+        if !server.headers.is_empty() {
+            anyhow::bail!(
+                "Server '{}' uses stdio ('command') and cannot define HTTP 'headers'",
+                server_id
+            );
+        }
+        if server.protocol_version.is_some() {
+            anyhow::bail!(
+                "Server '{}' uses stdio ('command') and cannot define 'protocolVersion'",
+                server_id
+            );
+        }
+        if server.allow_stateless.is_some() {
+            anyhow::bail!(
+                "Server '{}' uses stdio ('command') and cannot define 'allowStateless'",
+                server_id
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_server_auth(server_id: &str, auth: &AuthConfig) -> Result<()> {
+    match auth {
+        AuthConfig::Bearer { token, token_env } => {
+            let has_token = token.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
+            let has_token_env = token_env
+                .as_ref()
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            if has_token == has_token_env {
                 anyhow::bail!(
-                    "Server '{}' uses stdio ('command') and cannot define 'auth'",
-                    server_id
-                );
-            }
-            if !server.headers.is_empty() {
-                anyhow::bail!(
-                    "Server '{}' uses stdio ('command') and cannot define HTTP 'headers'",
-                    server_id
-                );
-            }
-            if server.protocol_version.is_some() {
-                anyhow::bail!(
-                    "Server '{}' uses stdio ('command') and cannot define 'protocolVersion'",
-                    server_id
-                );
-            }
-            if server.allow_stateless.is_some() {
-                anyhow::bail!(
-                    "Server '{}' uses stdio ('command') and cannot define 'allowStateless'",
+                    "Server '{}' bearer auth requires exactly one of 'token' or 'tokenEnv'",
                     server_id
                 );
             }
         }
-
-        if let Some(auth) = &server.auth {
-            match auth {
-                AuthConfig::Bearer { token, token_env } => {
-                    let has_token = token.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
-                    let has_token_env = token_env
-                        .as_ref()
-                        .map(|s| !s.trim().is_empty())
-                        .unwrap_or(false);
-                    if has_token == has_token_env {
-                        anyhow::bail!(
-                            "Server '{}' bearer auth requires exactly one of 'token' or 'tokenEnv'",
-                            server_id
-                        );
-                    }
-                }
-                AuthConfig::Basic {
-                    username,
-                    password,
-                    password_env,
-                } => {
-                    if username.trim().is_empty() {
-                        anyhow::bail!(
-                            "Server '{}' basic auth requires non-empty 'username'",
-                            server_id
-                        );
-                    }
-                    let has_password = password.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
-                    let has_password_env = password_env
-                        .as_ref()
-                        .map(|s| !s.trim().is_empty())
-                        .unwrap_or(false);
-                    if has_password == has_password_env {
-                        anyhow::bail!(
-                            "Server '{}' basic auth requires exactly one of 'password' or 'passwordEnv'",
-                            server_id
-                        );
-                    }
-                }
-                AuthConfig::Oauth2 {
-                    client_id,
-                    authorization_server_url,
-                    scopes: _,
-                    client_metadata_url: _,
-                } => {
-                    if client_id.trim().is_empty() {
-                        anyhow::bail!(
-                            "Server '{}' oauth2 auth requires non-empty 'clientId'",
-                            server_id
-                        );
-                    }
-                    if authorization_server_url.trim().is_empty() {
-                        anyhow::bail!(
-                            "Server '{}' oauth2 auth requires non-empty 'authorizationServerUrl'",
-                            server_id
-                        );
-                    }
-                }
+        AuthConfig::Basic {
+            username,
+            password,
+            password_env,
+        } => {
+            if username.trim().is_empty() {
+                anyhow::bail!(
+                    "Server '{}' basic auth requires non-empty 'username'",
+                    server_id
+                );
+            }
+            let has_password = password.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
+            let has_password_env = password_env
+                .as_ref()
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            if has_password == has_password_env {
+                anyhow::bail!(
+                    "Server '{}' basic auth requires exactly one of 'password' or 'passwordEnv'",
+                    server_id
+                );
+            }
+        }
+        AuthConfig::Oauth2 {
+            client_id,
+            authorization_server_url,
+            scopes: _,
+            client_metadata_url: _,
+        } => {
+            if client_id.trim().is_empty() {
+                anyhow::bail!(
+                    "Server '{}' oauth2 auth requires non-empty 'clientId'",
+                    server_id
+                );
+            }
+            if authorization_server_url.trim().is_empty() {
+                anyhow::bail!(
+                    "Server '{}' oauth2 auth requires non-empty 'authorizationServerUrl'",
+                    server_id
+                );
             }
         }
     }
+    Ok(())
+}
 
-    if let Some(rbac) = &config.rbac {
+fn validate_rbac(rbac: Option<&crate::rbac::RbacConfig>) -> Result<()> {
+    if let Some(rbac) = rbac {
         if rbac.enabled {
             if rbac.default_role.trim().is_empty() {
                 anyhow::bail!("RBAC configuration requires a non-empty 'defaultRole'");
@@ -1339,7 +1384,10 @@ fn validate_config(config: &McpConfig) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
 
+fn validate_profile_references(config: &McpConfig) -> Result<()> {
     for (profile_name, profile) in &config.profiles {
         if profile_name.trim().is_empty() {
             anyhow::bail!("Profile name cannot be empty");
@@ -1354,7 +1402,10 @@ fn validate_config(config: &McpConfig) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
 
+fn validate_mcp_http_server(config: &McpConfig) -> Result<()> {
     // Validate mcpHttpServer block if present
     if let Some(ref http_srv) = config.mcp_http_server {
         // Non-loopback bind requires at least one auth mechanism to prevent open network exposure
@@ -1386,7 +1437,6 @@ fn validate_config(config: &McpConfig) -> Result<()> {
             }
         }
     }
-
     Ok(())
 }
 
