@@ -9,7 +9,12 @@ use axum::{
     Json,
 };
 use serde_json::{json, Value};
-use std::{ops::ControlFlow, sync::atomic::Ordering, time::Instant};
+use std::{
+    collections::BTreeMap,
+    ops::ControlFlow,
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
+};
 use tokio::sync::oneshot;
 use tracing::info;
 
@@ -23,7 +28,9 @@ use crate::{
     },
     idempotency::{ExecutionClaim, IdempotencyClaim, RetryMetadata},
     rbac::TenantContext,
-    tasks::{TaskResponse, TaskStatus},
+    tasks::{
+        CreateTaskParams, EmissionPhase, EmissionRecord, TaskRecord, TaskResponse, TaskStatus,
+    },
 };
 
 /// Handles HTTP POST `/v1/tools/call` executing an MCP tool capability.
@@ -289,75 +296,30 @@ pub async fn handle_call_capability(
                     }
                 }
 
-                if let Some(contract) = reversibility_clone.as_ref().filter(|contract| {
-                    contract.class == crate::config::ReversibilityClass::Delayable
-                }) {
-                    let global_window = state_clone.policy.read().await.hold_window_secs;
-                    let profile_window = profile_clone
-                        .profile_policy
-                        .as_ref()
-                        .and_then(|profile_policy| profile_policy.hold_window_secs);
-                    let hold_secs = crate::emissions::effective_hold_window_secs(
-                        contract,
-                        profile_window,
-                        global_window,
-                    )
-                    .unwrap_or(30);
-                    let emission = match crate::emissions::release_deadline_ms(hold_secs) {
-                        Ok(release_at_ms) => crate::tasks::EmissionRecord {
-                            idempotency_claim,
-                            phase: crate::tasks::EmissionPhase::PendingEmission,
-                            release_at_ms,
-                            cancellable: true,
-                            tool_name: tool_name_clone.clone(),
-                            input_responses: input_responses_clone.clone(),
-                            request_state: request_state_clone.clone(),
-                            profile_id: profile_clone.profile_id.clone(),
-                            tenant_id: tenant_id_clone.clone(),
-                            role: caller_role_clone.clone(),
-                            authorization_expires_at_epoch_secs:
-                                caller_grant_expires_at_epoch_secs_clone,
-                            approval_completed: true,
-                            batch_id: None,
-                            step_id: None,
-                        },
-                        Err(error) => {
-                            let _ = state_clone
-                                .task_registry
-                                .fail_task(
-                                    &task_id_clone,
-                                    serde_json::json!({"code": "INVALID_HOLD_WINDOW"}),
-                                    Some(error.to_string()),
-                                )
-                                .await;
-                            return;
-                        }
-                    };
-                    match state_clone
-                        .hold_coordinator
-                        .queue_existing(&state_clone, &task_id_clone, worker_args.clone(), emission)
-                        .await
-                    {
-                        Ok(Some(_)) | Ok(None) => return,
-                        Err(error) => {
-                            let _ = state_clone
-                                .task_registry
-                                .fail_task(
-                                    &task_id_clone,
-                                    serde_json::json!({"code": "EMISSION_PERSISTENCE_FAILED"}),
-                                    Some(error.to_string()),
-                                )
-                                .await;
-                            state_clone
-                                .idempotency_store
-                                .release_execution(
-                                    idempotency_key_clone.as_deref(),
-                                    idempotency_claim,
-                                )
-                                .await;
-                            return;
-                        }
+                if let Some(contract) = reversibility_clone
+                    .as_ref()
+                    .filter(|contract| contract.class == ReversibilityClass::Delayable)
+                {
+                    EmissionOrigin {
+                        profile: &profile_clone,
+                        tool_name: &tool_name_clone,
+                        input_responses: input_responses_clone.as_ref(),
+                        request_state: request_state_clone.as_deref(),
+                        tenant_id: &tenant_id_clone,
+                        role: &caller_role_clone,
+                        authorization_expires_at_epoch_secs:
+                            caller_grant_expires_at_epoch_secs_clone,
+                        claim: idempotency_claim,
                     }
+                    .queue_after_approval(
+                        &state_clone,
+                        contract,
+                        &task_id_clone,
+                        worker_args,
+                        idempotency_key_clone.as_deref(),
+                    )
+                    .await;
+                    return;
                 }
 
                 let (snapshot, snapshot_hash) = match capture_call_snapshot(
@@ -790,208 +752,34 @@ pub async fn handle_call_capability(
 
     if let Some(contract) = reversibility
         .as_ref()
-        .filter(|contract| contract.class == crate::config::ReversibilityClass::Delayable)
+        .filter(|contract| contract.class == ReversibilityClass::Delayable)
     {
-        let global_window = state.policy.read().await.hold_window_secs;
-        let profile_window = prof_ctx
-            .profile_policy
-            .as_ref()
-            .and_then(|profile_policy| profile_policy.hold_window_secs);
-        let hold_secs =
-            crate::emissions::effective_hold_window_secs(contract, profile_window, global_window)
-                .unwrap_or(30);
-        let hold_ms = match hold_secs.checked_mul(1_000) {
-            Some(value) => value,
-            None => {
-                state.operation_registry.unregister(&request_id).await;
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(error_envelope(
-                        trace_id,
-                        Some(request_id),
-                        Some(req_context),
-                        retry_base("not_started"),
-                        "INVALID_HOLD_WINDOW",
-                        "Hold window overflows milliseconds",
-                        false,
-                    )),
-                )
-                    .into_response();
-            }
-        };
-        let release_at_ms = match crate::emissions::release_deadline_ms(hold_secs) {
-            Ok(deadline) => deadline,
-            Err(error) => {
-                state.operation_registry.unregister(&request_id).await;
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(error_envelope(
-                        trace_id,
-                        Some(request_id),
-                        Some(req_context),
-                        retry_base("not_started"),
-                        "INVALID_HOLD_WINDOW",
-                        error.to_string(),
-                        false,
-                    )),
-                )
-                    .into_response();
-            }
-        };
-        let emission = crate::tasks::EmissionRecord {
-            idempotency_claim,
-            phase: crate::tasks::EmissionPhase::PendingEmission,
-            release_at_ms,
-            cancellable: true,
-            tool_name: tool_name.clone(),
-            input_responses: payload.input_responses.clone(),
-            request_state: payload.request_state.clone(),
-            profile_id: prof_ctx.profile_id.clone(),
-            tenant_id: tenant_id.clone(),
-            role: caller_role.clone(),
-            authorization_expires_at_epoch_secs: caller_grant_expires_at_epoch_secs,
-            approval_completed: requires_approval,
-            batch_id: None,
-            step_id: None,
-        };
-        let existing_task = state
-            .task_registry
-            .list_tasks()
-            .await
-            .into_iter()
-            .find(|task| {
-                task.request_id.as_deref() == Some(request_id.as_str()) && task.emission.is_none()
-            });
-        let accepted = if let Some(existing) = existing_task {
-            state
-                .hold_coordinator
-                .queue_existing(&state, &existing.task_id, effective_args.clone(), emission)
-                .await
-                .context("failed to persist approved emission")
-        } else {
-            state
-                .hold_coordinator
-                .accept(
-                    &state,
-                    crate::tasks::CreateTaskParams {
-                        capability_id: payload.capability_id.clone(),
-                        server_id: server_id.clone(),
-                        args: effective_args.clone(),
-                        request_id: Some(request_id.clone()),
-                        context: Some(req_context.clone()),
-                        idempotency_key: idempotency_key.clone(),
-                        initial_status: crate::tasks::TaskStatus::Working,
-                        status_message: Some(
-                            "Waiting for the emission release deadline".to_string(),
-                        ),
-                        input_requests: None,
-                        ttl_ms: None,
-                        poll_interval_ms: Some(1_000),
-                    },
-                    emission,
-                )
-                .await
-                .map(Some)
-        };
-        let task = match accepted {
-            Ok(Some(task)) => task,
-            Ok(None) => {
-                state.operation_registry.unregister(&request_id).await;
-                return (
-                    StatusCode::CONFLICT,
-                    Json(error_envelope(
-                        trace_id,
-                        Some(request_id),
-                        Some(req_context),
-                        retry_base("not_started"),
-                        "EMISSION_TASK_STATE_INVALID",
-                        "Could not attach the approved emission to its task",
-                        false,
-                    )),
-                )
-                    .into_response();
-            }
-            Err(error) => {
-                release_registered_call(
-                    &state,
-                    &request_id,
-                    idempotency_key.as_deref(),
-                    idempotency_claim,
-                )
-                .await;
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    Json(error_envelope(
-                        trace_id,
-                        Some(request_id),
-                        Some(req_context),
-                        retry_base("not_started"),
-                        "EMISSION_PERSISTENCE_FAILED",
-                        error.to_string(),
-                        true,
-                    )),
-                )
-                    .into_response();
-            }
-        };
-        state.operation_registry.unregister(&request_id).await;
-        let prefer_async = payload.async_task
-            || headers
-                .get("prefer")
-                .and_then(|header| header.to_str().ok())
-                .is_some_and(|value| value.to_ascii_lowercase().contains("respond-async"));
-        if !prefer_async && hold_ms < state.tool_timeout_ms {
-            let wait =
-                std::time::Duration::from_millis(hold_ms.saturating_add(state.tool_timeout_ms));
-            if let Some(finished) = state
-                .hold_coordinator
-                .wait_for_terminal(&state, &task.task_id, wait)
-                .await
-            {
-                match finished.status {
-                    crate::tasks::TaskStatus::Completed => {
-                        let data = finished.result.unwrap_or(Value::Null);
-                        return (StatusCode::OK, Json(json!({"ok": true, "request_id": request_id, "context": req_context, "trace_id": trace_id, "data": data, "error": null, "retry": retry_base("completed")}))).into_response();
-                    }
-                    crate::tasks::TaskStatus::Failed | crate::tasks::TaskStatus::Cancelled => {
-                        let code = finished
-                            .error
-                            .as_ref()
-                            .and_then(|error| error.get("code"))
-                            .and_then(Value::as_str)
-                            .unwrap_or("EMISSION_FAILED");
-                        let message = finished
-                            .status_message
-                            .unwrap_or_else(|| "Held emission did not complete".to_string());
-                        return (
-                            StatusCode::BAD_GATEWAY,
-                            Json(error_envelope(
-                                trace_id,
-                                Some(request_id),
-                                Some(req_context),
-                                retry_base("completed"),
-                                code,
-                                message,
-                                false,
-                            )),
-                        )
-                            .into_response();
-                    }
-                    _ => {}
-                }
-            }
+        return HeldCall {
+            state: &state,
+            identity: CallIdentity {
+                trace_id,
+                request_id,
+                req_context,
+                client_ip,
+                idempotency_key,
+                retry_base,
+                start_time,
+            },
+            payload: &payload,
+            server_id: &server_id,
+            origin: EmissionOrigin {
+                profile: &prof_ctx,
+                tool_name: &tool_name,
+                input_responses: payload.input_responses.as_ref(),
+                request_state: payload.request_state.as_deref(),
+                tenant_id: &tenant_id,
+                role: &caller_role,
+                authorization_expires_at_epoch_secs: caller_grant_expires_at_epoch_secs,
+                claim: idempotency_claim,
+            },
         }
-        return (
-            StatusCode::ACCEPTED,
-            Json(json!({
-                "ok": true,
-                "resultType": "task",
-                "task": crate::tasks::TaskResponse::from(&task),
-                "request_id": request_id,
-                "trace_id": trace_id,
-            })),
-        )
-            .into_response();
+        .schedule(contract, effective_args, requires_approval, &headers)
+        .await;
     }
 
     let (snapshot, snapshot_hash) = match capture_call_snapshot(
@@ -1354,6 +1142,290 @@ pub async fn handle_call_capability(
     }
 }
 
+struct EmissionOrigin<'a> {
+    profile: &'a ProfileContext,
+    tool_name: &'a str,
+    input_responses: Option<&'a BTreeMap<String, Value>>,
+    request_state: Option<&'a str>,
+    tenant_id: &'a str,
+    role: &'a str,
+    authorization_expires_at_epoch_secs: Option<u64>,
+    claim: Option<IdempotencyClaim>,
+}
+
+impl EmissionOrigin<'_> {
+    async fn hold_seconds(&self, state: &AppState, contract: &ReversibilityConfig) -> u64 {
+        let global_window = state.policy.read().await.hold_window_secs;
+        let profile_window = self
+            .profile
+            .profile_policy
+            .as_ref()
+            .and_then(|policy| policy.hold_window_secs);
+        crate::emissions::effective_hold_window_secs(contract, profile_window, global_window)
+            .unwrap_or(30)
+    }
+
+    fn record(&self, release_at_ms: u64, approval_completed: bool) -> EmissionRecord {
+        EmissionRecord {
+            idempotency_claim: self.claim,
+            phase: EmissionPhase::PendingEmission,
+            release_at_ms,
+            cancellable: true,
+            tool_name: self.tool_name.to_owned(),
+            input_responses: self.input_responses.cloned(),
+            request_state: self.request_state.map(str::to_owned),
+            profile_id: self.profile.profile_id.clone(),
+            tenant_id: self.tenant_id.to_owned(),
+            role: self.role.to_owned(),
+            authorization_expires_at_epoch_secs: self.authorization_expires_at_epoch_secs,
+            approval_completed,
+            batch_id: None,
+            step_id: None,
+        }
+    }
+
+    async fn queue_after_approval(
+        &self,
+        state: &AppState,
+        contract: &ReversibilityConfig,
+        task_id: &str,
+        args: Value,
+        idempotency_key: Option<&str>,
+    ) {
+        let hold_secs = self.hold_seconds(state, contract).await;
+        let release_at_ms = match crate::emissions::release_deadline_ms(hold_secs) {
+            Ok(release_at_ms) => release_at_ms,
+            Err(error) => {
+                let _ = state
+                    .task_registry
+                    .fail_task(
+                        task_id,
+                        json!({"code": "INVALID_HOLD_WINDOW"}),
+                        Some(error.to_string()),
+                    )
+                    .await;
+                return;
+            }
+        };
+        if let Err(error) = state
+            .hold_coordinator
+            .queue_existing(state, task_id, args, self.record(release_at_ms, true))
+            .await
+        {
+            let _ = state
+                .task_registry
+                .fail_task(
+                    task_id,
+                    json!({"code": "EMISSION_PERSISTENCE_FAILED"}),
+                    Some(error.to_string()),
+                )
+                .await;
+            state
+                .idempotency_store
+                .release_execution(idempotency_key, self.claim)
+                .await;
+        }
+    }
+}
+
+struct HeldCall<'a> {
+    state: &'a AppState,
+    identity: CallIdentity,
+    payload: &'a CallCapabilityRequest,
+    server_id: &'a str,
+    origin: EmissionOrigin<'a>,
+}
+
+impl HeldCall<'_> {
+    async fn schedule(
+        &self,
+        contract: &ReversibilityConfig,
+        args: Value,
+        approval_completed: bool,
+        headers: &HeaderMap,
+    ) -> Response {
+        let (hold_ms, release_at_ms) = match self.hold_deadline(contract).await {
+            Ok(deadline) => deadline,
+            Err(error) => return self.reject(StatusCode::BAD_REQUEST, error).await,
+        };
+        let emission = self.origin.record(release_at_ms, approval_completed);
+        let task = match self.persist(args, emission).await {
+            Ok(Some(task)) => task,
+            Ok(None) => {
+                return self
+                    .reject(
+                        StatusCode::CONFLICT,
+                        CallRejection::new(
+                            "EMISSION_TASK_STATE_INVALID",
+                            "Could not attach the approved emission to its task",
+                        ),
+                    )
+                    .await
+            }
+            Err(error) => return self.persistence_failure(error).await,
+        };
+        self.unregister().await;
+        let prefer_async = self.payload.async_task
+            || headers
+                .get("prefer")
+                .and_then(|header| header.to_str().ok())
+                .is_some_and(|value| value.to_ascii_lowercase().contains("respond-async"));
+        if !prefer_async && hold_ms < self.state.tool_timeout_ms {
+            if let Some(response) = self.wait_for_result(&task.task_id, hold_ms).await {
+                return response;
+            }
+        }
+        self.identity.held_receipt(StatusCode::ACCEPTED, &task)
+    }
+
+    async fn hold_deadline(
+        &self,
+        contract: &ReversibilityConfig,
+    ) -> Result<(u64, u64), CallRejection> {
+        let seconds = self.origin.hold_seconds(self.state, contract).await;
+        let hold_ms = seconds.checked_mul(1_000).ok_or_else(|| {
+            CallRejection::new("INVALID_HOLD_WINDOW", "Hold window overflows milliseconds")
+        })?;
+        let release_at_ms = crate::emissions::release_deadline_ms(seconds)
+            .map_err(|error| CallRejection::new("INVALID_HOLD_WINDOW", error.to_string()))?;
+        Ok((hold_ms, release_at_ms))
+    }
+
+    async fn persist(
+        &self,
+        args: Value,
+        emission: EmissionRecord,
+    ) -> anyhow::Result<Option<TaskRecord>> {
+        let id = &self.identity;
+        let coordinator = &self.state.hold_coordinator;
+        let existing = self
+            .state
+            .task_registry
+            .list_tasks()
+            .await
+            .into_iter()
+            .find(|task| {
+                task.request_id.as_deref() == Some(id.request_id.as_str())
+                    && task.emission.is_none()
+            });
+        if let Some(task) = existing {
+            return coordinator
+                .queue_existing(self.state, &task.task_id, args, emission)
+                .await
+                .context("failed to persist approved emission");
+        }
+        coordinator
+            .accept(
+                self.state,
+                CreateTaskParams {
+                    capability_id: self.payload.capability_id.clone(),
+                    server_id: self.server_id.to_owned(),
+                    args,
+                    request_id: Some(id.request_id.clone()),
+                    context: Some(id.req_context.clone()),
+                    idempotency_key: id.idempotency_key.clone(),
+                    initial_status: TaskStatus::Working,
+                    status_message: Some("Waiting for the emission release deadline".to_string()),
+                    input_requests: None,
+                    ttl_ms: None,
+                    poll_interval_ms: Some(1_000),
+                },
+                emission,
+            )
+            .await
+            .map(Some)
+    }
+
+    async fn unregister(&self) {
+        self.state
+            .operation_registry
+            .unregister(&self.identity.request_id)
+            .await;
+    }
+
+    async fn reject(&self, status: StatusCode, error: CallRejection) -> Response {
+        self.unregister().await;
+        self.identity.rejected(status, error)
+    }
+
+    async fn persistence_failure(&self, error: anyhow::Error) -> Response {
+        release_registered_call(
+            self.state,
+            &self.identity.request_id,
+            self.identity.idempotency_key.as_deref(),
+            self.origin.claim,
+        )
+        .await;
+        self.identity.rejected(
+            StatusCode::SERVICE_UNAVAILABLE,
+            CallRejection {
+                code: "EMISSION_PERSISTENCE_FAILED",
+                message: error.to_string(),
+                retryable: true,
+            },
+        )
+    }
+
+    async fn wait_for_result(&self, task_id: &str, hold_ms: u64) -> Option<Response> {
+        let wait = Duration::from_millis(hold_ms.saturating_add(self.state.tool_timeout_ms));
+        let task = self
+            .state
+            .hold_coordinator
+            .wait_for_terminal(self.state, task_id, wait)
+            .await?;
+        self.completed_response(task)
+    }
+
+    fn completed_response(&self, task: TaskRecord) -> Option<Response> {
+        let id = &self.identity;
+        let retry = (id.retry_base)("completed");
+        match task.status {
+            TaskStatus::Completed => Some(
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "ok": true,
+                        "request_id": id.request_id,
+                        "context": id.req_context,
+                        "trace_id": id.trace_id,
+                        "data": task.result.unwrap_or(Value::Null),
+                        "error": null,
+                        "retry": retry,
+                    })),
+                )
+                    .into_response(),
+            ),
+            TaskStatus::Failed | TaskStatus::Cancelled => {
+                let code = task
+                    .error
+                    .as_ref()
+                    .and_then(|error| error.get("code"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("EMISSION_FAILED");
+                let message = task
+                    .status_message
+                    .unwrap_or_else(|| "Held emission did not complete".to_string());
+                Some(
+                    (
+                        StatusCode::BAD_GATEWAY,
+                        Json(error_envelope(
+                            id.trace_id.clone(),
+                            Some(id.request_id.clone()),
+                            Some(id.req_context.clone()),
+                            retry,
+                            code,
+                            message,
+                            false,
+                        )),
+                    )
+                        .into_response(),
+                )
+            }
+            _ => None,
+        }
+    }
+}
+
 struct CallAudit<'a> {
     trace_id: &'a str,
     request_id: &'a str,
@@ -1552,19 +1624,21 @@ impl CallIdentity {
         } else {
             StatusCode::ACCEPTED
         };
-        Some(
-            (
-                status,
-                Json(json!({
-                    "ok": true,
-                    "resultType": "task",
-                    "task": TaskResponse::from(&task),
-                    "request_id": self.request_id,
-                    "trace_id": self.trace_id,
-                })),
-            )
-                .into_response(),
+        Some(self.held_receipt(status, &task))
+    }
+
+    fn held_receipt(&self, status: StatusCode, task: &TaskRecord) -> Response {
+        (
+            status,
+            Json(json!({
+                "ok": true,
+                "resultType": "task",
+                "task": TaskResponse::from(task),
+                "request_id": self.request_id,
+                "trace_id": self.trace_id,
+            })),
         )
+            .into_response()
     }
 
     async fn claim_call(
