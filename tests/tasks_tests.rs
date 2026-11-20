@@ -127,6 +127,7 @@ async fn test_tasks_lifecycle_and_hitl_integration() {
         State(state.clone()),
         axum::extract::Path(task_id.clone()),
         None,
+        None,
         Json(UpdateTaskRequest {
             input_responses: responses,
         }),

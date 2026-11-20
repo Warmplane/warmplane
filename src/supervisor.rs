@@ -638,21 +638,10 @@ async fn reconcile_restarted_catalog(
     new_prompts: Vec<(String, PromptMeta)>,
 ) {
     {
-        let new_cap_map: HashMap<String, CapabilityMeta> = new_capabilities.into_iter().collect();
         let mut caps_guard = state.capabilities.write().await;
-        let stale_keys: Vec<String> = caps_guard
-            .iter()
-            .filter(|(id, meta)| meta.server == server_id && !new_cap_map.contains_key(*id))
-            .map(|(id, _)| id.clone())
-            .collect();
-        for k in stale_keys {
-            caps_guard.remove(&k);
-            state.event_store.record("capability", &k, "removed");
-        }
-        for (id, meta) in new_cap_map {
-            caps_guard.insert(id.clone(), meta);
-            state.event_store.record("capability", &id, "added");
-        }
+        caps_guard.retain(|_, meta| meta.server != server_id);
+        caps_guard.extend(new_capabilities);
+        state.record_tool_catalog_events(server_id, &caps_guard);
     }
     {
         let new_res_map: HashMap<String, ResourceMeta> = new_resources.into_iter().collect();
@@ -690,6 +679,7 @@ async fn reconcile_restarted_catalog(
     }
 
     state.refresh_server_catalog(server_id).await;
+    state.notify_tools_changed();
 }
 
 #[cfg(test)]
@@ -782,7 +772,11 @@ struct PinnedUpstream {
 
 impl PinnedUpstream {
     fn invalidate(&self) {
-        if self.state.tool_pins.invalidate(&self.server, self.session) {
+        if self
+            .state
+            .tool_pins
+            .invalidate(&self.server, self.session, &self.state.event_store)
+        {
             self.state.notify_tools_changed();
             self.state
                 .notify_tool_quarantine(&self.server, "observation_unavailable");
@@ -809,21 +803,19 @@ impl PinnedUpstream {
         }
     }
 
-    fn publish(&self, discovered: &PinnedDiscovery) -> bool {
+    fn publish(&self, discovered: &PinnedDiscovery) -> Option<bool> {
         let changed = self.state.tool_pins.observe(
             &self.server,
             self.session,
             discovered.epoch,
             &discovered.tools,
+            &self.state.event_store,
         );
-        if changed == Some(true) {
-            self.state.notify_tools_changed();
-            if self.state.tool_pins.is_quarantined(&self.server) {
-                self.state
-                    .notify_tool_quarantine(&self.server, "definition_requires_review");
-            }
+        if changed == Some(true) && self.state.tool_pins.is_quarantined(&self.server) {
+            self.state
+                .notify_tool_quarantine(&self.server, "definition_requires_review");
         }
-        changed.is_some()
+        changed
     }
 
     fn start_monitor(
@@ -891,15 +883,21 @@ impl PinnedUpstream {
             return;
         };
         let fresh = capability_metadata(&discovery.tools, &self.server, aliases);
-        {
+        let changed = {
             let mut capabilities = self.state.capabilities.write().await;
-            if !self.publish(&discovery) {
+            let Some(changed) = self.publish(&discovery) else {
                 return;
-            }
+            };
             capabilities.retain(|_, capability| capability.server != self.server.as_ref());
             capabilities.extend(fresh);
-        }
+            self.state
+                .record_tool_catalog_events(&self.server, &capabilities);
+            changed
+        };
         self.state.refresh_server_catalog(&self.server).await;
+        if changed {
+            self.state.notify_tools_changed();
+        }
     }
 }
 
@@ -1006,7 +1004,7 @@ async fn spawn_upstream(
 ) -> Result<InitialUpstream> {
     let pinned = state
         .tool_pins
-        .begin_session(server_id, config.require_tool_pins)
+        .begin_session(server_id, config.require_tool_pins, &state.event_store)
         .map(|session| PinnedUpstream {
             state: state.clone(),
             server: Arc::from(server_id),
@@ -1056,7 +1054,7 @@ async fn discover_connection(
         Some(pinned) => pinned
             .discover(client)
             .await
-            .filter(|discovered| pinned.publish(discovered))
+            .filter(|discovered| pinned.publish(discovered).is_some())
             .map_or_else(Vec::new, |discovered| {
                 capability_metadata(&discovered.tools, server, &aliases.0)
             }),

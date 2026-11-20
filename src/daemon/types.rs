@@ -63,7 +63,7 @@ pub enum UpstreamCallError {
 }
 
 /// Metadata describing a registered capability tool.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CapabilityMeta {
     /// Server identifier providing this capability.
     pub server: String,

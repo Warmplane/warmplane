@@ -602,7 +602,7 @@ pub async fn handle_update_alias(
 pub async fn handle_update_policy(
     State(state): State<AppState>,
     admin: Option<axum::extract::Extension<TrustAdmin>>,
-    Json(payload): Json<crate::config::PolicyConfig>,
+    Json(mut payload): Json<crate::config::PolicyConfig>,
 ) -> impl IntoResponse {
     if (payload.result_sanitization.is_some()
         || payload
@@ -625,8 +625,21 @@ pub async fn handle_update_policy(
         }
     };
 
-    config.policy = Some(payload.clone());
-    if let Err(e) = crate::config::save_config(&state.config_path, &config) {
+    let saved = (|| {
+        state
+            .approval_registry
+            .validate_webhook_storage(payload.webhook.as_ref())?;
+        if let Some(webhook) = &mut payload.webhook {
+            let current = config
+                .policy
+                .as_ref()
+                .and_then(|policy| policy.webhook.as_ref());
+            webhook.preserve_masked_secrets(current)?;
+        }
+        config.policy = Some(payload.clone());
+        crate::config::save_config(&state.config_path, &config)
+    })();
+    if let Err(e) = saved {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "ok": false, "error": e.to_string() })),
@@ -710,6 +723,7 @@ pub(crate) async fn handle_approve_tool_pin(
         .tool_pins
         .approve(&state, &request, tenant.and_then(|tenant| tenant.actor_id))
         .await;
+    state.record_tool_catalog_events(&request.server, &*state.capabilities.read().await);
     state.notify_tools_changed();
     let (status, code, message) = match outcome {
         Ok(pin) => return Json(json!({"ok": true, "pin": pin})).into_response(),

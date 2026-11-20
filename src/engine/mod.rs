@@ -2066,10 +2066,21 @@ impl ControlPlaneHandle {
         task_id: &str,
         input_responses: std::collections::BTreeMap<String, Value>,
     ) -> Envelope<bool> {
+        self.update_task_for_profile(task_id, input_responses, None)
+            .await
+    }
+
+    /// Submits input for an embedded task in the selected profile.
+    pub async fn update_task_for_profile(
+        &self,
+        task_id: &str,
+        input_responses: std::collections::BTreeMap<String, Value>,
+        profile: Option<&str>,
+    ) -> Envelope<bool> {
         let trace_id = next_trace_id();
         match self
             .state
-            .submit_task_input(task_id, input_responses, self.tenant.as_ref())
+            .submit_task_input(task_id, input_responses, self.tenant.as_ref(), profile)
             .await
         {
             Ok(_) => {

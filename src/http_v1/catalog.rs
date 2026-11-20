@@ -38,8 +38,7 @@ pub async fn handle_catalog_events(
     State(state): State<AppState>,
     Query(query): Query<CatalogEventsQuery>,
 ) -> impl IntoResponse {
-    let (mut events, next_cursor) = state.event_store.get_events_after(query.after.as_deref());
-    state.filter_tool_catalog_events(&mut events).await;
+    let (events, next_cursor) = state.event_store.get_events_after(query.after.as_deref());
     let catalog_ver = state.tool_catalog().await.version;
     (
         make_etag_header(&catalog_ver),

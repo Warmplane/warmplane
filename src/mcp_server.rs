@@ -739,8 +739,7 @@ impl FacadeMcpServer {
             }
             TOOL_SUBSCRIPTIONS_LISTEN => {
                 let after = args.get("after").and_then(Value::as_str);
-                let (mut events, next_cursor) = self.state.event_store.get_events_after(after);
-                self.state.filter_tool_catalog_events(&mut events).await;
+                let (events, next_cursor) = self.state.event_store.get_events_after(after);
                 let catalog_ver = self.state.tool_catalog().await.version;
                 Ok(json!({
                     "ok": true,
@@ -815,7 +814,12 @@ impl FacadeMcpServer {
 
                 match self
                     .state
-                    .submit_task_input(task_id, input_responses, self.tenant.as_ref())
+                    .submit_task_input(
+                        task_id,
+                        input_responses,
+                        self.tenant.as_ref(),
+                        self.profile.as_deref(),
+                    )
                     .await
                 {
                     Ok(receipt) => Ok(json!({

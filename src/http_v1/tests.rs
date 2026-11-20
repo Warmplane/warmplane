@@ -39,6 +39,95 @@ use serde_json::{json, Value};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
 
+#[tokio::test]
+async fn policy_update_preserves_masked_webhook_credentials() {
+    use crate::http_v1::config_api::{handle_update_policy, TrustAdmin};
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    let path = path.to_str().unwrap();
+    let config = serde_json::from_value::<crate::config::McpConfig>(json!({
+        "policy": {"webhook": {
+            "url": "https://example.invalid/events",
+            "secret": "fixture-webhook-key",
+            "authHeader": "Bearer fixture",
+            "format": "slack",
+            "slackSigningSecret": "fixture-slack-key",
+            "callbackUrl": "https://example.invalid/v1/webhooks/actions",
+            "events": ["approval.requested"],
+            "actionRole": "reviewer"
+        }}
+    }))
+    .unwrap();
+    crate::config::save_config(path, &config).unwrap();
+    let registry =
+        crate::approvals::ApprovalRegistry::open_or_create(directory.path().join("approvals.json"))
+            .unwrap();
+    let state = AppState::builder()
+        .config_path(path.to_owned())
+        .approval_registry(registry)
+        .build();
+    let response = handle_get_config(State(state.clone()))
+        .await
+        .into_response();
+    let json: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap()).unwrap();
+    let mut policy: crate::config::PolicyConfig =
+        serde_json::from_value(json["config"]["policy"].clone()).unwrap();
+    policy.deny.push("fixture.delete".into());
+    let response = handle_update_policy(
+        State(state.clone()),
+        Some(axum::Extension(TrustAdmin(true))),
+        Json(policy),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    let updated = crate::config::load_config(path).unwrap().policy.unwrap();
+    assert_eq!(updated.deny, ["fixture.delete"]);
+    assert_eq!(updated.webhook, config.policy.unwrap().webhook);
+    assert_eq!(state.policy.read().await.webhook, updated.webhook);
+}
+
+#[tokio::test]
+async fn signed_approval_configuration_requires_persistent_state() {
+    use crate::http_v1::config_api::{handle_update_policy, TrustAdmin};
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    let path = path.to_str().unwrap();
+    let config: crate::config::McpConfig = serde_json::from_value(json!({
+        "state": {"enabled": false},
+        "policy": {"webhook": {
+            "url": "https://example.invalid/events",
+            "secret": "fixture-key",
+            "callbackUrl": "https://example.invalid/v1/webhooks/actions",
+            "events": ["approval.requested"],
+            "actionRole": "reviewer"
+        }}
+    }))
+    .unwrap();
+    assert!(crate::config::save_config(path, &config).is_err());
+    assert!(
+        crate::daemon::server::initialize_state(config.clone(), path)
+            .await
+            .is_err()
+    );
+
+    let state = AppState::builder().config_path(path.to_owned()).build();
+    let policy = config.policy.unwrap();
+    let response = handle_update_policy(
+        State(state.clone()),
+        Some(axum::Extension(TrustAdmin(true))),
+        Json(policy),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(state.policy.read().await.webhook.is_none());
+    assert!(!std::path::Path::new(path).exists());
+}
+
 #[test]
 fn redact_value_masks_nested_keys_case_insensitive() {
     let input = json!({
@@ -54,6 +143,62 @@ fn redact_value_masks_nested_keys_case_insensitive() {
     assert_eq!(redacted["token"], "<redacted>");
     assert_eq!(redacted["nested"]["Api_Key"], "<redacted>");
     assert_eq!(redacted["nested"]["safe"], 1);
+}
+
+#[tokio::test]
+async fn task_input_respects_the_task_profile() {
+    use crate::http_v1::tasks_api::{handle_update_task, UpdateTaskRequest};
+    use crate::{
+        result_sanitization::ResultAccess,
+        tasks::{CreateTaskParams, TaskStatus},
+    };
+
+    let state = AppState::builder().build();
+    let (task, waiter) = state
+        .task_registry
+        .create_scoped_task(
+            CreateTaskParams {
+                capability_id: "fixture.input".to_owned(),
+                server_id: "fixture".to_owned(),
+                args: json!({}),
+                request_id: None,
+                context: None,
+                idempotency_key: None,
+                initial_status: TaskStatus::InputRequired,
+                status_message: None,
+                input_requests: Some(std::collections::BTreeMap::from([(
+                    "answer".into(),
+                    json!({}),
+                )])),
+                ttl_ms: None,
+                poll_interval_ms: None,
+            },
+            Some(ResultAccess::new("default", Some("selected"))),
+        )
+        .await;
+    for (profile, expected) in [
+        ("different", StatusCode::BAD_REQUEST),
+        ("selected", StatusCode::OK),
+    ] {
+        let response = handle_update_task(
+            State(state.clone()),
+            Path(task.task_id.clone()),
+            None,
+            Some(axum::Extension(crate::context::ProfileContext::scoped(
+                profile,
+                ["fixture"],
+            ))),
+            Json(UpdateTaskRequest {
+                input_responses: std::collections::BTreeMap::from([(
+                    "answer".into(),
+                    json!(profile),
+                )]),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), expected);
+    }
+    assert_eq!(waiter.unwrap().await.unwrap()["answer"], "selected");
 }
 
 #[tokio::test]
@@ -1956,6 +2101,7 @@ async fn test_task_update_bridges_to_approval_resolution() {
     let update_res = crate::http_v1::tasks_api::handle_update_task(
         State(state.clone()),
         Path(task_record.task_id.clone()),
+        None,
         None,
         Json(crate::http_v1::tasks_api::UpdateTaskRequest {
             input_responses: responses,

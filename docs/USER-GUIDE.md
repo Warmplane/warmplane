@@ -456,7 +456,7 @@ Subscribe to `tool_pin.quarantined` in `policy.webhook.events` and set `secret` 
 
 #### Migrate ChatOps approvals to signed actions
 
-Set the callback route to `/v1/webhooks/actions` and explicitly subscribe to `approval.requested`. The old `/v1/webhooks/callbacks` route returns `410`. Request a fresh invocation for old cards and pending approvals carried over from an earlier daemon process.
+Enable persistent state, set the callback route to `/v1/webhooks/actions`, and explicitly subscribe to `approval.requested`. If the running daemon started without persistent state, restart it with persistence enabled before activating signed approvals. The old `/v1/webhooks/callbacks` route returns `410`. Request a fresh invocation for old cards and pending approvals carried over from an earlier daemon process.
 
 ```json
 {
@@ -471,7 +471,7 @@ Set the callback route to `/v1/webhooks/actions` and explicitly subscribe to `ap
 }
 ```
 
-With RBAC enabled, specify one `approvalTenant` and give `actionRole` the `resolveApprovals` permission. Warmplane sends cards only for that tenant. In Control Deck, load **Approval activity** using an operator credential with the same permission. For REST task input, submit an explicit Boolean in `inputResponses.hitl_approval.approved`. The operator identity comes from the authenticated credential or delegation.
+With RBAC enabled, specify one `approvalTenant` and give `actionRole` the `resolveApprovals` permission. Warmplane sends cards only for that tenant. In Control Deck, load **Approval activity** using an operator credential with the same permission. For REST task input, use the task's tenant and profile scope and submit an explicit Boolean in `inputResponses.hitl_approval.approved`. The operator identity comes from the authenticated credential or delegation.
 
 - **Slack.** Set the app's Interactivity Request URL to the signed callback URL. Set the Slack app signing secret separately from the Warmplane webhook secret. Warmplane verifies Slack's timestamp and signature, acknowledges the request immediately, and posts the decision receipt to the configured destination.
 - **Teams.** Use a Workflow that posts the Adaptive Card and waits for its response, or an authenticated bot relay. Read `action_token` from the submitted action data and POST `{"action_token":"…"}` to the configured callback URL. Use incoming Workflows or a bot for the configured receipt destination.

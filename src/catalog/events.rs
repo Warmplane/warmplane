@@ -96,21 +96,6 @@ impl CatalogEventStore {
         })
     }
 
-    fn sync_to_disk(&self) {
-        if let Some(ref store) = self.storage {
-            let guard = self.events.read().unwrap_or_else(|e| e.into_inner());
-            let current_counter = self.counter.load(std::sync::atomic::Ordering::Relaxed);
-            let state = PersistedCatalogState {
-                counter: current_counter,
-                events: guard.clone(),
-            };
-            drop(guard);
-            if let Err(e) = store.save(&state) {
-                error!(error = %e, path = %store.path().display(), "failed to persist catalog events to disk");
-            }
-        }
-    }
-
     /// Records a catalog mutation event with an optional detail string.
     ///
     /// # Arguments
@@ -125,32 +110,59 @@ impl CatalogEventStore {
         change_type: impl AsRef<str>,
         detail: Option<impl Into<String>>,
     ) {
-        let seq = self
-            .counter
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let event_id = format!("evt_{}", seq);
+        self.record_events(std::iter::once((
+            object_type.as_ref(),
+            object_id.as_ref(),
+            change_type.as_ref(),
+            detail.map(Into::into),
+        )));
+    }
+
+    pub(crate) fn record_capability_changes<'a>(
+        &self,
+        changes: impl Iterator<Item = (&'a String, &'static str)>,
+    ) {
+        self.record_events(changes.map(|(id, change)| ("capability", id.as_str(), change, None)));
+    }
+
+    fn record_events<'a>(
+        &self,
+        events: impl Iterator<Item = (&'a str, &'a str, &'a str, Option<String>)>,
+    ) {
+        let mut events = events.peekable();
+        if events.peek().is_none() {
+            return;
+        }
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs().to_string())
             .unwrap_or_else(|_| "0".to_string());
 
         let mut guard = self.events.write().unwrap_or_else(|e| e.into_inner());
-        if guard.len() >= MAX_CATALOG_EVENTS {
-            let excess = guard.len() - (MAX_CATALOG_EVENTS - 1);
-            guard.drain(0..excess);
+        guard.extend(events.map(|(object_type, object_id, change_type, detail)| {
+            let seq = self
+                .counter
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            CatalogEvent {
+                id: format!("evt_{seq}"),
+                timestamp: timestamp.clone(),
+                object_type: object_type.to_owned(),
+                object_id: object_id.to_owned(),
+                change_type: change_type.to_owned(),
+                detail,
+            }
+        }));
+        let excess = guard.len().saturating_sub(MAX_CATALOG_EVENTS);
+        guard.drain(0..excess);
+        if let Some(store) = &self.storage {
+            let state = PersistedCatalogState {
+                counter: self.counter.load(std::sync::atomic::Ordering::Relaxed),
+                events: guard.clone(),
+            };
+            if let Err(e) = store.save(&state) {
+                error!(error = %e, path = %store.path().display(), "failed to persist catalog events to disk");
+            }
         }
-
-        guard.push(CatalogEvent {
-            id: event_id,
-            timestamp,
-            object_type: object_type.as_ref().to_string(),
-            object_id: object_id.as_ref().to_string(),
-            change_type: change_type.as_ref().to_string(),
-            detail: detail.map(|d| d.into()),
-        });
-        drop(guard);
-
-        self.sync_to_disk();
     }
 
     /// Records a catalog mutation event.

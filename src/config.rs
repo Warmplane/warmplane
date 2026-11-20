@@ -603,6 +603,33 @@ pub(crate) fn resolve_env_or_direct(
 }
 
 impl WebhookConfig {
+    pub(crate) fn preserve_masked_secrets(&mut self, current: Option<&Self>) -> Result<()> {
+        for (value, previous) in [
+            (
+                &mut self.secret,
+                current.and_then(|cfg| cfg.secret.as_ref()),
+            ),
+            (
+                &mut self.auth_header,
+                current.and_then(|cfg| cfg.auth_header.as_ref()),
+            ),
+            (
+                &mut self.slack_signing_secret,
+                current.and_then(|cfg| cfg.slack_signing_secret.as_ref()),
+            ),
+        ] {
+            if value.as_deref() == Some(REDACTED_TOKEN) {
+                *value = Some(
+                    previous
+                        .filter(|value| value.as_str() != REDACTED_TOKEN)
+                        .context("A masked webhook credential requires an existing stored value")?
+                        .clone(),
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Resolves the HMAC signing secret from env var or direct value.
     pub fn resolve_secret(&self) -> Option<String> {
         resolve_env_or_direct(self.secret_env.as_deref(), self.secret.as_deref())
@@ -1119,6 +1146,7 @@ pub(crate) fn validate_result_sanitization(config: &McpConfig) -> Result<()> {
 }
 
 fn validate_policy_holds_and_webhooks(config: &McpConfig) -> Result<()> {
+    validate_approval_configuration(config)?;
     if let Some(policy) = &config.policy {
         validate_hold_window(policy.hold_window_secs, "policy.holdWindowSecs")?;
         if let Some(webhook) = &policy.webhook {
@@ -1140,7 +1168,6 @@ fn validate_action_webhook(
     webhook: &WebhookConfig,
     rbac: Option<&crate::rbac::RbacConfig>,
 ) -> Result<()> {
-    crate::approval_chatops::validate_approval_webhook(webhook, rbac)?;
     anyhow::ensure!(
         !webhook
             .events
@@ -1154,6 +1181,22 @@ fn validate_action_webhook(
         if webhook.events.iter().any(|configured| configured == event) {
             validate_webhook_subscription(event, webhook, rbac)?;
         }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_approval_configuration(config: &McpConfig) -> Result<()> {
+    if let Some(webhook) = config
+        .policy
+        .as_ref()
+        .and_then(|policy| policy.webhook.as_ref())
+    {
+        crate::approval_chatops::validate_approval_webhook(webhook, config.rbac.as_ref())?;
+        anyhow::ensure!(
+            !crate::approval_chatops::subscribed(webhook)
+                || config.state.as_ref().is_none_or(|state| state.enabled),
+            "Signed approvals require persistent state"
+        );
     }
     Ok(())
 }

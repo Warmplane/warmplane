@@ -2206,12 +2206,12 @@ pub async fn handle_batch_call_capabilities(
         }
     }
 
-    let base_pol = state.policy.read().await;
+    let base_pol = state.policy.read().await.clone();
     let pol = req_ext
         .0
         .as_ref()
         .map(|ctx| ctx.effective_policy.clone())
-        .unwrap_or_else(|| base_pol.clone())
+        .unwrap_or(base_pol)
         .merge_with_profile(prof_ctx.profile_policy.as_ref());
     let cancellation_token = state.operation_registry.register(&request_id).await;
 

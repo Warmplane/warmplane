@@ -203,6 +203,10 @@ pub(crate) async fn resolve_signed(
     let role = delegated_role(cfg)
         .filter(|role| subscribed(cfg) && state.rbac_engine.can_resolve_approvals(role))
         .ok_or(SignedDecisionError::Invalid)?;
+    state
+        .approval_registry
+        .validate_webhook_storage(Some(cfg))
+        .map_err(|_| SignedDecisionError::Decision(crate::approvals::DecisionError::Persistence))?;
     let secret = cfg.resolve_secret().ok_or(SignedDecisionError::Invalid)?;
     let ticket = state
         .approval_registry
@@ -345,6 +349,13 @@ mod tests {
             .build()
     }
 
+    fn persistent_registry() -> (tempfile::TempDir, ApprovalRegistry) {
+        let directory = tempfile::tempdir().unwrap();
+        let registry =
+            ApprovalRegistry::open_or_create(directory.path().join("approvals.json")).unwrap();
+        (directory, registry)
+    }
+
     async fn ticket(
         state: &AppState,
         tenant: &str,
@@ -386,7 +397,8 @@ mod tests {
 
     #[tokio::test]
     async fn teams_relay_replays_one_receipt_and_rejects_conflicts_and_cross_tenant_tokens() {
-        let state = state(webhook(WebhookFormat::Teams), ApprovalRegistry::new());
+        let (directory, registry) = persistent_registry();
+        let state = state(webhook(WebhookFormat::Teams), registry);
         let router = build_router(state.clone());
         let (ticket_a, waiter) = ticket(&state, "tenant-a").await;
         let approve =
@@ -411,6 +423,15 @@ mod tests {
         assert_eq!(one.0, StatusCode::OK, "{one:?}");
         assert_eq!(one, two);
         assert_eq!(one.1["receipt"]["principal"], "chatops:reviewer");
+        let reopened =
+            ApprovalRegistry::open_or_create(directory.path().join("approvals.json")).unwrap();
+        let receipt = reopened
+            .get(&ticket_a.id)
+            .await
+            .unwrap()
+            .decision_receipt
+            .unwrap();
+        assert_eq!(json!(receipt), one.1["receipt"]);
         assert!(matches!(
             waiter.await.unwrap(),
             ApprovalResolution::Approved {
@@ -436,7 +457,8 @@ mod tests {
 
     #[tokio::test]
     async fn slack_acknowledges_authenticated_actions_before_waiting_on_the_decision_store() {
-        let state = state(webhook(WebhookFormat::Slack), ApprovalRegistry::new());
+        let (_directory, registry) = persistent_registry();
+        let state = state(webhook(WebhookFormat::Slack), registry);
         let (ticket, waiter) = ticket(&state, "tenant-a").await;
         let token =
             sign_approval_token(&ticket, SIGNING_KEY, "reviewer", Decision::Reject).unwrap();
@@ -519,7 +541,8 @@ mod tests {
 
     #[tokio::test]
     async fn an_expired_approval_token_never_releases_the_waiter() {
-        let state = state(webhook(WebhookFormat::Generic), ApprovalRegistry::new());
+        let (_directory, registry) = persistent_registry();
+        let state = state(webhook(WebhookFormat::Generic), registry);
         let (mut ticket, mut waiter) = ticket(&state, "tenant-a").await;
         let expiry = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -586,7 +609,8 @@ mod tests {
             }),
         );
         let server = tokio::spawn(async move { axum::serve(listener, destination).await.unwrap() });
-        let state = state(config.clone(), ApprovalRegistry::new());
+        let (_directory, registry) = persistent_registry();
+        let state = state(config.clone(), registry);
         let (unrelated, _) = ticket(&state, "tenant-b").await;
         send_card(&config, &unrelated).await.unwrap();
         assert!(observed.try_recv().is_err());

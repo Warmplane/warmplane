@@ -32,13 +32,7 @@ pub async fn initialize_state(
     config_path: impl Into<String>,
 ) -> Result<AppState> {
     crate::config::validate_result_sanitization(&config)?;
-    if let Some(webhook) = config
-        .policy
-        .as_ref()
-        .and_then(|policy| policy.webhook.as_ref())
-    {
-        crate::approval_chatops::validate_approval_webhook(webhook, config.rbac.as_ref())?;
-    }
+    crate::config::validate_approval_configuration(&config)?;
     let config_path_str = config_path.into();
     let tool_timeout_ms = config.tool_timeout_ms.unwrap_or(DEFAULT_TOOL_TIMEOUT_MS);
     let policy = Policy::from_config(config.policy.clone());

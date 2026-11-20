@@ -120,11 +120,15 @@ pub async fn handle_update_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
     tenant: Option<axum::extract::Extension<Option<crate::rbac::TenantContext>>>,
+    profile: Option<axum::extract::Extension<crate::context::ProfileContext>>,
     Json(payload): Json<UpdateTaskRequest>,
 ) -> axum::response::Response {
     let tenant = tenant.as_ref().and_then(|tenant| tenant.0.as_ref());
+    let profile = profile
+        .as_ref()
+        .and_then(|profile| profile.0.profile_id.as_deref());
     match state
-        .submit_task_input(&id, payload.input_responses, tenant)
+        .submit_task_input(&id, payload.input_responses, tenant, profile)
         .await
     {
         Ok(receipt) => Json(json!({

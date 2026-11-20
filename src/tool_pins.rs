@@ -18,6 +18,7 @@ use tokio::{sync::Mutex, time::Instant};
 
 use crate::{
     audit::{AuditEventStatus, AuditEventType, RawAuditEvent},
+    catalog::CatalogEventStore,
     daemon::{AppState, CapabilityMeta},
     idempotency::canonicalize_json,
     storage::AtomicFile,
@@ -148,16 +149,18 @@ impl AppState {
         }
     }
 
-    pub(crate) async fn filter_tool_catalog_events(
+    pub(crate) fn record_tool_catalog_events(
         &self,
-        events: &mut Vec<crate::catalog::CatalogEvent>,
+        server: &str,
+        capabilities: &HashMap<String, CapabilityMeta>,
     ) {
-        if self.tool_pins.has_required_servers() {
-            let catalog = self.tool_catalog().await;
-            events.retain(|event| {
-                event.object_type != "capability" || catalog.items.contains_key(&event.object_id)
-            });
-        }
+        let mut state = self.tool_pins.write();
+        let visible = capabilities
+            .iter()
+            .filter(|(_, meta)| meta.server == server && state.binding(server, &meta.tool).is_ok())
+            .map(|(id, meta)| (id.clone(), meta.clone()))
+            .collect();
+        state.record_visibility(server, visible, &self.event_store);
     }
 
     pub(crate) async fn tool_error(
@@ -262,9 +265,34 @@ struct PinState {
     observations: BTreeMap<String, Observation>,
     approved: ApprovedDefinitions,
     uncertain: PendingApprovals,
+    visible: BTreeMap<String, BTreeMap<String, CapabilityMeta>>,
 }
 
 impl PinState {
+    fn record_visibility(
+        &mut self,
+        server: &str,
+        visible: BTreeMap<String, CapabilityMeta>,
+        events: &CatalogEventStore,
+    ) {
+        let previous = self.visible.remove(server).unwrap_or_default();
+        let removed = previous
+            .keys()
+            .filter(|id| !visible.contains_key(*id))
+            .map(|id| (id, "removed"));
+        let changes = visible
+            .iter()
+            .filter_map(|(id, meta)| match previous.get(id) {
+                None => Some((id, "added")),
+                Some(old) if old != meta => Some((id, "updated")),
+                Some(_) => None,
+            });
+        events.record_capability_changes(removed.chain(changes));
+        if !visible.is_empty() {
+            self.visible.insert(server.to_owned(), visible);
+        }
+    }
+
     fn observed(&self, server: &str, tool: &str) -> Option<&Definition> {
         self.observations
             .get(server)
@@ -357,13 +385,19 @@ impl ToolPins {
         !self.read().observations.is_empty()
     }
 
-    pub(crate) fn begin_session(&self, server: &str, required: bool) -> Option<PinSession> {
+    pub(crate) fn begin_session(
+        &self,
+        server: &str,
+        required: bool,
+        events: &CatalogEventStore,
+    ) -> Option<PinSession> {
         let mut state = self.write();
         if !required {
             state.observations.remove(server);
             return None;
         }
         let session = PinSession(rand::random());
+        state.record_visibility(server, BTreeMap::new(), events);
         state.observations.insert(
             server.to_owned(),
             Observation {
@@ -381,7 +415,12 @@ impl ToolPins {
         self.write().observations.remove(server);
     }
 
-    pub(crate) fn invalidate(&self, server: &str, session: PinSession) -> bool {
+    pub(crate) fn invalidate(
+        &self,
+        server: &str,
+        session: PinSession,
+        events: &CatalogEventStore,
+    ) -> bool {
         let mut state = self.write();
         let Some(item) = state
             .observations
@@ -391,7 +430,11 @@ impl ToolPins {
             return false;
         };
         item.epoch = item.epoch.wrapping_add(1);
-        item.observed_at.take().is_some()
+        let changed = item.observed_at.take().is_some();
+        if changed {
+            state.record_visibility(server, BTreeMap::new(), events);
+        }
+        changed
     }
 
     pub(crate) fn epoch(&self, server: &str, session: PinSession) -> Option<u64> {
@@ -409,6 +452,7 @@ impl ToolPins {
         session: PinSession,
         epoch: u64,
         tools: &[Tool],
+        events: &CatalogEventStore,
     ) -> Option<bool> {
         let mut definitions = Definitions::new();
         for tool in tools {
@@ -416,7 +460,7 @@ impl ToolPins {
                 .insert(tool.name.to_string(), Definition::from_tool(tool))
                 .is_some()
             {
-                self.invalidate(server, session);
+                self.invalidate(server, session, events);
                 return None;
             }
         }
@@ -640,7 +684,8 @@ mod tests {
     }
 
     fn observed(pins: &ToolPins) -> (PinSession, ApprovePin) {
-        let session = pins.begin_session("source", true).unwrap();
+        let events = CatalogEventStore::new();
+        let session = pins.begin_session("source", true, &events).unwrap();
         let tool: Tool = serde_json::from_value(json!({
             "name": "write",
             "description": "Fixture",
@@ -649,7 +694,10 @@ mod tests {
         .unwrap();
         let digest = Definition::from_tool(&tool).digest;
         let epoch = pins.epoch("source", session).unwrap();
-        assert_eq!(pins.observe("source", session, epoch, &[tool]), Some(true));
+        assert_eq!(
+            pins.observe("source", session, epoch, &[tool], &events),
+            Some(true)
+        );
         (
             session,
             ApprovePin {

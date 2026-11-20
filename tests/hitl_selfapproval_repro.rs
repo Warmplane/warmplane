@@ -64,7 +64,10 @@ async fn pending_approval(
 /// Creates a task awaiting input, linked to `request_id`.
 async fn input_required_task(state: &AppState, request_id: &str) -> String {
     let mut input_requests = BTreeMap::new();
-    input_requests.insert("reason".to_string(), json!("confirm deletion"));
+    input_requests.insert(
+        "hitl_approval".to_string(),
+        json!({"type": "approval_review"}),
+    );
 
     let (record, _rx) = state
         .task_registry
@@ -90,6 +93,7 @@ async fn update(state: &AppState, task_id: &str, responses: BTreeMap<String, Val
     handle_update_task(
         State(state.clone()),
         axum::extract::Path(task_id.to_string()),
+        None,
         None,
         Json(UpdateTaskRequest {
             input_responses: responses,
@@ -130,6 +134,22 @@ async fn empty_input_responses_do_not_approve_a_pending_ticket() {
         "an update carrying no decision must not approve, got {:?}",
         status
     );
+}
+
+#[tokio::test]
+async fn unlinked_approval_task_rejects_generic_input() {
+    let state = state();
+    let task_id = input_required_task(&state, "req-unlinked").await;
+    let code = update(
+        &state,
+        &task_id,
+        responses(vec![("reason", json!("continue"))]),
+    )
+    .await;
+    assert_eq!(code, StatusCode::BAD_REQUEST);
+    let task = state.task_registry.get_task(&task_id).await.unwrap();
+    assert_eq!(task.status, TaskStatus::InputRequired);
+    assert!(task.input_responses.is_empty());
 }
 
 #[tokio::test]

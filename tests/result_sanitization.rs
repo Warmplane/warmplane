@@ -277,6 +277,37 @@ async fn batch_rejects_reference_to_a_protected_result_before_dispatch() {
 }
 
 #[tokio::test]
+async fn policy_can_change_while_a_rest_batch_waits_for_an_upstream() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, mut upstream) = state(&dir.path().join("cache.json"));
+    let router = warmplane::daemon::server::build_router(state.clone());
+    let batch = tokio::spawn(rest(
+        router,
+        Method::POST,
+        "/v1/tools/batch_call",
+        json!({"steps": [{"id": "first", "capability_id": "fixture.save", "args": {}}]}),
+    ));
+    let Some(ServerMsg::CallTool { reply, .. }) = upstream.recv().await else {
+        panic!("expected batch tool call");
+    };
+    *tokio::time::timeout(Duration::from_secs(2), state.policy.write())
+        .await
+        .unwrap() = policy(json!({"fieldNames": ["newSecret"]}));
+    reply
+        .send(Ok(json!({"structuredContent": {"newSecret": "hidden"}})))
+        .unwrap();
+    let (status, result) = tokio::time::timeout(Duration::from_secs(2), batch)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        result["results"][0]["data"]["structuredContent"]["newSecret"],
+        "[REDACTED]"
+    );
+}
+
+#[tokio::test]
 async fn task_polling_retains_completion_and_withholds_a_stale_result() {
     let dir = tempfile::tempdir().unwrap();
     let (state, mut upstream) = state(&dir.path().join("cache.json"));

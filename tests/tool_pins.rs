@@ -127,6 +127,28 @@ fn save_pin(pins: &[Value]) -> &Value {
     pins.iter().find(|pin| pin["tool"] == "save").unwrap()
 }
 
+async fn catalog_events(router: &Router, after: &str) -> Value {
+    let (status, _, feed) = request(
+        router,
+        Method::GET,
+        &format!("/v1/catalog/events?after={after}"),
+        Value::Null,
+        Some(TOKEN),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    feed
+}
+
+fn has_alias_event(feed: &Value, change: &str) -> bool {
+    feed["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["object_id"] == "save_alias" && event["change_type"] == change)
+}
+
 #[tokio::test]
 async fn stdio_pin_gates_paginated_discovery_stale_review_and_held_dispatch() {
     let dir = tempfile::tempdir().unwrap();
@@ -176,7 +198,15 @@ async fn stdio_pin_gates_paginated_discovery_stale_review_and_held_dispatch() {
         .unwrap()
         .capabilities
         .is_empty());
+    let before = catalog_events(&router, "").await;
+    assert!(before["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|event| event["object_type"] != "capability"));
     assert_eq!(approve(&router, old).await, StatusCode::OK);
+    let added = catalog_events(&router, before["cursor"].as_str().unwrap()).await;
+    assert!(has_alias_event(&added, "added"));
     let (status, headers, listed) = request(
         &router,
         Method::GET,
@@ -215,6 +245,8 @@ async fn stdio_pin_gates_paginated_discovery_stale_review_and_held_dispatch() {
     .await
     .unwrap();
     assert_eq!(changed["current"]["value"]["description"], "changed");
+    let removed = catalog_events(&router, added["cursor"].as_str().unwrap()).await;
+    assert!(has_alias_event(&removed, "removed"));
     let (status, _, listed) = request(
         &router,
         Method::GET,
@@ -233,6 +265,8 @@ async fn stdio_pin_gates_paginated_discovery_stale_review_and_held_dispatch() {
 
     assert_eq!(approve(&router, old).await, StatusCode::CONFLICT);
     assert_eq!(approve(&router, &changed).await, StatusCode::OK);
+    let restored = catalog_events(&router, removed["cursor"].as_str().unwrap()).await;
+    assert!(has_alias_event(&restored, "added"));
     let failed = tokio::time::timeout(Duration::from_secs(4), async {
         loop {
             let task = handle.get_task(task_id).await.data.unwrap();

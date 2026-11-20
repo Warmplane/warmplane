@@ -998,11 +998,17 @@ paths:
   /v1/tasks/{id}/update:
     post:
       summary: Submit input responses to a suspended task
+      description: Submit input in the task's tenant and profile scope. Approval tasks require an explicit Boolean decision.
       operationId: updateTask
       parameters:
         - in: path
           name: id
           required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Warmplane-Profile
+          required: false
           schema:
             type: string
       requestBody:

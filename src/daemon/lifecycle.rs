@@ -175,9 +175,9 @@ impl AppState {
             caps_guard.retain(|id, meta| meta.server != server_id || new_ids.contains(id));
             for (id, meta) in new_capabilities {
                 info!(%server_id, capability_id = %id, "registered upstream capability");
-                caps_guard.insert(id.clone(), meta);
-                self.event_store.record("capability", &id, "added");
+                caps_guard.insert(id, meta);
             }
+            self.record_tool_catalog_events(server_id, &caps_guard);
         }
         {
             let mut res_guard = self.resources.write().await;
@@ -276,8 +276,8 @@ impl AppState {
             let mut caps_guard = self.capabilities.write().await;
             for id in removed_caps {
                 caps_guard.remove(&id);
-                self.event_store.record("capability", &id, "removed");
             }
+            self.record_tool_catalog_events(server_id, &caps_guard);
         }
         {
             let mut res_guard = self.resources.write().await;
@@ -349,6 +349,12 @@ impl AppState {
         info!(config_path = %self.config_path, "reloading configuration from disk");
 
         let config = crate::config::load_config(&self.config_path)?;
+        self.approval_registry.validate_webhook_storage(
+            config
+                .policy
+                .as_ref()
+                .and_then(|policy| policy.webhook.as_ref()),
+        )?;
 
         // 1. Update security policy atomically
         {

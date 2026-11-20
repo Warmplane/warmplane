@@ -1509,6 +1509,7 @@ async fn approval_argument_edits_are_the_payload_held_and_dispatched() {
         State(state.clone()),
         Path(task_id.clone()),
         None,
+        None,
         Json(warmplane::http_v1::tasks_api::UpdateTaskRequest {
             input_responses: responses,
         }),

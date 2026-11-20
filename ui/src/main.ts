@@ -1544,12 +1544,16 @@ class WarmplaneApp {
     const state = store.getState();
     const current = state.config.policy || {};
 
+    const previous = typeof current.webhook === 'object' ? current.webhook : undefined;
+    const usesEnv = secret === (previous?.secretEnv ?? previous?.secret_env) || secret.includes('_');
     const webhook = url ? {
+      ...previous,
       url,
       format,
-      secret: secret && !secret.startsWith('WARMPLANE_') && !secret.includes('_') ? secret : undefined,
-      secret_env: secret && (secret.startsWith('WARMPLANE_') || secret.includes('_')) ? secret : undefined,
-      events: ['approval.requested', 'circuit_breaker.tripped', 'policy.violation'],
+      secret: secret && !usesEnv ? secret : undefined,
+      secret_env: undefined,
+      secretEnv: secret && usesEnv ? secret : undefined,
+      events: previous?.events ?? ['approval.requested', 'circuit_breaker.tripped', 'policy.violation'],
     } : undefined;
 
     const res = await api.savePolicy({

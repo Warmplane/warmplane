@@ -70,7 +70,7 @@ The Control Deck Action Feed provides Previous/Next navigation through undo hist
 
 Set `mcpServers.<server>.requireToolPins` with persistent state to require approval of upstream tool definitions. Use **Tool definition pins** in Control Deck or authenticate to `GET /v1/config/tool-pins` and `POST /v1/config/tool-pins/approve` with `server`, `tool`, and the current `digest`. A stale observation returns `409 TOOL_PIN_STALE`. When a held tool's definition changes, review the new definition and submit a new invocation.
 
-Signed ChatOps approvals use `approval.requested` and `/v1/webhooks/actions`. Configure `actionRole` and, under RBAC, `approvalTenant` and `resolveApprovals`. Slack requires `slackSigningSecret` or `slackSigningSecretEnv`. Teams Workflows and generic clients relay only the signed `action_token`. Legacy callback URLs return `410`. The Tasks screen separates decision receipts, execution, and webhook delivery.
+Signed ChatOps approvals require persistent state and use `approval.requested` and `/v1/webhooks/actions`. Configure `actionRole` and, under RBAC, `approvalTenant` and `resolveApprovals`. Slack requires `slackSigningSecret` or `slackSigningSecretEnv`. Teams Workflows and generic clients relay only the signed `action_token`. Legacy callback URLs return `410`. The Tasks screen separates decision receipts, execution, and webhook delivery.
 - [Setup & Install Guide](./references/setup_and_installation.md): Binaries, package managers, and verification.
 - [MCP Stdio Usage](./references/mcp_stdio_usage.md): 1-Click client config for 17 IDEs/agents and stdio tools.
 - [HTTP REST API](./references/http_rest_api.md): Complete `/v1/...` endpoint reference.

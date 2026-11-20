@@ -310,7 +310,30 @@ impl crate::daemon::AppState {
         task_id: &str,
         input: std::collections::BTreeMap<String, Value>,
         tenant: Option<&crate::rbac::TenantContext>,
+        profile: Option<&str>,
     ) -> Result<Option<DecisionReceipt>, DecisionError> {
+        let task = self
+            .task_registry
+            .get_task(task_id)
+            .await
+            .ok_or(DecisionError::TaskNotInputRequired)?;
+        let default_role = self.rbac_engine.default_role();
+        let (tenant_id, role) = tenant.map_or(("default", default_role.as_str()), |context| {
+            (context.tenant_id.as_str(), context.role.as_str())
+        });
+        let access = crate::result_sanitization::ResultAccess::new(tenant_id, profile);
+        if task
+            .result_access
+            .as_ref()
+            .is_some_and(|owner| owner != &access)
+            || !self
+                .hold_coordinator
+                .can_access_task(self, &task, tenant_id, role, profile)
+                .await
+        {
+            return Err(DecisionError::TaskNotInputRequired);
+        }
+
         let decision = input
             .get("hitl_approval")
             .map(parse_task_decision)
@@ -327,7 +350,9 @@ impl crate::daemon::AppState {
                 .await?;
             return Ok(Some(receipt));
         }
-        if self.approval_registry.find_by_task(task_id).await.is_some() {
+        if task.input_requests.contains_key("hitl_approval")
+            || self.approval_registry.find_by_task(task_id).await.is_some()
+        {
             return Err(DecisionError::InvalidInput);
         }
         match self.task_registry.update_task(task_id, input).await {
@@ -632,7 +657,10 @@ impl ApprovalRegistry {
             self_clone.expire_if_pending(&ticket_id).await;
         });
 
-        if let Some(cfg) = req.webhook {
+        if let Some(cfg) = req
+            .webhook
+            .filter(|cfg| self.validate_webhook_storage(Some(cfg)).is_ok())
+        {
             crate::approval_chatops::issue_card(cfg.clone(), approval);
         }
 
@@ -644,6 +672,14 @@ impl ApprovalRegistry {
         if let Some(storage) = &self.storage {
             storage.save(tickets)?;
         }
+        Ok(())
+    }
+
+    pub(crate) fn validate_webhook_storage(&self, webhook: Option<&WebhookConfig>) -> Result<()> {
+        anyhow::ensure!(
+            self.storage.is_some() || !webhook.is_some_and(crate::approval_chatops::subscribed),
+            "Signed approvals require an active persistent state store"
+        );
         Ok(())
     }
 

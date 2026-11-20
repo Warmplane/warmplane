@@ -135,6 +135,7 @@ export interface PolicyConfig {
   require_approval?: string[];
   approvalTimeoutSecs?: number;
   approval_timeout_secs?: number;
+  holdWindowSecs?: number;
   webhook?: WebhookConfig | string;
 }
 
@@ -668,6 +669,7 @@ export class WarmplaneClient {
       resultSanitization: policy.resultSanitization,
       requireApproval: policy.require_approval || policy.requireApproval || [],
       approvalTimeoutSecs: policy.approvalTimeoutSecs || policy.approval_timeout_secs || 300,
+      holdWindowSecs: policy.holdWindowSecs,
       webhook: policy.webhook
     };
     const res = await fetch(`${this.baseUrl}/v1/config/policy`, {
