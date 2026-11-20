@@ -12,7 +12,7 @@ pub(crate) mod undo;
 use crate::undo::{RollbackResult, UndoAccessContext, UndoEntrySummary, UndoOperationError};
 use anyhow::Result;
 use serde_json::Value;
-use std::sync::atomic::Ordering;
+use std::{sync::atomic::Ordering, time::Duration};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -27,7 +27,8 @@ use crate::{
         types::{ServerMsg, UpstreamCallError},
         Policy,
     },
-    idempotency::RetryMetadata,
+    idempotency::{IdempotencyClaim, RetryMetadata},
+    tasks::{CreateTaskParams, EmissionPhase, EmissionRecord},
 };
 
 pub use types::*;
@@ -819,84 +820,26 @@ impl ControlPlaneHandle {
                     }
                 }
 
-                if let Some(contract) = reversibility_clone.as_ref().filter(|contract| {
-                    contract.class == crate::config::ReversibilityClass::Delayable
-                }) {
-                    let global_window = handle.state.policy.read().await.hold_window_secs;
-                    let profile_window = profile_context_clone
-                        .profile_policy
-                        .as_ref()
-                        .and_then(|profile_policy| profile_policy.hold_window_secs);
-                    let hold_secs = crate::emissions::effective_hold_window_secs(
-                        contract,
-                        profile_window,
-                        global_window,
-                    )
-                    .unwrap_or(30);
-                    let emission = crate::tasks::EmissionRecord {
-                        idempotency_claim,
-                        phase: crate::tasks::EmissionPhase::PendingEmission,
-                        release_at_ms: match crate::emissions::release_deadline_ms(hold_secs) {
-                            Ok(deadline) => deadline,
-                            Err(error) => {
-                                let _ = handle
-                                    .state
-                                    .task_registry
-                                    .fail_task(
-                                        &task_id_clone,
-                                        serde_json::json!({"code": "INVALID_HOLD_WINDOW"}),
-                                        Some(error.to_string()),
-                                    )
-                                    .await;
-                                return;
-                            }
-                        },
-                        cancellable: true,
-                        tool_name: tool_name_clone.clone(),
-                        input_responses: options.input_responses.clone(),
-                        request_state: options.request_state.clone(),
-                        profile_id: profile_context_clone.profile_id.clone(),
-                        tenant_id: "default".to_string(),
-                        role: handle.state.rbac_engine.default_role().to_string(),
-                        authorization_expires_at_epoch_secs: None,
+                if let Some(contract) = reversibility_clone
+                    .as_ref()
+                    .filter(|contract| contract.class == ReversibilityClass::Delayable)
+                {
+                    EmbeddedEmission {
+                        state: &handle.state,
+                        profile: &profile_context_clone,
+                        tool_name: &tool_name_clone,
+                        options: &options,
+                        claim: idempotency_claim,
                         approval_completed: requires_approval,
-                        batch_id: None,
-                        step_id: None,
-                    };
-                    match handle
-                        .state
-                        .hold_coordinator
-                        .queue_existing(
-                            &handle.state,
-                            &task_id_clone,
-                            worker_args.clone(),
-                            emission,
-                        )
-                        .await
-                    {
-                        Ok(Some(_)) => return,
-                        Ok(None) => return,
-                        Err(error) => {
-                            let _ = handle
-                                .state
-                                .task_registry
-                                .fail_task(
-                                    &task_id_clone,
-                                    serde_json::json!({"code": "EMISSION_PERSISTENCE_FAILED"}),
-                                    Some(error.to_string()),
-                                )
-                                .await;
-                            handle
-                                .state
-                                .idempotency_store
-                                .release_execution(
-                                    idempotency_key_clone.as_deref(),
-                                    idempotency_claim,
-                                )
-                                .await;
-                            return;
-                        }
                     }
+                    .queue_task(
+                        contract,
+                        &task_id_clone,
+                        worker_args,
+                        idempotency_key_clone.as_deref(),
+                    )
+                    .await;
+                    return;
                 }
 
                 let (snapshot, snapshot_hash) = match capture_call_snapshot(
@@ -1329,176 +1272,27 @@ impl ControlPlaneHandle {
 
         if let Some(contract) = reversibility
             .as_ref()
-            .filter(|contract| contract.class == crate::config::ReversibilityClass::Delayable)
+            .filter(|contract| contract.class == ReversibilityClass::Delayable)
         {
-            let global_window = self.state.policy.read().await.hold_window_secs;
-            let profile_window = prof_ctx
-                .profile_policy
-                .as_ref()
-                .and_then(|profile_policy| profile_policy.hold_window_secs);
-            let hold_secs = crate::emissions::effective_hold_window_secs(
-                contract,
-                profile_window,
-                global_window,
-            )
-            .unwrap_or(30);
-            let hold_ms = match hold_secs.checked_mul(1_000) {
-                Some(value) => value,
-                None => {
-                    return Envelope::failure(
-                        trace_id,
-                        Some(req_id),
-                        Some(req_ctx),
-                        WarmplaneError::new(
-                            "INVALID_HOLD_WINDOW",
-                            "Hold window overflows milliseconds",
-                            false,
-                        ),
-                        retry_base("not_started"),
-                    );
-                }
-            };
-            let release_at_ms = match crate::emissions::release_deadline_ms(hold_secs) {
-                Ok(deadline) => deadline,
-                Err(error) => {
-                    return Envelope::failure(
-                        trace_id,
-                        Some(req_id),
-                        Some(req_ctx),
-                        WarmplaneError::new("INVALID_HOLD_WINDOW", error.to_string(), false),
-                        retry_base("not_started"),
-                    );
-                }
-            };
-            let emission = crate::tasks::EmissionRecord {
-                idempotency_claim,
-                phase: crate::tasks::EmissionPhase::PendingEmission,
-                release_at_ms,
-                cancellable: true,
-                tool_name: tool_name.clone(),
-                input_responses: options.input_responses.clone(),
-                request_state: options.request_state.clone(),
-                profile_id: prof_ctx.profile_id.clone(),
-                tenant_id: "default".to_string(),
-                role: self.state.rbac_engine.default_role().to_string(),
-                authorization_expires_at_epoch_secs: None,
-                approval_completed: requires_approval,
-                batch_id: None,
-                step_id: None,
-            };
-            let task = if let Some(existing) = task_record.as_ref() {
-                self.state
-                    .hold_coordinator
-                    .queue_existing(
-                        &self.state,
-                        &existing.task_id,
-                        effective_args.clone(),
-                        emission,
-                    )
-                    .await
-                    .ok()
-                    .flatten()
-            } else {
-                self.state
-                    .hold_coordinator
-                    .accept(
-                        &self.state,
-                        crate::tasks::CreateTaskParams {
-                            capability_id: capability_id.to_string(),
-                            server_id: server_id.clone(),
-                            args: effective_args.clone(),
-                            request_id: Some(req_id.clone()),
-                            context: Some(req_ctx.clone()),
-                            idempotency_key: idempotency_key.clone(),
-                            initial_status: crate::tasks::TaskStatus::Working,
-                            status_message: Some(
-                                "Waiting for the emission release deadline".to_string(),
-                            ),
-                            input_requests: None,
-                            ttl_ms: None,
-                            poll_interval_ms: Some(1_000),
-                        },
-                        emission,
-                    )
-                    .await
-                    .ok()
-            };
-            let Some(task) = task else {
-                return Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    WarmplaneError::new(
-                        "EMISSION_PERSISTENCE_FAILED",
-                        "Could not persist held emission",
-                        true,
-                    ),
-                    retry_base("not_started"),
-                );
-            };
-            if hold_ms < self.state.tool_timeout_ms {
-                let wait = std::time::Duration::from_millis(
-                    hold_ms.saturating_add(self.state.tool_timeout_ms),
-                );
-                if let Some(finished) = self
-                    .state
-                    .hold_coordinator
-                    .wait_for_terminal(&self.state, &task.task_id, wait)
-                    .await
-                {
-                    match finished.status {
-                        crate::tasks::TaskStatus::Completed => {
-                            let env = Envelope::success(
-                                trace_id,
-                                Some(req_id),
-                                Some(req_ctx),
-                                finished.result.unwrap_or(Value::Null),
-                                retry_base("completed"),
-                            );
-                            if let (Some(key), Some(claim)) =
-                                (idempotency_key.as_deref(), idempotency_claim)
-                            {
-                                if let Ok(value) = serde_json::to_value(&env) {
-                                    self.state
-                                        .idempotency_store
-                                        .complete(key, claim, value)
-                                        .await;
-                                }
-                            }
-                            return env;
-                        }
-                        crate::tasks::TaskStatus::Failed | crate::tasks::TaskStatus::Cancelled => {
-                            return Envelope::failure(
-                                trace_id,
-                                Some(req_id),
-                                Some(req_ctx),
-                                WarmplaneError::new(
-                                    finished
-                                        .error
-                                        .as_ref()
-                                        .and_then(|error| error.get("code"))
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("EMISSION_FAILED"),
-                                    finished.status_message.unwrap_or_else(|| {
-                                        "Held emission did not complete".to_string()
-                                    }),
-                                    false,
-                                ),
-                                retry_base("completed"),
-                            );
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            let receipt = crate::tasks::TaskResponse::from(&task);
-            return Envelope::success(
+            return HeldCapabilityCall {
+                emission: EmbeddedEmission {
+                    state: &self.state,
+                    profile: &prof_ctx,
+                    tool_name: &tool_name,
+                    options: &options,
+                    claim: idempotency_claim,
+                    approval_completed: requires_approval,
+                },
+                capability_id,
+                server_id: &server_id,
                 trace_id,
-                Some(req_id),
-                Some(req_ctx),
-                serde_json::to_value(receipt).unwrap_or_default(),
-                retry_base("in_progress"),
-            );
+                request_id: req_id,
+                context: req_ctx,
+                idempotency_key: idempotency_key.as_deref(),
+                retry_base,
+            }
+            .schedule(contract, effective_args, task_record.as_ref())
+            .await;
         }
 
         let tx = {
@@ -2242,6 +2036,251 @@ impl ControlPlaneHandle {
     /// Gracefully initiates shutdown of all background supervisors and actor channels.
     pub async fn shutdown(&self) {
         self.state.shutdown().await;
+    }
+}
+
+struct EmbeddedEmission<'a> {
+    state: &'a AppState,
+    profile: &'a ProfileContext,
+    tool_name: &'a str,
+    options: &'a ExecutionOptions,
+    claim: Option<IdempotencyClaim>,
+    approval_completed: bool,
+}
+
+impl EmbeddedEmission<'_> {
+    async fn hold_seconds(&self, contract: &ReversibilityConfig) -> u64 {
+        let global_window = self.state.policy.read().await.hold_window_secs;
+        let profile_window = self
+            .profile
+            .profile_policy
+            .as_ref()
+            .and_then(|policy| policy.hold_window_secs);
+        crate::emissions::effective_hold_window_secs(contract, profile_window, global_window)
+            .unwrap_or(30)
+    }
+
+    fn record(&self, release_at_ms: u64) -> EmissionRecord {
+        EmissionRecord {
+            idempotency_claim: self.claim,
+            phase: EmissionPhase::PendingEmission,
+            release_at_ms,
+            cancellable: true,
+            tool_name: self.tool_name.to_owned(),
+            input_responses: self.options.input_responses.clone(),
+            request_state: self.options.request_state.clone(),
+            profile_id: self.profile.profile_id.clone(),
+            tenant_id: "default".to_string(),
+            role: self.state.rbac_engine.default_role(),
+            authorization_expires_at_epoch_secs: None,
+            approval_completed: self.approval_completed,
+            batch_id: None,
+            step_id: None,
+        }
+    }
+
+    async fn queue_task(
+        &self,
+        contract: &ReversibilityConfig,
+        task_id: &str,
+        args: Value,
+        idempotency_key: Option<&str>,
+    ) {
+        let hold_secs = self.hold_seconds(contract).await;
+        let release_at_ms = match crate::emissions::release_deadline_ms(hold_secs) {
+            Ok(deadline) => deadline,
+            Err(error) => {
+                let _ = self
+                    .state
+                    .task_registry
+                    .fail_task(
+                        task_id,
+                        serde_json::json!({"code": "INVALID_HOLD_WINDOW"}),
+                        Some(error.to_string()),
+                    )
+                    .await;
+                return;
+            }
+        };
+        if let Err(error) = self
+            .state
+            .hold_coordinator
+            .queue_existing(self.state, task_id, args, self.record(release_at_ms))
+            .await
+        {
+            let _ = self
+                .state
+                .task_registry
+                .fail_task(
+                    task_id,
+                    serde_json::json!({"code": "EMISSION_PERSISTENCE_FAILED"}),
+                    Some(error.to_string()),
+                )
+                .await;
+            self.state
+                .idempotency_store
+                .release_execution(idempotency_key, self.claim)
+                .await;
+        }
+    }
+}
+
+struct HeldCapabilityCall<'a> {
+    emission: EmbeddedEmission<'a>,
+    capability_id: &'a str,
+    server_id: &'a str,
+    trace_id: String,
+    request_id: String,
+    context: RequestContext,
+    idempotency_key: Option<&'a str>,
+    retry_base: fn(&'static str) -> RetryMetadata,
+}
+
+impl HeldCapabilityCall<'_> {
+    async fn schedule(
+        self,
+        contract: &ReversibilityConfig,
+        args: Value,
+        approval_task: Option<&TaskRecord>,
+    ) -> Envelope<Value> {
+        let (hold_ms, release_at_ms) = match self.hold_deadline(contract).await {
+            Ok(deadline) => deadline,
+            Err(error) => return self.into_envelope(Err(error), "not_started"),
+        };
+        let Some(task) = self
+            .persist(args, self.emission.record(release_at_ms), approval_task)
+            .await
+        else {
+            return self.into_envelope(
+                Err(WarmplaneError::new(
+                    "EMISSION_PERSISTENCE_FAILED",
+                    "Could not persist held emission",
+                    true,
+                )),
+                "not_started",
+            );
+        };
+        if let Some(outcome) = self.wait_for_result(&task.task_id, hold_ms).await {
+            return self.complete(outcome).await;
+        }
+        let receipt = crate::tasks::TaskResponse::from(&task);
+        self.into_envelope(
+            Ok(serde_json::to_value(receipt).unwrap_or_default()),
+            "in_progress",
+        )
+    }
+
+    async fn hold_deadline(
+        &self,
+        contract: &ReversibilityConfig,
+    ) -> Result<(u64, u64), WarmplaneError> {
+        let seconds = self.emission.hold_seconds(contract).await;
+        let hold_ms = seconds.checked_mul(1_000).ok_or_else(|| {
+            WarmplaneError::new(
+                "INVALID_HOLD_WINDOW",
+                "Hold window overflows milliseconds",
+                false,
+            )
+        })?;
+        let release_at_ms = crate::emissions::release_deadline_ms(seconds).map_err(|error| {
+            WarmplaneError::new("INVALID_HOLD_WINDOW", error.to_string(), false)
+        })?;
+        Ok((hold_ms, release_at_ms))
+    }
+
+    async fn persist(
+        &self,
+        args: Value,
+        emission: EmissionRecord,
+        approval_task: Option<&TaskRecord>,
+    ) -> Option<TaskRecord> {
+        let state = self.emission.state;
+        if let Some(task) = approval_task {
+            return state
+                .hold_coordinator
+                .queue_existing(state, &task.task_id, args, emission)
+                .await
+                .ok()
+                .flatten();
+        }
+        state
+            .hold_coordinator
+            .accept(
+                state,
+                CreateTaskParams {
+                    capability_id: self.capability_id.to_owned(),
+                    server_id: self.server_id.to_owned(),
+                    args,
+                    request_id: Some(self.request_id.clone()),
+                    context: Some(self.context.clone()),
+                    idempotency_key: self.idempotency_key.map(str::to_owned),
+                    initial_status: TaskStatus::Working,
+                    status_message: Some("Waiting for the emission release deadline".to_string()),
+                    input_requests: None,
+                    ttl_ms: None,
+                    poll_interval_ms: Some(1_000),
+                },
+                emission,
+            )
+            .await
+            .ok()
+    }
+
+    async fn wait_for_result(
+        &self,
+        task_id: &str,
+        hold_ms: u64,
+    ) -> Option<Result<Value, WarmplaneError>> {
+        let state = self.emission.state;
+        if hold_ms >= state.tool_timeout_ms {
+            return None;
+        }
+        let wait = Duration::from_millis(hold_ms.saturating_add(state.tool_timeout_ms));
+        let task = state
+            .hold_coordinator
+            .wait_for_terminal(state, task_id, wait)
+            .await?;
+        match task.status {
+            TaskStatus::Completed => Some(Ok(task.result.unwrap_or(Value::Null))),
+            TaskStatus::Failed | TaskStatus::Cancelled => {
+                let code = task
+                    .error
+                    .as_ref()
+                    .and_then(|error| error.get("code"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("EMISSION_FAILED");
+                let message = task
+                    .status_message
+                    .unwrap_or_else(|| "Held emission did not complete".to_string());
+                Some(Err(WarmplaneError::new(code, message, false)))
+            }
+            _ => None,
+        }
+    }
+
+    async fn complete(self, result: Result<Value, WarmplaneError>) -> Envelope<Value> {
+        let state = self.emission.state;
+        let claim = self.idempotency_key.zip(self.emission.claim);
+        let envelope = self.into_envelope(result, "completed");
+        if envelope.ok {
+            if let Some((key, claim)) = claim {
+                if let Ok(value) = serde_json::to_value(&envelope) {
+                    state.idempotency_store.complete(key, claim, value).await;
+                }
+            }
+        }
+        envelope
+    }
+
+    fn into_envelope(
+        self,
+        result: Result<Value, WarmplaneError>,
+        execution_state: &'static str,
+    ) -> Envelope<Value> {
+        EnvelopeBuilder::new(self.trace_id, (self.retry_base)(execution_state))
+            .request_id(Some(self.request_id))
+            .context(Some(self.context))
+            .outcome(result)
     }
 }
 
