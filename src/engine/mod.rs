@@ -18,13 +18,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     batch_executor::{execute_batch, BatchCallResponse, BatchStep},
-    config::McpConfig,
+    config::{McpConfig, ReversibilityClass, ReversibilityConfig},
     context::{ProfileContext, RequestContext},
     context_filter::{distill_value, DistillationOptions},
     daemon::{
         initialize_state,
         state::AppState,
         types::{ServerMsg, UpstreamCallError},
+        Policy,
     },
     idempotency::RetryMetadata,
 };
@@ -898,20 +899,25 @@ impl ControlPlaneHandle {
                     }
                 }
 
-                let (snapshot, snapshot_hash) = if let Some(contract) = &reversibility_clone {
-                    if matches!(
-                        contract.class,
-                        crate::config::ReversibilityClass::Reversible
-                            | crate::config::ReversibilityClass::Compensable
-                    ) && handle.state.undo_ledger.is_none()
-                    {
+                let (snapshot, snapshot_hash) = match capture_call_snapshot(
+                    &handle.state,
+                    reversibility_clone.as_ref(),
+                    &worker_args,
+                    &profile_context_clone,
+                    Some(&policy_for_undo),
+                )
+                .await
+                {
+                    Ok(snapshot) => snapshot,
+                    Err(failure) => {
+                        let error = failure.into_error("Persistent undo ledger is unavailable");
                         let _ = handle
                             .state
                             .task_registry
                             .fail_task(
                                 &task_id_clone,
-                                serde_json::json!({"code": "UNDO_STORAGE_UNAVAILABLE"}),
-                                Some("Persistent undo ledger is unavailable".to_string()),
+                                serde_json::json!({"code": error.code}),
+                                Some(error.message),
                             )
                             .await;
                         handle
@@ -921,43 +927,6 @@ impl ControlPlaneHandle {
                             .await;
                         return;
                     }
-                    if let Some(pre_snapshot) = &contract.pre_snapshot {
-                        match undo::capture_pre_snapshot(
-                            &handle.state,
-                            pre_snapshot,
-                            &worker_args,
-                            &profile_context_clone,
-                            &policy_for_undo,
-                        )
-                        .await
-                        {
-                            Ok(snapshot) => snapshot,
-                            Err(error) => {
-                                let _ = handle
-                                    .state
-                                    .task_registry
-                                    .fail_task(
-                                        &task_id_clone,
-                                        serde_json::json!({"code": "PRE_SNAPSHOT_FAILED"}),
-                                        Some(error.to_string()),
-                                    )
-                                    .await;
-                                handle
-                                    .state
-                                    .idempotency_store
-                                    .release_execution(
-                                        idempotency_key_clone.as_deref(),
-                                        idempotency_claim,
-                                    )
-                                    .await;
-                                return;
-                            }
-                        }
-                    } else {
-                        (Value::Null, None)
-                    }
-                } else {
-                    (Value::Null, None)
                 };
 
                 let tx = {
@@ -1596,13 +1565,17 @@ impl ControlPlaneHandle {
             );
         }
 
-        let (snapshot, snapshot_hash) = if let Some(contract) = &reversibility {
-            if matches!(
-                contract.class,
-                crate::config::ReversibilityClass::Reversible
-                    | crate::config::ReversibilityClass::Compensable
-            ) && self.state.undo_ledger.is_none()
-            {
+        let (snapshot, snapshot_hash) = match capture_call_snapshot(
+            &self.state,
+            reversibility.as_ref(),
+            &effective_args,
+            &prof_ctx,
+            None,
+        )
+        .await
+        {
+            Ok(snapshot) => snapshot,
+            Err(failure) => {
                 self.state
                     .idempotency_store
                     .release_execution(idempotency_key.as_deref(), idempotency_claim)
@@ -1611,49 +1584,12 @@ impl ControlPlaneHandle {
                     trace_id,
                     Some(req_id),
                     Some(req_ctx),
-                    WarmplaneError::new(
-                        "UNDO_STORAGE_UNAVAILABLE",
+                    failure.into_error(
                         "Persistent undo ledger is required for reversible capabilities",
-                        false,
                     ),
                     retry_base("not_started"),
                 );
             }
-            if let Some(pre_snapshot) = &contract.pre_snapshot {
-                match undo::capture_pre_snapshot(
-                    &self.state,
-                    pre_snapshot,
-                    &effective_args,
-                    &prof_ctx,
-                    &self
-                        .state
-                        .policy
-                        .read()
-                        .await
-                        .merge_with_profile(prof_ctx.profile_policy.as_ref()),
-                )
-                .await
-                {
-                    Ok(snapshot) => snapshot,
-                    Err(error) => {
-                        self.state
-                            .idempotency_store
-                            .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                            .await;
-                        return Envelope::failure(
-                            trace_id,
-                            Some(req_id),
-                            Some(req_ctx),
-                            WarmplaneError::new("PRE_SNAPSHOT_FAILED", error.to_string(), true),
-                            retry_base("not_started"),
-                        );
-                    }
-                }
-            } else {
-                (Value::Null, None)
-            }
-        } else {
-            (Value::Null, None)
         };
 
         let distill_opts = DistillationOptions::from_args(Some(&args));
@@ -2307,4 +2243,58 @@ impl ControlPlaneHandle {
     pub async fn shutdown(&self) {
         self.state.shutdown().await;
     }
+}
+
+enum SnapshotFailure {
+    UndoStorageUnavailable,
+    Capture(anyhow::Error),
+}
+
+impl SnapshotFailure {
+    fn into_error(self, storage_message: &'static str) -> WarmplaneError {
+        match self {
+            Self::UndoStorageUnavailable => {
+                WarmplaneError::new("UNDO_STORAGE_UNAVAILABLE", storage_message, false)
+            }
+            Self::Capture(error) => {
+                WarmplaneError::new("PRE_SNAPSHOT_FAILED", error.to_string(), true)
+            }
+        }
+    }
+}
+
+async fn capture_call_snapshot(
+    state: &AppState,
+    contract: Option<&ReversibilityConfig>,
+    args: &Value,
+    profile: &ProfileContext,
+    prepared_policy: Option<&Policy>,
+) -> Result<(Value, Option<String>), SnapshotFailure> {
+    let Some(contract) = contract else {
+        return Ok((Value::Null, None));
+    };
+    if matches!(
+        contract.class,
+        ReversibilityClass::Reversible | ReversibilityClass::Compensable
+    ) && state.undo_ledger.is_none()
+    {
+        return Err(SnapshotFailure::UndoStorageUnavailable);
+    }
+    let Some(snapshot) = &contract.pre_snapshot else {
+        return Ok((Value::Null, None));
+    };
+
+    let current_policy;
+    let merged_policy;
+    let policy = match prepared_policy {
+        Some(policy) => policy,
+        None => {
+            current_policy = state.policy.read().await;
+            merged_policy = current_policy.merge_with_profile(profile.profile_policy.as_ref());
+            &merged_policy
+        }
+    };
+    undo::capture_pre_snapshot(state, snapshot, args, profile, policy)
+        .await
+        .map_err(SnapshotFailure::Capture)
 }

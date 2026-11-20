@@ -286,6 +286,15 @@ async fn inverse_upstream_error_text_is_not_written_to_the_audit_chain() {
 
 #[tokio::test]
 async fn failed_pre_snapshot_prevents_the_forward_mutation() {
+    assert_failed_pre_snapshot(false).await;
+}
+
+#[tokio::test]
+async fn failed_async_pre_snapshot_fails_the_task_before_forward_dispatch() {
+    assert_failed_pre_snapshot(true).await;
+}
+
+async fn assert_failed_pre_snapshot(async_task: bool) {
     let capabilities = priority_capabilities(false);
     let (upstream_tx, mut upstream_rx) = tokio::sync::mpsc::channel(4);
     let temp = tempfile::tempdir().unwrap();
@@ -298,17 +307,23 @@ async fn failed_pre_snapshot_prevents_the_forward_mutation() {
         .undo_ledger(ledger.clone())
         .build();
     let handle = ControlPlaneHandle::new(state);
+    let worker = handle.clone();
     let call = tokio::spawn(async move {
-        handle
+        worker
             .call_capability(
                 "mock.set_priority",
                 json!({"id": "ISSUE-7", "priority": "high"}),
-                ExecutionOptions::default(),
+                ExecutionOptions::default().with_async_task(async_task),
             )
             .await
     });
 
-    let Some(ServerMsg::CallTool { name, reply, .. }) = upstream_rx.recv().await else {
+    let timeout = std::time::Duration::from_secs(2);
+    let Some(ServerMsg::CallTool { name, reply, .. }) =
+        tokio::time::timeout(timeout, upstream_rx.recv())
+            .await
+            .unwrap()
+    else {
         panic!("expected the pre-snapshot read");
     };
     assert_eq!(name, "get_issue");
@@ -319,8 +334,25 @@ async fn failed_pre_snapshot_prevents_the_forward_mutation() {
         .unwrap();
 
     let response = call.await.unwrap();
-    assert!(!response.ok);
-    assert_eq!(response.error.unwrap().code, "PRE_SNAPSHOT_FAILED");
+    if async_task {
+        assert!(response.ok);
+        let receipt = response.data.unwrap();
+        let task_id = receipt["taskId"].as_str().unwrap();
+        let state = handle.state();
+        let task = state
+            .hold_coordinator
+            .wait_for_terminal(state, task_id, timeout)
+            .await
+            .unwrap();
+        assert_eq!(task.status, warmplane::tasks::TaskStatus::Failed);
+        assert_eq!(task.error.unwrap()["code"], "PRE_SNAPSHOT_FAILED");
+    } else {
+        assert!(!response.ok);
+        let error = response.error.unwrap();
+        assert_eq!(error.code, "PRE_SNAPSHOT_FAILED");
+        assert!(error.retryable);
+        assert_eq!(response.retry.upstream_execution_state, "not_started");
+    }
     assert!(upstream_rx.try_recv().is_err());
     assert!(ledger.entries().await.is_empty());
 }
