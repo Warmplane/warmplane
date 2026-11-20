@@ -529,6 +529,66 @@ async fn test_embedded_warmplane_start_from_path() {
 }
 
 #[tokio::test]
+async fn expired_async_completion_replays_the_task_failure() {
+    let (upstream_tx, mut upstream_rx) = tokio::sync::mpsc::channel(8);
+    let capability = CapabilityMeta::new(
+        "mock",
+        "run",
+        "Run a tool",
+        "Run a tool",
+        json!({"type": "object"}),
+    );
+    let state = AppState::builder()
+        .servers(HashMap::from([("mock".to_string(), upstream_tx)]))
+        .capabilities(HashMap::from([("mock.run".to_string(), capability)]))
+        .policy(warmplane::daemon::Policy {
+            approval_timeout_secs: 0,
+            ..Default::default()
+        })
+        .build();
+    let handle = ControlPlaneHandle::new(state);
+    let deadline = std::time::Duration::from_secs(2);
+    let key = "expired-async-completion";
+    let accepted = handle
+        .call_capability(
+            "mock.run",
+            json!({}),
+            ExecutionOptions::default()
+                .with_idempotency_key(key)
+                .with_async_task(true),
+        )
+        .await;
+    let data = accepted.data.unwrap();
+    let task_id = data["taskId"].as_str().unwrap();
+    let Some(ServerMsg::CallTool { reply, .. }) =
+        tokio::time::timeout(deadline, upstream_rx.recv())
+            .await
+            .unwrap()
+    else {
+        panic!("expected the upstream call");
+    };
+    reply.send(Ok(json!({"late": true}))).unwrap();
+
+    let replay = tokio::time::timeout(
+        deadline,
+        handle.call_capability(
+            "mock.run",
+            json!({}),
+            ExecutionOptions::default().with_idempotency_key(key),
+        ),
+    )
+    .await
+    .unwrap();
+    let task = handle.get_task(task_id).await.data.unwrap();
+    assert_eq!(task.status, warmplane::tasks::TaskStatus::Failed);
+    assert!(task.result.is_none());
+    assert!(!replay.ok);
+    assert_eq!(replay.error.unwrap().code, task.error.unwrap()["code"]);
+    assert!(upstream_rx.try_recv().is_err());
+    handle.shutdown().await;
+}
+
+#[tokio::test]
 async fn test_embedded_task_management_lifecycle() {
     use std::collections::BTreeMap;
     use warmplane::config::{PolicyConfig, ServerConfig};

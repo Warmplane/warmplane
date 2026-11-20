@@ -7,7 +7,7 @@
 
 use anyhow::{Context, Result};
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Take, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -113,7 +113,7 @@ impl AuditStore {
         let path = path.as_ref().to_path_buf();
         let mut events = Vec::new();
         let mut last_sequence = 0;
-        for record in read_records(&path)? {
+        for record in read_records(open_log(&path)?) {
             let record = record?;
             let prev_hash = events
                 .last()
@@ -226,68 +226,44 @@ impl AuditStore {
     /// Verifies the persisted chain or the retained suffix of an in-memory log.
     pub async fn verify_chain(&self) -> VerificationReport {
         let log = self.log.read().await;
-        let retained_start = log.total_records - log.events.len();
-        let mut report = VerificationReport {
-            is_valid: true,
-            total_records: log.total_records,
-            first_retained_index: (self.file_path.is_none() && retained_start > 0)
-                .then_some(retained_start),
-            corrupted_at_index: None,
-            corrupted_record_id: None,
-            message: None,
-        };
-
-        let mut check = |index, record: &AuditEvent, previous: &str| {
-            if let Err(error) = validate_record(record, previous, self.hmac_key.as_deref()) {
-                report.is_valid = false;
-                report.corrupted_at_index = Some(index);
-                report.corrupted_record_id = Some(record.id.clone());
-                report.message = Some(error.to_string());
-                return false;
-            }
-            true
-        };
-
+        let total_records = log.total_records;
+        let key = self.hmac_key.as_deref();
         if let Some(path) = &self.file_path {
-            let mut previous = GENESIS_HASH.to_owned();
-            let mut count = 0;
-            let result = (|| -> Result<()> {
-                for record in read_records(path)? {
-                    let record = record?;
-                    if !check(count, &record, &previous) {
-                        return Ok(());
+            // Capture the committed tail and a stable file handle before letting appends resume.
+            let snapshot = AuditSnapshot::capture(path, &log);
+            drop(log);
+            let key = self.hmac_key.clone();
+            return match snapshot {
+                Ok(snapshot) => {
+                    match tokio::task::spawn_blocking(move || snapshot.verify(key.as_deref())).await
+                    {
+                        Ok(report) => report,
+                        Err(error) => failed_verification(total_records, None, None, None, error),
                     }
-                    previous = record.hash;
-                    count += 1;
                 }
-                anyhow::ensure!(
-                    count == log.total_records && previous == log.tail_hash(),
-                    "persisted audit chain differs from the committed tail"
-                );
-                Ok(())
-            })();
-            if let Err(error) = result {
-                report.is_valid = false;
-                report.corrupted_at_index = Some(count);
-                report.message = Some(error.to_string());
-            }
-        } else {
-            let mut previous = log.events.first().map_or(GENESIS_HASH, |event| {
-                if retained_start == 0 {
-                    GENESIS_HASH
-                } else {
-                    &event.prev_hash
-                }
-            });
-            for (offset, record) in log.events.iter().enumerate() {
-                if !check(retained_start + offset, record, previous) {
-                    break;
-                }
-                previous = &record.hash;
-            }
+                Err(error) => failed_verification(total_records, None, None, None, error),
+            };
         }
 
-        report
+        let retained_start = total_records - log.events.len();
+        let first_retained_index = (retained_start > 0).then_some(retained_start);
+        let mut previous = GENESIS_HASH;
+        if let (Some(_), Some(first)) = (first_retained_index, log.events.first()) {
+            previous = &first.prev_hash;
+        }
+        for (offset, record) in log.events.iter().enumerate() {
+            if let Err(error) = validate_record(record, previous, key) {
+                return failed_verification(
+                    total_records,
+                    first_retained_index,
+                    Some(retained_start + offset),
+                    Some(record.id.clone()),
+                    error,
+                );
+            }
+            previous = &record.hash;
+        }
+        valid_verification(total_records, first_retained_index)
     }
 
     /// Queries audit events matching the provided filter criteria.
@@ -436,14 +412,109 @@ fn unix_time_ns() -> u64 {
         .as_nanos() as u64
 }
 
-fn read_records(path: &Path) -> Result<impl Iterator<Item = Result<AuditEvent>>> {
-    let mut reader = match File::open(path) {
-        Ok(file) => Some(BufReader::new(file)),
-        Err(error) if error.kind() == ErrorKind::NotFound => None,
-        Err(error) => return Err(error).context("failed to open audit log"),
-    };
+struct AuditSnapshot {
+    file: Option<Take<File>>,
+    total_records: usize,
+    tail_hash: String,
+}
+
+impl AuditSnapshot {
+    fn capture(path: &Path, log: &AuditLog) -> Result<Self> {
+        let file = match open_log(path)? {
+            Some(file) => {
+                let len = file
+                    .metadata()
+                    .context("failed to measure audit log")?
+                    .len();
+                Some(file.take(len))
+            }
+            None => None,
+        };
+        Ok(Self {
+            file,
+            total_records: log.total_records,
+            tail_hash: log.tail_hash().to_owned(),
+        })
+    }
+
+    fn verify(self, key: Option<&[u8]>) -> VerificationReport {
+        let mut previous = GENESIS_HASH.to_owned();
+        let mut count = 0;
+        for result in read_records(self.file) {
+            let record = match result {
+                Ok(record) => record,
+                Err(error) => {
+                    return failed_verification(self.total_records, None, Some(count), None, error)
+                }
+            };
+            if let Err(error) = validate_record(&record, &previous, key) {
+                return failed_verification(
+                    self.total_records,
+                    None,
+                    Some(count),
+                    Some(record.id),
+                    error,
+                );
+            }
+            previous = record.hash;
+            count += 1;
+        }
+        if count != self.total_records || previous != self.tail_hash {
+            return failed_verification(
+                self.total_records,
+                None,
+                Some(count),
+                None,
+                "persisted audit chain differs from the committed tail",
+            );
+        }
+        valid_verification(self.total_records, None)
+    }
+}
+
+fn valid_verification(
+    total_records: usize,
+    first_retained_index: Option<usize>,
+) -> VerificationReport {
+    VerificationReport {
+        is_valid: true,
+        total_records,
+        first_retained_index,
+        corrupted_at_index: None,
+        corrupted_record_id: None,
+        message: None,
+    }
+}
+
+fn failed_verification(
+    total_records: usize,
+    first_retained_index: Option<usize>,
+    corrupted_at_index: Option<usize>,
+    corrupted_record_id: Option<String>,
+    error: impl std::fmt::Display,
+) -> VerificationReport {
+    VerificationReport {
+        is_valid: false,
+        total_records,
+        first_retained_index,
+        corrupted_at_index,
+        corrupted_record_id,
+        message: Some(error.to_string()),
+    }
+}
+
+fn open_log(path: &Path) -> Result<Option<File>> {
+    match File::open(path) {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).context("failed to open audit log"),
+    }
+}
+
+fn read_records(input: Option<impl Read>) -> impl Iterator<Item = Result<AuditEvent>> {
+    let mut reader = input.map(BufReader::new);
     let mut line = String::new();
-    Ok(std::iter::from_fn(move || loop {
+    std::iter::from_fn(move || loop {
         line.clear();
         let file = reader.as_mut()?;
         match file.read_line(&mut line) {
@@ -459,7 +530,7 @@ fn read_records(path: &Path) -> Result<impl Iterator<Item = Result<AuditEvent>>>
                 return Some(Err(error).context("failed to read audit log record"));
             }
         }
-    }))
+    })
 }
 
 fn validate_record(record: &AuditEvent, previous: &str, hmac_key: Option<&[u8]>) -> Result<()> {
@@ -580,6 +651,27 @@ mod tests {
         std::fs::write(&path, content).unwrap();
         assert!(!reopened.verify_chain().await.is_valid);
         assert!(AuditStore::open_or_create(&path).is_err());
+    }
+
+    #[tokio::test]
+    async fn audit_snapshot_excludes_concurrent_appends() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audit.jsonl");
+        let store = AuditStore::open_or_create(&path).unwrap();
+        store.append(tool_event()).await.unwrap();
+        let snapshot = {
+            let log = store.log.read().await;
+            AuditSnapshot::capture(&path, &log).unwrap()
+        };
+
+        store.append(tool_event()).await.unwrap();
+
+        let captured = snapshot.verify(None);
+        assert!(captured.is_valid);
+        assert_eq!(captured.total_records, 1);
+        let latest = store.verify_chain().await;
+        assert!(latest.is_valid);
+        assert_eq!(latest.total_records, 2);
     }
 
     #[tokio::test]

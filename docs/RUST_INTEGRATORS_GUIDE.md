@@ -574,3 +574,8 @@ execution. The embedded control plane manages these claims for its callers.
 
 When constructing an `EmissionRecord` directly without an originating store
 claim, set `idempotency_claim` to `None`. The field is scoped to the current process.
+
+`TaskRegistry::complete_task` returns the resulting task record, or `None` if
+the task is missing. Check the returned status when publishing a result.
+A task that expires before completion returns a failed record with
+`TASK_EXPIRED`. Embedded tool calls use that outcome for idempotent replay.

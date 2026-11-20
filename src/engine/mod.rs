@@ -1089,19 +1089,16 @@ impl ControlPlaneHandle {
                             }
                         }
                         let distilled_data = distill_value(data, &distill_opts);
-                        let _ = handle
+                        let outcome = handle
                             .state
                             .task_registry
-                            .complete_task(&task_id_clone, distilled_data.clone())
+                            .complete_execution(&task_id_clone, distilled_data)
                             .await;
 
-                        let env = Envelope::success(
-                            trace_id_clone,
-                            Some(req_id_clone),
-                            Some(req_ctx_clone),
-                            distilled_data,
-                            retry_base("completed"),
-                        );
+                        let env = EnvelopeBuilder::new(trace_id_clone, retry_base("completed"))
+                            .request_id(Some(req_id_clone))
+                            .context(Some(req_ctx_clone))
+                            .outcome(outcome);
                         if let (Some(key), Some(claim)) =
                             (idempotency_key_clone.as_deref(), idempotency_claim)
                         {
@@ -1762,21 +1759,19 @@ impl ControlPlaneHandle {
                     }
                 }
                 let distilled_data = distill_value(data, &distill_opts);
-                if let Some(ref rec) = task_record {
-                    let _ = self
-                        .state
-                        .task_registry
-                        .complete_task(&rec.task_id, distilled_data.clone())
-                        .await;
-                }
-
-                let env = Envelope::success(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    distilled_data,
-                    retry_base("completed"),
-                );
+                let outcome = match task_record.as_ref() {
+                    Some(record) => {
+                        self.state
+                            .task_registry
+                            .complete_execution(&record.task_id, distilled_data)
+                            .await
+                    }
+                    None => Ok(distilled_data),
+                };
+                let env = EnvelopeBuilder::new(trace_id, retry_base("completed"))
+                    .request_id(Some(req_id))
+                    .context(Some(req_ctx))
+                    .outcome(outcome);
 
                 if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
                     if let Ok(val) = serde_json::to_value(&env) {

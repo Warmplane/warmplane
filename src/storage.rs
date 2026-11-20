@@ -38,6 +38,8 @@ impl std::error::Error for ReplacementDurabilityUnknown {
 pub struct AtomicFile<T> {
     path: PathBuf,
     _phantom: std::marker::PhantomData<T>,
+    #[cfg(all(test, unix))]
+    fail_next_directory_sync: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl<T> AtomicFile<T>
@@ -55,6 +57,8 @@ where
         Self {
             path: path.as_ref().to_path_buf(),
             _phantom: std::marker::PhantomData,
+            #[cfg(all(test, unix))]
+            fail_next_directory_sync: std::sync::Arc::default(),
         }
     }
 
@@ -124,10 +128,26 @@ where
     /// [`ReplacementDurabilityUnknown`] error means the new file is already visible.
     pub fn save(&self, data: &T) -> Result<()> {
         if let Some(directory) = self.replace(data)? {
+            #[cfg(all(test, unix))]
+            if self
+                .fail_next_directory_sync
+                .swap(false, std::sync::atomic::Ordering::Relaxed)
+            {
+                return sync_replacement(
+                    Err(std::io::Error::other("injected sync failure")),
+                    &self.path,
+                );
+            }
             sync_replacement(directory.sync_all(), &self.path)?;
         }
         debug!(path = %self.path.display(), "atomically saved persistent state");
         Ok(())
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn fail_next_directory_sync(&self) {
+        self.fail_next_directory_sync
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn replace(&self, data: &T) -> Result<Option<fs::File>> {
@@ -334,6 +354,7 @@ mod tests {
         tags: Vec<String>,
     }
 
+    #[cfg(unix)]
     #[test]
     fn directory_sync_failure_reports_a_visible_replacement() {
         let directory = tempfile::tempdir().unwrap();
@@ -341,9 +362,8 @@ mod tests {
         let store = AtomicFile::new(&path);
         store.save(&1_u64).unwrap();
 
-        store.replace(&2).unwrap();
-        let error = sync_replacement(Err(std::io::Error::other("injected sync failure")), &path)
-            .unwrap_err();
+        store.fail_next_directory_sync();
+        let error = store.save(&2).unwrap_err();
 
         assert!(error.is::<ReplacementDurabilityUnknown>());
         assert_eq!(store.load_opt().unwrap(), Some(2));

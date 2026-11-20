@@ -699,3 +699,8 @@ No polyfills, no build step, no bundler configuration required.
 When `report.first_retained_index` is present, it is the zero-based start of the
 verified in-memory suffix. The number of retained records is
 `total_records - first_retained_index`. Persisted audit logs are verified from disk.
+
+When an upstream result arrives after task expiry, task polling and idempotent
+replay of that result report `TASK_EXPIRED`. A hold receipt may report uncertain persistence
+in `statusMessage`; the hold has been accepted and can resume after restart if
+its record survives.

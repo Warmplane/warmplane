@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{oneshot, RwLock};
 
-use crate::context::RequestContext;
 use crate::storage::{AtomicFile, ReplacementDurabilityUnknown};
+use crate::{context::RequestContext, engine::WarmplaneError};
 
 /// Task execution status per SEP-2663.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -222,7 +222,9 @@ fn expire_task(record: &mut TaskRecord, now: SystemTime) -> bool {
     }
 
     record.status = TaskStatus::Failed;
-    record.status_message = Some("Task expired due to TTL timeout".to_string());
+    let message = "Task expired due to TTL timeout";
+    record.status_message = Some(message.to_string());
+    record.error = Some(serde_json::json!({"code": "TASK_EXPIRED", "message": message}));
     record.last_updated_at = format_iso_time(now);
     true
 }
@@ -381,7 +383,14 @@ impl TaskRegistry {
         (record, rx)
     }
 
-    /// Creates and durably stores a held emission before returning its task record.
+    /// Creates a held emission and stores its task record.
+    ///
+    /// A visible replacement with uncertain durability counts as accepted. The
+    /// returned status message reports the uncertainty, and dispatch still
+    /// requires a durable claim.
+    ///
+    /// # Errors
+    /// Returns an error if persistence fails before the replacement becomes visible.
     pub async fn create_emission_task(
         &self,
         params: CreateTaskParams,
@@ -401,16 +410,39 @@ impl TaskRegistry {
             }
         };
         let record = new_task_record(task_id.clone(), params, now_secs, iso_time, Some(emission));
-        guard.insert(task_id.clone(), record.clone());
-        if let Some(storage) = &self.storage {
-            if let Err(error) = storage.save(&guard) {
-                if !error.is::<ReplacementDurabilityUnknown>() {
-                    guard.remove(&task_id);
-                }
-                return Err(error).context("failed to persist accepted emission task");
+        guard.insert(task_id.clone(), record);
+        match self.persist_emission_acceptance(&mut guard, &task_id) {
+            Ok(record) => Ok(record),
+            Err(error) => {
+                guard.remove(&task_id);
+                Err(error).context("failed to persist accepted emission task")
             }
         }
-        Ok(record)
+    }
+
+    fn persist_emission_acceptance(
+        &self,
+        tasks: &mut HashMap<String, TaskRecord>,
+        task_id: &str,
+    ) -> Result<TaskRecord> {
+        let persistence = self
+            .storage
+            .as_ref()
+            .map_or(Ok(()), |storage| storage.save(tasks));
+        let record = tasks
+            .get_mut(task_id)
+            .context("emission task missing during acceptance")?;
+        if let Err(error) = persistence {
+            if !error.is::<ReplacementDurabilityUnknown>() {
+                return Err(error);
+            }
+            tracing::warn!(task_id, error = %error, "accepted visible emission with uncertain durability");
+            record.status_message = Some(
+                "Emission accepted and waiting for release. Its persistence across restart is uncertain."
+                    .to_string(),
+            );
+        }
+        Ok(record.clone())
     }
 
     /// Durably claims a pending emission for dispatch, preventing later cancellation.
@@ -455,6 +487,11 @@ impl TaskRegistry {
     }
 
     /// Attaches a held-emission payload to a task already created for approval.
+    ///
+    /// Acceptance follows the same persistence rules as [Self::create_emission_task].
+    ///
+    /// # Errors
+    /// Returns an error if persistence fails before the replacement becomes visible.
     pub async fn attach_emission(
         &self,
         task_id: &str,
@@ -478,18 +515,15 @@ impl TaskRegistry {
         record.ttl_ms = None;
         record.last_updated_at = format_iso_time(SystemTime::now());
         record.emission = Some(emission);
-        if let Some(storage) = &self.storage {
-            if let Err(error) = storage.save(&guard) {
-                if !error.is::<ReplacementDurabilityUnknown>() {
-                    guard.insert(task_id.to_string(), previous);
-                } else {
-                    self.wait_channels.write().await.remove(task_id);
-                }
+        let attached = match self.persist_emission_acceptance(&mut guard, task_id) {
+            Ok(record) => record,
+            Err(error) => {
+                guard.insert(task_id.to_string(), previous);
                 return Err(error).context("failed to persist approved emission task");
             }
-        }
+        };
         self.wait_channels.write().await.remove(task_id);
-        Ok(guard.get(task_id).cloned())
+        Ok(Some(attached))
     }
 
     /// Cancels a held emission only while it remains pending and cancellable.
@@ -674,46 +708,94 @@ impl TaskRegistry {
         Ok(true)
     }
 
-    /// Marks a task as completed with results.
-    pub async fn complete_task(&self, task_id: &str, result: Value) -> Result<()> {
+    /// Records a completion attempt and returns the resulting task state.
+    ///
+    /// An expired task is returned as failed, an existing terminal state is
+    /// preserved, and a missing task returns `None`.
+    ///
+    /// # Errors
+    /// Returns an error if a new completed state could not replace the stored state.
+    pub async fn complete_task(&self, task_id: &str, result: Value) -> Result<Option<TaskRecord>> {
         let mut guard = self.tasks.write().await;
-        if let Some(record) = guard.get_mut(task_id) {
-            if expire_task(record, SystemTime::now()) {
-                self.persist_expirations(&guard, &[task_id.to_string()])
-                    .await;
-                return Ok(());
-            }
-            if matches!(
-                record.status,
-                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
-            ) {
-                return Ok(());
-            }
-            let previous = record.clone();
-            if let Some(emission) = record.emission.as_mut() {
-                emission.cancellable = false;
-            }
-            record.status = TaskStatus::Completed;
-            record.status_message = Some("Execution completed successfully".to_string());
-            record.result = Some(result);
-            record.last_updated_at = format_iso_time(SystemTime::now());
-            if let Some(storage) = &self.storage {
-                if let Err(error) = storage.save(&guard) {
-                    if !error.is::<ReplacementDurabilityUnknown>() {
-                        guard.insert(task_id.to_string(), previous);
-                    } else {
-                        self.wait_channels.write().await.remove(task_id);
-                    }
+        let Some(record) = guard.get_mut(task_id) else {
+            return Ok(None);
+        };
+        if expire_task(record, SystemTime::now()) {
+            let record = record.clone();
+            self.persist_expirations(&guard, std::slice::from_ref(&record.task_id))
+                .await;
+            return Ok(Some(record));
+        }
+        if matches!(
+            record.status,
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+        ) {
+            return Ok(Some(record.clone()));
+        }
+        let previous = record.clone();
+        if let Some(emission) = record.emission.as_mut() {
+            emission.cancellable = false;
+        }
+        record.status = TaskStatus::Completed;
+        record.status_message = Some("Execution completed successfully".to_string());
+        record.result = Some(result);
+        record.last_updated_at = format_iso_time(SystemTime::now());
+        let completed = record.clone();
+        if let Some(storage) = &self.storage {
+            if let Err(error) = storage.save(&guard) {
+                if !error.is::<ReplacementDurabilityUnknown>() {
+                    guard.insert(task_id.to_string(), previous);
                     return Err(error).context("failed to persist completed task");
                 }
+                tracing::warn!(task_id, error = %error, "task completion is visible with uncertain durability");
             }
         }
 
-        let mut channels = self.wait_channels.write().await;
-        channels.remove(task_id);
+        self.wait_channels.write().await.remove(task_id);
+        Ok(Some(completed))
+    }
 
-        drop(guard);
-        Ok(())
+    pub(crate) async fn complete_execution(
+        &self,
+        task_id: &str,
+        upstream_result: Value,
+    ) -> std::result::Result<Value, WarmplaneError> {
+        let record = match self.complete_task(task_id, upstream_result).await {
+            Ok(Some(record)) => record,
+            Ok(None) => {
+                return Err(WarmplaneError::new(
+                    "TASK_NOT_FOUND",
+                    "Task no longer exists",
+                    false,
+                ))
+            }
+            Err(error) => {
+                tracing::error!(task_id, %error, "failed to store task result");
+                return Err(WarmplaneError::new(
+                    "TASK_COMPLETION_FAILED",
+                    "Could not store the completed task result",
+                    false,
+                ));
+            }
+        };
+        if record.status == TaskStatus::Completed {
+            return Ok(record.result.unwrap_or(Value::Null));
+        }
+
+        let fallback_code = match record.status {
+            TaskStatus::Cancelled => "TASK_CANCELLED",
+            _ => "TASK_FAILED",
+        };
+        let code = record
+            .error
+            .as_ref()
+            .and_then(|error| error.get("code"))
+            .and_then(Value::as_str)
+            .unwrap_or(fallback_code);
+        let message = record
+            .status_message
+            .unwrap_or_else(|| "Task did not complete".to_string());
+        Err(WarmplaneError::new(code, message, false))
     }
 
     /// Marks a task as failed with an error payload.
@@ -1083,9 +1165,27 @@ mod tests {
 
     #[tokio::test]
     async fn emission_phase_transitions_survive_registry_reopen() {
+        check_emission_recovery(false).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn visible_emission_is_accepted_after_uncertain_directory_sync() {
+        check_emission_recovery(true).await;
+    }
+
+    async fn check_emission_recovery(uncertain: bool) {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("tasks.json");
         let registry = TaskRegistry::open_or_create(&path).unwrap();
+        #[cfg(unix)]
+        if uncertain {
+            registry
+                .storage
+                .as_ref()
+                .unwrap()
+                .fail_next_directory_sync();
+        }
         let record = registry
             .create_emission_task(
                 CreateTaskParams {
@@ -1129,10 +1229,19 @@ mod tests {
                 0o600
             );
         }
-        registry
+        if uncertain {
+            assert!(record
+                .status_message
+                .as_deref()
+                .unwrap()
+                .contains("uncertain"));
+        }
+        let reopened = TaskRegistry::open_or_create(&path).unwrap();
+        let claimed = reopened
             .claim_emission_dispatch(&record.task_id)
             .await
             .unwrap();
+        assert!(claimed.is_some());
         let reopened = TaskRegistry::open_or_create(&path).unwrap();
         let loaded = reopened.get_task(&record.task_id).await.unwrap();
         assert_eq!(loaded.emission.unwrap().phase, EmissionPhase::Dispatching);

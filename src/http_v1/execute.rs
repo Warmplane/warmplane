@@ -787,20 +787,31 @@ pub async fn handle_call_capability(
                         }
                         let distilled_data =
                             crate::context_filter::distill_value(data, &distill_opts);
-                        let _ = state_clone
+                        let outcome = state_clone
                             .task_registry
-                            .complete_task(&task_id_clone, distilled_data.clone())
+                            .complete_execution(&task_id_clone, distilled_data)
                             .await;
 
-                        let response_json = json!({
-                            "ok": true,
-                            "request_id": req_id_clone,
-                            "context": req_ctx_clone,
-                            "trace_id": trace_id_clone,
-                            "data": distilled_data,
-                            "error": null,
-                            "retry": retry_base("completed"),
-                        });
+                        let response_json = match outcome {
+                            Ok(data) => json!({
+                                "ok": true,
+                                "request_id": req_id_clone,
+                                "context": req_ctx_clone,
+                                "trace_id": trace_id_clone,
+                                "data": data,
+                                "error": null,
+                                "retry": retry_base("completed"),
+                            }),
+                            Err(error) => error_envelope(
+                                trace_id_clone,
+                                Some(req_id_clone),
+                                Some(req_ctx_clone),
+                                retry_base("completed"),
+                                &error.code,
+                                error.message,
+                                error.retryable,
+                            ),
+                        };
 
                         if let (Some(key), Some(claim)) =
                             (idempotency_key_clone.as_deref(), idempotency_claim)
