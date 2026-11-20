@@ -314,21 +314,11 @@ impl crate::daemon::AppState {
     ) -> Result<Option<DecisionReceipt>, DecisionError> {
         let task = self.authorized_input_task(task_id, tenant, profile).await?;
 
-        let decision = input
-            .get("hitl_approval")
-            .map(parse_task_decision)
-            .transpose()?;
-        if let Some(decision) = decision {
-            let actor = self.approval_actor(tenant)?;
-            let ticket = self
-                .approval_registry
-                .find_by_task(task_id)
+        if let Some(decision) = input.get("hitl_approval") {
+            return self
+                .submit_task_approval(task_id, decision, tenant)
                 .await
-                .ok_or(DecisionError::NotFound)?;
-            let receipt = self
-                .decide_approval(&ticket.id, &actor, decision, false)
-                .await?;
-            return Ok(Some(receipt));
+                .map(Some);
         }
         if task.input_requests.contains_key("hitl_approval")
             || self.approval_registry.find_by_task(task_id).await.is_some()
@@ -340,6 +330,23 @@ impl crate::daemon::AppState {
             Ok(false) => Err(DecisionError::TaskNotInputRequired),
             Err(_) => Err(DecisionError::Persistence),
         }
+    }
+
+    async fn submit_task_approval(
+        &self,
+        task_id: &str,
+        decision: &Value,
+        tenant: Option<&crate::rbac::TenantContext>,
+    ) -> Result<DecisionReceipt, DecisionError> {
+        let decision = parse_task_decision(decision)?;
+        let actor = self.approval_actor(tenant)?;
+        let ticket = self
+            .approval_registry
+            .find_by_task(task_id)
+            .await
+            .ok_or(DecisionError::NotFound)?;
+        self.decide_approval(&ticket.id, &actor, decision, false)
+            .await
     }
 
     async fn authorized_input_task(
