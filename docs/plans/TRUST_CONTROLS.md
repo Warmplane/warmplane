@@ -27,6 +27,30 @@ Deliver three opt-in controls on the v0.34.0 baseline: result sanitization acros
 - Separate callback acknowledgment, ticket decision, and upstream execution outcome. Acknowledge verified Slack callbacks with HTTP 200 within three seconds, then resolve and send feedback asynchronously. Route outbound receipts to the configured destination and record delivery success or failure against the ticket. A failed delivery leaves the decision intact. Support Teams through a documented Workflow or authenticated bot relay that submits the signed action to the same endpoint. [Slack acknowledgment contract](https://docs.slack.dev/interactivity/handling-user-interaction/) · [Teams Workflow integration](https://learn.microsoft.com/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook)
 - Return `410` from `/v1/webhooks/callbacks` after upgrade and direct operators to the signed callback URL. Old cards and unscoped pending tickets require a fresh request when ownership or approval freshness cannot be established. Keep undo and cancel-send actions on their existing authorization paths. Document the Slack, Teams, and generic migration steps and surface delivery feedback in Control Deck.
 
+## Checkpoint 1 — Result delivery and replay
+
+1. Put rule compilation and content inspection in [`src/result_sanitization.rs`](../../src/result_sanitization.rs). Apply the same rules from REST execution, the embedded engine, and the MCP facade. Preserve the distinction between an upstream operation that failed and a completed operation whose result the policy withheld.
+2. Carry the policy revision through [`src/idempotency.rs`](../../src/idempotency.rs) and [`src/tasks.rs`](../../src/tasks.rs). Verify current access before reading a stored result. Pass protected paths to the batch executor so it can reject interpolation before calling the next tool.
+3. Verify the trust boundary with fixtures that put the same secret in nested tool data, prompt or resource content, and an upstream error. Check the client response, persisted result, logs, audit records, and SIEM export. Restart the daemon after a withheld mutation and verify that a retry reuses the completed execution record.
+
+This checkpoint can ship with sanitization disabled by default. Enable it first on an integration whose result types are known. Confirm that its expected text and structured responses still work and that old results are withheld on replay. Existing records follow the operator's configured retention policy.
+
+## Checkpoint 2 — Review and enforce tool pins
+
+1. Attach pin discovery to [`src/supervisor.rs`](../../src/supervisor.rs). Collect all pages before publishing a generation. Use the same publication path on mount, reconnect, notification, and timed refresh. Invalidate catalog and search views when availability changes.
+2. Use [`src/tool_pins.rs`](../../src/tool_pins.rs) for the observed, approved, and unavailable states. Wire the config API and [Control Deck comparison view](../../ui/src/components/tool-pins.ts) to those states. Test that a successful approval remains effective after restart and that an uncertain write still leaves the tool unavailable after reopening the store.
+3. Validate the handoff from catalog to worker with two upstreams. The stdio fixture changes a definition during a hold and sends a notification. The HTTP fixture changes a definition silently and lets the fallback observe it. Check that an operator can approve the new definition for a new call and that the held call still produces zero upstream dispatches.
+
+This checkpoint can ship with `requireToolPins` disabled by default. For a pilot upstream, configure persistent state and confirm the operator can authenticate to the pin API before enabling enforcement. Expect tools to be unavailable until the operator approves their observed definitions.
+
+## Checkpoint 3 — Signed ChatOps cutover
+
+1. Centralize ticket ownership, expiry, and durable decision handling in [`src/approvals.rs`](../../src/approvals.rs). Route REST approval actions, linked task input, and webhook decisions through that resolver. Record execution outcomes separately from a decision that permits execution.
+2. Use [`src/approval_chatops.rs`](../../src/approval_chatops.rs) for action signing, Slack verification, and receipt delivery. Prove that verified Slack callbacks can acknowledge while decision storage is busy. Check that a Teams relay replay returns the same receipt and that a conflicting, expired, or cross-tenant action releases no waiter.
+3. Verify the [operator migration procedure](../USER-GUIDE.md) against Slack, Teams, and generic callback configurations. Exercise a failing receipt destination and verify that Control Deck still shows the committed decision and its separate delivery status. Verify the existing undo and cancel-send actions along with `410` on the retired callback route.
+
+This checkpoint changes the callback contract at upgrade. Configure `/v1/webhooks/actions` and the signing and delegation settings for each destination before cutover. Prepare operators to reissue pending requests that used old cards. Where RBAC is enabled, verify the receiving tenant and delegated role with a fresh approval before resuming routine use.
+
 ## Acceptance and release checks
 
 | Scenario | Expected result |
