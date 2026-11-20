@@ -1760,6 +1760,7 @@ mod tests {
                     poll_interval_ms: None,
                 },
                 EmissionRecord {
+                    idempotency_claim: None,
                     phase: EmissionPhase::PendingEmission,
                     release_at_ms: release_deadline_ms(2).unwrap(),
                     cancellable: true,

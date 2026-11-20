@@ -13,6 +13,26 @@ use std::{
 };
 use tracing::debug;
 
+/// The destination was replaced, but syncing its parent directory failed.
+#[derive(Debug)]
+pub struct ReplacementDurabilityUnknown(std::io::Error);
+
+impl std::fmt::Display for ReplacementDurabilityUnknown {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "replacement is visible, but directory sync failed: {}",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for ReplacementDurabilityUnknown {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
 /// Thread-safe manager for an atomically persisted JSON file on disk.
 #[derive(Debug, Clone)]
 pub struct AtomicFile<T> {
@@ -100,8 +120,17 @@ where
     /// * `data` - Reference to data structure implementing `Serialize`.
     ///
     /// # Errors
-    /// Returns an error if serialization, directory creation, writing, or renaming fails.
+    /// Returns an error if preparing or replacing the file fails. A
+    /// [`ReplacementDurabilityUnknown`] error means the new file is already visible.
     pub fn save(&self, data: &T) -> Result<()> {
+        if let Some(directory) = self.replace(data)? {
+            sync_replacement(directory.sync_all(), &self.path)?;
+        }
+        debug!(path = %self.path.display(), "atomically saved persistent state");
+        Ok(())
+    }
+
+    fn replace(&self, data: &T) -> Result<Option<fs::File>> {
         if let Some(parent) = self.path.parent() {
             if !parent.as_os_str().is_empty() && !parent.exists() {
                 fs::create_dir_all(parent).with_context(|| {
@@ -164,12 +193,9 @@ where
             })?;
 
         #[cfg(unix)]
-        directory
-            .sync_all()
-            .with_context(|| format!("Failed to sync state directory {}", parent.display()))?;
-
-        debug!(path = %self.path.display(), "atomically saved persistent state");
-        Ok(())
+        return Ok(Some(directory));
+        #[cfg(not(unix))]
+        Ok(None)
     }
 
     /// Saves state and logs any persistence failure using the specified error message context.
@@ -195,6 +221,12 @@ where
             }),
         }
     }
+}
+
+fn sync_replacement(result: std::io::Result<()>, path: &Path) -> Result<()> {
+    result
+        .map_err(ReplacementDurabilityUnknown)
+        .with_context(|| format!("Failed to sync state directory for {}", path.display()))
 }
 
 /// Helper to ensure the base state directory exists and return paths for state components.
@@ -300,6 +332,21 @@ mod tests {
     struct SampleState {
         counter: u64,
         tags: Vec<String>,
+    }
+
+    #[test]
+    fn directory_sync_failure_reports_a_visible_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        let store = AtomicFile::new(&path);
+        store.save(&1_u64).unwrap();
+
+        store.replace(&2).unwrap();
+        let error = sync_replacement(Err(std::io::Error::other("injected sync failure")), &path)
+            .unwrap_err();
+
+        assert!(error.is::<ReplacementDurabilityUnknown>());
+        assert_eq!(store.load_opt().unwrap(), Some(2));
     }
 
     #[test]

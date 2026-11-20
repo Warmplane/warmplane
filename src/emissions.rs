@@ -195,7 +195,13 @@ impl HoldCoordinator {
                     crate::audit::AuditEventType::EmissionCancelled,
                 )
                 .await;
-                if let Some(key) = record.idempotency_key.as_deref() {
+                if let (Some(key), Some(claim)) = (
+                    record.idempotency_key.as_deref(),
+                    record
+                        .emission
+                        .as_ref()
+                        .and_then(|emission| emission.idempotency_claim),
+                ) {
                     let envelope = crate::engine::Envelope::<serde_json::Value>::failure(
                         record
                             .request_id
@@ -213,7 +219,7 @@ impl HoldCoordinator {
                         crate::idempotency::RetryMetadata::idempotent("not_started"),
                     );
                     if let Ok(value) = serde_json::to_value(envelope) {
-                        state.idempotency_store.complete(key, value).await;
+                        state.idempotency_store.complete(key, claim, value).await;
                     }
                 }
             }
@@ -444,7 +450,13 @@ impl HoldCoordinator {
             .await;
         self.audit_execution(state, record, Some(result.clone()), None)
             .await;
-        if let Some(key) = record.idempotency_key.as_deref() {
+        if let (Some(key), Some(claim)) = (
+            record.idempotency_key.as_deref(),
+            record
+                .emission
+                .as_ref()
+                .and_then(|emission| emission.idempotency_claim),
+        ) {
             let retry = if record.idempotency_key.is_some() {
                 crate::idempotency::RetryMetadata::idempotent("completed")
             } else {
@@ -461,7 +473,7 @@ impl HoldCoordinator {
                 retry,
             );
             if let Ok(value) = serde_json::to_value(envelope) {
-                state.idempotency_store.complete(key, value).await;
+                state.idempotency_store.complete(key, claim, value).await;
             }
         }
     }
@@ -483,7 +495,13 @@ impl HoldCoordinator {
             .await;
         self.audit_execution(state, record, None, Some((code, message.clone())))
             .await;
-        if let Some(key) = record.idempotency_key.as_deref() {
+        if let (Some(key), Some(claim)) = (
+            record.idempotency_key.as_deref(),
+            record
+                .emission
+                .as_ref()
+                .and_then(|emission| emission.idempotency_claim),
+        ) {
             let envelope = crate::engine::Envelope::<serde_json::Value>::failure(
                 record
                     .request_id
@@ -495,7 +513,7 @@ impl HoldCoordinator {
                 crate::idempotency::RetryMetadata::idempotent("completed"),
             );
             if let Ok(value) = serde_json::to_value(envelope) {
-                state.idempotency_store.complete(key, value).await;
+                state.idempotency_store.complete(key, claim, value).await;
             }
         }
     }

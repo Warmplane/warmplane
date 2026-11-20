@@ -1325,7 +1325,7 @@ curl -s "http://127.0.0.1:9090/v1/audit/events?actor_id=user-7&limit=10" | jq
 
 #### 2. Verify Hash Chain Integrity (`GET /v1/audit/verify`)
 
-Validates the cryptographic SHA-256 linear hash chain across all stored audit records.
+Verifies the full hash chain from disk when audit persistence is enabled. An in-memory log that has evicted older records reports the zero-based `first_retained_index` of the suffix it verified. `total_records` includes earlier records.
 
 ```bash
 curl -s http://127.0.0.1:9090/v1/audit/verify | jq
@@ -1337,10 +1337,7 @@ curl -s http://127.0.0.1:9090/v1/audit/verify | jq
   "ok": true,
   "report": {
     "is_valid": true,
-    "total_records": 1420,
-    "verified_records": 1420,
-    "first_corrupted_id": null,
-    "details": "All 1420 records cryptographically verified with zero discrepancies"
+    "total_records": 1420
   }
 }
 ```

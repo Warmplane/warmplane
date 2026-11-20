@@ -71,3 +71,7 @@ The Control Deck Action Feed provides Previous/Next navigation through undo hist
 - [CLI Cheatsheet](./references/cli_cheatsheet.md): Shell commands for daemon, 1-click sync, and vault.
 - [Configuration Schema](./references/configuration_schema.md): `mcp_servers.json` spec, dynamic secrets (`keychain://`, `op://`, `env://`), profiles, resilience, and reversibility contracts.
 - [Troubleshooting](./references/error_resolution.md): Circuit breakers, policy denials, and cascade cleanup.
+
+`GET /v1/audit/verify` checks the complete persisted log. When an in-memory
+log has evicted records, `report.first_retained_index` identifies the start of
+the verified suffix and `report.total_records` includes earlier records.

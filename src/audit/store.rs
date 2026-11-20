@@ -5,11 +5,10 @@
 //! Provides in-memory or persisted append-only storage with linear cryptographic hash chaining,
 //! fast indexed filtering, and continuous tamper verification.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -54,17 +53,23 @@ pub struct AuditQueryFilter {
 /// Maximum number of audit events cached in RAM.
 pub const MAX_IN_MEMORY_AUDIT_EVENTS: usize = 20_000;
 
+struct AuditLog {
+    events: Vec<AuditEvent>,
+    total_records: usize,
+    last_sequence: u64,
+    append_blocked: bool,
+}
+
+impl AuditLog {
+    fn tail_hash(&self) -> &str {
+        self.events.last().map_or(GENESIS_HASH, |event| &event.hash)
+    }
+}
+
 /// Append-only audit store protecting log records from retroactive tampering.
 pub struct AuditStore {
-    /// In-memory sequential audit log.
-    events: RwLock<Vec<AuditEvent>>,
-    /// Most recent chain hash.
-    latest_hash: RwLock<String>,
-    /// Atomic sequence counter for event ID generation.
-    counter: AtomicU64,
-    /// Optional file path for appending serialized audit log entries (JSONL).
+    log: RwLock<AuditLog>,
     file_path: Option<PathBuf>,
-    /// Optional HMAC key for calculating keyed audit event digests.
     hmac_key: Option<Vec<u8>>,
 }
 
@@ -77,9 +82,12 @@ impl AuditStore {
     /// Creates an empty in-memory audit store with an optional HMAC key.
     pub fn in_memory_with_key(hmac_key: Option<Vec<u8>>) -> Self {
         Self {
-            events: RwLock::new(Vec::new()),
-            latest_hash: RwLock::new(GENESIS_HASH.to_string()),
-            counter: AtomicU64::new(1),
+            log: RwLock::new(AuditLog {
+                events: Vec::new(),
+                total_records: 0,
+                last_sequence: 0,
+                append_blocked: false,
+            }),
             file_path: None,
             hmac_key,
         }
@@ -102,226 +110,184 @@ impl AuditStore {
         path: impl AsRef<Path>,
         hmac_key: Option<Vec<u8>>,
     ) -> Result<Self> {
-        let path_buf = path.as_ref().to_path_buf();
+        let path = path.as_ref().to_path_buf();
         let mut events = Vec::new();
-        let mut latest_hash = GENESIS_HASH.to_string();
-        let mut max_seq = 0u64;
-
-        if path_buf.exists() {
-            let file = File::open(&path_buf)?;
-            let reader = BufReader::new(file);
-            for line_res in reader.lines() {
-                let line = line_res?;
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                let event: AuditEvent = serde_json::from_str(trimmed)?;
-
-                // Verify record
-                if event.prev_hash != latest_hash {
-                    anyhow::bail!(
-                        "Corrupted audit chain at event ID '{}': expected prev_hash '{}', found '{}'",
-                        event.id,
-                        latest_hash,
-                        event.prev_hash
-                    );
-                }
-                if !verify_record_hash_with_key(&event, hmac_key.as_deref()) {
-                    anyhow::bail!("Tampered audit record detected at event ID '{}'", event.id);
-                }
-
-                latest_hash = event.hash.clone();
-                events.push(event);
-                max_seq += 1;
+        let mut last_sequence = 0;
+        for record in read_records(&path)? {
+            let record = record?;
+            let prev_hash = events
+                .last()
+                .map_or(GENESIS_HASH, |event: &AuditEvent| event.hash.as_str());
+            validate_record(&record, prev_hash, hmac_key.as_deref())?;
+            if let Some(sequence) = record
+                .id
+                .strip_prefix("aud_")
+                .and_then(|id| id.parse().ok())
+            {
+                last_sequence = last_sequence.max(sequence);
             }
+            events.push(record);
         }
+        let total_records = events.len();
 
         Ok(Self {
-            events: RwLock::new(events),
-            latest_hash: RwLock::new(latest_hash),
-            counter: AtomicU64::new(max_seq + 1),
-            file_path: Some(path_buf),
+            log: RwLock::new(AuditLog {
+                events,
+                total_records,
+                last_sequence: last_sequence.max(u64::try_from(total_records)?),
+                append_blocked: false,
+            }),
+            file_path: Some(path),
             hmac_key,
         })
     }
 
-    /// Appends a raw audit event to the append-only log atomically calculating its chain hash.
-    ///
-    /// # Arguments
-    /// * `raw` - Unsigned raw event payload.
-    ///
-    /// # Returns
-    /// The fully signed, chained `AuditEvent`.
+    /// Appends a single event and returns its committed, signed record.
     ///
     /// # Errors
-    /// Returns an error if writing to disk file fails.
+    /// Returns an error if the event cannot be committed to the audit log.
     pub async fn append(&self, raw: RawAuditEvent) -> Result<AuditEvent> {
-        let seq = self.counter.fetch_add(1, Ordering::Relaxed);
-        let now_ns = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
-
-        let id = format!("aud_{:012}", seq);
-
-        let mut events_guard = self.events.write().await;
-        let mut latest_hash_guard = self.latest_hash.write().await;
-
-        let prev_hash = latest_hash_guard.clone();
-        let hash =
-            compute_event_hash_with_key(&prev_hash, &id, now_ns, &raw, self.hmac_key.as_deref());
-
-        let record = chained_record(id, now_ns, raw, prev_hash, hash.clone());
-
-        if let Some(ref path) = self.file_path {
-            let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-            let serialized = serde_json::to_string(&record)?;
-            writeln!(file, "{}", serialized)?;
-            file.sync_data()?;
-        }
-
-        *latest_hash_guard = hash;
-        if events_guard.len() >= MAX_IN_MEMORY_AUDIT_EVENTS {
-            let excess = events_guard.len() - (MAX_IN_MEMORY_AUDIT_EVENTS - 1);
-            events_guard.drain(0..excess);
-            tracing::info!(
-                evicted_count = excess,
-                capacity = MAX_IN_MEMORY_AUDIT_EVENTS,
-                "evicted oldest audit events from in-memory cache (persisted file log remains intact)"
-            );
-        }
-        events_guard.push(record.clone());
-
-        Ok(record)
+        self.append_batch(vec![raw])
+            .await?
+            .pop()
+            .context("audit append produced no record")
     }
 
-    /// Appends a batch of raw audit events atomically within a single write lock.
+    /// Appends a batch and publishes its signed records after the file is synced.
     ///
-    /// # Arguments
-    /// * `batch` - Slice of raw event payloads.
-    ///
-    /// # Returns
-    /// List of signed, chained `AuditEvent` records.
+    /// # Errors
+    /// Returns an error if the batch cannot be committed to the audit log.
     pub async fn append_batch(&self, batch: Vec<RawAuditEvent>) -> Result<Vec<AuditEvent>> {
         if batch.is_empty() {
             return Ok(Vec::new());
         }
 
-        let mut events_guard = self.events.write().await;
-        let mut latest_hash_guard = self.latest_hash.write().await;
+        let mut log = self.log.write().await;
+        anyhow::ensure!(
+            !log.append_blocked,
+            "audit log requires recovery after a failed append rollback"
+        );
 
-        let mut out = Vec::with_capacity(batch.len());
-        let mut disk_lines = Vec::with_capacity(batch.len());
-
+        let mut records = Vec::with_capacity(batch.len());
+        let mut previous = log.tail_hash().to_owned();
+        let mut sequence = log.last_sequence;
         for raw in batch {
-            let seq = self.counter.fetch_add(1, Ordering::Relaxed);
-            let now_ns = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64;
-
-            let id = format!("aud_{:012}", seq);
-            let prev_hash = latest_hash_guard.clone();
-            let hash = compute_event_hash_with_key(
-                &prev_hash,
-                &id,
-                now_ns,
-                &raw,
-                self.hmac_key.as_deref(),
-            );
-
-            let record = chained_record(id, now_ns, raw, prev_hash, hash.clone());
-
-            *latest_hash_guard = hash;
-            disk_lines.push(serde_json::to_string(&record)?);
-            if events_guard.len() >= MAX_IN_MEMORY_AUDIT_EVENTS {
-                let excess = events_guard.len() - (MAX_IN_MEMORY_AUDIT_EVENTS - 1);
-                events_guard.drain(0..excess);
-                tracing::info!(
-                    evicted_count = excess,
-                    capacity = MAX_IN_MEMORY_AUDIT_EVENTS,
-                    "evicted oldest audit events from in-memory cache (persisted file log remains intact)"
-                );
-            }
-            events_guard.push(record.clone());
-            out.push(record);
+            sequence = sequence
+                .checked_add(1)
+                .context("audit sequence exhausted")?;
+            let id = format!("aud_{sequence:012}");
+            let now_ns = unix_time_ns();
+            let hash =
+                compute_event_hash_with_key(&previous, &id, now_ns, &raw, self.hmac_key.as_deref());
+            records.push(chained_record(id, now_ns, raw, previous, hash.clone()));
+            previous = hash;
         }
 
-        if let Some(ref path) = self.file_path {
+        if let Some(path) = &self.file_path {
+            let mut bytes = Vec::new();
+            for record in &records {
+                serde_json::to_writer(&mut bytes, record)?;
+                bytes.push(b'\n');
+            }
+
             let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-            for line in disk_lines {
-                writeln!(file, "{}", line)?;
+            let original_len = file.metadata()?.len();
+            if let Err(error) = file.write_all(&bytes).and_then(|()| file.sync_data()) {
+                // Keep the next append from chaining across a partial batch.
+                if let Err(rollback) = file.set_len(original_len).and_then(|()| file.sync_data()) {
+                    log.append_blocked = true;
+                    return Err(error).context(format!("failed to restore audit log: {rollback}"));
+                }
+                return Err(error).context("failed to append audit records");
             }
-            file.sync_data()?;
         }
 
-        Ok(out)
+        log.total_records += records.len();
+        log.last_sequence = sequence;
+        let excess = (log.events.len() + records.len()).saturating_sub(MAX_IN_MEMORY_AUDIT_EVENTS);
+        let evict_cached = excess.min(log.events.len());
+        log.events.drain(..evict_cached);
+        log.events
+            .extend(records[excess - evict_cached..].iter().cloned());
+        Ok(records)
     }
 
     /// Captures an external anchor checkpoint summary of the current tail state of the audit log.
     pub async fn get_checkpoint(&self) -> crate::audit::models::AuditCheckpoint {
-        let events = self.events.read().await;
-        let latest_hash = self.latest_hash.read().await.clone();
-        let last_event_id = events.last().map(|e| e.id.clone());
-        let now_ns = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
-
+        let log = self.log.read().await;
         crate::audit::models::AuditCheckpoint {
-            tail_hash: latest_hash,
-            last_event_id,
-            total_records: events.len(),
-            timestamp_ns: now_ns,
+            tail_hash: log.tail_hash().to_owned(),
+            last_event_id: log.events.last().map(|event| event.id.clone()),
+            total_records: log.total_records,
+            timestamp_ns: unix_time_ns(),
         }
     }
 
-    /// Verifies the complete cryptographic hash chain across all stored events.
-    ///
-    /// # Returns
-    /// `VerificationReport` indicating whether all records are untampered or where tampering occurred.
+    /// Verifies the persisted chain or the retained suffix of an in-memory log.
     pub async fn verify_chain(&self) -> VerificationReport {
-        let events = self.events.read().await;
-        let mut expected_prev_hash = GENESIS_HASH.to_string();
-
-        for (idx, record) in events.iter().enumerate() {
-            if record.prev_hash != expected_prev_hash {
-                return VerificationReport {
-                    is_valid: false,
-                    total_records: events.len(),
-                    corrupted_at_index: Some(idx),
-                    corrupted_record_id: Some(record.id.clone()),
-                    message: Some(format!(
-                        "Broken hash link at record #{}: prev_hash '{}' != expected '{}'",
-                        idx, record.prev_hash, expected_prev_hash
-                    )),
-                };
-            }
-
-            if !verify_record_hash_with_key(record, self.hmac_key.as_deref()) {
-                return VerificationReport {
-                    is_valid: false,
-                    total_records: events.len(),
-                    corrupted_at_index: Some(idx),
-                    corrupted_record_id: Some(record.id.clone()),
-                    message: Some(format!(
-                        "Hash signature mismatch at record #{} (ID: '{}')",
-                        idx, record.id
-                    )),
-                };
-            }
-
-            expected_prev_hash = record.hash.clone();
-        }
-
-        VerificationReport {
+        let log = self.log.read().await;
+        let retained_start = log.total_records - log.events.len();
+        let mut report = VerificationReport {
             is_valid: true,
-            total_records: events.len(),
+            total_records: log.total_records,
+            first_retained_index: (self.file_path.is_none() && retained_start > 0)
+                .then_some(retained_start),
             corrupted_at_index: None,
             corrupted_record_id: None,
             message: None,
+        };
+
+        let mut check = |index, record: &AuditEvent, previous: &str| {
+            if let Err(error) = validate_record(record, previous, self.hmac_key.as_deref()) {
+                report.is_valid = false;
+                report.corrupted_at_index = Some(index);
+                report.corrupted_record_id = Some(record.id.clone());
+                report.message = Some(error.to_string());
+                return false;
+            }
+            true
+        };
+
+        if let Some(path) = &self.file_path {
+            let mut previous = GENESIS_HASH.to_owned();
+            let mut count = 0;
+            let result = (|| -> Result<()> {
+                for record in read_records(path)? {
+                    let record = record?;
+                    if !check(count, &record, &previous) {
+                        return Ok(());
+                    }
+                    previous = record.hash;
+                    count += 1;
+                }
+                anyhow::ensure!(
+                    count == log.total_records && previous == log.tail_hash(),
+                    "persisted audit chain differs from the committed tail"
+                );
+                Ok(())
+            })();
+            if let Err(error) = result {
+                report.is_valid = false;
+                report.corrupted_at_index = Some(count);
+                report.message = Some(error.to_string());
+            }
+        } else {
+            let mut previous = log.events.first().map_or(GENESIS_HASH, |event| {
+                if retained_start == 0 {
+                    GENESIS_HASH
+                } else {
+                    &event.prev_hash
+                }
+            });
+            for (offset, record) in log.events.iter().enumerate() {
+                if !check(retained_start + offset, record, previous) {
+                    break;
+                }
+                previous = &record.hash;
+            }
         }
+
+        report
     }
 
     /// Queries audit events matching the provided filter criteria.
@@ -332,7 +298,8 @@ impl AuditStore {
     /// # Returns
     /// (Matching records subset, total matching count).
     pub async fn query(&self, filter: &AuditQueryFilter) -> (Vec<AuditEvent>, usize) {
-        let events = self.events.read().await;
+        let log = self.log.read().await;
+        let events = &log.events;
         let search_pattern = filter.search.as_ref().map(|s| s.to_lowercase());
 
         let filtered: Vec<&AuditEvent> = events
@@ -449,17 +416,67 @@ impl AuditStore {
 
     /// Retrieves an audit event by its unique ID.
     pub async fn get_by_id(&self, id: &str) -> Option<AuditEvent> {
-        let events = self.events.read().await;
+        let log = self.log.read().await;
+        let events = &log.events;
         events.iter().find(|e| e.id == id).cloned()
     }
 
     /// Returns the total count of audit events in the store.
     pub async fn count(&self) -> usize {
-        self.events.read().await.len()
+        self.log.read().await.events.len()
     }
 }
 
 pub type SharedAuditStore = Arc<AuditStore>;
+
+fn unix_time_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
+}
+
+fn read_records(path: &Path) -> Result<impl Iterator<Item = Result<AuditEvent>>> {
+    let mut reader = match File::open(path) {
+        Ok(file) => Some(BufReader::new(file)),
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
+        Err(error) => return Err(error).context("failed to open audit log"),
+    };
+    let mut line = String::new();
+    Ok(std::iter::from_fn(move || loop {
+        line.clear();
+        let file = reader.as_mut()?;
+        match file.read_line(&mut line) {
+            Ok(0) => return None,
+            Ok(_) if !line.ends_with('\n') => {
+                return Some(Err(anyhow::anyhow!("unterminated audit log record")));
+            }
+            Ok(_) if line.trim().is_empty() => continue,
+            Ok(_) => {
+                return Some(serde_json::from_str(&line).context("invalid audit log record"));
+            }
+            Err(error) => {
+                return Some(Err(error).context("failed to read audit log record"));
+            }
+        }
+    }))
+}
+
+fn validate_record(record: &AuditEvent, previous: &str, hmac_key: Option<&[u8]>) -> Result<()> {
+    anyhow::ensure!(
+        record.prev_hash == previous,
+        "broken audit chain at event '{}': expected previous hash '{}', found '{}'",
+        record.id,
+        previous,
+        record.prev_hash
+    );
+    anyhow::ensure!(
+        verify_record_hash_with_key(record, hmac_key),
+        "hash signature mismatch at audit event '{}'",
+        record.id
+    );
+    Ok(())
+}
 
 fn chained_record(
     id: String,
@@ -500,11 +517,8 @@ mod tests {
     use super::*;
     use crate::audit::models::AuditEventStatus;
 
-    #[tokio::test]
-    async fn test_store_append_and_verify() {
-        let store = AuditStore::in_memory();
-
-        let raw1 = RawAuditEvent {
+    fn tool_event() -> RawAuditEvent {
+        RawAuditEvent {
             event_type: AuditEventType::ToolExecution,
             trace_id: "trace-1".to_string(),
             request_id: Some("req-1".to_string()),
@@ -524,7 +538,83 @@ mod tests {
             approval_ticket_id: None,
             idempotency_key: None,
             is_replay: None,
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_batch_leaves_the_committed_tail_intact() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audit.jsonl");
+        let store = AuditStore::open_or_create(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+
+        assert!(store
+            .append_batch(vec![tool_event(), tool_event()])
+            .await
+            .is_err());
+        assert_eq!(store.get_checkpoint().await.tail_hash, GENESIS_HASH);
+        assert_eq!(store.count().await, 0);
+
+        std::fs::remove_dir(&path).unwrap();
+        let event = store.append(tool_event()).await.unwrap();
+        assert_eq!(event.id, "aud_000000000001");
+        assert!(AuditStore::open_or_create(&path).is_ok());
+    }
+
+    #[tokio::test]
+    async fn reopening_preserves_legacy_sequence_gaps_and_rejects_unterminated_records() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audit.jsonl");
+        let store = AuditStore::open_or_create(&path).unwrap();
+        store.log.write().await.last_sequence = 2;
+        let prior = store.append(tool_event()).await.unwrap();
+        assert_eq!(prior.id, "aud_000000000003");
+        drop(store);
+
+        let reopened = AuditStore::open_or_create(&path).unwrap();
+        let next = reopened.append(tool_event()).await.unwrap();
+        assert_eq!(next.id, "aud_000000000004");
+
+        let mut content = std::fs::read(&path).unwrap();
+        assert_eq!(content.pop(), Some(b'\n'));
+        std::fs::write(&path, content).unwrap();
+        assert!(!reopened.verify_chain().await.is_valid);
+        assert!(AuditStore::open_or_create(&path).is_err());
+    }
+
+    #[tokio::test]
+    async fn verification_covers_disk_history_beyond_the_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("audit.jsonl");
+        let file_store = AuditStore::open_or_create(&path).unwrap();
+        let memory_store = AuditStore::in_memory();
+        let batch = vec![tool_event(); MAX_IN_MEMORY_AUDIT_EVENTS + 1];
+
+        file_store.append_batch(batch.clone()).await.unwrap();
+        memory_store.append_batch(batch).await.unwrap();
+        assert_eq!(file_store.count().await, MAX_IN_MEMORY_AUDIT_EVENTS);
+        let disk_report = file_store.verify_chain().await;
+        assert!(disk_report.is_valid);
+        assert_eq!(disk_report.first_retained_index, None);
+        assert_eq!(disk_report.total_records, MAX_IN_MEMORY_AUDIT_EVENTS + 1);
+
+        let memory_report = memory_store.verify_chain().await;
+        assert!(memory_report.is_valid);
+        assert_eq!(memory_report.first_retained_index, Some(1));
+        assert_eq!(memory_report.total_records, disk_report.total_records);
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, content.replacen("trace-1", "trace-changed", 1)).unwrap();
+        let report = file_store.verify_chain().await;
+        assert!(!report.is_valid);
+        assert_eq!(report.corrupted_at_index, Some(0));
+    }
+
+    #[tokio::test]
+    async fn test_store_append_and_verify() {
+        let store = AuditStore::in_memory();
+
+        let raw1 = tool_event();
 
         let raw2 = RawAuditEvent {
             event_type: AuditEventType::ApprovalGranted,

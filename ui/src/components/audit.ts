@@ -47,12 +47,14 @@ export function renderAudit(): string {
     verification.is_valid ? `
       <div style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: var(--radius-sm); font-size: 11.5px; color: var(--green-400);">
         <span>🛡️</span>
-        <span style="font-weight: 600;">Chain Verified: 100% Tamper Free (${verification.total_records} events)</span>
+        <span style="font-weight: 600;">${verification.first_retained_index === undefined
+          ? `Chain verified (${verification.total_records} events)`
+          : `Retained records verified (${verification.total_records - verification.first_retained_index} of ${verification.total_records} events)`}</span>
       </div>
     ` : `
       <div style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-sm); font-size: 11.5px; color: var(--red-400);">
         <span>⚠️</span>
-        <span style="font-weight: 600;">TAMPER DETECTED at Record #${verification.corrupted_at_index}</span>
+        <span style="font-weight: 600;">Verification failed${verification.corrupted_at_index === undefined ? "" : ` at record #${verification.corrupted_at_index}`}</span>
       </div>
     `
   ) : `

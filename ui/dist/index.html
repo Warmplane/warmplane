@@ -2057,12 +2057,12 @@ function o(e){if(e===null||e===void 0)return"";return String(e).replace(/&/g,"&a
   </section>`}function ge(){let e=p.getState(),t=e.auditEvents||[],s=e.auditStats||{total_events:0,by_status:{success:0,failed:0,denied:0,intercepted:0}},{auditVerification:a,auditFilters:r}=e,i=e.auditTotal??t.length,n=e.auditSelectedEvent,l=Object.keys(e.config?.mcpServers||{}),c=r.limit||25,g=r.offset||0,u=Math.floor(g/c)+1,m=Math.max(1,Math.ceil(i/c)),f=i===0?0:g+1,d=Math.min(g+c,i),v=h.getAuditExportUrl({actor_id:r.search?void 0:void 0,server_id:r.serverId!=="all"?r.serverId:void 0,event_type:r.eventType!=="all"?r.eventType:void 0,status:r.status!=="all"?r.status:void 0,search:r.search.trim()?r.search.trim():void 0},"csv"),b=h.getAuditExportUrl({server_id:r.serverId!=="all"?r.serverId:void 0,event_type:r.eventType!=="all"?r.eventType:void 0,status:r.status!=="all"?r.status:void 0,search:r.search.trim()?r.search.trim():void 0},"jsonl"),y=a?a.is_valid?`
       <div style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: var(--radius-sm); font-size: 11.5px; color: var(--green-400);">
         <span>\uD83D\uDEE1️</span>
-        <span style="font-weight: 600;">Chain Verified: 100% Tamper Free (${a.total_records} events)</span>
+        <span style="font-weight: 600;">${a.first_retained_index===void 0?`Chain verified (${a.total_records} events)`:`Retained records verified (${a.total_records-a.first_retained_index} of ${a.total_records} events)`}</span>
       </div>
     `:`
       <div style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-sm); font-size: 11.5px; color: var(--red-400);">
         <span>⚠️</span>
-        <span style="font-weight: 600;">TAMPER DETECTED at Record #${a.corrupted_at_index}</span>
+        <span style="font-weight: 600;">Verification failed${a.corrupted_at_index===void 0?"":` at record #${a.corrupted_at_index}`}</span>
       </div>
     `:`
     <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.verifyAuditChain()">

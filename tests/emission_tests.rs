@@ -68,6 +68,7 @@ fn params(idempotency_key: Option<&str>) -> CreateTaskParams {
 
 fn emission(release_at_ms: u64) -> EmissionRecord {
     EmissionRecord {
+        idempotency_claim: None,
         phase: EmissionPhase::PendingEmission,
         release_at_ms,
         cancellable: true,

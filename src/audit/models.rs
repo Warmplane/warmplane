@@ -170,8 +170,11 @@ pub struct RawAuditEvent {
 pub struct VerificationReport {
     /// Whether all records in the verified chain are valid and untampered.
     pub is_valid: bool,
-    /// Total number of records inspected.
+    /// Total number of records committed to the log.
     pub total_records: usize,
+    /// First retained record index when verification covers only an in-memory suffix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_retained_index: Option<usize>,
     /// Index and ID of the first corrupted record if tampering was detected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub corrupted_at_index: Option<usize>,

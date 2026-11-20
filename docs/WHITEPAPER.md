@@ -220,7 +220,7 @@ To satisfy enterprise compliance mandates (SOC2 Type II, ISO 27001, HIPAA), Warm
    $$\text{hash}_0 = \text{SHA256}(\text{GENESIS\_HASH} \mathbin{\Vert} \text{canonical}(R_0))$$
    $$\text{hash}_i = \text{SHA256}(\text{hash}_{i-1} \mathbin{\Vert} \text{canonical}(R_i)) \quad \forall i \ge 1$$
    Any modification, insertion, or truncation of stored events invalidates subsequent hashes in the chain.
-2. **Deterministic Verification (`GET /v1/audit/verify`)**: Traverses the sequential log in $O(N)$ time, recomputing and verifying each link. Returns a detailed verification report identifying the exact record ID if corruption is detected.
+2. **Deterministic Verification (`GET /v1/audit/verify`)**: Traverses the persistent log in $O(N)$ time, recomputing and verifying each link. An in-memory log reports the first retained index when verification covers only the retained suffix. Failed verification identifies the record ID when the record can be parsed.
 3. **Asynchronous Batching**: Ingestion utilizes a non-blocking bounded queue (default capacity 10,000) flushed via background worker batches (flush interval 250ms, max batch size 100).
 4. **Native SIEM Export**: Batched events stream in real time to external security hubs:
    - **Splunk HEC**: Formatted directly to Splunk HTTP Event Collector JSON payloads with event timestamps and index routing.

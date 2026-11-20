@@ -580,6 +580,7 @@ async fn execute_batch_for_tenant_with_budget(
                 }
             };
             let emission = crate::tasks::EmissionRecord {
+                idempotency_claim: None,
                 phase: crate::tasks::EmissionPhase::PendingEmission,
                 release_at_ms,
                 cancellable: true,

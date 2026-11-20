@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{oneshot, RwLock};
 
 use crate::context::RequestContext;
-use crate::storage::AtomicFile;
+use crate::storage::{AtomicFile, ReplacementDurabilityUnknown};
 
 /// Task execution status per SEP-2663.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,6 +45,9 @@ pub enum EmissionPhase {
 /// Persisted execution details needed to resume an accepted held emission.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EmissionRecord {
+    /// In-process idempotency ownership for the originating execution.
+    #[serde(skip)]
+    pub idempotency_claim: Option<crate::idempotency::IdempotencyClaim>,
     /// Current pre-dispatch or dispatching phase.
     pub phase: EmissionPhase,
     /// Absolute Unix deadline in milliseconds.
@@ -198,11 +201,35 @@ fn ttl_ms_to_secs_ceil(ttl_ms: u64) -> u64 {
     ttl_ms.div_ceil(1000)
 }
 
+fn task_expiry(record: &TaskRecord) -> Option<u64> {
+    record.ttl_ms.map(|ms| {
+        record
+            .created_at_epoch_secs
+            .saturating_add(ttl_ms_to_secs_ceil(ms))
+    })
+}
+
+fn expire_task(record: &mut TaskRecord, now: SystemTime) -> bool {
+    let now_secs = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    if record.emission.is_some()
+        || !matches!(
+            record.status,
+            TaskStatus::Working | TaskStatus::InputRequired
+        )
+        || !task_expiry(record).is_some_and(|deadline| now_secs >= deadline)
+    {
+        return false;
+    }
+
+    record.status = TaskStatus::Failed;
+    record.status_message = Some("Task expired due to TTL timeout".to_string());
+    record.last_updated_at = format_iso_time(now);
+    true
+}
+
 impl From<&TaskRecord> for TaskResponse {
     fn from(record: &TaskRecord) -> Self {
-        let expires_at_epoch_secs = record
-            .ttl_ms
-            .map(|ms| record.created_at_epoch_secs + ttl_ms_to_secs_ceil(ms));
+        let expires_at_epoch_secs = task_expiry(record);
 
         Self {
             task_id: record.task_id.clone(),
@@ -292,30 +319,13 @@ impl TaskRegistry {
     pub fn open_or_create(path: impl AsRef<Path>) -> Result<Self> {
         let storage = AtomicFile::new(path);
         let mut loaded: HashMap<String, TaskRecord> = storage.load_opt()?.unwrap_or_default();
-        let now_secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
+        let now = SystemTime::now();
         let mut expired_any = false;
         for record in loaded.values_mut() {
-            if record.emission.is_none()
-                && (record.status == TaskStatus::Working
-                    || record.status == TaskStatus::InputRequired)
-            {
-                if let Some(ttl_ms) = record.ttl_ms {
-                    let ttl_secs = ttl_ms_to_secs_ceil(ttl_ms);
-                    if now_secs >= record.created_at_epoch_secs + ttl_secs {
-                        record.status = TaskStatus::Failed;
-                        record.status_message = Some("Task expired due to TTL timeout".to_string());
-                        expired_any = true;
-                    }
-                }
-            }
+            expired_any |= expire_task(record, now);
         }
-
         if expired_any {
-            let _ = storage.save(&loaded);
+            storage.save_logged(&loaded, "failed to persist expired tasks on startup");
         }
 
         Ok(Self {
@@ -361,13 +371,12 @@ impl TaskRegistry {
             record.task_id = format!("task-{}-{:032x}", now_secs, rand::random::<u128>());
         }
         guard.insert(record.task_id.clone(), record.clone());
-        drop(guard);
-
         if let Some(channel) = tx {
             let mut channels = self.wait_channels.write().await;
             channels.insert(record.task_id.clone(), channel);
         }
 
+        drop(guard);
         self.sync_to_disk().await;
         (record, rx)
     }
@@ -395,7 +404,9 @@ impl TaskRegistry {
         guard.insert(task_id.clone(), record.clone());
         if let Some(storage) = &self.storage {
             if let Err(error) = storage.save(&guard) {
-                guard.remove(&task_id);
+                if !error.is::<ReplacementDurabilityUnknown>() {
+                    guard.remove(&task_id);
+                }
                 return Err(error).context("failed to persist accepted emission task");
             }
         }
@@ -431,7 +442,11 @@ impl TaskRegistry {
         record.last_updated_at = format_iso_time(SystemTime::now());
         if let Some(storage) = &self.storage {
             if let Err(error) = storage.save(&guard) {
-                guard.insert(task_id.to_string(), previous);
+                if !error.is::<ReplacementDurabilityUnknown>() {
+                    guard.insert(task_id.to_string(), previous);
+                } else {
+                    self.wait_channels.write().await.remove(task_id);
+                }
                 return Err(error).context("failed to persist emission dispatch claim");
             }
         }
@@ -465,7 +480,11 @@ impl TaskRegistry {
         record.emission = Some(emission);
         if let Some(storage) = &self.storage {
             if let Err(error) = storage.save(&guard) {
-                guard.insert(task_id.to_string(), previous);
+                if !error.is::<ReplacementDurabilityUnknown>() {
+                    guard.insert(task_id.to_string(), previous);
+                } else {
+                    self.wait_channels.write().await.remove(task_id);
+                }
                 return Err(error).context("failed to persist approved emission task");
             }
         }
@@ -509,53 +528,74 @@ impl TaskRegistry {
         record.last_updated_at = format_iso_time(SystemTime::now());
         if let Some(storage) = &self.storage {
             if let Err(error) = storage.save(&guard) {
-                guard.insert(task_id.to_string(), previous);
+                if !error.is::<ReplacementDurabilityUnknown>() {
+                    guard.insert(task_id.to_string(), previous);
+                }
                 return Err(error).context("failed to persist emission cancellation");
             }
         }
         Ok(EmissionCancelResult::Cancelled)
     }
 
-    /// Retrieves a task by its task ID, checking for TTL expiry.
-    pub async fn get_task(&self, task_id: &str) -> Option<TaskRecord> {
-        let mut guard = self.tasks.write().await;
-        if let Some(record) = guard.get_mut(task_id) {
-            if record.emission.is_none()
-                && (record.status == TaskStatus::Working
-                    || record.status == TaskStatus::InputRequired)
-            {
-                if let Some(ttl_ms) = record.ttl_ms {
-                    let now_secs = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-                    let ttl_secs = ttl_ms_to_secs_ceil(ttl_ms);
-                    if now_secs >= record.created_at_epoch_secs + ttl_secs {
-                        record.status = TaskStatus::Failed;
-                        record.status_message = Some("Task expired due to TTL timeout".to_string());
-                        record.last_updated_at = format_iso_time(SystemTime::now());
-                    }
-                }
-            }
-            Some(record.clone())
-        } else {
-            None
+    async fn persist_expirations(
+        &self,
+        tasks: &HashMap<String, TaskRecord>,
+        expired_ids: &[String],
+    ) {
+        if expired_ids.is_empty() {
+            return;
+        }
+        let mut channels = self.wait_channels.write().await;
+        for id in expired_ids {
+            channels.remove(id);
+        }
+        if let Some(storage) = &self.storage {
+            storage.save_logged(tasks, "failed to persist expired tasks");
         }
     }
 
-    /// Finds an active or completed task by idempotency key.
-    pub async fn find_by_idempotency_key(&self, key: &str) -> Option<TaskRecord> {
-        let guard = self.tasks.read().await;
-        guard
-            .values()
-            .find(|t| t.idempotency_key.as_deref() == Some(key))
-            .cloned()
+    /// Retrieves a task by its task ID, checking for TTL expiry.
+    pub async fn get_task(&self, task_id: &str) -> Option<TaskRecord> {
+        let mut tasks = self.tasks.write().await;
+        let record = tasks.get_mut(task_id)?;
+        let expired = expire_task(record, SystemTime::now());
+        let record = record.clone();
+        if expired {
+            self.persist_expirations(&tasks, std::slice::from_ref(&record.task_id))
+                .await;
+        }
+        Some(record)
     }
 
-    /// Lists all tasks.
+    /// Finds an active or completed task by idempotency key and checks for expiry.
+    pub async fn find_by_idempotency_key(&self, key: &str) -> Option<TaskRecord> {
+        let mut tasks = self.tasks.write().await;
+        let record = tasks
+            .values_mut()
+            .find(|task| task.idempotency_key.as_deref() == Some(key))?;
+        let expired = expire_task(record, SystemTime::now());
+        let record = record.clone();
+        if expired {
+            self.persist_expirations(&tasks, std::slice::from_ref(&record.task_id))
+                .await;
+        }
+        Some(record)
+    }
+
+    /// Lists all tasks after applying TTL expiry.
     pub async fn list_tasks(&self) -> Vec<TaskRecord> {
-        let guard = self.tasks.read().await;
-        let mut list: Vec<TaskRecord> = guard.values().cloned().collect();
+        let mut tasks = self.tasks.write().await;
+        let now = SystemTime::now();
+        let mut expired = Vec::new();
+        let mut list = Vec::with_capacity(tasks.len());
+        for record in tasks.values_mut() {
+            if expire_task(record, now) {
+                expired.push(record.task_id.clone());
+            }
+            list.push(record.clone());
+        }
+        self.persist_expirations(&tasks, &expired).await;
+        drop(tasks);
         list.sort_by_key(|t| std::cmp::Reverse(t.created_at_epoch_secs));
         list
     }
@@ -570,6 +610,12 @@ impl TaskRegistry {
         let Some(record) = guard.get_mut(task_id) else {
             return Ok(false);
         };
+
+        if expire_task(record, SystemTime::now()) {
+            self.persist_expirations(&guard, &[task_id.to_string()])
+                .await;
+            return Ok(false);
+        }
 
         if record.status != TaskStatus::InputRequired {
             return Ok(false);
@@ -589,6 +635,7 @@ impl TaskRegistry {
             let _ = tx.send(input_responses);
         }
 
+        drop(channels);
         drop(guard);
         self.sync_to_disk().await;
         Ok(true)
@@ -600,6 +647,12 @@ impl TaskRegistry {
         let Some(record) = guard.get_mut(task_id) else {
             return Ok(false);
         };
+
+        if expire_task(record, SystemTime::now()) {
+            self.persist_expirations(&guard, &[task_id.to_string()])
+                .await;
+            return Ok(false);
+        }
 
         if record.status == TaskStatus::Completed
             || record.status == TaskStatus::Failed
@@ -615,6 +668,7 @@ impl TaskRegistry {
         let mut channels = self.wait_channels.write().await;
         channels.remove(task_id);
 
+        drop(channels);
         drop(guard);
         self.sync_to_disk().await;
         Ok(true)
@@ -624,6 +678,11 @@ impl TaskRegistry {
     pub async fn complete_task(&self, task_id: &str, result: Value) -> Result<()> {
         let mut guard = self.tasks.write().await;
         if let Some(record) = guard.get_mut(task_id) {
+            if expire_task(record, SystemTime::now()) {
+                self.persist_expirations(&guard, &[task_id.to_string()])
+                    .await;
+                return Ok(());
+            }
             if matches!(
                 record.status,
                 TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
@@ -640,7 +699,11 @@ impl TaskRegistry {
             record.last_updated_at = format_iso_time(SystemTime::now());
             if let Some(storage) = &self.storage {
                 if let Err(error) = storage.save(&guard) {
-                    guard.insert(task_id.to_string(), previous);
+                    if !error.is::<ReplacementDurabilityUnknown>() {
+                        guard.insert(task_id.to_string(), previous);
+                    } else {
+                        self.wait_channels.write().await.remove(task_id);
+                    }
                     return Err(error).context("failed to persist completed task");
                 }
             }
@@ -678,7 +741,11 @@ impl TaskRegistry {
             record.last_updated_at = format_iso_time(SystemTime::now());
             if let Some(storage) = &self.storage {
                 if let Err(error) = storage.save(&guard) {
-                    guard.insert(task_id.to_string(), previous);
+                    if !error.is::<ReplacementDurabilityUnknown>() {
+                        guard.insert(task_id.to_string(), previous);
+                    } else {
+                        self.wait_channels.write().await.remove(task_id);
+                    }
                     return Err(error).context("failed to persist failed task");
                 }
             }
@@ -786,6 +853,49 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
+    async fn expired_tasks_reject_input_release_waiters_and_persist() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("tasks.json");
+        let registry = TaskRegistry::open_or_create(&path).unwrap();
+        let params = CreateTaskParams {
+            capability_id: "db.query".to_string(),
+            server_id: "sqlite".to_string(),
+            args: json!({}),
+            request_id: None,
+            context: None,
+            idempotency_key: None,
+            initial_status: TaskStatus::InputRequired,
+            status_message: None,
+            input_requests: None,
+            ttl_ms: Some(0),
+            poll_interval_ms: None,
+        };
+        let (list_task, list_waiter) = registry.create_task(params.clone()).await;
+        let (update_task, update_waiter) = registry.create_task(params).await;
+
+        assert!(!registry
+            .update_task(&update_task.task_id, BTreeMap::new())
+            .await
+            .unwrap());
+        assert!(matches!(
+            list_waiter.unwrap().try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            update_waiter.unwrap().try_recv(),
+            Err(oneshot::error::TryRecvError::Closed)
+        ));
+
+        let tasks = registry.list_tasks().await;
+        assert!(tasks.iter().all(|task| task.status == TaskStatus::Failed));
+        assert!(registry.wait_channels.read().await.is_empty());
+        let saved: HashMap<String, TaskRecord> =
+            AtomicFile::new(&path).load_opt().unwrap().unwrap();
+        assert_eq!(saved[&list_task.task_id].status, TaskStatus::Failed);
+        assert_eq!(saved[&update_task.task_id].status, TaskStatus::Failed);
+    }
+
+    #[tokio::test]
     async fn test_task_lifecycle() {
         let registry = TaskRegistry::new();
         let (task, rx) = registry
@@ -857,6 +967,7 @@ mod tests {
                     poll_interval_ms: Some(100),
                 },
                 EmissionRecord {
+                    idempotency_claim: None,
                     phase: EmissionPhase::PendingEmission,
                     release_at_ms: 2_000,
                     cancellable: true,
@@ -924,6 +1035,7 @@ mod tests {
                     poll_interval_ms: None,
                 },
                 EmissionRecord {
+                    idempotency_claim: None,
                     phase: EmissionPhase::PendingEmission,
                     release_at_ms: 2_000,
                     cancellable: true,
@@ -990,6 +1102,7 @@ mod tests {
                     poll_interval_ms: None,
                 },
                 EmissionRecord {
+                    idempotency_claim: None,
                     phase: EmissionPhase::PendingEmission,
                     release_at_ms: 4_000,
                     cancellable: true,

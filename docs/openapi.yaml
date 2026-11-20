@@ -663,7 +663,8 @@ paths:
           description: Audit event not found
   /v1/audit/verify:
     get:
-      summary: Verify complete cryptographic SHA-256 hash chain integrity
+      summary: Verify the audit hash chain
+      description: File-backed logs are checked from disk. For an in-memory log after eviction, the report includes the zero-based first_retained_index of the verified suffix.
       operationId: verifyAuditChain
       responses:
         "200":

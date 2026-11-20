@@ -263,6 +263,7 @@ export interface AuditEventItem {
 export interface VerificationReport {
   is_valid: boolean;
   total_records: number;
+  first_retained_index?: number;
   corrupted_at_index?: number;
   corrupted_record_id?: string;
   message?: string;

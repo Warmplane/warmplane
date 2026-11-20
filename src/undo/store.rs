@@ -15,7 +15,7 @@ use std::{
 use tokio::sync::Mutex;
 
 use crate::{
-    storage::AtomicFile,
+    storage::{AtomicFile, ReplacementDurabilityUnknown},
     undo::types::{CompensableUsage, UndoEntry, UndoLedger},
 };
 
@@ -179,7 +179,9 @@ impl UndoLedgerStore {
         );
         guard.entries.push(entry);
         if let Err(error) = self.storage.save(&guard) {
-            guard.entries.pop();
+            if !error.is::<ReplacementDurabilityUnknown>() {
+                guard.entries.pop();
+            }
             return Err(error).context("failed to persist undo ledger");
         }
         Ok(())
@@ -252,7 +254,9 @@ impl UndoLedgerStore {
             let previous = entry.status.clone();
             guard.entries[index].status = crate::undo::UndoEntryStatus::Expired;
             if let Err(error) = self.storage.save(&guard) {
-                guard.entries[index].status = previous;
+                if !error.is::<ReplacementDurabilityUnknown>() {
+                    guard.entries[index].status = previous;
+                }
                 return Err(error).context("failed to persist expired undo status");
             }
             return Ok(UndoClaimResult::Expired(guard.entries[index].clone()));
@@ -266,14 +270,13 @@ impl UndoLedgerStore {
         if entry.status != crate::undo::UndoEntryStatus::Armed && !forceable {
             return Ok(UndoClaimResult::Unavailable(Some(entry.clone())));
         }
+        let previous = entry.status.clone();
         guard.entries[index].status = crate::undo::UndoEntryStatus::Executing;
         let claimed = guard.entries[index].clone();
         if let Err(error) = self.storage.save(&guard) {
-            guard.entries[index].status = if expired {
-                crate::undo::UndoEntryStatus::Expired
-            } else {
-                crate::undo::UndoEntryStatus::Armed
-            };
+            if !error.is::<ReplacementDurabilityUnknown>() {
+                guard.entries[index].status = previous;
+            }
             return Err(error).context("failed to persist operator undo claim");
         }
         Ok(UndoClaimResult::Claimed(claimed))
@@ -308,12 +311,14 @@ impl UndoLedgerStore {
         entry.status = crate::undo::UndoEntryStatus::Executing;
         let claimed = entry.clone();
         if let Err(error) = self.storage.save(&guard) {
-            if let Some(entry) = guard
-                .entries
-                .iter_mut()
-                .find(|entry| entry.undo_id == undo_id)
-            {
-                entry.status = crate::undo::UndoEntryStatus::Armed;
+            if !error.is::<ReplacementDurabilityUnknown>() {
+                if let Some(entry) = guard
+                    .entries
+                    .iter_mut()
+                    .find(|entry| entry.undo_id == undo_id)
+                {
+                    entry.status = crate::undo::UndoEntryStatus::Armed;
+                }
             }
             return Err(error).context("failed to persist undo claim");
         }
@@ -355,12 +360,14 @@ impl UndoLedgerStore {
         let previous = entry.status.clone();
         entry.status = status;
         if let Err(error) = self.storage.save(&guard) {
-            if let Some(entry) = guard
-                .entries
-                .iter_mut()
-                .find(|entry| entry.undo_id == undo_id)
-            {
-                entry.status = previous;
+            if !error.is::<ReplacementDurabilityUnknown>() {
+                if let Some(entry) = guard
+                    .entries
+                    .iter_mut()
+                    .find(|entry| entry.undo_id == undo_id)
+                {
+                    entry.status = previous;
+                }
             }
             return Err(error).context("failed to persist undo completion");
         }
@@ -388,12 +395,14 @@ impl UndoLedgerStore {
         let previous = entry.status.clone();
         entry.status = crate::undo::UndoEntryStatus::Armed;
         if let Err(error) = self.storage.save(&guard) {
-            if let Some(entry) = guard
-                .entries
-                .iter_mut()
-                .find(|entry| entry.undo_id == undo_id)
-            {
-                entry.status = previous;
+            if !error.is::<ReplacementDurabilityUnknown>() {
+                if let Some(entry) = guard
+                    .entries
+                    .iter_mut()
+                    .find(|entry| entry.undo_id == undo_id)
+                {
+                    entry.status = previous;
+                }
             }
             return Err(error).context("failed to release undo claim");
         }
@@ -448,7 +457,9 @@ impl UndoLedgerStore {
             timestamp_ms: now_ms,
         });
         if let Err(error) = self.storage.save(&guard) {
-            guard.compensable_usage.pop();
+            if !error.is::<ReplacementDurabilityUnknown>() {
+                guard.compensable_usage.pop();
+            }
             return Err(error).context("failed to persist compensable invocation reservation");
         }
         Ok(true)
