@@ -341,10 +341,11 @@ impl BatchExecution<'_> {
             StepFailure::Regular(message) => {
                 (Some(message), auto_rollback || !step.continue_on_error)
             }
-            // A held terminal failure follows the existing hold continuation rule.
             StepFailure::Held(message) => (
                 message,
-                self.scope.cancellation_token.is_cancelled() || !step.continue_on_error,
+                auto_rollback
+                    || self.scope.cancellation_token.is_cancelled()
+                    || !step.continue_on_error,
             ),
             StepFailure::Stop(message) => (Some(message), true),
         }
@@ -602,16 +603,9 @@ impl BatchStepExecution<'_, '_> {
     ) -> Result<TaskRecord, String> {
         let batch = self.batch;
         let scope = &batch.scope;
-        let hold_secs = crate::emissions::effective_hold_window_secs(
-            contract,
-            scope
-                .profile
-                .profile_policy
-                .as_ref()
-                .and_then(|policy| policy.hold_window_secs),
-            batch.state.policy.read().await.hold_window_secs,
-        )
-        .unwrap_or(30);
+        let hold_secs =
+            crate::emissions::resolve_call_hold_window_secs(batch.state, scope.profile, contract)
+                .await;
         let release_at_ms =
             crate::emissions::release_deadline_ms(hold_secs).map_err(|error| error.to_string())?;
         let emission = EmissionRecord {

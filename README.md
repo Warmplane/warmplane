@@ -6,7 +6,7 @@
 
 > **The local control plane that keeps Model Context Protocol (MCP) sessions warm with compact capability facades, policy governance, and deterministic execution.**
 > 
-> v0.33.2 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
+> v0.34.0 — [Changelog](#changelog) · [User Guide](docs/USER-GUIDE.md) · [Agent Skill](.skills/warmplane/SKILL.md) · [Performance](docs/PERFORMANCE.md) · [Whitepaper](docs/WHITEPAPER.md) · [OpenAPI](docs/openapi.yaml)
 
 ---
 
@@ -255,6 +255,16 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 ---
 
 ## Changelog
+
+### v0.34.0 — Execution reliability and audit integrity
+
+- Idempotent execution uses claim tokens, so a superseded execution cannot complete or release a newer claim. In-progress claims are preserved during capacity eviction.
+- Task expiry releases waiting callers and rejects late input. An upstream result that arrives after expiry produces the same `TASK_EXPIRED` outcome in task polling and idempotent replay. A held task receipt reports uncertain restart persistence if directory sync fails after the task file is replaced.
+- File-backed audit batches update the in-memory chain after the write is synced. Audit verification checks a snapshot of the full persisted log while appends can continue. In-memory verification reports when it covers only the retained suffix. A persisted audit log with an unterminated final record is rejected on open.
+- Batches with automatic rollback enabled stop after a held step fails, including when that step permits continuation.
+- Split configuration validation, batch execution, and HTTP and embedded capability handling into smaller stages. Updated GitHub Actions used by CI and release packaging.
+
+**Rust migration.** Direct `IdempotencyStore` callers receive `DeduplicateResult::New(claim)` and pass the claim to `complete` or `remove`. `TaskRegistry::complete_task` returns the resulting task record when present. Direct `EmissionRecord` and `VerificationReport` initializers include the new optional fields `idempotency_claim` and `first_retained_index`, respectively. See the [Rust Integrators Guide](docs/RUST_INTEGRATORS_GUIDE.md#direct-idempotency-store-use).
 
 ### v0.33.2 — MCP batch rollback
 
