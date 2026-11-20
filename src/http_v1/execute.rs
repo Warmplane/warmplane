@@ -5,19 +5,31 @@ use anyhow::Context;
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     Json,
 };
 use serde_json::{json, Value};
-use std::sync::atomic::Ordering;
+use std::{
+    collections::BTreeMap,
+    ops::ControlFlow,
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
+};
 use tokio::sync::oneshot;
 use tracing::info;
 
 use crate::{
-    daemon::{AppState, ServerMsg, UpstreamCallError},
+    config::{ReversibilityClass, ReversibilityConfig},
+    context::{ProfileContext, RequestContext},
+    daemon::{AppState, Policy, ServerMsg, UpstreamCallError},
     http_v1::{
         helpers::{next_trace_id, redact_value, resolve_client_ip, resolve_idempotency_key},
         types::{error_envelope, CallCapabilityRequest},
+    },
+    idempotency::{ExecutionClaim, IdempotencyClaim, RetryMetadata},
+    rbac::TenantContext,
+    tasks::{
+        CreateTaskParams, EmissionPhase, EmissionRecord, TaskRecord, TaskResponse, TaskStatus,
     },
 };
 
@@ -33,272 +45,46 @@ pub async fn handle_call_capability(
         .as_ref()
         .map(|extension| extension.0.clone())
         .unwrap_or_default();
-    let start_time = std::time::Instant::now();
-    state.total_tool_calls.fetch_add(1, Ordering::Relaxed);
-    let trace_id = next_trace_id();
-    let request_id =
-        crate::context::resolve_request_id(payload.request_id.clone(), &headers, trace_id.clone());
-    let mut req_context =
-        crate::context::resolve_request_context(payload.context.clone(), &headers);
-
-    // Bind authenticated tenant/actor if available
-    if let Some(ref tenant_ctx) = req_ext.0 {
-        if let Some(ref actor) = tenant_ctx.actor_id {
-            req_context.actor_id = Some(actor.clone());
-        }
-        if let Some(ref grant) = tenant_ctx.grant_id {
-            req_context.grant_id = Some(grant.clone());
-        }
-    }
-
-    let client_ip = resolve_client_ip(&headers);
-
-    let explicit_key = resolve_idempotency_key(payload.idempotency_key.clone(), &headers);
-    let idempotency_key = explicit_key.or_else(|| {
-        if payload.args.is_object() {
-            Some(crate::idempotency::derive_idempotency_key(
-                &payload.capability_id,
-                &payload.args,
-                req_context.actor_id.as_deref(),
-                payload.request_id.as_deref(),
-            ))
-        } else {
-            None
-        }
-    });
-
-    let retry_base = if idempotency_key.is_some() {
-        crate::idempotency::RetryMetadata::idempotent
-    } else {
-        crate::idempotency::RetryMetadata::unsafe_op
-    };
-
-    if let Some(key) = idempotency_key.as_deref() {
-        if let Some(task) = state.task_registry.find_by_idempotency_key(key).await {
-            if task.emission.is_some() {
-                if !crate::http_v1::helpers::can_access_emission_task(
-                    &state,
-                    &task,
-                    req_ext.0.as_ref(),
-                    prof_ext.as_ref().map(|extension| &extension.0),
-                )
-                .await
-                {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        Json(error_envelope(
-                            trace_id,
-                            Some(request_id),
-                            Some(req_context),
-                            retry_base("not_started"),
-                            "POLICY_DENIED",
-                            "Held task is not accessible to this caller",
-                            false,
-                        )),
-                    )
-                        .into_response();
-                }
-                let status = if matches!(
-                    task.status,
-                    crate::tasks::TaskStatus::Completed
-                        | crate::tasks::TaskStatus::Failed
-                        | crate::tasks::TaskStatus::Cancelled
-                ) {
-                    StatusCode::OK
-                } else {
-                    StatusCode::ACCEPTED
-                };
-                return (status, Json(json!({"ok": true, "resultType": "task", "task": crate::tasks::TaskResponse::from(&task), "request_id": request_id, "trace_id": trace_id}))).into_response();
-            }
-        }
-    }
-
-    let idempotency_claim = if let Some(key) = idempotency_key.as_deref() {
-        match state
-            .idempotency_store
-            .claim_or_replay(key, &payload.capability_id, &trace_id)
-            .await
-        {
-            crate::idempotency::ExecutionClaim::New(claim) => Some(claim),
-            crate::idempotency::ExecutionClaim::Replay {
-                response,
-                from_cache,
-            } => {
-                if from_cache {
-                    state.audit_handle.send(crate::audit::RawAuditEvent {
-                        event_type: crate::audit::AuditEventType::ToolExecution,
-                        trace_id: trace_id.clone(),
-                        request_id: Some(request_id.clone()),
-                        actor_id: req_context.actor_id.clone(),
-                        work_item_id: req_context.work_item_id.clone(),
-                        client_ip: client_ip.clone(),
-                        server_id: None,
-                        capability_id: Some(payload.capability_id.clone()),
-                        resource_uri: None,
-                        sanitized_args: Some(payload.args.clone()),
-                        sanitized_response: Some(response.clone()),
-                        execution_latency_us: Some(start_time.elapsed().as_micros() as u64),
-                        status: crate::audit::AuditEventStatus::Success,
-                        error_code: None,
-                        error_message: None,
-                        operator_id: None,
-                        approval_ticket_id: None,
-                        idempotency_key: Some(key.to_owned()),
-                        is_replay: Some(true),
-                    });
-                }
-                let mut response_headers = HeaderMap::new();
-                response_headers.insert(
-                    "x-warmplane-deduplicated",
-                    axum::http::HeaderValue::from_static("true"),
-                );
-                return (StatusCode::OK, response_headers, Json(response)).into_response();
-            }
-        }
-    } else {
-        None
-    };
-
-    let cancel_token: tokio_util::sync::CancellationToken =
-        state.operation_registry.register(&request_id).await;
-
-    if !payload.args.is_object() {
-        state.operation_registry.unregister(&request_id).await;
-        state
-            .idempotency_store
-            .release_execution(idempotency_key.as_deref(), idempotency_claim)
-            .await;
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(error_envelope(
-                trace_id,
-                Some(request_id),
-                Some(req_context),
-                retry_base("not_started"),
-                "INVALID_ARGS",
-                "'args' must be a JSON object",
-                false,
-            )),
+    let identity = CallIdentity::new(&state, &payload, &headers, req_ext.0.as_ref());
+    let idempotency_claim = match identity
+        .claim_call(
+            &state,
+            &payload,
+            req_ext.0.as_ref(),
+            prof_ext.as_ref().map(|extension| &extension.0),
         )
-            .into_response();
+        .await
+    {
+        ControlFlow::Continue(claim) => claim,
+        ControlFlow::Break(response) => return response,
+    };
+    let cancel_token = state
+        .operation_registry
+        .register(&identity.request_id)
+        .await;
+    let preflight = CallPreflight {
+        state: &state,
+        payload: &payload,
+        identity: &identity,
+        profile: &prof_ctx,
+        tenant: req_ext.0.as_ref(),
+        claim: idempotency_claim,
+    };
+    if let Err((status, error)) = preflight.validate_arguments().await {
+        return identity.rejected(status, error);
     }
-
-    let (mut requires_approval, approval_timeout_secs, webhook_cfg, redact_keys, effective_policy) = {
-        let base_pol = state.policy.read().await;
-        let pol = req_ext
-            .0
-            .as_ref()
-            .map(|ctx| ctx.effective_policy.clone())
-            .unwrap_or_else(|| base_pol.clone())
-            .merge_with_profile(prof_ctx.profile_policy.as_ref());
-
-        if !pol.allows(&payload.capability_id) {
-            state.operation_registry.unregister(&request_id).await;
-            state
-                .idempotency_store
-                .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                .await;
-            state.audit_handle.send(crate::audit::RawAuditEvent {
-                event_type: crate::audit::AuditEventType::PolicyViolation,
-                trace_id: trace_id.clone(),
-                request_id: Some(request_id.clone()),
-                actor_id: req_context.actor_id.clone(),
-                work_item_id: req_context.work_item_id.clone(),
-                client_ip: client_ip.clone(),
-                server_id: None,
-                capability_id: Some(payload.capability_id.clone()),
-                resource_uri: None,
-                sanitized_args: Some(redact_value(payload.args.clone(), &pol.redact_keys)),
-                sanitized_response: None,
-                execution_latency_us: Some(start_time.elapsed().as_micros() as u64),
-                status: crate::audit::AuditEventStatus::Denied,
-                error_code: Some("POLICY_DENIED".to_string()),
-                error_message: Some(format!(
-                    "Capability '{}' blocked by policy",
-                    payload.capability_id
-                )),
-                operator_id: None,
-                approval_ticket_id: None,
-                idempotency_key: idempotency_key.clone(),
-                is_replay: Some(false),
-            });
-            return (
-                StatusCode::FORBIDDEN,
-                Json(error_envelope(
-                    trace_id,
-                    Some(request_id),
-                    Some(req_context),
-                    retry_base("not_started"),
-                    "POLICY_DENIED",
-                    format!("Capability '{}' blocked by policy", payload.capability_id),
-                    false,
-                )),
-            )
-                .into_response();
-        }
-        (
-            pol.requires_approval(&payload.capability_id),
-            pol.approval_timeout_secs,
-            pol.webhook.clone(),
-            pol.redact_keys.clone(),
-            pol,
-        )
+    let effective_policy = match preflight.resolve_policy().await {
+        Ok(policy) => policy,
+        Err((status, error)) => return identity.rejected(status, error),
     };
-
-    let (server_id, tool_name, reversibility) = {
-        let caps_guard = state.capabilities.read().await;
-        let Some(meta) = caps_guard.get(&payload.capability_id) else {
-            state.operation_registry.unregister(&request_id).await;
-            state
-                .idempotency_store
-                .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                .await;
-            return (
-                StatusCode::NOT_FOUND,
-                Json(error_envelope(
-                    trace_id,
-                    Some(request_id),
-                    Some(req_context),
-                    retry_base("not_started"),
-                    "TOOL_NOT_FOUND",
-                    format!("Capability '{}' not found", payload.capability_id),
-                    false,
-                )),
-            )
-                .into_response();
-        };
-
-        if !prof_ctx.is_server_allowed(&meta.server) {
-            state.operation_registry.unregister(&request_id).await;
-            state
-                .idempotency_store
-                .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                .await;
-            return (
-                StatusCode::FORBIDDEN,
-                Json(error_envelope(
-                    trace_id,
-                    Some(request_id),
-                    Some(req_context),
-                    retry_base("not_started"),
-                    "TOOL_NOT_IN_PROFILE",
-                    format!(
-                        "Capability '{}' belongs to server '{}' which is not in active profile",
-                        payload.capability_id, meta.server
-                    ),
-                    false,
-                )),
-            )
-                .into_response();
-        }
-
-        (
-            meta.server.clone(),
-            meta.tool.clone(),
-            meta.reversibility.clone(),
-        )
+    let CallTarget {
+        server_id,
+        tool_name,
+        reversibility,
+    } = match preflight.resolve_target().await {
+        Ok(target) => target,
+        Err((status, error)) => return identity.rejected(status, error),
     };
-
     let tenant_id = req_ext
         .0
         .as_ref()
@@ -314,68 +100,28 @@ pub async fn handle_call_capability(
         .0
         .as_ref()
         .and_then(|context| context.grant_expires_at_epoch_secs);
-    let mut compensable_reserved = false;
-    if let Some(contract) = reversibility
-        .as_ref()
-        .filter(|contract| contract.class == crate::config::ReversibilityClass::Compensable)
+    let CallApproval {
+        required: requires_approval,
+        compensable_reserved,
+    } = match preflight
+        .resolve_approval(&effective_policy, reversibility.as_ref(), &tenant_id)
+        .await
     {
-        if state.undo_ledger.is_none() {
-            state.operation_registry.unregister(&request_id).await;
-            state
-                .idempotency_store
-                .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                .await;
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(error_envelope(
-                    trace_id,
-                    Some(request_id),
-                    Some(req_context),
-                    retry_base("not_started"),
-                    "UNDO_STORAGE_UNAVAILABLE",
-                    "Persistent undo storage is unavailable",
-                    false,
-                )),
-            )
-                .into_response();
-        }
-        if !requires_approval {
-            match crate::engine::undo::reserve_compensable(
-                &state,
-                contract,
-                &payload.capability_id,
-                &tenant_id,
-                prof_ctx.profile_id.as_deref(),
-                idempotency_key.as_deref(),
-                false,
-            )
-            .await
-            {
-                Ok(true) => compensable_reserved = true,
-                Ok(false) => requires_approval = true,
-                Err(error) => {
-                    state.operation_registry.unregister(&request_id).await;
-                    state
-                        .idempotency_store
-                        .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                        .await;
-                    return (
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        Json(error_envelope(
-                            trace_id,
-                            Some(request_id),
-                            Some(req_context),
-                            retry_base("not_started"),
-                            "COMPENSABLE_LIMIT_STORAGE_FAILED",
-                            error.to_string(),
-                            true,
-                        )),
-                    )
-                        .into_response();
-                }
-            }
-        }
-    }
+        Ok(approval) => approval,
+        Err((status, error)) => return identity.rejected(status, error),
+    };
+    let approval_timeout_secs = effective_policy.approval_timeout_secs;
+    let webhook_cfg = effective_policy.webhook.clone();
+    let redact_keys = effective_policy.redact_keys.clone();
+    let CallIdentity {
+        trace_id,
+        request_id,
+        req_context,
+        client_ip,
+        idempotency_key,
+        retry_base,
+        start_time,
+    } = identity;
 
     let mut effective_args = payload.args.clone();
 
@@ -550,91 +296,49 @@ pub async fn handle_call_capability(
                     }
                 }
 
-                if let Some(contract) = reversibility_clone.as_ref().filter(|contract| {
-                    contract.class == crate::config::ReversibilityClass::Delayable
-                }) {
-                    let global_window = state_clone.policy.read().await.hold_window_secs;
-                    let profile_window = profile_clone
-                        .profile_policy
-                        .as_ref()
-                        .and_then(|profile_policy| profile_policy.hold_window_secs);
-                    let hold_secs = crate::emissions::effective_hold_window_secs(
-                        contract,
-                        profile_window,
-                        global_window,
-                    )
-                    .unwrap_or(30);
-                    let emission = match crate::emissions::release_deadline_ms(hold_secs) {
-                        Ok(release_at_ms) => crate::tasks::EmissionRecord {
-                            idempotency_claim,
-                            phase: crate::tasks::EmissionPhase::PendingEmission,
-                            release_at_ms,
-                            cancellable: true,
-                            tool_name: tool_name_clone.clone(),
-                            input_responses: input_responses_clone.clone(),
-                            request_state: request_state_clone.clone(),
-                            profile_id: profile_clone.profile_id.clone(),
-                            tenant_id: tenant_id_clone.clone(),
-                            role: caller_role_clone.clone(),
-                            authorization_expires_at_epoch_secs:
-                                caller_grant_expires_at_epoch_secs_clone,
-                            approval_completed: true,
-                            batch_id: None,
-                            step_id: None,
-                        },
-                        Err(error) => {
-                            let _ = state_clone
-                                .task_registry
-                                .fail_task(
-                                    &task_id_clone,
-                                    serde_json::json!({"code": "INVALID_HOLD_WINDOW"}),
-                                    Some(error.to_string()),
-                                )
-                                .await;
-                            return;
-                        }
-                    };
-                    match state_clone
-                        .hold_coordinator
-                        .queue_existing(&state_clone, &task_id_clone, worker_args.clone(), emission)
-                        .await
-                    {
-                        Ok(Some(_)) | Ok(None) => return,
-                        Err(error) => {
-                            let _ = state_clone
-                                .task_registry
-                                .fail_task(
-                                    &task_id_clone,
-                                    serde_json::json!({"code": "EMISSION_PERSISTENCE_FAILED"}),
-                                    Some(error.to_string()),
-                                )
-                                .await;
-                            state_clone
-                                .idempotency_store
-                                .release_execution(
-                                    idempotency_key_clone.as_deref(),
-                                    idempotency_claim,
-                                )
-                                .await;
-                            return;
-                        }
+                if let Some(contract) = reversibility_clone
+                    .as_ref()
+                    .filter(|contract| contract.class == ReversibilityClass::Delayable)
+                {
+                    EmissionOrigin {
+                        profile: &profile_clone,
+                        tool_name: &tool_name_clone,
+                        input_responses: input_responses_clone.as_ref(),
+                        request_state: request_state_clone.as_deref(),
+                        tenant_id: &tenant_id_clone,
+                        role: &caller_role_clone,
+                        authorization_expires_at_epoch_secs:
+                            caller_grant_expires_at_epoch_secs_clone,
+                        claim: idempotency_claim,
                     }
+                    .queue_after_approval(
+                        &state_clone,
+                        contract,
+                        &task_id_clone,
+                        worker_args,
+                        idempotency_key_clone.as_deref(),
+                    )
+                    .await;
+                    return;
                 }
 
-                let (snapshot, snapshot_hash) = if let Some(contract) = reversibility_clone.as_ref()
+                let (snapshot, snapshot_hash) = match capture_call_snapshot(
+                    &state_clone,
+                    reversibility_clone.as_ref(),
+                    &worker_args,
+                    &profile_clone,
+                    &policy_clone,
+                )
+                .await
                 {
-                    if matches!(
-                        contract.class,
-                        crate::config::ReversibilityClass::Reversible
-                            | crate::config::ReversibilityClass::Compensable
-                    ) && state_clone.undo_ledger.is_none()
-                    {
+                    Ok(snapshot) => snapshot,
+                    Err((_, error)) => {
                         let _ = state_clone
                             .task_registry
                             .fail_task(
                                 &task_id_clone,
-                                serde_json::json!({"code": "UNDO_STORAGE_UNAVAILABLE"}),
-                                Some("Persistent undo storage is unavailable".to_string()),
+                                json!({"code": error.code}),
+                                Some(error.message),
                             )
                             .await;
                         state_clone
@@ -643,41 +347,6 @@ pub async fn handle_call_capability(
                             .await;
                         return;
                     }
-                    if let Some(pre_snapshot) = &contract.pre_snapshot {
-                        match crate::engine::undo::capture_pre_snapshot(
-                            &state_clone,
-                            pre_snapshot,
-                            &worker_args,
-                            &profile_clone,
-                            &policy_clone,
-                        )
-                        .await
-                        {
-                            Ok(value) => value,
-                            Err(error) => {
-                                let _ = state_clone
-                                    .task_registry
-                                    .fail_task(
-                                        &task_id_clone,
-                                        serde_json::json!({"code": "PRE_SNAPSHOT_FAILED"}),
-                                        Some(error.to_string()),
-                                    )
-                                    .await;
-                                state_clone
-                                    .idempotency_store
-                                    .release_execution(
-                                        idempotency_key_clone.as_deref(),
-                                        idempotency_claim,
-                                    )
-                                    .await;
-                                return;
-                            }
-                        }
-                    } else {
-                        (Value::Null, None)
-                    }
-                } else {
-                    (Value::Null, None)
                 };
 
                 let tx = {
@@ -909,10 +578,7 @@ pub async fn handle_call_capability(
         // Synchronous caller suspension on approval wait channel
         let resolution = tokio::select! {
             _ = cancel_token.cancelled() => {
-                state.operation_registry.unregister(&request_id).await;
-                state.idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                    .await;
+                release_registered_call(&state, &request_id, idempotency_key.as_deref(), idempotency_claim).await;
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(error_envelope(
@@ -944,11 +610,13 @@ pub async fn handle_call_capability(
                 }
             }
             crate::approvals::ApprovalResolution::Rejected { operator, reason } => {
-                state.operation_registry.unregister(&request_id).await;
-                state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                    .await;
+                release_registered_call(
+                    &state,
+                    &request_id,
+                    idempotency_key.as_deref(),
+                    idempotency_claim,
+                )
+                .await;
                 state.audit_handle.send(crate::audit::RawAuditEvent {
                     event_type: crate::audit::AuditEventType::ApprovalRejected,
                     trace_id: trace_id.clone(),
@@ -991,11 +659,13 @@ pub async fn handle_call_capability(
                     .into_response();
             }
             crate::approvals::ApprovalResolution::Expired => {
-                state.operation_registry.unregister(&request_id).await;
-                state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                    .await;
+                release_registered_call(
+                    &state,
+                    &request_id,
+                    idempotency_key.as_deref(),
+                    idempotency_claim,
+                )
+                .await;
                 state.audit_handle.send(crate::audit::RawAuditEvent {
                     event_type: crate::audit::AuditEventType::ApprovalExpired,
                     trace_id: trace_id.clone(),
@@ -1056,11 +726,13 @@ pub async fn handle_call_capability(
             )
             .await
             {
-                state.operation_registry.unregister(&request_id).await;
-                state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                    .await;
+                release_registered_call(
+                    &state,
+                    &request_id,
+                    idempotency_key.as_deref(),
+                    idempotency_claim,
+                )
+                .await;
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
                     Json(error_envelope(
@@ -1080,281 +752,80 @@ pub async fn handle_call_capability(
 
     if let Some(contract) = reversibility
         .as_ref()
-        .filter(|contract| contract.class == crate::config::ReversibilityClass::Delayable)
+        .filter(|contract| contract.class == ReversibilityClass::Delayable)
     {
-        let global_window = state.policy.read().await.hold_window_secs;
-        let profile_window = prof_ctx
-            .profile_policy
-            .as_ref()
-            .and_then(|profile_policy| profile_policy.hold_window_secs);
-        let hold_secs =
-            crate::emissions::effective_hold_window_secs(contract, profile_window, global_window)
-                .unwrap_or(30);
-        let hold_ms = match hold_secs.checked_mul(1_000) {
-            Some(value) => value,
-            None => {
-                state.operation_registry.unregister(&request_id).await;
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(error_envelope(
-                        trace_id,
-                        Some(request_id),
-                        Some(req_context),
-                        retry_base("not_started"),
-                        "INVALID_HOLD_WINDOW",
-                        "Hold window overflows milliseconds",
-                        false,
-                    )),
-                )
-                    .into_response();
-            }
-        };
-        let release_at_ms = match crate::emissions::release_deadline_ms(hold_secs) {
-            Ok(deadline) => deadline,
-            Err(error) => {
-                state.operation_registry.unregister(&request_id).await;
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(error_envelope(
-                        trace_id,
-                        Some(request_id),
-                        Some(req_context),
-                        retry_base("not_started"),
-                        "INVALID_HOLD_WINDOW",
-                        error.to_string(),
-                        false,
-                    )),
-                )
-                    .into_response();
-            }
-        };
-        let emission = crate::tasks::EmissionRecord {
-            idempotency_claim,
-            phase: crate::tasks::EmissionPhase::PendingEmission,
-            release_at_ms,
-            cancellable: true,
-            tool_name: tool_name.clone(),
-            input_responses: payload.input_responses.clone(),
-            request_state: payload.request_state.clone(),
-            profile_id: prof_ctx.profile_id.clone(),
-            tenant_id: tenant_id.clone(),
-            role: caller_role.clone(),
-            authorization_expires_at_epoch_secs: caller_grant_expires_at_epoch_secs,
-            approval_completed: requires_approval,
-            batch_id: None,
-            step_id: None,
-        };
-        let existing_task = state
-            .task_registry
-            .list_tasks()
-            .await
-            .into_iter()
-            .find(|task| {
-                task.request_id.as_deref() == Some(request_id.as_str()) && task.emission.is_none()
-            });
-        let accepted = if let Some(existing) = existing_task {
-            state
-                .hold_coordinator
-                .queue_existing(&state, &existing.task_id, effective_args.clone(), emission)
-                .await
-                .context("failed to persist approved emission")
-        } else {
-            state
-                .hold_coordinator
-                .accept(
-                    &state,
-                    crate::tasks::CreateTaskParams {
-                        capability_id: payload.capability_id.clone(),
-                        server_id: server_id.clone(),
-                        args: effective_args.clone(),
-                        request_id: Some(request_id.clone()),
-                        context: Some(req_context.clone()),
-                        idempotency_key: idempotency_key.clone(),
-                        initial_status: crate::tasks::TaskStatus::Working,
-                        status_message: Some(
-                            "Waiting for the emission release deadline".to_string(),
-                        ),
-                        input_requests: None,
-                        ttl_ms: None,
-                        poll_interval_ms: Some(1_000),
-                    },
-                    emission,
-                )
-                .await
-                .map(Some)
-        };
-        let task = match accepted {
-            Ok(Some(task)) => task,
-            Ok(None) => {
-                state.operation_registry.unregister(&request_id).await;
-                return (
-                    StatusCode::CONFLICT,
-                    Json(error_envelope(
-                        trace_id,
-                        Some(request_id),
-                        Some(req_context),
-                        retry_base("not_started"),
-                        "EMISSION_TASK_STATE_INVALID",
-                        "Could not attach the approved emission to its task",
-                        false,
-                    )),
-                )
-                    .into_response();
-            }
-            Err(error) => {
-                state.operation_registry.unregister(&request_id).await;
-                state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                    .await;
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    Json(error_envelope(
-                        trace_id,
-                        Some(request_id),
-                        Some(req_context),
-                        retry_base("not_started"),
-                        "EMISSION_PERSISTENCE_FAILED",
-                        error.to_string(),
-                        true,
-                    )),
-                )
-                    .into_response();
-            }
-        };
-        state.operation_registry.unregister(&request_id).await;
-        let prefer_async = payload.async_task
-            || headers
-                .get("prefer")
-                .and_then(|header| header.to_str().ok())
-                .is_some_and(|value| value.to_ascii_lowercase().contains("respond-async"));
-        if !prefer_async && hold_ms < state.tool_timeout_ms {
-            let wait =
-                std::time::Duration::from_millis(hold_ms.saturating_add(state.tool_timeout_ms));
-            if let Some(finished) = state
-                .hold_coordinator
-                .wait_for_terminal(&state, &task.task_id, wait)
-                .await
-            {
-                match finished.status {
-                    crate::tasks::TaskStatus::Completed => {
-                        let data = finished.result.unwrap_or(Value::Null);
-                        return (StatusCode::OK, Json(json!({"ok": true, "request_id": request_id, "context": req_context, "trace_id": trace_id, "data": data, "error": null, "retry": retry_base("completed")}))).into_response();
-                    }
-                    crate::tasks::TaskStatus::Failed | crate::tasks::TaskStatus::Cancelled => {
-                        let code = finished
-                            .error
-                            .as_ref()
-                            .and_then(|error| error.get("code"))
-                            .and_then(Value::as_str)
-                            .unwrap_or("EMISSION_FAILED");
-                        let message = finished
-                            .status_message
-                            .unwrap_or_else(|| "Held emission did not complete".to_string());
-                        return (
-                            StatusCode::BAD_GATEWAY,
-                            Json(error_envelope(
-                                trace_id,
-                                Some(request_id),
-                                Some(req_context),
-                                retry_base("completed"),
-                                code,
-                                message,
-                                false,
-                            )),
-                        )
-                            .into_response();
-                    }
-                    _ => {}
-                }
-            }
+        return HeldCall {
+            state: &state,
+            identity: CallIdentity {
+                trace_id,
+                request_id,
+                req_context,
+                client_ip,
+                idempotency_key,
+                retry_base,
+                start_time,
+            },
+            payload: &payload,
+            server_id: &server_id,
+            origin: EmissionOrigin {
+                profile: &prof_ctx,
+                tool_name: &tool_name,
+                input_responses: payload.input_responses.as_ref(),
+                request_state: payload.request_state.as_deref(),
+                tenant_id: &tenant_id,
+                role: &caller_role,
+                authorization_expires_at_epoch_secs: caller_grant_expires_at_epoch_secs,
+                claim: idempotency_claim,
+            },
         }
-        return (
-            StatusCode::ACCEPTED,
-            Json(json!({
-                "ok": true,
-                "resultType": "task",
-                "task": crate::tasks::TaskResponse::from(&task),
-                "request_id": request_id,
-                "trace_id": trace_id,
-            })),
-        )
-            .into_response();
+        .schedule(contract, effective_args, requires_approval, &headers)
+        .await;
     }
 
-    let (snapshot, snapshot_hash) = if let Some(contract) = reversibility.as_ref() {
-        if matches!(
-            contract.class,
-            crate::config::ReversibilityClass::Reversible
-                | crate::config::ReversibilityClass::Compensable
-        ) && state.undo_ledger.is_none()
-        {
-            state.operation_registry.unregister(&request_id).await;
-            state
-                .idempotency_store
-                .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                .await;
+    let (snapshot, snapshot_hash) = match capture_call_snapshot(
+        &state,
+        reversibility.as_ref(),
+        &effective_args,
+        &prof_ctx,
+        &effective_policy,
+    )
+    .await
+    {
+        Ok(snapshot) => snapshot,
+        Err((status, error)) => {
+            release_registered_call(
+                &state,
+                &request_id,
+                idempotency_key.as_deref(),
+                idempotency_claim,
+            )
+            .await;
             return (
-                StatusCode::SERVICE_UNAVAILABLE,
+                status,
                 Json(error_envelope(
                     trace_id,
                     Some(request_id),
                     Some(req_context),
                     retry_base("not_started"),
-                    "UNDO_STORAGE_UNAVAILABLE",
-                    "Persistent undo storage is unavailable",
-                    false,
+                    error.code,
+                    error.message,
+                    error.retryable,
                 )),
             )
                 .into_response();
         }
-        if let Some(pre_snapshot) = &contract.pre_snapshot {
-            match crate::engine::undo::capture_pre_snapshot(
-                &state,
-                pre_snapshot,
-                &effective_args,
-                &prof_ctx,
-                &effective_policy,
-            )
-            .await
-            {
-                Ok(value) => value,
-                Err(error) => {
-                    state.operation_registry.unregister(&request_id).await;
-                    state
-                        .idempotency_store
-                        .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                        .await;
-                    return (
-                        StatusCode::BAD_GATEWAY,
-                        Json(error_envelope(
-                            trace_id,
-                            Some(request_id),
-                            Some(req_context),
-                            retry_base("not_started"),
-                            "PRE_SNAPSHOT_FAILED",
-                            error.to_string(),
-                            true,
-                        )),
-                    )
-                        .into_response();
-                }
-            }
-        } else {
-            (Value::Null, None)
-        }
-    } else {
-        (Value::Null, None)
     };
 
     let tx = {
         let servers_guard = state.servers.read().await;
         let Some(tx) = servers_guard.get(&server_id).cloned() else {
-            state.operation_registry.unregister(&request_id).await;
-            state
-                .idempotency_store
-                .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                .await;
+            release_registered_call(
+                &state,
+                &request_id,
+                idempotency_key.as_deref(),
+                idempotency_claim,
+            )
+            .await;
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(error_envelope(
@@ -1387,11 +858,13 @@ pub async fn handle_call_capability(
 
     // Circuit Breaker Permission Check
     if let Err(cb_err) = state.circuit_breakers.check_permission(&server_id).await {
-        state.operation_registry.unregister(&request_id).await;
-        state
-            .idempotency_store
-            .release_execution(idempotency_key.as_deref(), idempotency_claim)
-            .await;
+        release_registered_call(
+            &state,
+            &request_id,
+            idempotency_key.as_deref(),
+            idempotency_claim,
+        )
+        .await;
         state.audit_handle.send(crate::audit::RawAuditEvent {
             event_type: crate::audit::AuditEventType::ToolExecution,
             trace_id: trace_id.clone(),
@@ -1441,11 +914,13 @@ pub async fn handle_call_capability(
         .is_err()
     {
         state.circuit_breakers.record_failure(&server_id).await;
-        state.operation_registry.unregister(&request_id).await;
-        state
-            .idempotency_store
-            .release_execution(idempotency_key.as_deref(), idempotency_claim)
-            .await;
+        release_registered_call(
+            &state,
+            &request_id,
+            idempotency_key.as_deref(),
+            idempotency_claim,
+        )
+        .await;
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(error_envelope(
@@ -1463,10 +938,7 @@ pub async fn handle_call_capability(
 
     let result: Result<Result<Value, UpstreamCallError>, oneshot::error::RecvError> = tokio::select! {
         _ = cancel_token.cancelled() => {
-            state.operation_registry.unregister(&request_id).await;
-            state.idempotency_store
-                .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                .await;
+            release_registered_call(&state, &request_id, idempotency_key.as_deref(), idempotency_claim).await;
             return (
                 StatusCode::BAD_REQUEST,
                 Json(error_envelope(
@@ -1485,6 +957,15 @@ pub async fn handle_call_capability(
 
     state.operation_registry.unregister(&request_id).await;
 
+    let audit = CallAudit {
+        trace_id: &trace_id,
+        request_id: &request_id,
+        context: &req_context,
+        client_ip: client_ip.as_deref(),
+        server_id: &server_id,
+        capability_id: &payload.capability_id,
+        idempotency_key: idempotency_key.as_deref(),
+    };
     match result {
         Ok(Ok(data)) => {
             state.circuit_breakers.record_success(&server_id).await;
@@ -1557,27 +1038,9 @@ pub async fn handle_call_capability(
                 .total_tool_duration_us
                 .fetch_add(elapsed_us, Ordering::Relaxed);
 
-            state.audit_handle.send(crate::audit::RawAuditEvent {
-                event_type: crate::audit::AuditEventType::ToolExecution,
-                trace_id: trace_id.clone(),
-                request_id: Some(request_id.clone()),
-                actor_id: req_context.actor_id.clone(),
-                work_item_id: req_context.work_item_id.clone(),
-                client_ip: client_ip.clone(),
-                server_id: Some(server_id.clone()),
-                capability_id: Some(payload.capability_id.clone()),
-                resource_uri: None,
-                sanitized_args: Some(redacted_input),
-                sanitized_response: Some(redacted_output),
-                execution_latency_us: Some(elapsed_us),
-                status: crate::audit::AuditEventStatus::Success,
-                error_code: None,
-                error_message: None,
-                operator_id: None,
-                approval_ticket_id: None,
-                idempotency_key: idempotency_key.clone(),
-                is_replay: Some(false),
-            });
+            state
+                .audit_handle
+                .send(audit.event(redacted_input, elapsed_us, Ok(redacted_output)));
 
             let distill_opts =
                 crate::context_filter::DistillationOptions::from_args(Some(&payload.args));
@@ -1609,30 +1072,14 @@ pub async fn handle_call_capability(
                 .idempotency_store
                 .release_execution(idempotency_key.as_deref(), idempotency_claim)
                 .await;
-            state.audit_handle.send(crate::audit::RawAuditEvent {
-                event_type: crate::audit::AuditEventType::ToolExecution,
-                trace_id: trace_id.clone(),
-                request_id: Some(request_id.clone()),
-                actor_id: req_context.actor_id.clone(),
-                work_item_id: req_context.work_item_id.clone(),
-                client_ip: client_ip.clone(),
-                server_id: Some(server_id.clone()),
-                capability_id: Some(payload.capability_id.clone()),
-                resource_uri: None,
-                sanitized_args: Some(redacted_input),
-                sanitized_response: None,
-                execution_latency_us: Some(elapsed_us),
-                status: crate::audit::AuditEventStatus::Failed,
-                error_code: Some("UPSTREAM_TIMEOUT".to_string()),
-                error_message: Some(format!(
-                    "Tool call timed out after {}ms",
-                    state.tool_timeout_ms
+            state.audit_handle.send(audit.event(
+                redacted_input,
+                elapsed_us,
+                Err((
+                    "UPSTREAM_TIMEOUT",
+                    format!("Tool call timed out after {}ms", state.tool_timeout_ms),
                 )),
-                operator_id: None,
-                approval_ticket_id: None,
-                idempotency_key: idempotency_key.clone(),
-                is_replay: Some(false),
-            });
+            ));
             (
                 StatusCode::GATEWAY_TIMEOUT,
                 Json(error_envelope(
@@ -1654,27 +1101,11 @@ pub async fn handle_call_capability(
                 .idempotency_store
                 .release_execution(idempotency_key.as_deref(), idempotency_claim)
                 .await;
-            state.audit_handle.send(crate::audit::RawAuditEvent {
-                event_type: crate::audit::AuditEventType::ToolExecution,
-                trace_id: trace_id.clone(),
-                request_id: Some(request_id.clone()),
-                actor_id: req_context.actor_id.clone(),
-                work_item_id: req_context.work_item_id.clone(),
-                client_ip: client_ip.clone(),
-                server_id: Some(server_id.clone()),
-                capability_id: Some(payload.capability_id.clone()),
-                resource_uri: None,
-                sanitized_args: Some(redacted_input),
-                sanitized_response: None,
-                execution_latency_us: Some(elapsed_us),
-                status: crate::audit::AuditEventStatus::Failed,
-                error_code: Some("UPSTREAM_ERROR".to_string()),
-                error_message: Some(err.clone()),
-                operator_id: None,
-                approval_ticket_id: None,
-                idempotency_key: idempotency_key.clone(),
-                is_replay: Some(false),
-            });
+            state.audit_handle.send(audit.event(
+                redacted_input,
+                elapsed_us,
+                Err(("UPSTREAM_ERROR", err.clone())),
+            ));
             (
                 StatusCode::BAD_GATEWAY,
                 Json(error_envelope(
@@ -1709,6 +1140,794 @@ pub async fn handle_call_capability(
                 .into_response()
         }
     }
+}
+
+struct EmissionOrigin<'a> {
+    profile: &'a ProfileContext,
+    tool_name: &'a str,
+    input_responses: Option<&'a BTreeMap<String, Value>>,
+    request_state: Option<&'a str>,
+    tenant_id: &'a str,
+    role: &'a str,
+    authorization_expires_at_epoch_secs: Option<u64>,
+    claim: Option<IdempotencyClaim>,
+}
+
+impl EmissionOrigin<'_> {
+    async fn hold_seconds(&self, state: &AppState, contract: &ReversibilityConfig) -> u64 {
+        let global_window = state.policy.read().await.hold_window_secs;
+        let profile_window = self
+            .profile
+            .profile_policy
+            .as_ref()
+            .and_then(|policy| policy.hold_window_secs);
+        crate::emissions::effective_hold_window_secs(contract, profile_window, global_window)
+            .unwrap_or(30)
+    }
+
+    fn record(&self, release_at_ms: u64, approval_completed: bool) -> EmissionRecord {
+        EmissionRecord {
+            idempotency_claim: self.claim,
+            phase: EmissionPhase::PendingEmission,
+            release_at_ms,
+            cancellable: true,
+            tool_name: self.tool_name.to_owned(),
+            input_responses: self.input_responses.cloned(),
+            request_state: self.request_state.map(str::to_owned),
+            profile_id: self.profile.profile_id.clone(),
+            tenant_id: self.tenant_id.to_owned(),
+            role: self.role.to_owned(),
+            authorization_expires_at_epoch_secs: self.authorization_expires_at_epoch_secs,
+            approval_completed,
+            batch_id: None,
+            step_id: None,
+        }
+    }
+
+    async fn queue_after_approval(
+        &self,
+        state: &AppState,
+        contract: &ReversibilityConfig,
+        task_id: &str,
+        args: Value,
+        idempotency_key: Option<&str>,
+    ) {
+        let hold_secs = self.hold_seconds(state, contract).await;
+        let release_at_ms = match crate::emissions::release_deadline_ms(hold_secs) {
+            Ok(release_at_ms) => release_at_ms,
+            Err(error) => {
+                let _ = state
+                    .task_registry
+                    .fail_task(
+                        task_id,
+                        json!({"code": "INVALID_HOLD_WINDOW"}),
+                        Some(error.to_string()),
+                    )
+                    .await;
+                return;
+            }
+        };
+        if let Err(error) = state
+            .hold_coordinator
+            .queue_existing(state, task_id, args, self.record(release_at_ms, true))
+            .await
+        {
+            let _ = state
+                .task_registry
+                .fail_task(
+                    task_id,
+                    json!({"code": "EMISSION_PERSISTENCE_FAILED"}),
+                    Some(error.to_string()),
+                )
+                .await;
+            state
+                .idempotency_store
+                .release_execution(idempotency_key, self.claim)
+                .await;
+        }
+    }
+}
+
+struct HeldCall<'a> {
+    state: &'a AppState,
+    identity: CallIdentity,
+    payload: &'a CallCapabilityRequest,
+    server_id: &'a str,
+    origin: EmissionOrigin<'a>,
+}
+
+impl HeldCall<'_> {
+    async fn schedule(
+        &self,
+        contract: &ReversibilityConfig,
+        args: Value,
+        approval_completed: bool,
+        headers: &HeaderMap,
+    ) -> Response {
+        let (hold_ms, release_at_ms) = match self.hold_deadline(contract).await {
+            Ok(deadline) => deadline,
+            Err(error) => return self.reject(StatusCode::BAD_REQUEST, error).await,
+        };
+        let emission = self.origin.record(release_at_ms, approval_completed);
+        let task = match self.persist(args, emission).await {
+            Ok(Some(task)) => task,
+            Ok(None) => {
+                return self
+                    .reject(
+                        StatusCode::CONFLICT,
+                        CallRejection::new(
+                            "EMISSION_TASK_STATE_INVALID",
+                            "Could not attach the approved emission to its task",
+                        ),
+                    )
+                    .await
+            }
+            Err(error) => return self.persistence_failure(error).await,
+        };
+        self.unregister().await;
+        let prefer_async = self.payload.async_task
+            || headers
+                .get("prefer")
+                .and_then(|header| header.to_str().ok())
+                .is_some_and(|value| value.to_ascii_lowercase().contains("respond-async"));
+        if !prefer_async && hold_ms < self.state.tool_timeout_ms {
+            if let Some(response) = self.wait_for_result(&task.task_id, hold_ms).await {
+                return response;
+            }
+        }
+        self.identity.held_receipt(StatusCode::ACCEPTED, &task)
+    }
+
+    async fn hold_deadline(
+        &self,
+        contract: &ReversibilityConfig,
+    ) -> Result<(u64, u64), CallRejection> {
+        let seconds = self.origin.hold_seconds(self.state, contract).await;
+        let hold_ms = seconds.checked_mul(1_000).ok_or_else(|| {
+            CallRejection::new("INVALID_HOLD_WINDOW", "Hold window overflows milliseconds")
+        })?;
+        let release_at_ms = crate::emissions::release_deadline_ms(seconds)
+            .map_err(|error| CallRejection::new("INVALID_HOLD_WINDOW", error.to_string()))?;
+        Ok((hold_ms, release_at_ms))
+    }
+
+    async fn persist(
+        &self,
+        args: Value,
+        emission: EmissionRecord,
+    ) -> anyhow::Result<Option<TaskRecord>> {
+        let id = &self.identity;
+        let coordinator = &self.state.hold_coordinator;
+        let existing = self
+            .state
+            .task_registry
+            .list_tasks()
+            .await
+            .into_iter()
+            .find(|task| {
+                task.request_id.as_deref() == Some(id.request_id.as_str())
+                    && task.emission.is_none()
+            });
+        if let Some(task) = existing {
+            return coordinator
+                .queue_existing(self.state, &task.task_id, args, emission)
+                .await
+                .context("failed to persist approved emission");
+        }
+        coordinator
+            .accept(
+                self.state,
+                CreateTaskParams {
+                    capability_id: self.payload.capability_id.clone(),
+                    server_id: self.server_id.to_owned(),
+                    args,
+                    request_id: Some(id.request_id.clone()),
+                    context: Some(id.req_context.clone()),
+                    idempotency_key: id.idempotency_key.clone(),
+                    initial_status: TaskStatus::Working,
+                    status_message: Some("Waiting for the emission release deadline".to_string()),
+                    input_requests: None,
+                    ttl_ms: None,
+                    poll_interval_ms: Some(1_000),
+                },
+                emission,
+            )
+            .await
+            .map(Some)
+    }
+
+    async fn unregister(&self) {
+        self.state
+            .operation_registry
+            .unregister(&self.identity.request_id)
+            .await;
+    }
+
+    async fn reject(&self, status: StatusCode, error: CallRejection) -> Response {
+        self.unregister().await;
+        self.identity.rejected(status, error)
+    }
+
+    async fn persistence_failure(&self, error: anyhow::Error) -> Response {
+        release_registered_call(
+            self.state,
+            &self.identity.request_id,
+            self.identity.idempotency_key.as_deref(),
+            self.origin.claim,
+        )
+        .await;
+        self.identity.rejected(
+            StatusCode::SERVICE_UNAVAILABLE,
+            CallRejection {
+                code: "EMISSION_PERSISTENCE_FAILED",
+                message: error.to_string(),
+                retryable: true,
+            },
+        )
+    }
+
+    async fn wait_for_result(&self, task_id: &str, hold_ms: u64) -> Option<Response> {
+        let wait = Duration::from_millis(hold_ms.saturating_add(self.state.tool_timeout_ms));
+        let task = self
+            .state
+            .hold_coordinator
+            .wait_for_terminal(self.state, task_id, wait)
+            .await?;
+        self.completed_response(task)
+    }
+
+    fn completed_response(&self, task: TaskRecord) -> Option<Response> {
+        let id = &self.identity;
+        let retry = (id.retry_base)("completed");
+        match task.status {
+            TaskStatus::Completed => Some(
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "ok": true,
+                        "request_id": id.request_id,
+                        "context": id.req_context,
+                        "trace_id": id.trace_id,
+                        "data": task.result.unwrap_or(Value::Null),
+                        "error": null,
+                        "retry": retry,
+                    })),
+                )
+                    .into_response(),
+            ),
+            TaskStatus::Failed | TaskStatus::Cancelled => {
+                let code = task
+                    .error
+                    .as_ref()
+                    .and_then(|error| error.get("code"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("EMISSION_FAILED");
+                let message = task
+                    .status_message
+                    .unwrap_or_else(|| "Held emission did not complete".to_string());
+                Some(
+                    (
+                        StatusCode::BAD_GATEWAY,
+                        Json(error_envelope(
+                            id.trace_id.clone(),
+                            Some(id.request_id.clone()),
+                            Some(id.req_context.clone()),
+                            retry,
+                            code,
+                            message,
+                            false,
+                        )),
+                    )
+                        .into_response(),
+                )
+            }
+            _ => None,
+        }
+    }
+}
+
+struct CallAudit<'a> {
+    trace_id: &'a str,
+    request_id: &'a str,
+    context: &'a RequestContext,
+    client_ip: Option<&'a str>,
+    server_id: &'a str,
+    capability_id: &'a str,
+    idempotency_key: Option<&'a str>,
+}
+
+impl CallAudit<'_> {
+    fn event(
+        &self,
+        sanitized_args: Value,
+        elapsed_us: u64,
+        outcome: Result<Value, (&str, String)>,
+    ) -> crate::audit::RawAuditEvent {
+        use crate::audit::{AuditEventStatus, AuditEventType, RawAuditEvent};
+
+        let (status, sanitized_response, error_code, error_message) = match outcome {
+            Ok(response) => (AuditEventStatus::Success, Some(response), None, None),
+            Err((code, message)) => (
+                AuditEventStatus::Failed,
+                None,
+                Some(code.to_owned()),
+                Some(message),
+            ),
+        };
+        RawAuditEvent {
+            event_type: AuditEventType::ToolExecution,
+            trace_id: self.trace_id.to_owned(),
+            request_id: Some(self.request_id.to_owned()),
+            actor_id: self.context.actor_id.clone(),
+            work_item_id: self.context.work_item_id.clone(),
+            client_ip: self.client_ip.map(str::to_owned),
+            server_id: Some(self.server_id.to_owned()),
+            capability_id: Some(self.capability_id.to_owned()),
+            resource_uri: None,
+            sanitized_args: Some(sanitized_args),
+            sanitized_response,
+            execution_latency_us: Some(elapsed_us),
+            status,
+            error_code,
+            error_message,
+            operator_id: None,
+            approval_ticket_id: None,
+            idempotency_key: self.idempotency_key.map(str::to_owned),
+            is_replay: Some(false),
+        }
+    }
+}
+
+async fn capture_call_snapshot(
+    state: &AppState,
+    contract: Option<&ReversibilityConfig>,
+    args: &Value,
+    profile: &ProfileContext,
+    policy: &Policy,
+) -> Result<(Value, Option<String>), (StatusCode, CallRejection)> {
+    let Some(contract) = contract else {
+        return Ok((Value::Null, None));
+    };
+    if matches!(
+        contract.class,
+        ReversibilityClass::Reversible | ReversibilityClass::Compensable
+    ) && state.undo_ledger.is_none()
+    {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            CallRejection::new(
+                "UNDO_STORAGE_UNAVAILABLE",
+                "Persistent undo storage is unavailable",
+            ),
+        ));
+    }
+    let Some(snapshot) = &contract.pre_snapshot else {
+        return Ok((Value::Null, None));
+    };
+    crate::engine::undo::capture_pre_snapshot(state, snapshot, args, profile, policy)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_GATEWAY,
+                CallRejection {
+                    code: "PRE_SNAPSHOT_FAILED",
+                    message: error.to_string(),
+                    retryable: true,
+                },
+            )
+        })
+}
+
+struct CallIdentity {
+    trace_id: String,
+    request_id: String,
+    req_context: RequestContext,
+    client_ip: Option<String>,
+    idempotency_key: Option<String>,
+    retry_base: fn(&'static str) -> RetryMetadata,
+    start_time: Instant,
+}
+
+impl CallIdentity {
+    fn new(
+        state: &AppState,
+        payload: &CallCapabilityRequest,
+        headers: &HeaderMap,
+        tenant: Option<&TenantContext>,
+    ) -> Self {
+        let start_time = Instant::now();
+        state.total_tool_calls.fetch_add(1, Ordering::Relaxed);
+        let trace_id = next_trace_id();
+        let request_id = crate::context::resolve_request_id(
+            payload.request_id.clone(),
+            headers,
+            trace_id.clone(),
+        );
+        let mut req_context =
+            crate::context::resolve_request_context(payload.context.clone(), headers);
+        if let Some(tenant) = tenant {
+            if let Some(actor) = &tenant.actor_id {
+                req_context.actor_id = Some(actor.clone());
+            }
+            if let Some(grant) = &tenant.grant_id {
+                req_context.grant_id = Some(grant.clone());
+            }
+        }
+
+        let client_ip = resolve_client_ip(headers);
+        let idempotency_key = resolve_idempotency_key(payload.idempotency_key.clone(), headers)
+            .or_else(|| {
+                payload.args.is_object().then(|| {
+                    crate::idempotency::derive_idempotency_key(
+                        &payload.capability_id,
+                        &payload.args,
+                        req_context.actor_id.as_deref(),
+                        payload.request_id.as_deref(),
+                    )
+                })
+            });
+        let retry_base = if idempotency_key.is_some() {
+            RetryMetadata::idempotent
+        } else {
+            RetryMetadata::unsafe_op
+        };
+        Self {
+            trace_id,
+            request_id,
+            req_context,
+            client_ip,
+            idempotency_key,
+            retry_base,
+            start_time,
+        }
+    }
+
+    fn rejected(&self, status: StatusCode, error: CallRejection) -> Response {
+        (
+            status,
+            Json(error_envelope(
+                self.trace_id.clone(),
+                Some(self.request_id.clone()),
+                Some(self.req_context.clone()),
+                (self.retry_base)("not_started"),
+                error.code,
+                error.message,
+                error.retryable,
+            )),
+        )
+            .into_response()
+    }
+
+    async fn replay_held_call(
+        &self,
+        state: &AppState,
+        key: &str,
+        tenant: Option<&TenantContext>,
+        profile: Option<&ProfileContext>,
+    ) -> Option<Response> {
+        let task = state.task_registry.find_by_idempotency_key(key).await?;
+        task.emission.as_ref()?;
+        if !crate::http_v1::helpers::can_access_emission_task(state, &task, tenant, profile).await {
+            return Some(self.rejected(
+                StatusCode::FORBIDDEN,
+                CallRejection::new(
+                    "POLICY_DENIED",
+                    "Held task is not accessible to this caller",
+                ),
+            ));
+        }
+        let status = if matches!(
+            task.status,
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+        ) {
+            StatusCode::OK
+        } else {
+            StatusCode::ACCEPTED
+        };
+        Some(self.held_receipt(status, &task))
+    }
+
+    fn held_receipt(&self, status: StatusCode, task: &TaskRecord) -> Response {
+        (
+            status,
+            Json(json!({
+                "ok": true,
+                "resultType": "task",
+                "task": TaskResponse::from(task),
+                "request_id": self.request_id,
+                "trace_id": self.trace_id,
+            })),
+        )
+            .into_response()
+    }
+
+    async fn claim_call(
+        &self,
+        state: &AppState,
+        payload: &CallCapabilityRequest,
+        tenant: Option<&TenantContext>,
+        profile: Option<&ProfileContext>,
+    ) -> ControlFlow<Response, Option<IdempotencyClaim>> {
+        let Some(key) = self.idempotency_key.as_deref() else {
+            return ControlFlow::Continue(None);
+        };
+        if let Some(response) = self.replay_held_call(state, key, tenant, profile).await {
+            return ControlFlow::Break(response);
+        }
+        match state
+            .idempotency_store
+            .claim_or_replay(key, &payload.capability_id, &self.trace_id)
+            .await
+        {
+            ExecutionClaim::New(claim) => ControlFlow::Continue(Some(claim)),
+            ExecutionClaim::Replay {
+                response,
+                from_cache,
+            } => {
+                if from_cache {
+                    self.audit_cached_replay(state, key, payload, &response);
+                }
+                let mut headers = HeaderMap::new();
+                headers.insert(
+                    "x-warmplane-deduplicated",
+                    axum::http::HeaderValue::from_static("true"),
+                );
+                ControlFlow::Break((StatusCode::OK, headers, Json(response)).into_response())
+            }
+        }
+    }
+
+    fn audit_cached_replay(
+        &self,
+        state: &AppState,
+        key: &str,
+        payload: &CallCapabilityRequest,
+        response: &Value,
+    ) {
+        state.audit_handle.send(crate::audit::RawAuditEvent {
+            event_type: crate::audit::AuditEventType::ToolExecution,
+            trace_id: self.trace_id.clone(),
+            request_id: Some(self.request_id.clone()),
+            actor_id: self.req_context.actor_id.clone(),
+            work_item_id: self.req_context.work_item_id.clone(),
+            client_ip: self.client_ip.clone(),
+            server_id: None,
+            capability_id: Some(payload.capability_id.clone()),
+            resource_uri: None,
+            sanitized_args: Some(payload.args.clone()),
+            sanitized_response: Some(response.clone()),
+            execution_latency_us: Some(self.start_time.elapsed().as_micros() as u64),
+            status: crate::audit::AuditEventStatus::Success,
+            error_code: None,
+            error_message: None,
+            operator_id: None,
+            approval_ticket_id: None,
+            idempotency_key: Some(key.to_owned()),
+            is_replay: Some(true),
+        });
+    }
+}
+
+struct CallRejection {
+    code: &'static str,
+    message: String,
+    retryable: bool,
+}
+
+impl CallRejection {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            retryable: false,
+        }
+    }
+}
+
+struct CallTarget {
+    server_id: String,
+    tool_name: String,
+    reversibility: Option<ReversibilityConfig>,
+}
+
+struct CallApproval {
+    required: bool,
+    compensable_reserved: bool,
+}
+
+struct CallPreflight<'a> {
+    state: &'a AppState,
+    payload: &'a CallCapabilityRequest,
+    identity: &'a CallIdentity,
+    profile: &'a ProfileContext,
+    tenant: Option<&'a TenantContext>,
+    claim: Option<IdempotencyClaim>,
+}
+
+impl CallPreflight<'_> {
+    async fn reject(
+        &self,
+        status: StatusCode,
+        error: CallRejection,
+    ) -> (StatusCode, CallRejection) {
+        release_registered_call(
+            self.state,
+            &self.identity.request_id,
+            self.identity.idempotency_key.as_deref(),
+            self.claim,
+        )
+        .await;
+        (status, error)
+    }
+
+    async fn validate_arguments(&self) -> Result<(), (StatusCode, CallRejection)> {
+        if self.payload.args.is_object() {
+            return Ok(());
+        }
+        Err(self
+            .reject(
+                StatusCode::BAD_REQUEST,
+                CallRejection::new("INVALID_ARGS", "'args' must be a JSON object"),
+            )
+            .await)
+    }
+
+    async fn resolve_policy(&self) -> Result<Policy, (StatusCode, CallRejection)> {
+        let base = self.state.policy.read().await;
+        let policy = self
+            .tenant
+            .map(|tenant| tenant.effective_policy.clone())
+            .unwrap_or_else(|| base.clone())
+            .merge_with_profile(self.profile.profile_policy.as_ref());
+
+        if policy.allows(&self.payload.capability_id) {
+            return Ok(policy);
+        }
+        let message = format!(
+            "Capability '{}' blocked by policy",
+            self.payload.capability_id
+        );
+        release_registered_call(
+            self.state,
+            &self.identity.request_id,
+            self.identity.idempotency_key.as_deref(),
+            self.claim,
+        )
+        .await;
+        self.audit_policy_denial(&policy, &message);
+        Err((
+            StatusCode::FORBIDDEN,
+            CallRejection::new("POLICY_DENIED", message),
+        ))
+    }
+
+    fn audit_policy_denial(&self, policy: &Policy, message: &str) {
+        let identity = self.identity;
+        self.state.audit_handle.send(crate::audit::RawAuditEvent {
+            event_type: crate::audit::AuditEventType::PolicyViolation,
+            trace_id: identity.trace_id.clone(),
+            request_id: Some(identity.request_id.clone()),
+            actor_id: identity.req_context.actor_id.clone(),
+            work_item_id: identity.req_context.work_item_id.clone(),
+            client_ip: identity.client_ip.clone(),
+            server_id: None,
+            capability_id: Some(self.payload.capability_id.clone()),
+            resource_uri: None,
+            sanitized_args: Some(redact_value(self.payload.args.clone(), &policy.redact_keys)),
+            sanitized_response: None,
+            execution_latency_us: Some(identity.start_time.elapsed().as_micros() as u64),
+            status: crate::audit::AuditEventStatus::Denied,
+            error_code: Some("POLICY_DENIED".to_string()),
+            error_message: Some(message.to_owned()),
+            operator_id: None,
+            approval_ticket_id: None,
+            idempotency_key: identity.idempotency_key.clone(),
+            is_replay: Some(false),
+        });
+    }
+
+    async fn resolve_target(&self) -> Result<CallTarget, (StatusCode, CallRejection)> {
+        let capabilities = self.state.capabilities.read().await;
+        let capability_id = &self.payload.capability_id;
+        let Some(meta) = capabilities.get(capability_id) else {
+            return Err(self
+                .reject(
+                    StatusCode::NOT_FOUND,
+                    CallRejection::new(
+                        "TOOL_NOT_FOUND",
+                        format!("Capability '{capability_id}' not found"),
+                    ),
+                )
+                .await);
+        };
+        if !self.profile.is_server_allowed(&meta.server) {
+            return Err(self.reject(
+                StatusCode::FORBIDDEN,
+                CallRejection::new(
+                    "TOOL_NOT_IN_PROFILE",
+                    format!("Capability '{capability_id}' belongs to server '{}' which is not in active profile", meta.server),
+                ),
+            ).await);
+        }
+        Ok(CallTarget {
+            server_id: meta.server.clone(),
+            tool_name: meta.tool.clone(),
+            reversibility: meta.reversibility.clone(),
+        })
+    }
+
+    async fn resolve_approval(
+        &self,
+        policy: &Policy,
+        contract: Option<&ReversibilityConfig>,
+        tenant_id: &str,
+    ) -> Result<CallApproval, (StatusCode, CallRejection)> {
+        let required = policy.requires_approval(&self.payload.capability_id);
+        let Some(contract) =
+            contract.filter(|contract| contract.class == ReversibilityClass::Compensable)
+        else {
+            return Ok(CallApproval {
+                required,
+                compensable_reserved: false,
+            });
+        };
+        if self.state.undo_ledger.is_none() {
+            return Err(self
+                .reject(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    CallRejection::new(
+                        "UNDO_STORAGE_UNAVAILABLE",
+                        "Persistent undo storage is unavailable",
+                    ),
+                )
+                .await);
+        }
+        if required {
+            return Ok(CallApproval {
+                required,
+                compensable_reserved: false,
+            });
+        }
+        match crate::engine::undo::reserve_compensable(
+            self.state,
+            contract,
+            &self.payload.capability_id,
+            tenant_id,
+            self.profile.profile_id.as_deref(),
+            self.identity.idempotency_key.as_deref(),
+            false,
+        )
+        .await
+        {
+            Ok(reserved) => Ok(CallApproval {
+                required: !reserved,
+                compensable_reserved: reserved,
+            }),
+            Err(error) => Err(self
+                .reject(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    CallRejection {
+                        code: "COMPENSABLE_LIMIT_STORAGE_FAILED",
+                        message: error.to_string(),
+                        retryable: true,
+                    },
+                )
+                .await),
+        }
+    }
+}
+
+async fn release_registered_call(
+    state: &AppState,
+    request_id: &str,
+    idempotency_key: Option<&str>,
+    claim: Option<IdempotencyClaim>,
+) {
+    state.operation_registry.unregister(request_id).await;
+    state
+        .idempotency_store
+        .release_execution(idempotency_key, claim)
+        .await;
 }
 
 /// Handles HTTP POST `/v1/operations/:id/cancel` cancelling an in-flight operation.
