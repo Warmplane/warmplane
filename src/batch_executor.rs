@@ -3,13 +3,21 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    approvals::ApprovalResolution,
+    config::{ReversibilityClass, ReversibilityConfig},
     daemon::{AppState, ServerMsg, UpstreamCallError},
-    tasks::{CreateTaskParams, EmissionCancelResult, EmissionPhase, EmissionRecord, TaskStatus},
+    tasks::{
+        CreateTaskParams, EmissionCancelResult, EmissionPhase, EmissionRecord, TaskRecord,
+        TaskStatus,
+    },
 };
 
 /// Single execution step within a batch capability call.
@@ -209,21 +217,7 @@ async fn execute_batch_for_tenant_with_budget(
     scope: BatchExecutionScope<'_>,
     options: BatchExecutionOptions,
 ) -> BatchCallResponse {
-    let BatchExecutionOptions {
-        auto_rollback_on_failure,
-        batch_timeout_ms,
-    } = options;
-    let BatchExecutionScope {
-        policy,
-        profile: prof_ctx,
-        tenant_id,
-        role,
-        authorization_expires_at_epoch_secs,
-        cancellation_token,
-    } = scope;
-    let start_all = std::time::Instant::now();
-    let batch_fiber_id = request_id.clone().unwrap_or_else(|| trace_id.clone());
-
+    let start = Instant::now();
     if steps.len() > MAX_BATCH_STEPS {
         return BatchCallResponse {
             trace_id,
@@ -246,779 +240,612 @@ async fn execute_batch_for_tenant_with_budget(
         };
     }
 
-    let mut step_outputs: HashMap<String, Value> = HashMap::new();
-    let mut results = Vec::new();
-    let mut overall_ok = true;
-    let fallback_context = crate::context::RequestContext::default();
+    let batch = BatchExecution {
+        state,
+        scope,
+        trace_id: &trace_id,
+        request_id: request_id.as_deref(),
+        fiber_id: request_id.as_deref().unwrap_or(&trace_id),
+        context: context.as_ref(),
+        start,
+        timeout_ms: options.batch_timeout_ms,
+    };
+    let (ok, results) = batch
+        .run_steps(steps, options.auto_rollback_on_failure)
+        .await;
+    let rollback_results = if options.auto_rollback_on_failure && !ok {
+        batch.rollback().await
+    } else {
+        Vec::new()
+    };
+    BatchCallResponse {
+        ok,
+        request_id,
+        trace_id,
+        results,
+        total_duration_us: start.elapsed().as_micros() as u64,
+        rollback_results,
+    }
+}
 
-    for step in steps {
-        let step_start = std::time::Instant::now();
+struct BatchExecution<'a> {
+    state: &'a AppState,
+    scope: BatchExecutionScope<'a>,
+    trace_id: &'a str,
+    request_id: Option<&'a str>,
+    fiber_id: &'a str,
+    context: Option<&'a crate::context::RequestContext>,
+    start: Instant,
+    timeout_ms: u64,
+}
 
-        // Check aggregate batch timeout budget
-        if cancellation_token.is_cancelled() {
-            results.push(BatchStepResult {
-                id: step.id.clone(),
-                capability_id: step.capability_id.clone(),
-                ok: false,
-                data: None,
-                error: Some("Batch execution was cancelled".to_string()),
-                duration_us: step_start.elapsed().as_micros() as u64,
-            });
-            overall_ok = false;
-            break;
-        }
-        if start_all.elapsed().as_millis() as u64 >= batch_timeout_ms {
-            results.push(BatchStepResult {
-                id: step.id.clone(),
-                capability_id: step.capability_id.clone(),
-                ok: false,
-                data: None,
-                error: Some(format!(
-                    "Batch execution timed out after {}ms budget",
-                    batch_timeout_ms
-                )),
-                duration_us: step_start.elapsed().as_micros() as u64,
-            });
-            overall_ok = false;
-            break;
-        }
-
-        let mut interpolated_args = interpolate_step_references(&step.args, &step_outputs);
-
-        // Check policy allow/deny
-        if !policy.allows(&step.capability_id) {
-            results.push(BatchStepResult {
-                id: step.id.clone(),
-                capability_id: step.capability_id.clone(),
-                ok: false,
-                data: None,
-                error: Some(format!(
-                    "Capability '{}' blocked by policy",
-                    step.capability_id
-                )),
-                duration_us: step_start.elapsed().as_micros() as u64,
-            });
-            overall_ok = false;
-            if auto_rollback_on_failure || !step.continue_on_error {
-                break;
-            }
-            continue;
-        }
-
-        // Lookup capability target
-        let (server, tool, reversibility) = {
-            let caps_guard = state.capabilities.read().await;
-            let Some(meta) = caps_guard.get(&step.capability_id) else {
-                results.push(BatchStepResult {
-                    id: step.id.clone(),
-                    capability_id: step.capability_id.clone(),
-                    ok: false,
-                    data: None,
-                    error: Some(format!("Capability '{}' not found", step.capability_id)),
-                    duration_us: step_start.elapsed().as_micros() as u64,
-                });
-                overall_ok = false;
-                if auto_rollback_on_failure || !step.continue_on_error {
-                    break;
-                }
-                continue;
-            };
-
-            if !prof_ctx.is_server_allowed(&meta.server) {
-                results.push(BatchStepResult {
-                    id: step.id.clone(),
-                    capability_id: step.capability_id.clone(),
-                    ok: false,
-                    data: None,
-                    error: Some(format!(
-                        "Capability '{}' belongs to server '{}' which is not in active profile",
-                        step.capability_id, meta.server
-                    )),
-                    duration_us: step_start.elapsed().as_micros() as u64,
-                });
-                overall_ok = false;
-                if auto_rollback_on_failure || !step.continue_on_error {
-                    break;
-                }
-                continue;
-            }
-
-            (
-                meta.server.clone(),
-                meta.tool.clone(),
-                meta.reversibility.clone(),
-            )
-        };
-
-        let compensable_idempotency_key = request_id
-            .as_ref()
-            .map(|batch_id| format!("batch:{batch_id}:step:{}", step.id));
-        let mut compensable_reserved = false;
-        if let Some(contract) = reversibility
-            .as_ref()
-            .filter(|contract| contract.class == crate::config::ReversibilityClass::Compensable)
-        {
-            if state.undo_ledger.is_none() {
-                results.push(BatchStepResult {
-                    id: step.id.clone(),
-                    capability_id: step.capability_id.clone(),
-                    ok: false,
-                    data: None,
-                    error: Some("Persistent undo storage is unavailable".to_string()),
-                    duration_us: step_start.elapsed().as_micros() as u64,
-                });
-                overall_ok = false;
-                if auto_rollback_on_failure || !step.continue_on_error {
-                    break;
-                }
-                continue;
-            }
-            match crate::engine::undo::reserve_compensable(
-                state,
-                contract,
-                &step.capability_id,
-                tenant_id,
-                prof_ctx.profile_id.as_deref(),
-                compensable_idempotency_key.as_deref(),
-                false,
-            )
-            .await
-            {
-                Ok(true) => compensable_reserved = true,
-                Ok(false) => {}
-                Err(error) => {
-                    results.push(BatchStepResult {
-                        id: step.id.clone(),
-                        capability_id: step.capability_id.clone(),
-                        ok: false,
-                        data: None,
-                        error: Some(error.to_string()),
-                        duration_us: step_start.elapsed().as_micros() as u64,
-                    });
-                    overall_ok = false;
-                    if auto_rollback_on_failure || !step.continue_on_error {
-                        break;
+impl BatchExecution<'_> {
+    async fn run_steps(
+        &self,
+        steps: Vec<BatchStep>,
+        auto_rollback: bool,
+    ) -> (bool, Vec<BatchStepResult>) {
+        let mut outputs = HashMap::new();
+        let mut results = Vec::new();
+        let mut ok = true;
+        for step in steps {
+            let start = Instant::now();
+            let outcome = match self.check_budget() {
+                Ok(()) => {
+                    BatchStepExecution {
+                        batch: self,
+                        step: &step,
+                        start,
+                        idempotency_key: self
+                            .request_id
+                            .map(|batch_id| format!("batch:{batch_id}:step:{}", step.id)),
                     }
-                    continue;
-                }
-            }
-        }
-
-        // Enforce HITL approval gate if required
-        let (mut requires_approval, redact_keys, approval_timeout_secs, webhook_cfg) = (
-            policy.requires_approval(&step.capability_id),
-            policy.redact_keys.clone(),
-            policy.approval_timeout_secs,
-            policy.webhook.clone(),
-        );
-
-        if reversibility.as_ref().is_some_and(|contract| {
-            contract.class == crate::config::ReversibilityClass::Compensable
-        }) && !compensable_reserved
-        {
-            requires_approval = true;
-        }
-
-        if requires_approval {
-            let sanitized =
-                crate::http_v1::helpers::redact_value(interpolated_args.clone(), &redact_keys);
-            let approval_request = crate::approvals::CreateApprovalRequest {
-                capability_id: step.capability_id.clone(),
-                server_id: server.clone(),
-                args: interpolated_args.clone(),
-                sanitized_args: sanitized.clone(),
-                request_id: request_id.clone(),
-                context: context.clone(),
-                timeout_secs: approval_timeout_secs,
-                webhook: webhook_cfg.as_ref(),
-            };
-            let (_, rx, event) = state
-                .approval_registry
-                .create_audited_approval(approval_request, trace_id.clone(), step_start)
-                .await;
-            state.audit_handle.send(event);
-
-            let approval_budget_ms =
-                batch_timeout_ms.saturating_sub(start_all.elapsed().as_millis() as u64);
-            let resolution = tokio::select! {
-                _ = cancellation_token.cancelled() => crate::approvals::ApprovalResolution::Expired,
-                result = tokio::time::timeout(Duration::from_millis(approval_budget_ms), rx) => {
-                    match result {
-                        Ok(Ok(resolution)) => resolution,
-                        _ => crate::approvals::ApprovalResolution::Expired,
-                    }
-                }
-            };
-
-            match resolution {
-                crate::approvals::ApprovalResolution::Approved { modified_args, .. } => {
-                    if let Some(mod_args) = modified_args {
-                        interpolated_args = mod_args;
-                    }
-                }
-                crate::approvals::ApprovalResolution::Rejected { reason, operator } => {
-                    results.push(BatchStepResult {
-                        id: step.id.clone(),
-                        capability_id: step.capability_id.clone(),
-                        ok: false,
-                        data: None,
-                        error: Some(format!(
-                            "HITL approval rejected by operator '{}': {}",
-                            operator,
-                            reason.unwrap_or_else(|| "No reason provided".to_string())
-                        )),
-                        duration_us: step_start.elapsed().as_micros() as u64,
-                    });
-                    overall_ok = false;
-                    if auto_rollback_on_failure || !step.continue_on_error {
-                        break;
-                    }
-                    continue;
-                }
-                crate::approvals::ApprovalResolution::Expired => {
-                    results.push(BatchStepResult {
-                        id: step.id.clone(),
-                        capability_id: step.capability_id.clone(),
-                        ok: false,
-                        data: None,
-                        error: Some(if cancellation_token.is_cancelled() {
-                            "Batch execution was cancelled while waiting for HITL approval"
-                                .to_string()
-                        } else if start_all.elapsed().as_millis() as u64 >= batch_timeout_ms {
-                            "Batch execution budget expired while waiting for HITL approval"
-                                .to_string()
-                        } else {
-                            "HITL approval expired".to_string()
-                        }),
-                        duration_us: step_start.elapsed().as_micros() as u64,
-                    });
-                    overall_ok = false;
-                    if auto_rollback_on_failure || !step.continue_on_error {
-                        break;
-                    }
-                    continue;
-                }
-            }
-        }
-
-        if requires_approval && !compensable_reserved {
-            if let Some(contract) = reversibility
-                .as_ref()
-                .filter(|contract| contract.class == crate::config::ReversibilityClass::Compensable)
-            {
-                if let Err(error) = crate::engine::undo::reserve_compensable(
-                    state,
-                    contract,
-                    &step.capability_id,
-                    tenant_id,
-                    prof_ctx.profile_id.as_deref(),
-                    compensable_idempotency_key.as_deref(),
-                    true,
-                )
-                .await
-                {
-                    results.push(BatchStepResult {
-                        id: step.id.clone(),
-                        capability_id: step.capability_id.clone(),
-                        ok: false,
-                        data: None,
-                        error: Some(error.to_string()),
-                        duration_us: step_start.elapsed().as_micros() as u64,
-                    });
-                    overall_ok = false;
-                    if auto_rollback_on_failure || !step.continue_on_error {
-                        break;
-                    }
-                    continue;
-                }
-            }
-        }
-
-        // Circuit breaker check
-        if let Err(cb_err) = state.circuit_breakers.check_permission(&server).await {
-            results.push(BatchStepResult {
-                id: step.id.clone(),
-                capability_id: step.capability_id.clone(),
-                ok: false,
-                data: None,
-                error: Some(format!("Circuit open for server '{}': {}", server, cb_err)),
-                duration_us: step_start.elapsed().as_micros() as u64,
-            });
-            overall_ok = false;
-            if auto_rollback_on_failure || !step.continue_on_error {
-                break;
-            }
-            continue;
-        }
-
-        if let Some(contract) = reversibility
-            .as_ref()
-            .filter(|contract| contract.class == crate::config::ReversibilityClass::Delayable)
-        {
-            let hold_secs = crate::emissions::effective_hold_window_secs(
-                contract,
-                prof_ctx
-                    .profile_policy
-                    .as_ref()
-                    .and_then(|item| item.hold_window_secs),
-                state.policy.read().await.hold_window_secs,
-            )
-            .unwrap_or(30);
-            let release_at_ms = match crate::emissions::release_deadline_ms(hold_secs) {
-                Ok(deadline) => deadline,
-                Err(error) => {
-                    results.push(BatchStepResult {
-                        id: step.id.clone(),
-                        capability_id: step.capability_id.clone(),
-                        ok: false,
-                        data: None,
-                        error: Some(error.to_string()),
-                        duration_us: step_start.elapsed().as_micros() as u64,
-                    });
-                    overall_ok = false;
-                    if auto_rollback_on_failure || !step.continue_on_error {
-                        break;
-                    }
-                    continue;
-                }
-            };
-            let emission = EmissionRecord {
-                idempotency_claim: None,
-                phase: EmissionPhase::PendingEmission,
-                release_at_ms,
-                cancellable: true,
-                tool_name: tool.clone(),
-                input_responses: None,
-                request_state: None,
-                profile_id: prof_ctx.profile_id.clone(),
-                tenant_id: tenant_id.to_string(),
-                role: role.to_string(),
-                authorization_expires_at_epoch_secs,
-                approval_completed: requires_approval,
-                batch_id: request_id.clone(),
-                step_id: Some(step.id.clone()),
-            };
-            let task = state
-                .hold_coordinator
-                .accept(
-                    state,
-                    CreateTaskParams {
-                        capability_id: step.capability_id.clone(),
-                        server_id: server.clone(),
-                        args: interpolated_args.clone(),
-                        request_id: request_id.clone(),
-                        context: context.clone(),
-                        idempotency_key: compensable_idempotency_key.clone(),
-                        initial_status: TaskStatus::Working,
-                        status_message: Some(
-                            "Waiting for the batch emission release deadline".to_string(),
-                        ),
-                        input_requests: None,
-                        ttl_ms: None,
-                        poll_interval_ms: Some(500),
-                    },
-                    emission,
-                )
-                .await;
-            let task = match task {
-                Ok(task) => task,
-                Err(error) => {
-                    results.push(BatchStepResult {
-                        id: step.id.clone(),
-                        capability_id: step.capability_id.clone(),
-                        ok: false,
-                        data: None,
-                        error: Some(format!("Could not persist held emission: {error}")),
-                        duration_us: step_start.elapsed().as_micros() as u64,
-                    });
-                    overall_ok = false;
-                    if auto_rollback_on_failure || !step.continue_on_error {
-                        break;
-                    }
-                    continue;
-                }
-            };
-            let remaining_ms =
-                batch_timeout_ms.saturating_sub(start_all.elapsed().as_millis() as u64);
-            let terminal = tokio::select! {
-                _ = cancellation_token.cancelled() => None,
-                result = state.hold_coordinator.wait_for_terminal(
-                    state,
-                    &task.task_id,
-                    Duration::from_millis(remaining_ms),
-                ) => result,
-            };
-            let Some(terminal) = terminal else {
-                let cancellation = state
-                    .hold_coordinator
-                    .cancel(
-                        state,
-                        &task.task_id,
-                        Some("Batch execution cancelled".to_string()),
-                    )
-                    .await;
-                let message = match cancellation {
-                    Ok(
-                        EmissionCancelResult::Cancelled | EmissionCancelResult::AlreadyCancelled,
-                    ) => {
-                        "Batch cancelled; held emission was prevented from dispatching".to_string()
-                    }
-                    _ => "Batch cancelled after dispatch began; emission outcome may be pending"
-                        .to_string(),
-                };
-                results.push(BatchStepResult {
-                    id: step.id.clone(),
-                    capability_id: step.capability_id.clone(),
-                    ok: false,
-                    data: None,
-                    error: Some(message),
-                    duration_us: step_start.elapsed().as_micros() as u64,
-                });
-                overall_ok = false;
-                break;
-            };
-            if terminal.status == TaskStatus::Completed {
-                let value = terminal.result.unwrap_or(Value::Null);
-                state.circuit_breakers.record_success(&server).await;
-                let sanitized_args =
-                    crate::http_v1::helpers::redact_value(interpolated_args.clone(), &redact_keys);
-                let sanitized_response =
-                    crate::http_v1::helpers::redact_value(value.clone(), &redact_keys);
-                state.audit_handle.send(crate::audit::RawAuditEvent {
-                    event_type: crate::audit::AuditEventType::ToolExecution,
-                    trace_id: trace_id.clone(),
-                    request_id: request_id.clone(),
-                    actor_id: context.as_ref().and_then(|item| item.actor_id.clone()),
-                    work_item_id: context.as_ref().and_then(|item| item.work_item_id.clone()),
-                    client_ip: None,
-                    server_id: Some(server.clone()),
-                    capability_id: Some(step.capability_id.clone()),
-                    resource_uri: None,
-                    sanitized_args: Some(sanitized_args),
-                    sanitized_response: Some(
-                        serde_json::json!({"taskId": task.task_id, "result": sanitized_response}),
-                    ),
-                    execution_latency_us: Some(step_start.elapsed().as_micros() as u64),
-                    status: crate::audit::AuditEventStatus::Success,
-                    error_code: None,
-                    error_message: None,
-                    operator_id: None,
-                    approval_ticket_id: None,
-                    idempotency_key: request_id
-                        .as_ref()
-                        .map(|batch_id| format!("batch:{batch_id}:step:{}", step.id)),
-                    is_replay: Some(false),
-                });
-                step_outputs.insert(step.id.clone(), value.clone());
-                results.push(BatchStepResult {
-                    id: step.id.clone(),
-                    capability_id: step.capability_id.clone(),
-                    ok: true,
-                    data: Some(value),
-                    error: None,
-                    duration_us: step_start.elapsed().as_micros() as u64,
-                });
-                continue;
-            }
-            if !matches!(terminal.status, TaskStatus::Failed | TaskStatus::Cancelled) {
-                let cancellation = state
-                    .hold_coordinator
-                    .cancel(
-                        state,
-                        &task.task_id,
-                        Some("Batch execution budget expired".to_string()),
-                    )
-                    .await;
-                let message = match cancellation {
-                    Ok(
-                        EmissionCancelResult::Cancelled | EmissionCancelResult::AlreadyCancelled,
-                    ) => "Batch budget expired; held emission was cancelled before dispatch"
-                        .to_string(),
-                    _ => {
-                        "Batch budget expired after dispatch began; emission outcome may be pending"
-                            .to_string()
-                    }
-                };
-                results.push(BatchStepResult {
-                    id: step.id.clone(),
-                    capability_id: step.capability_id.clone(),
-                    ok: false,
-                    data: None,
-                    error: Some(message),
-                    duration_us: step_start.elapsed().as_micros() as u64,
-                });
-            } else {
-                results.push(BatchStepResult {
-                    id: step.id.clone(),
-                    capability_id: step.capability_id.clone(),
-                    ok: false,
-                    data: None,
-                    error: terminal.status_message,
-                    duration_us: step_start.elapsed().as_micros() as u64,
-                });
-            }
-            overall_ok = false;
-            if cancellation_token.is_cancelled() || !step.continue_on_error {
-                break;
-            }
-            continue;
-        }
-
-        let (snapshot, snapshot_hash) = if let Some(contract) = reversibility.as_ref() {
-            if matches!(
-                contract.class,
-                crate::config::ReversibilityClass::Reversible
-                    | crate::config::ReversibilityClass::Compensable
-            ) && state.undo_ledger.is_none()
-            {
-                results.push(BatchStepResult {
-                    id: step.id.clone(),
-                    capability_id: step.capability_id.clone(),
-                    ok: false,
-                    data: None,
-                    error: Some("Persistent undo storage is unavailable".to_string()),
-                    duration_us: step_start.elapsed().as_micros() as u64,
-                });
-                overall_ok = false;
-                if auto_rollback_on_failure || !step.continue_on_error {
-                    break;
-                }
-                continue;
-            }
-            if let Some(pre_snapshot) = &contract.pre_snapshot {
-                match crate::engine::undo::capture_pre_snapshot(
-                    state,
-                    pre_snapshot,
-                    &interpolated_args,
-                    prof_ctx,
-                    policy,
-                )
-                .await
-                {
-                    Ok(value) => value,
-                    Err(error) => {
-                        results.push(BatchStepResult {
-                            id: step.id.clone(),
-                            capability_id: step.capability_id.clone(),
-                            ok: false,
-                            data: None,
-                            error: Some(format!("Pre-snapshot failed: {error}")),
-                            duration_us: step_start.elapsed().as_micros() as u64,
-                        });
-                        overall_ok = false;
-                        if auto_rollback_on_failure || !step.continue_on_error {
-                            break;
-                        }
-                        continue;
-                    }
-                }
-            } else {
-                (Value::Null, None)
-            }
-        } else {
-            (Value::Null, None)
-        };
-
-        // Lookup server sender channel
-        let tx = {
-            let servers_guard = state.servers.read().await;
-            let Some(tx) = servers_guard.get(&server).cloned() else {
-                state.circuit_breakers.record_failure(&server).await;
-                results.push(BatchStepResult {
-                    id: step.id.clone(),
-                    capability_id: step.capability_id.clone(),
-                    ok: false,
-                    data: None,
-                    error: Some(format!("Server '{}' unreachable", server)),
-                    duration_us: step_start.elapsed().as_micros() as u64,
-                });
-                overall_ok = false;
-                if auto_rollback_on_failure || !step.continue_on_error {
-                    break;
-                }
-                continue;
-            };
-            tx
-        };
-
-        let (reply_tx, reply_rx) = oneshot::channel();
-        let send_res = tx
-            .send(ServerMsg::CallTool {
-                name: tool,
-                params: interpolated_args.clone(),
-                input_responses: None,
-                request_state: None,
-                reply: reply_tx,
-            })
-            .await;
-
-        if send_res.is_err() {
-            state.circuit_breakers.record_failure(&server).await;
-            results.push(BatchStepResult {
-                id: step.id.clone(),
-                capability_id: step.capability_id.clone(),
-                ok: false,
-                data: None,
-                error: Some(format!("Server '{}' mailbox closed", server)),
-                duration_us: step_start.elapsed().as_micros() as u64,
-            });
-            overall_ok = false;
-            if auto_rollback_on_failure || !step.continue_on_error {
-                break;
-            }
-            continue;
-        }
-
-        match reply_rx.await {
-            Ok(Ok(val)) => {
-                state.circuit_breakers.record_success(&server).await;
-                if let Some(contract) = reversibility.as_ref() {
-                    if let Err(error) = crate::engine::undo::register_inverse(
-                        state,
-                        contract,
-                        crate::engine::undo::ForwardCall {
-                            capability: &step.capability_id,
-                            args: &interpolated_args,
-                            result: &val,
-                            snapshot: &snapshot,
-                            snapshot_hash,
-                            context: context.as_ref().unwrap_or(&fallback_context),
-                            batch_id: Some(&batch_fiber_id),
-                            tenant_id,
-                            profile_id: prof_ctx.profile_id.as_deref(),
-                        },
-                        prof_ctx,
-                        policy,
-                    )
+                    .run(&outputs)
                     .await
-                    {
-                        results.push(BatchStepResult {
-                            id: step.id.clone(),
-                            capability_id: step.capability_id.clone(),
-                            ok: false,
-                            data: None,
-                            error: Some(format!(
-                                "Forward call succeeded but inverse registration failed: {error}"
-                            )),
-                            duration_us: step_start.elapsed().as_micros() as u64,
-                        });
-                        overall_ok = false;
-                        if auto_rollback_on_failure || !step.continue_on_error {
-                            break;
-                        }
-                        continue;
-                    }
                 }
-                let sanitized_res =
-                    crate::http_v1::helpers::redact_value(val.clone(), &redact_keys);
-                let sanitized_args =
-                    crate::http_v1::helpers::redact_value(interpolated_args, &redact_keys);
-                state.audit_handle.send(crate::audit::RawAuditEvent {
-                    event_type: crate::audit::AuditEventType::ToolExecution,
-                    trace_id: trace_id.clone(),
-                    request_id: request_id.clone(),
-                    actor_id: context.as_ref().and_then(|c| c.actor_id.clone()),
-                    work_item_id: context.as_ref().and_then(|c| c.work_item_id.clone()),
-                    client_ip: None,
-                    server_id: Some(server),
-                    capability_id: Some(step.capability_id.clone()),
-                    resource_uri: None,
-                    sanitized_args: Some(sanitized_args),
-                    sanitized_response: Some(sanitized_res),
-                    execution_latency_us: Some(step_start.elapsed().as_micros() as u64),
-                    status: crate::audit::AuditEventStatus::Success,
-                    error_code: None,
-                    error_message: None,
-                    operator_id: None,
-                    approval_ticket_id: None,
-                    idempotency_key: None,
-                    is_replay: Some(false),
-                });
+                Err(failure) => Err(failure),
+            };
+            let (step_ok, data, error, stop) = match outcome {
+                Ok(value) => {
+                    outputs.insert(step.id.clone(), value.clone());
+                    (true, Some(value), None, false)
+                }
+                Err(failure) => {
+                    ok = false;
+                    let (error, stop) = self.handle_step_failure(failure, &step, auto_rollback);
+                    (false, None, error, stop)
+                }
+            };
+            results.push(BatchStepResult {
+                id: step.id,
+                capability_id: step.capability_id,
+                ok: step_ok,
+                data,
+                error,
+                duration_us: start.elapsed().as_micros() as u64,
+            });
+            if stop {
+                break;
+            }
+        }
+        (ok, results)
+    }
 
-                step_outputs.insert(step.id.clone(), val.clone());
-                results.push(BatchStepResult {
-                    id: step.id.clone(),
-                    capability_id: step.capability_id.clone(),
-                    ok: true,
-                    data: Some(val),
-                    error: None,
-                    duration_us: step_start.elapsed().as_micros() as u64,
-                });
+    fn handle_step_failure(
+        &self,
+        failure: StepFailure,
+        step: &BatchStep,
+        auto_rollback: bool,
+    ) -> (Option<String>, bool) {
+        match failure {
+            StepFailure::Regular(message) => {
+                (Some(message), auto_rollback || !step.continue_on_error)
             }
-            Ok(Err(UpstreamCallError::Timeout)) => {
-                state.circuit_breakers.record_failure(&server).await;
-                results.push(BatchStepResult {
-                    id: step.id.clone(),
-                    capability_id: step.capability_id.clone(),
-                    ok: false,
-                    data: None,
-                    error: Some("Tool execution timed out".to_string()),
-                    duration_us: step_start.elapsed().as_micros() as u64,
-                });
-                overall_ok = false;
-                if auto_rollback_on_failure || !step.continue_on_error {
-                    break;
-                }
-            }
-            Ok(Err(UpstreamCallError::Upstream(err))) => {
-                state.circuit_breakers.record_failure(&server).await;
-                results.push(BatchStepResult {
-                    id: step.id.clone(),
-                    capability_id: step.capability_id.clone(),
-                    ok: false,
-                    data: None,
-                    error: Some(err),
-                    duration_us: step_start.elapsed().as_micros() as u64,
-                });
-                overall_ok = false;
-                if auto_rollback_on_failure || !step.continue_on_error {
-                    break;
-                }
-            }
-            Err(_) => {
-                state.circuit_breakers.record_failure(&server).await;
-                results.push(BatchStepResult {
-                    id: step.id.clone(),
-                    capability_id: step.capability_id.clone(),
-                    ok: false,
-                    data: None,
-                    error: Some("Daemon actor task died".to_string()),
-                    duration_us: step_start.elapsed().as_micros() as u64,
-                });
-                overall_ok = false;
-                if auto_rollback_on_failure || !step.continue_on_error {
-                    break;
-                }
-            }
+            // A held terminal failure follows the existing hold continuation rule.
+            StepFailure::Held(message) => (
+                message,
+                self.scope.cancellation_token.is_cancelled() || !step.continue_on_error,
+            ),
+            StepFailure::Stop(message) => (Some(message), true),
         }
     }
 
-    let rollback_results = if auto_rollback_on_failure && !overall_ok {
+    fn check_budget(&self) -> Result<(), StepFailure> {
+        if self.scope.cancellation_token.is_cancelled() {
+            return Err(StepFailure::Stop(
+                "Batch execution was cancelled".to_string(),
+            ));
+        }
+        if self.budget_expired() {
+            return Err(StepFailure::Stop(format!(
+                "Batch execution timed out after {}ms budget",
+                self.timeout_ms
+            )));
+        }
+        Ok(())
+    }
+
+    fn budget_expired(&self) -> bool {
+        self.start.elapsed().as_millis() as u64 >= self.timeout_ms
+    }
+
+    fn remaining_budget(&self) -> Duration {
+        Duration::from_millis(
+            self.timeout_ms
+                .saturating_sub(self.start.elapsed().as_millis() as u64),
+        )
+    }
+
+    fn approval_expiry_message(&self) -> &'static str {
+        if self.scope.cancellation_token.is_cancelled() {
+            "Batch execution was cancelled while waiting for HITL approval"
+        } else if self.budget_expired() {
+            "Batch execution budget expired while waiting for HITL approval"
+        } else {
+            "HITL approval expired"
+        }
+    }
+
+    async fn rollback(&self) -> Vec<crate::undo::RollbackResult> {
         crate::undo::unwind_batch_fiber(
-            state,
-            tenant_id,
-            &batch_fiber_id,
+            self.state,
+            self.scope.tenant_id,
+            self.fiber_id,
             crate::undo::FiberExecutionScope {
-                policy,
-                profile: prof_ctx,
-                context: context.as_ref(),
-                authorization_expires_at_epoch_secs,
-                trace_id: &trace_id,
+                policy: self.scope.policy,
+                profile: self.scope.profile,
+                context: self.context,
+                authorization_expires_at_epoch_secs: self.scope.authorization_expires_at_epoch_secs,
+                trace_id: self.trace_id,
                 operator_id: None,
                 force_expired_reason: None,
             },
         )
         .await
-    } else {
-        Vec::new()
-    };
-    BatchCallResponse {
-        ok: overall_ok,
-        request_id,
-        trace_id,
-        results,
-        total_duration_us: start_all.elapsed().as_micros() as u64,
-        rollback_results,
+    }
+}
+
+enum StepFailure {
+    Regular(String),
+    Held(Option<String>),
+    Stop(String),
+}
+
+struct StepTarget {
+    server: String,
+    tool: String,
+    reversibility: Option<ReversibilityConfig>,
+}
+
+struct BatchStepExecution<'a, 'batch> {
+    batch: &'a BatchExecution<'batch>,
+    step: &'a BatchStep,
+    start: Instant,
+    idempotency_key: Option<String>,
+}
+
+impl BatchStepExecution<'_, '_> {
+    async fn run(&self, outputs: &HashMap<String, Value>) -> Result<Value, StepFailure> {
+        let mut args = interpolate_step_references(&self.step.args, outputs);
+        let target = self.resolve_target().await.map_err(StepFailure::Regular)?;
+        let approved = self
+            .apply_approval(&target, &mut args)
+            .await
+            .map_err(StepFailure::Regular)?;
+        self.batch
+            .state
+            .circuit_breakers
+            .check_permission(&target.server)
+            .await
+            .map_err(|error| {
+                StepFailure::Regular(format!(
+                    "Circuit open for server '{}': {error}",
+                    target.server
+                ))
+            })?;
+
+        if let Some(contract) = target
+            .reversibility
+            .as_ref()
+            .filter(|contract| contract.class == ReversibilityClass::Delayable)
+        {
+            let task = self
+                .accept_emission(&target, &args, contract, approved)
+                .await
+                .map_err(StepFailure::Regular)?;
+            let value = self.wait_for_emission(&task.task_id).await?;
+            self.batch
+                .state
+                .circuit_breakers
+                .record_success(&target.server)
+                .await;
+            self.audit_success(&target.server, args, &value, Some(&task.task_id));
+            return Ok(value);
+        }
+
+        let value = self
+            .call_and_register_inverse(&target, &args)
+            .await
+            .map_err(StepFailure::Regular)?;
+        self.audit_success(&target.server, args, &value, None);
+        Ok(value)
+    }
+
+    async fn resolve_target(&self) -> Result<StepTarget, String> {
+        let capability = &self.step.capability_id;
+        if !self.batch.scope.policy.allows(capability) {
+            return Err(format!("Capability '{capability}' blocked by policy"));
+        }
+        let capabilities = self.batch.state.capabilities.read().await;
+        let meta = capabilities
+            .get(capability)
+            .ok_or_else(|| format!("Capability '{capability}' not found"))?;
+        if !self.batch.scope.profile.is_server_allowed(&meta.server) {
+            return Err(format!(
+                "Capability '{capability}' belongs to server '{}' which is not in active profile",
+                meta.server
+            ));
+        }
+        Ok(StepTarget {
+            server: meta.server.clone(),
+            tool: meta.tool.clone(),
+            reversibility: meta.reversibility.clone(),
+        })
+    }
+
+    async fn apply_approval(&self, target: &StepTarget, args: &mut Value) -> Result<bool, String> {
+        let compensable = target
+            .reversibility
+            .as_ref()
+            .filter(|contract| contract.class == ReversibilityClass::Compensable);
+        let reserved = match compensable {
+            Some(contract) => self.reserve_compensable(contract, false).await?,
+            None => true,
+        };
+        if reserved
+            && !self
+                .batch
+                .scope
+                .policy
+                .requires_approval(&self.step.capability_id)
+        {
+            return Ok(false);
+        }
+
+        if let Some(modified_args) = self.request_approval(&target.server, args).await? {
+            *args = modified_args;
+        }
+        if let Some(contract) = compensable.filter(|_| !reserved) {
+            self.reserve_compensable(contract, true).await?;
+        }
+        Ok(true)
+    }
+
+    fn require_undo_ledger(&self) -> Result<(), String> {
+        self.batch
+            .state
+            .undo_ledger
+            .as_ref()
+            .map(|_| ())
+            .ok_or_else(|| "Persistent undo storage is unavailable".to_string())
+    }
+
+    async fn reserve_compensable(
+        &self,
+        contract: &ReversibilityConfig,
+        approved_over_limit: bool,
+    ) -> Result<bool, String> {
+        self.require_undo_ledger()?;
+        let batch = self.batch;
+        crate::engine::undo::reserve_compensable(
+            batch.state,
+            contract,
+            &self.step.capability_id,
+            batch.scope.tenant_id,
+            batch.scope.profile.profile_id.as_deref(),
+            self.idempotency_key.as_deref(),
+            approved_over_limit,
+        )
+        .await
+        .map_err(|error| error.to_string())
+    }
+
+    async fn request_approval(&self, server: &str, args: &Value) -> Result<Option<Value>, String> {
+        let batch = self.batch;
+        let policy = batch.scope.policy;
+        let request = crate::approvals::CreateApprovalRequest {
+            capability_id: self.step.capability_id.clone(),
+            server_id: server.to_owned(),
+            args: args.clone(),
+            sanitized_args: crate::http_v1::helpers::redact_value(
+                args.clone(),
+                &policy.redact_keys,
+            ),
+            request_id: batch.request_id.map(str::to_owned),
+            context: batch.context.cloned(),
+            timeout_secs: policy.approval_timeout_secs,
+            webhook: policy.webhook.as_ref(),
+        };
+        let (_, receiver, event) = batch
+            .state
+            .approval_registry
+            .create_audited_approval(request, batch.trace_id.to_owned(), self.start)
+            .await;
+        batch.state.audit_handle.send(event);
+
+        let resolution = tokio::select! {
+            _ = batch.scope.cancellation_token.cancelled() => ApprovalResolution::Expired,
+            result = tokio::time::timeout(batch.remaining_budget(), receiver) => {
+                match result {
+                    Ok(Ok(resolution)) => resolution,
+                    _ => ApprovalResolution::Expired,
+                }
+            }
+        };
+        match resolution {
+            ApprovalResolution::Approved { modified_args, .. } => Ok(modified_args),
+            ApprovalResolution::Rejected { reason, operator } => Err(format!(
+                "HITL approval rejected by operator '{}': {}",
+                operator,
+                reason.unwrap_or_else(|| "No reason provided".to_string())
+            )),
+            ApprovalResolution::Expired => Err(batch.approval_expiry_message().to_string()),
+        }
+    }
+
+    async fn accept_emission(
+        &self,
+        target: &StepTarget,
+        args: &Value,
+        contract: &ReversibilityConfig,
+        approved: bool,
+    ) -> Result<TaskRecord, String> {
+        let batch = self.batch;
+        let scope = &batch.scope;
+        let hold_secs = crate::emissions::effective_hold_window_secs(
+            contract,
+            scope
+                .profile
+                .profile_policy
+                .as_ref()
+                .and_then(|policy| policy.hold_window_secs),
+            batch.state.policy.read().await.hold_window_secs,
+        )
+        .unwrap_or(30);
+        let release_at_ms =
+            crate::emissions::release_deadline_ms(hold_secs).map_err(|error| error.to_string())?;
+        let emission = EmissionRecord {
+            idempotency_claim: None,
+            phase: EmissionPhase::PendingEmission,
+            release_at_ms,
+            cancellable: true,
+            tool_name: target.tool.clone(),
+            input_responses: None,
+            request_state: None,
+            profile_id: scope.profile.profile_id.clone(),
+            tenant_id: scope.tenant_id.to_owned(),
+            role: scope.role.to_owned(),
+            authorization_expires_at_epoch_secs: scope.authorization_expires_at_epoch_secs,
+            approval_completed: approved,
+            batch_id: batch.request_id.map(str::to_owned),
+            step_id: Some(self.step.id.clone()),
+        };
+        batch
+            .state
+            .hold_coordinator
+            .accept(
+                batch.state,
+                CreateTaskParams {
+                    capability_id: self.step.capability_id.clone(),
+                    server_id: target.server.clone(),
+                    args: args.clone(),
+                    request_id: batch.request_id.map(str::to_owned),
+                    context: batch.context.cloned(),
+                    idempotency_key: self.idempotency_key.clone(),
+                    initial_status: TaskStatus::Working,
+                    status_message: Some(
+                        "Waiting for the batch emission release deadline".to_string(),
+                    ),
+                    input_requests: None,
+                    ttl_ms: None,
+                    poll_interval_ms: Some(500),
+                },
+                emission,
+            )
+            .await
+            .map_err(|error| format!("Could not persist held emission: {error}"))
+    }
+
+    async fn wait_for_emission(&self, task_id: &str) -> Result<Value, StepFailure> {
+        let batch = self.batch;
+        let terminal = tokio::select! {
+            _ = batch.scope.cancellation_token.cancelled() => None,
+            result = batch.state.hold_coordinator.wait_for_terminal(
+                batch.state, task_id, batch.remaining_budget(),
+            ) => result,
+        };
+        let Some(terminal) = terminal else {
+            let cancelled = self
+                .cancel_emission(task_id, "Batch execution cancelled")
+                .await;
+            let message = if cancelled {
+                "Batch cancelled; held emission was prevented from dispatching"
+            } else {
+                "Batch cancelled after dispatch began; emission outcome may be pending"
+            };
+            return Err(StepFailure::Stop(message.to_string()));
+        };
+        match terminal.status {
+            TaskStatus::Completed => Ok(terminal.result.unwrap_or(Value::Null)),
+            TaskStatus::Failed | TaskStatus::Cancelled => {
+                Err(StepFailure::Held(terminal.status_message))
+            }
+            _ => {
+                let cancelled = self
+                    .cancel_emission(task_id, "Batch execution budget expired")
+                    .await;
+                let message = if cancelled {
+                    "Batch budget expired; held emission was cancelled before dispatch"
+                } else {
+                    "Batch budget expired after dispatch began; emission outcome may be pending"
+                };
+                Err(StepFailure::Held(Some(message.to_string())))
+            }
+        }
+    }
+
+    async fn cancel_emission(&self, task_id: &str, reason: &str) -> bool {
+        let state = self.batch.state;
+        matches!(
+            state
+                .hold_coordinator
+                .cancel(state, task_id, Some(reason.to_string()))
+                .await,
+            Ok(EmissionCancelResult::Cancelled | EmissionCancelResult::AlreadyCancelled)
+        )
+    }
+
+    async fn capture_snapshot(
+        &self,
+        contract: Option<&ReversibilityConfig>,
+        args: &Value,
+    ) -> Result<(Value, Option<String>), String> {
+        let Some(contract) = contract else {
+            return Ok((Value::Null, None));
+        };
+        if matches!(
+            contract.class,
+            ReversibilityClass::Reversible | ReversibilityClass::Compensable
+        ) {
+            self.require_undo_ledger()?;
+        }
+        let Some(snapshot) = &contract.pre_snapshot else {
+            return Ok((Value::Null, None));
+        };
+        let batch = self.batch;
+        crate::engine::undo::capture_pre_snapshot(
+            batch.state,
+            snapshot,
+            args,
+            batch.scope.profile,
+            batch.scope.policy,
+        )
+        .await
+        .map_err(|error| format!("Pre-snapshot failed: {error}"))
+    }
+
+    async fn call_and_register_inverse(
+        &self,
+        target: &StepTarget,
+        args: &Value,
+    ) -> Result<Value, String> {
+        let batch = self.batch;
+        let contract = target.reversibility.as_ref();
+        let (snapshot, snapshot_hash) = self.capture_snapshot(contract, args).await?;
+        let value = self.call_upstream(target, args).await?;
+        if let Some(contract) = contract {
+            let fallback_context = crate::context::RequestContext::default();
+            crate::engine::undo::register_inverse(
+                batch.state,
+                contract,
+                crate::engine::undo::ForwardCall {
+                    capability: &self.step.capability_id,
+                    args,
+                    result: &value,
+                    snapshot: &snapshot,
+                    snapshot_hash,
+                    context: batch.context.unwrap_or(&fallback_context),
+                    batch_id: Some(batch.fiber_id),
+                    tenant_id: batch.scope.tenant_id,
+                    profile_id: batch.scope.profile.profile_id.as_deref(),
+                },
+                batch.scope.profile,
+                batch.scope.policy,
+            )
+            .await
+            .map_err(|error| {
+                format!("Forward call succeeded but inverse registration failed: {error}")
+            })?;
+        }
+        Ok(value)
+    }
+
+    async fn call_upstream(&self, target: &StepTarget, args: &Value) -> Result<Value, String> {
+        let state = self.batch.state;
+        let result = send_step_call(state, target, args).await;
+        if result.is_ok() {
+            state.circuit_breakers.record_success(&target.server).await;
+        } else {
+            state.circuit_breakers.record_failure(&target.server).await;
+        }
+        result
+    }
+
+    fn audit_success(&self, server: &str, args: Value, result: &Value, held_task_id: Option<&str>) {
+        let batch = self.batch;
+        let redact_keys = &batch.scope.policy.redact_keys;
+        let sanitized_response = crate::http_v1::helpers::redact_value(result.clone(), redact_keys);
+        let (sanitized_response, idempotency_key) = match held_task_id {
+            Some(task_id) => (
+                serde_json::json!({"taskId": task_id, "result": sanitized_response}),
+                self.idempotency_key.clone(),
+            ),
+            None => (sanitized_response, None),
+        };
+        batch.state.audit_handle.send(crate::audit::RawAuditEvent {
+            event_type: crate::audit::AuditEventType::ToolExecution,
+            trace_id: batch.trace_id.to_owned(),
+            request_id: batch.request_id.map(str::to_owned),
+            actor_id: batch.context.and_then(|context| context.actor_id.clone()),
+            work_item_id: batch
+                .context
+                .and_then(|context| context.work_item_id.clone()),
+            client_ip: None,
+            server_id: Some(server.to_owned()),
+            capability_id: Some(self.step.capability_id.clone()),
+            resource_uri: None,
+            sanitized_args: Some(crate::http_v1::helpers::redact_value(args, redact_keys)),
+            sanitized_response: Some(sanitized_response),
+            execution_latency_us: Some(self.start.elapsed().as_micros() as u64),
+            status: crate::audit::AuditEventStatus::Success,
+            error_code: None,
+            error_message: None,
+            operator_id: None,
+            approval_ticket_id: None,
+            idempotency_key,
+            is_replay: Some(false),
+        });
+    }
+}
+
+async fn send_step_call(
+    state: &AppState,
+    target: &StepTarget,
+    args: &Value,
+) -> Result<Value, String> {
+    let sender = state
+        .servers
+        .read()
+        .await
+        .get(&target.server)
+        .cloned()
+        .ok_or_else(|| format!("Server '{}' unreachable", target.server))?;
+    let (reply, receiver) = oneshot::channel();
+    sender
+        .send(ServerMsg::CallTool {
+            name: target.tool.clone(),
+            params: args.clone(),
+            input_responses: None,
+            request_state: None,
+            reply,
+        })
+        .await
+        .map_err(|_| format!("Server '{}' mailbox closed", target.server))?;
+    match receiver.await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(UpstreamCallError::Timeout)) => Err("Tool execution timed out".to_string()),
+        Ok(Err(UpstreamCallError::Upstream(error))) => Err(error),
+        Err(_) => Err("Daemon actor task died".to_string()),
     }
 }
 
