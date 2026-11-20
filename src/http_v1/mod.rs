@@ -33,6 +33,7 @@ pub use catalog::{
     handle_resource_updates, handle_respond_sampling_request, handle_sampling_create_message,
     handle_search_capabilities,
 };
+pub(crate) use config_api::{handle_approve_tool_pin, handle_list_tool_pins};
 pub use config_api::{
     handle_attach_client, handle_delete_profile, handle_delete_secret, handle_delete_server,
     handle_detach_client, handle_get_config, handle_get_ecosystem_sources, handle_import_config,

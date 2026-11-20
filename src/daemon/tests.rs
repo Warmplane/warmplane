@@ -55,6 +55,7 @@ async fn test_initialize_state_degraded_boot() {
             auth: None,
             protocol_version: None,
             allow_stateless: Some(false),
+            require_tool_pins: false,
             headers: HashMap::new(),
             resilience: None,
         },

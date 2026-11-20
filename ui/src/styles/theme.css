@@ -426,3 +426,40 @@ select option {
   width: 100%;
   margin-top: 4px;
 }
+
+.tool-pin-auth {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.tool-pin-auth .form-group { margin: 0; min-width: min(18rem, 100%); }
+.tool-pin-feedback { color: var(--text-muted); font-size: 12px; }
+.tool-pin-review { border-top: 1px solid var(--border-subtle); padding: 10px 0; }
+.tool-pin-review summary { cursor: pointer; }
+.tool-pin-review summary code { overflow-wrap: anywhere; }
+.tool-pin-status { margin-inline-start: 12px; font-size: 12px; color: var(--text-muted); }
+.tool-pin-status[data-status="matching"] { color: var(--green-400); }
+.tool-pin-status[data-status="missing"],
+.tool-pin-status[data-status="changed"] { color: var(--amber-400); }
+
+.tool-pin-comparison {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr));
+  gap: 12px;
+  margin-block: 12px;
+}
+
+.tool-pin-definition { min-width: 0; font-size: 12px; }
+.tool-pin-definition > code { display: block; margin: 4px 0; overflow-wrap: anywhere; color: var(--text-muted); }
+.tool-pin-definition pre {
+  max-height: 22rem;
+  overflow: auto;
+  padding: 12px;
+  color: var(--text-main);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}

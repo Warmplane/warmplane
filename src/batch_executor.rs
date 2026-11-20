@@ -415,6 +415,7 @@ enum StepFailure {
 struct StepTarget {
     server: String,
     tool: String,
+    tool_definition: Option<String>,
     reversibility: Option<ReversibilityConfig>,
 }
 
@@ -518,6 +519,12 @@ impl BatchStepExecution<'_, '_> {
         Ok(StepTarget {
             server: meta.server.clone(),
             tool: meta.tool.clone(),
+            tool_definition: self
+                .batch
+                .state
+                .tool_pins
+                .binding(&meta.server, &meta.tool)
+                .map_err(|denied| crate::WarmplaneError::from(denied).message)?,
             reversibility: meta.reversibility.clone(),
         })
     }
@@ -642,6 +649,7 @@ impl BatchStepExecution<'_, '_> {
             release_at_ms,
             cancellable: true,
             tool_name: target.tool.clone(),
+            tool_definition: target.tool_definition.clone(),
             input_responses: None,
             request_state: None,
             profile_id: scope.profile.profile_id.clone(),
@@ -864,6 +872,7 @@ async fn send_step_call(
     sender
         .send(ServerMsg::CallTool {
             name: target.tool.clone(),
+            tool_definition: target.tool_definition.clone(),
             params: args.clone(),
             input_responses: None,
             request_state: None,
@@ -875,6 +884,9 @@ async fn send_step_call(
         Ok(Ok(value)) => Ok(value),
         Ok(Err(UpstreamCallError::Timeout)) => Err("Tool execution timed out".to_string()),
         Ok(Err(UpstreamCallError::Upstream(error))) => Err(state.safe_upstream_error(error).await),
+        Ok(Err(UpstreamCallError::ToolDefinitionChanged)) => {
+            Err(crate::WarmplaneError::from(crate::tool_pins::PinDenied).message)
+        }
         Err(_) => Err("Daemon actor task died".to_string()),
     }
 }

@@ -10,6 +10,7 @@ import { renderUndoFeed } from './components/undo';
 import { renderApprovals } from './components/approvals';
 import { renderAudit } from './components/audit';
 import { renderPolicy } from './components/policy';
+import { mountToolPinReview } from './components/tool-pins';
 import { getSavedAlias, renderAliasList, renderAliases } from './components/aliases';
 import type { AliasKind, AliasTestStatus } from './components/aliases';
 import { bindCapabilityAutocomplete, closeCapabilitySuggestions } from './components/capability-autocomplete';
@@ -492,9 +493,14 @@ class WarmplaneApp {
       case 'audit':
         mainEl.innerHTML = renderAudit();
         break;
-      case 'policy':
+      case 'policy': {
+        const previousPinPanel = mainEl.querySelector<HTMLElement>('#tool-pins-panel');
         mainEl.innerHTML = renderPolicy();
+        const pinPanel = mainEl.querySelector<HTMLElement>('#tool-pins-panel');
+        if (pinPanel && previousPinPanel) pinPanel.replaceWith(previousPinPanel);
+        else if (pinPanel) mountToolPinReview(pinPanel);
         break;
+      }
       case 'secrets':
         mainEl.innerHTML = renderSecrets();
         break;

@@ -91,6 +91,10 @@ pub(crate) async fn read_checked_state(
     let (reply_tx, reply_rx) = oneshot::channel();
     upstream
         .send(ServerMsg::CallTool {
+            tool_definition: state
+                .tool_pins
+                .binding(&server_id, &tool_name)
+                .map_err(|denied| anyhow::anyhow!(crate::WarmplaneError::from(denied).message))?,
             name: tool_name,
             params: args,
             input_responses: None,
@@ -110,6 +114,9 @@ pub(crate) async fn read_checked_state(
         Err(UpstreamCallError::Upstream(message)) => {
             let message = state.safe_upstream_error(message).await;
             bail!("state-check failed: {message}");
+        }
+        Err(UpstreamCallError::ToolDefinitionChanged) => {
+            bail!("State-check tool definition changed before dispatch")
         }
     };
 

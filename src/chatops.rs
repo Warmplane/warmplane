@@ -18,6 +18,52 @@ use subtle::ConstantTimeEq;
 
 type HmacSha256 = Hmac<Sha256>;
 
+pub(crate) async fn post_signed_webhook(
+    cfg: &crate::config::WebhookConfig,
+    event: &str,
+    payload: &Value,
+    secret: &str,
+) -> anyhow::Result<()> {
+    let body = serde_json::to_vec(payload)?;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())?;
+    mac.update(format!("{timestamp}.").as_bytes());
+    mac.update(&body);
+    let signature = hex::encode(mac.finalize().into_bytes());
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    let mut request = client
+        .post(&cfg.url)
+        .header("Content-Type", "application/json")
+        .header("X-Warmplane-Timestamp", timestamp.to_string())
+        .header("X-Warmplane-Event", event)
+        .header("X-Warmplane-Signature", format!("sha256={signature}"));
+    if let Some(auth) = &cfg.auth_header {
+        request = request.header("Authorization", auth);
+    }
+    if let Some(headers) = &cfg.headers {
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+    }
+    let response = request
+        .body(body)
+        .send()
+        .await
+        .map_err(reqwest::Error::without_url)?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "webhook returned HTTP {}",
+        response.status()
+    );
+    Ok(())
+}
+
 /// Payload layout format for outbound webhooks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]

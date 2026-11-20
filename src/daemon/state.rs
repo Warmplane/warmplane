@@ -24,6 +24,7 @@ pub struct AppState {
     pub servers: SharedServers,
     /// Compact capability catalog metadata map.
     pub capabilities: SharedCapabilities,
+    pub(crate) tool_pins: Arc<crate::tool_pins::ToolPins>,
     /// Compact resource catalog metadata map.
     pub resources: SharedResources,
     /// Compact prompt catalog metadata map.
@@ -133,6 +134,7 @@ impl AppState {
 pub struct AppStateBuilder {
     servers: Option<SharedServers>,
     capabilities: Option<SharedCapabilities>,
+    tool_pins: Option<crate::tool_pins::ToolPins>,
     resources: Option<SharedResources>,
     prompts: Option<SharedPrompts>,
     tool_timeout_ms: Option<u64>,
@@ -166,6 +168,11 @@ pub struct AppStateBuilder {
 
 #[allow(dead_code)]
 impl AppStateBuilder {
+    pub(crate) fn tool_pins(mut self, tool_pins: crate::tool_pins::ToolPins) -> Self {
+        self.tool_pins = Some(tool_pins);
+        self
+    }
+
     /// Sets the RBAC engine.
     pub fn rbac_engine(mut self, engine: crate::rbac::RbacEngine) -> Self {
         self.rbac_engine = Some(engine);
@@ -434,6 +441,7 @@ impl AppStateBuilder {
         AppState {
             servers: self.servers.unwrap_or_default(),
             capabilities: self.capabilities.unwrap_or_default(),
+            tool_pins: Arc::new(self.tool_pins.unwrap_or_default()),
             resources: self.resources.unwrap_or_default(),
             prompts: self.prompts.unwrap_or_default(),
             tool_timeout_ms: self.tool_timeout_ms.unwrap_or(DEFAULT_TOOL_TIMEOUT_MS),

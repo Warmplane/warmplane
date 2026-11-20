@@ -570,6 +570,8 @@ Use `ControlPlaneHandle::call_capability` and the handle's task methods for poli
 
 Embedded hosts configure their own logging. Filter the `rmcp` tracing target in the host subscriber to keep protocol payloads out of logs before Warmplane inspects them. The standalone daemon filters that target in its telemetry setup.
 
+Use `list_tasks_for_profile` and `get_task_for_profile` to inspect tasks created in an embedded profile under result sanitization. With `requireToolPins` set on an upstream, catalog methods omit quarantined tools. `TOOL_DEFINITION_UNAPPROVED` means the tool needs a current review or the prepared revision no longer matches.
+
 `IdempotencyStore::check_or_start` and `check_or_start_with_meta` return
 `DeduplicateResult::New(claim)` when the caller owns the execution. Pass that
 claim and the key to `complete` when publishing a result or to `remove` when

@@ -240,6 +240,8 @@ To eliminate duplicate side-effect execution caused by agent retry loops, transi
 
 The optional global result policy inspects upstream results before facade shaping, ordinary storage, and batch interpolation. A stored result carries the effective policy revision. Delivery checks both current access and that revision. A withheld result preserves the known upstream execution outcome and its deduplication claim. Undo snapshots and resolved inverse arguments remain in protected operational state.
 
+Opt-in tool definition pinning binds a raw upstream tool to an operator-approved canonical digest. Mount and reconnect publish complete discovery generations, and approval requires a committed audit authorization followed by durable state replacement. Catalog views and dispatch fail closed when observation freshness expires. Prepared invocations carry the observed revision through holds and reviews.
+
 ---
 
 ## 4. Performance Profile and Micro-Benchmarks

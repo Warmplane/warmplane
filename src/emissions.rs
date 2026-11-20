@@ -387,6 +387,7 @@ impl HoldCoordinator {
         let send_result = sender
             .send(crate::daemon::ServerMsg::CallTool {
                 name: emission.tool_name.clone(),
+                tool_definition: emission.tool_definition.clone(),
                 params: record.args.clone(),
                 input_responses: emission.input_responses.clone(),
                 request_state: emission.request_state.clone(),
@@ -428,6 +429,12 @@ impl HoldCoordinator {
                     }
                     crate::daemon::UpstreamCallError::Upstream(message) => {
                         state.safe_upstream_error(message).await
+                    }
+                    crate::daemon::UpstreamCallError::ToolDefinitionChanged => {
+                        let error = crate::WarmplaneError::from(crate::tool_pins::PinDenied);
+                        self.finish_failure(&state, &record, &error.code, error.message)
+                            .await;
+                        return;
                     }
                 };
                 self.finish_failure(&state, &record, "UPSTREAM_CALL_FAILED", message)

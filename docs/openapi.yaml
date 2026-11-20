@@ -543,6 +543,55 @@ paths:
       responses:
         "200":
           description: Summary of mounted, unmounted, and updated servers
+  /v1/config/tool-pins:
+    get:
+      summary: Review upstream tool definitions and approvals as a trust administrator
+      operationId: listToolPins
+      responses:
+        "200":
+          description: Definitions from servers that require pins
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: {type: boolean}
+                  pins:
+                    type: array
+                    items: {$ref: "#/components/schemas/ToolPin"}
+        "403":
+          description: Authenticated trust administrator required
+  /v1/config/tool-pins/approve:
+    post:
+      summary: Persist approval of an exact observed upstream definition
+      operationId: approveToolPin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [server, tool, digest]
+              properties:
+                server: {type: string}
+                tool: {type: string}
+                digest: {type: string}
+      responses:
+        "200":
+          description: Current pin review state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: {type: boolean}
+                  pin: {$ref: "#/components/schemas/ToolPin"}
+        "403":
+          description: Authenticated trust administrator required
+        "409":
+          description: The observed definition changed or became unavailable
+        "503":
+          description: Audit authorization or pin persistence failed
   /v1/approvals:
     get:
       summary: List pending and resolved human approval tickets
@@ -1347,6 +1396,9 @@ components:
           example: "2026-07-28"
         allowStateless:
           type: [boolean, "null"]
+        requireToolPins:
+          type: boolean
+          default: false
         headers:
           type: object
           additionalProperties:
@@ -1355,6 +1407,25 @@ components:
           type: object
         resilience:
           $ref: "#/components/schemas/ResilienceConfig"
+    ToolPinDefinition:
+      type: object
+      properties:
+        digest: {type: string}
+        value: {type: object}
+    ToolPin:
+      type: object
+      properties:
+        server: {type: string}
+        tool: {type: [string, "null"]}
+        status: {type: string, enum: [missing, matching, changed, unavailable]}
+        current:
+          oneOf:
+            - $ref: "#/components/schemas/ToolPinDefinition"
+            - type: "null"
+        approved:
+          oneOf:
+            - $ref: "#/components/schemas/ToolPinDefinition"
+            - type: "null"
     UpsertServerRequest:
       type: object
       required: [name, server]
@@ -1743,6 +1814,7 @@ components:
                 - UPSTREAM_TIMEOUT
                 - UPSTREAM_ERROR
                 - RESULT_WITHHELD
+                - TOOL_DEFINITION_UNAPPROVED
                 - POLICY_DENIED
                 - APPROVAL_PENDING
                 - APPROVAL_TIMEOUT

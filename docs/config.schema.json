@@ -424,6 +424,7 @@
         "url": { "type": "string", "format": "uri" },
         "protocolVersion": { "type": "string" },
         "allowStateless": { "type": "boolean" },
+        "requireToolPins": { "type": "boolean", "default": false },
         "headers": {
           "type": "object",
           "additionalProperties": { "type": "string" },

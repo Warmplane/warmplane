@@ -63,6 +63,7 @@ fn hanging_server() -> ServerConfig {
         auth: None,
         protocol_version: None,
         allow_stateless: None,
+        require_tool_pins: false,
         headers: HashMap::new(),
         resilience: Some(ResilienceConfig {
             // One restart so the test settles instead of looping for 5 attempts.
@@ -78,6 +79,7 @@ async fn call_tool(
 ) -> Result<Result<Value, UpstreamCallError>, String> {
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     tx.send(ServerMsg::CallTool {
+        tool_definition: None,
         name: name.to_string(),
         params: json!({}),
         input_responses: None,
@@ -99,6 +101,7 @@ async fn ask(tx: &tokio::sync::mpsc::Sender<ServerMsg>) -> Result<(), String> {
         // The server has no working client, so a bounded upstream error is expected.
         Ok(_) | Err(UpstreamCallError::Upstream(_)) => Ok(()),
         Err(UpstreamCallError::Timeout) => Err("upstream call timed out".to_string()),
+        Err(UpstreamCallError::ToolDefinitionChanged) => Err("tool definition changed".to_string()),
     }
 }
 
@@ -274,6 +277,7 @@ async fn http_negotiates_a_legacy_session_and_enforces_response_limits() {
         command: None,
         url: Some(url),
         allow_stateless: Some(false),
+        require_tool_pins: false,
         resilience: None,
         ..hanging_server()
     };

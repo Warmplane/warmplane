@@ -31,6 +31,7 @@ pub mod storage;
 pub mod supervisor;
 pub mod tasks;
 pub mod telemetry;
+mod tool_pins;
 pub mod undo;
 pub mod vault;
 

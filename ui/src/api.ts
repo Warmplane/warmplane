@@ -316,6 +316,7 @@ export interface McpServerConfig {
   url?: string;
   protocolVersion?: string;
   allowStateless?: boolean;
+  requireToolPins?: boolean;
   resilience?: ResilienceConfig;
 }
 
@@ -336,6 +337,19 @@ export interface RolePolicyConfig {
   redactKeys?: string[];
   redact_keys?: string[];
   manageTrustControls?: boolean;
+}
+
+export interface ToolPinDefinition {
+  digest: string;
+  value: unknown;
+}
+
+export interface ToolPinReview {
+  server: string;
+  tool: string | null;
+  status: 'missing' | 'matching' | 'changed' | 'unavailable';
+  current: ToolPinDefinition | null;
+  approved: ToolPinDefinition | null;
 }
 
 export interface TokenAssignment {
@@ -470,6 +484,28 @@ export class WarmplaneClient {
 
   constructor(baseUrl: string = '') {
     this.baseUrl = baseUrl;
+  }
+
+  async listToolPins(token: string): Promise<{ pins?: ToolPinReview[]; error?: string }> {
+    return this.requestToolPins(token);
+  }
+
+  async approveToolPin(token: string, approval: { server: string; tool: string; digest: string }): Promise<{ error?: string }> {
+    return this.requestToolPins(token, approval);
+  }
+
+  private async requestToolPins(token: string, approval?: { server: string; tool: string; digest: string }): Promise<{ pins?: ToolPinReview[]; error?: string }> {
+    const headers = new Headers();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    if (approval) headers.set('Content-Type', 'application/json');
+    const response = await fetch(`${this.baseUrl}/v1/config/tool-pins${approval ? '/approve' : ''}`, {
+      method: approval ? 'POST' : 'GET',
+      headers,
+      body: approval ? JSON.stringify(approval) : undefined,
+    });
+    const payload = await response.json();
+    if (response.ok && payload.ok) return { pins: payload.pins };
+    return { error: payload.error?.message ?? payload.message ?? 'Could not load or approve tool definitions.' };
   }
 
   async getConfig(): Promise<GetConfigResponse> {

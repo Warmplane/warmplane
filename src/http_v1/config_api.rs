@@ -674,6 +674,57 @@ pub(crate) fn trust_admin_required() -> axum::response::Response {
         .into_response()
 }
 
+pub(crate) async fn handle_list_tool_pins(
+    State(state): State<AppState>,
+    admin: Option<axum::extract::Extension<TrustAdmin>>,
+) -> axum::response::Response {
+    if !admin.is_some_and(|axum::extract::Extension(TrustAdmin(admin))| admin) {
+        return trust_admin_required();
+    }
+    Json(json!({"ok": true, "pins": state.tool_pins.reviews()})).into_response()
+}
+
+pub(crate) async fn handle_approve_tool_pin(
+    State(state): State<AppState>,
+    admin: Option<axum::extract::Extension<TrustAdmin>>,
+    axum::extract::Extension(tenant): axum::extract::Extension<Option<crate::rbac::TenantContext>>,
+    Json(request): Json<crate::tool_pins::ApprovePin>,
+) -> axum::response::Response {
+    use crate::tool_pins::PinApprovalError;
+
+    if !admin.is_some_and(|axum::extract::Extension(TrustAdmin(admin))| admin) {
+        return trust_admin_required();
+    }
+    let outcome = state
+        .tool_pins
+        .approve(&state, &request, tenant.and_then(|tenant| tenant.actor_id))
+        .await;
+    state.notify_tools_changed();
+    let (status, code, message) = match outcome {
+        Ok(pin) => return Json(json!({"ok": true, "pin": pin})).into_response(),
+        Err(PinApprovalError::Stale) => (
+            StatusCode::CONFLICT,
+            "TOOL_PIN_STALE",
+            "The observed definition changed or became unavailable",
+        ),
+        Err(PinApprovalError::Audit) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "AUDIT_PERSISTENCE_FAILED",
+            "Could not authorize the approval in the audit store",
+        ),
+        Err(PinApprovalError::Storage) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "TOOL_PIN_STORAGE_FAILED",
+            "Could not durably save the approval",
+        ),
+    };
+    (
+        status,
+        Json(json!({"ok": false, "error": {"code": code, "message": message}})),
+    )
+        .into_response()
+}
+
 /// Handles POST `/v1/config/profiles` to add or update a profile constellation.
 pub async fn handle_upsert_profile(
     State(state): State<AppState>,

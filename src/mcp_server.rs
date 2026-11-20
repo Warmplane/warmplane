@@ -130,7 +130,7 @@ impl ServerHandler for FacadeMcpServer {
                 schema_object(json!({"type":"object","properties":{"undo_id":{"type":"string","description":"Explicit undo entry identifier"},"work_item_id":{"type":"string","description":"Execute the newest armed inverse for this work item"}},"anyOf":[{"required":["undo_id"]},{"required":["work_item_id"]}],"additionalProperties":false})),
             ));
         }
-        let caps_guard = self.state.capabilities.read().await;
+        let caps_guard = self.state.tool_catalog().await.items;
 
         if let Ok(config) = crate::config::load_or_default_config(&self.state.config_path) {
             for (alias_name, alias_target) in &config.capability_aliases {
@@ -143,7 +143,7 @@ impl ServerHandler for FacadeMcpServer {
                     let is_allowed = if let Some(cap_meta) = cap_meta_opt {
                         prof_ctx.is_server_allowed(&cap_meta.server)
                     } else {
-                        true
+                        !self.state.tool_pins.target_requires_pin(target_id)
                     };
 
                     if is_allowed {
@@ -508,8 +508,9 @@ impl ServerHandler for FacadeMcpServer {
             }
             TOOL_SUBSCRIPTIONS_LISTEN => {
                 let after = args.get("after").and_then(Value::as_str);
-                let (events, next_cursor) = self.state.event_store.get_events_after(after);
-                let catalog_ver = self.state.catalog_version.read().await.clone();
+                let (mut events, next_cursor) = self.state.event_store.get_events_after(after);
+                self.state.filter_tool_catalog_events(&mut events).await;
+                let catalog_ver = self.state.tool_catalog().await.version;
                 Ok(json!({
                     "ok": true,
                     "catalog_version": catalog_ver,
@@ -729,7 +730,9 @@ impl ServerHandler for FacadeMcpServer {
                 self.state.safe_upstream_error(err).await,
                 None,
             )),
-            Err(_) => Err(McpError::internal_error("Actor task died", None)),
+            Ok(Err(UpstreamCallError::ToolDefinitionChanged)) | Err(_) => {
+                Err(McpError::internal_error("Actor task died", None))
+            }
         }
     }
 
@@ -806,7 +809,9 @@ impl ServerHandler for FacadeMcpServer {
                 self.state.safe_upstream_error(err).await,
                 None,
             )),
-            Err(_) => Err(McpError::internal_error("Actor task died", None)),
+            Ok(Err(UpstreamCallError::ToolDefinitionChanged)) | Err(_) => {
+                Err(McpError::internal_error("Actor task died", None))
+            }
         }
     }
 }
@@ -1798,6 +1803,7 @@ mod tests {
                     release_at_ms: release_deadline_ms(2).unwrap(),
                     cancellable: true,
                     tool_name: "send".to_string(),
+                    tool_definition: None,
                     input_responses: None,
                     request_state: None,
                     profile_id: None,

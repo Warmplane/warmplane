@@ -792,6 +792,7 @@ async fn test_mrtr_call_capability_round_trip() {
             input_responses,
             request_state,
             reply,
+            ..
         }) = rx.recv().await
         {
             assert_eq!(name, "interactive_tool");
@@ -1801,6 +1802,7 @@ async fn test_ui_config_profiles_crud() {
             url: None,
             protocol_version: None,
             allow_stateless: None,
+            require_tool_pins: false,
             headers: HashMap::new(),
             auth: None,
             resilience: None,

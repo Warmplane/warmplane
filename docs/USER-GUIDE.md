@@ -444,6 +444,14 @@ Enabling or changing the policy withholds previously stored responses that lack 
 
 With RBAC enabled, grant `manageTrustControls: true` to an operator role and authenticate its requests to edit trust controls through REST. When RBAC is disabled, set the daemon token to manage trust controls through REST. Filesystem operators can edit local configuration directly.
 
+#### Review upstream tool definitions
+
+Set `requireToolPins: true` on an upstream in `mcpServers` and enable persistent state. In **Security Governance & Redaction**, enter a trust administrator token under **Tool definition pins**. Expand a tool, compare its observed and approved definitions, and approve the observed digest. The same approval covers aliases and native exports of that upstream tool. An outdated review returns `409 TOOL_PIN_STALE`. Load definitions again before making a new decision.
+
+Tools without a matching approval are quarantined from discovery, search, and execution. Warmplane refreshes pinned servers every 15 seconds and on supported tool-list notifications. It withholds tools if discovery fails or the observation is older than 30 seconds. The worker checks the prepared definition again immediately before dispatch. If that revision changed while the tool was held or awaiting approval, submit a new invocation after reviewing the change. Held calls from an earlier daemon process require a fresh request when their observation cannot be verified.
+
+Subscribe to `tool_pin.quarantined` in `policy.webhook.events` and set `secret` or `secretEnv` to receive signed notices with the server ID and quarantine reason.
+
 ---
 
 ### 4.4 WORM Audit Trail and SIEM Export Configuration

@@ -38,8 +38,9 @@ pub async fn handle_catalog_events(
     State(state): State<AppState>,
     Query(query): Query<CatalogEventsQuery>,
 ) -> impl IntoResponse {
-    let (events, next_cursor) = state.event_store.get_events_after(query.after.as_deref());
-    let catalog_ver = state.catalog_version.read().await.clone();
+    let (mut events, next_cursor) = state.event_store.get_events_after(query.after.as_deref());
+    state.filter_tool_catalog_events(&mut events).await;
+    let catalog_ver = state.tool_catalog().await.version;
     (
         make_etag_header(&catalog_ver),
         Json(CatalogEventsResponse {
@@ -82,7 +83,7 @@ pub async fn handle_search_capabilities(
         .modes(payload.modes)
         .build();
 
-    let caps = state.capabilities.read().await;
+    let catalog = state.tool_catalog().await;
     let base_pol = state.policy.read().await;
     let pol = req_ext
         .0
@@ -90,14 +91,13 @@ pub async fn handle_search_capabilities(
         .map(|ctx| ctx.effective_policy.clone())
         .unwrap_or_else(|| base_pol.clone())
         .merge_with_profile(prof_ctx.profile_policy.as_ref());
-    let base_ver = state.catalog_version.read().await.clone();
     let catalog_ver =
-        crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
+        crate::http_v1::helpers::get_profile_scoped_catalog_version(&catalog.version, &prof_ctx);
     let limit = payload.limit.clamp(1, 100);
 
     let results = state
         .search_engine
-        .search(query_str, limit, &filter, &caps, &pol);
+        .search(query_str, limit, &filter, &catalog.items, &pol);
 
     (
         make_etag_header(&catalog_ver),
@@ -411,9 +411,9 @@ pub async fn handle_list_capabilities(
         .unwrap_or_else(|| base_pol.clone())
         .merge_with_profile(prof_ctx.profile_policy.as_ref());
 
-    let base_ver = state.catalog_version.read().await.clone();
+    let catalog = state.tool_catalog().await;
     let catalog_ver =
-        crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
+        crate::http_v1::helpers::get_profile_scoped_catalog_version(&catalog.version, &prof_ctx);
 
     if check_if_none_match(&headers, &catalog_ver) {
         state.total_etag_hits.fetch_add(1, Ordering::Relaxed);
@@ -425,7 +425,7 @@ pub async fn handle_list_capabilities(
             .into_response();
     }
 
-    let caps_guard = state.capabilities.read().await;
+    let caps_guard = catalog.items;
     let total_unfiltered = caps_guard.len();
     let mut capabilities = caps_guard
         .iter()
@@ -504,9 +504,9 @@ pub async fn handle_describe_capability(
             .into_response();
     }
 
-    let base_ver = state.catalog_version.read().await.clone();
+    let catalog = state.tool_catalog().await;
     let catalog_ver =
-        crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
+        crate::http_v1::helpers::get_profile_scoped_catalog_version(&catalog.version, &prof_ctx);
 
     if check_if_none_match(&headers, &catalog_ver) {
         return (
@@ -517,7 +517,7 @@ pub async fn handle_describe_capability(
             .into_response();
     }
 
-    let caps_guard = state.capabilities.read().await;
+    let caps_guard = catalog.items;
     match caps_guard.get(&id) {
         Some(CapabilityMeta {
             server,
@@ -1038,7 +1038,7 @@ async fn dispatch_catalog_call(
             )),
         )
             .into_response(),
-        Err(_) => (
+        Ok(Err(UpstreamCallError::ToolDefinitionChanged)) | Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(error_envelope(
                 trace_id,

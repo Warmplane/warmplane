@@ -450,6 +450,13 @@ pub struct ServerConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub allow_stateless: Option<bool>,
+    /// Requires an operator-approved definition for every tool from this server.
+    #[serde(
+        default,
+        rename = "requireToolPins",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub require_tool_pins: bool,
     /// Additional static HTTP headers.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub headers: HashMap<String, String>,
@@ -1102,6 +1109,15 @@ fn validate_action_webhook(
     webhook: &WebhookConfig,
     rbac: Option<&crate::rbac::RbacConfig>,
 ) -> Result<()> {
+    anyhow::ensure!(
+        !webhook
+            .events
+            .iter()
+            .any(|event| event == "tool_pin.quarantined")
+            || webhook.secret.is_some()
+            || webhook.secret_env.is_some(),
+        "policy.webhook.secret or secretEnv is required when subscribing to tool_pin.quarantined"
+    );
     for event in ["undo.action_available", "emission.held"] {
         if webhook.events.iter().any(|configured| configured == event) {
             validate_webhook_subscription(event, webhook, rbac)?;
@@ -1610,6 +1626,7 @@ mod tests {
             url: None,
             protocol_version: None,
             allow_stateless: None,
+            require_tool_pins: false,
             headers: HashMap::new(),
             auth: None,
             resilience: None,

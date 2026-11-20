@@ -139,6 +139,7 @@ export function renderPolicy(): string {
     ${constellationBoundaryHtml}
 
     <div class="bento-grid">
+      ${!isProfileScope ? '<section id="tool-pins-panel" class="bento-card col-12"></section>' : ''}
       <!-- Allow Rules -->
       <div class="bento-card col-4">
         <div class="stat-header">

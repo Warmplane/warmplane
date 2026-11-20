@@ -67,6 +67,8 @@ The Control Deck Action Feed provides Previous/Next navigation through undo hist
 ## 4. Reference Map
 
 `policy.resultSanitization` applies globally to upstream results across REST, MCP, and the embedded handle. Use `fieldNames`, `patterns`, and exact `opaqueExceptions` in local configuration. `RESULT_WITHHELD` with a completed upstream execution state means the upstream returned while its result was withheld. Keep the original idempotency key. The daemon requires authenticated `manageTrustControls` permission under RBAC or the configured daemon token for REST changes.
+
+Set `mcpServers.<server>.requireToolPins` with persistent state to require approval of upstream tool definitions. Use **Tool definition pins** in Control Deck or authenticate to `GET /v1/config/tool-pins` and `POST /v1/config/tool-pins/approve` with `server`, `tool`, and the current `digest`. A stale observation returns `409 TOOL_PIN_STALE`. When a held tool's definition changes, review the new definition and submit a new invocation.
 - [Setup & Install Guide](./references/setup_and_installation.md): Binaries, package managers, and verification.
 - [MCP Stdio Usage](./references/mcp_stdio_usage.md): 1-Click client config for 17 IDEs/agents and stdio tools.
 - [HTTP REST API](./references/http_rest_api.md): Complete `/v1/...` endpoint reference.

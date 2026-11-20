@@ -80,6 +80,7 @@ pub async fn handle_call_capability(
     let CallTarget {
         server_id,
         tool_name,
+        tool_definition,
         reversibility,
     } = match preflight.resolve_target().await {
         Ok(target) => target,
@@ -309,6 +310,7 @@ pub async fn handle_call_capability(
                     EmissionOrigin {
                         profile: &profile_clone,
                         tool_name: &tool_name_clone,
+                        tool_definition: tool_definition.as_deref(),
                         input_responses: input_responses_clone.as_ref(),
                         request_state: request_state_clone.as_deref(),
                         tenant_id: &tenant_id_clone,
@@ -384,6 +386,7 @@ pub async fn handle_call_capability(
                 if tx
                     .send(ServerMsg::CallTool {
                         name: tool_name_clone,
+                        tool_definition,
                         params: worker_args.clone(),
                         input_responses: input_responses_clone,
                         request_state: request_state_clone,
@@ -529,18 +532,14 @@ pub async fn handle_call_capability(
                             .release_execution(idempotency_key_clone.as_deref(), idempotency_claim)
                             .await;
                     }
-                    Ok(Err(UpstreamCallError::Upstream(err))) => {
-                        let err = state_clone.safe_upstream_error(err).await;
-                        state_clone
-                            .circuit_breakers
-                            .record_failure(&server_id_clone)
-                            .await;
+                    Ok(Err(failure)) => {
+                        let (error, _) = state_clone.tool_error(&server_id_clone, failure).await;
                         let _ = state_clone
                             .task_registry
                             .fail_task(
                                 &task_id_clone,
-                                serde_json::json!({"code": "UPSTREAM_ERROR", "message": &err}),
-                                Some(err),
+                                serde_json::json!({"code": error.code, "message": &error.message}),
+                                Some(error.message),
                             )
                             .await;
                         state_clone
@@ -780,6 +779,7 @@ pub async fn handle_call_capability(
             origin: EmissionOrigin {
                 profile: &prof_ctx,
                 tool_name: &tool_name,
+                tool_definition: tool_definition.as_deref(),
                 input_responses: payload.input_responses.as_ref(),
                 request_state: payload.request_state.as_deref(),
                 tenant_id: &tenant_id,
@@ -915,6 +915,7 @@ pub async fn handle_call_capability(
     if tx
         .send(ServerMsg::CallTool {
             name: tool_name,
+            tool_definition,
             params: effective_args.clone(),
             input_responses: payload.input_responses,
             request_state: payload.request_state,
@@ -1135,9 +1136,13 @@ pub async fn handle_call_capability(
             )
                 .into_response()
         }
-        Ok(Err(UpstreamCallError::Upstream(err))) => {
-            let err = state.safe_upstream_error(err).await;
-            state.circuit_breakers.record_failure(&server_id).await;
+        Ok(Err(failure)) => {
+            let (error, execution_state) = state.tool_error(&server_id, failure).await;
+            let (status, code) = if execution_state == "not_started" {
+                (StatusCode::FORBIDDEN, crate::tool_pins::PinDenied::CODE)
+            } else {
+                (StatusCode::BAD_GATEWAY, "UPSTREAM_ERROR")
+            };
             let elapsed_us = start_time.elapsed().as_micros() as u64;
             state
                 .idempotency_store
@@ -1146,18 +1151,18 @@ pub async fn handle_call_capability(
             state.audit_handle.send(audit.event(
                 redacted_input,
                 elapsed_us,
-                Err(("UPSTREAM_ERROR", err.clone())),
+                Err((code, error.message.clone())),
             ));
             (
-                StatusCode::BAD_GATEWAY,
+                status,
                 Json(error_envelope(
                     trace_id,
                     Some(request_id),
                     Some(req_context),
-                    retry_base("unknown"),
-                    "UPSTREAM_ERROR",
-                    err,
-                    false,
+                    retry_base(execution_state),
+                    code,
+                    error.message,
+                    error.retryable,
                 )),
             )
                 .into_response()
@@ -1187,6 +1192,7 @@ pub async fn handle_call_capability(
 struct EmissionOrigin<'a> {
     profile: &'a ProfileContext,
     tool_name: &'a str,
+    tool_definition: Option<&'a str>,
     input_responses: Option<&'a BTreeMap<String, Value>>,
     request_state: Option<&'a str>,
     tenant_id: &'a str,
@@ -1203,6 +1209,7 @@ impl EmissionOrigin<'_> {
             release_at_ms,
             cancellable: true,
             tool_name: self.tool_name.to_owned(),
+            tool_definition: self.tool_definition.map(str::to_owned),
             input_responses: self.input_responses.cloned(),
             request_state: self.request_state.map(str::to_owned),
             profile_id: self.profile.profile_id.clone(),
@@ -1802,6 +1809,7 @@ impl CallRejection {
 struct CallTarget {
     server_id: String,
     tool_name: String,
+    tool_definition: Option<String>,
     reversibility: Option<ReversibilityConfig>,
 }
 
@@ -1924,9 +1932,22 @@ impl CallPreflight<'_> {
                 ),
             ).await);
         }
+        let tool_definition = match self.state.tool_pins.binding(&meta.server, &meta.tool) {
+            Ok(definition) => definition,
+            Err(denied) => {
+                let error = crate::WarmplaneError::from(denied);
+                return Err(self
+                    .reject(
+                        StatusCode::FORBIDDEN,
+                        CallRejection::new(crate::tool_pins::PinDenied::CODE, error.message),
+                    )
+                    .await);
+            }
+        };
         Ok(CallTarget {
             server_id: meta.server.clone(),
             tool_name: meta.tool.clone(),
+            tool_definition,
             reversibility: meta.reversibility.clone(),
         })
     }

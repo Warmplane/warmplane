@@ -572,45 +572,11 @@ pub(crate) fn dispatch_signed_action(
             &data,
             Some(callback_url),
         );
-        let Ok(payload) = serde_json::to_string(&payload) else {
-            return;
-        };
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .unwrap_or(0);
-        let client = match reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
+        if let Err(error) =
+            crate::chatops::post_signed_webhook(&webhook, dispatch.event_type, &payload, &secret)
+                .await
         {
-            Ok(client) => client,
-            Err(error) => {
-                error!(error = %error, "failed to create ChatOps action HTTP client");
-                return;
-            }
-        };
-        let mut request = client
-            .post(&webhook.url)
-            .header("Content-Type", "application/json")
-            .header("X-Warmplane-Timestamp", now.to_string())
-            .header("X-Warmplane-Event", dispatch.event_type);
-        if let Some(auth) = &webhook.auth_header {
-            request = request.header("Authorization", auth);
-        }
-        if let Some(headers) = &webhook.headers {
-            for (name, value) in headers {
-                request = request.header(name, value);
-            }
-        }
-        if let Ok(mut mac) = HmacSha256::new_from_slice(secret.as_bytes()) {
-            mac.update(format!("{now}.{payload}").as_bytes());
-            request = request.header(
-                "X-Warmplane-Signature",
-                format!("sha256={}", hex::encode(mac.finalize().into_bytes())),
-            );
-        }
-        if let Err(error) = request.body(payload).send().await {
-            warn!(url = %webhook.url, error = %error, event_type = dispatch.event_type, "ChatOps action notification failed");
+            warn!(%error, event_type = dispatch.event_type, "ChatOps action notification failed");
         }
     });
 }

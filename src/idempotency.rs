@@ -54,7 +54,7 @@ pub fn derive_idempotency_key(
 }
 
 /// Recursively sorts object keys to produce deterministic, canonical JSON strings.
-fn canonicalize_json(v: &Value) -> String {
+pub(crate) fn canonicalize_json(v: &Value) -> String {
     match v {
         Value::Null => "null".to_string(),
         Value::Bool(b) => b.to_string(),

@@ -14,6 +14,8 @@ pub enum ServerMsg {
     CallTool {
         /// Tool name on upstream server.
         name: String,
+        /// Approved definition digest captured before preparing or holding the call.
+        tool_definition: Option<String>,
         /// Execution parameters.
         params: Value,
         /// Multi-roundtrip client input responses.
@@ -56,6 +58,8 @@ pub enum UpstreamCallError {
     Upstream(String),
     /// Operation timed out.
     Timeout,
+    /// The worker blocked dispatch because the approved definition changed or was unavailable.
+    ToolDefinitionChanged,
 }
 
 /// Metadata describing a registered capability tool.

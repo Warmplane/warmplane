@@ -271,7 +271,7 @@ impl ControlPlaneHandle {
         profile: Option<&str>,
     ) -> Result<CapabilitiesListResponse> {
         let prof_ctx = self.resolve_profile_context(profile).await;
-        let caps_guard = self.state.capabilities.read().await;
+        let caps_guard = self.state.tool_catalog().await.items;
         let mut capabilities = caps_guard
             .iter()
             .filter(|(_, meta)| prof_ctx.is_server_allowed(&meta.server))
@@ -302,7 +302,7 @@ impl ControlPlaneHandle {
     ) -> Envelope<CapabilityDetail> {
         let trace_id = next_trace_id();
         let prof_ctx = self.resolve_profile_context(profile).await;
-        let caps_guard = self.state.capabilities.read().await;
+        let caps_guard = self.state.tool_catalog().await.items;
 
         match caps_guard.get(id) {
             Some(meta) if prof_ctx.is_server_allowed(&meta.server) => Envelope::success(
@@ -367,18 +367,19 @@ impl ControlPlaneHandle {
         }
         let filter = filter_builder.build();
 
-        let caps = self.state.capabilities.read().await;
+        let catalog = self.state.tool_catalog().await;
         let pol = self.state.policy.read().await;
-        let base_ver = self.state.catalog_version.read().await.clone();
-        let catalog_ver =
-            crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
+        let catalog_ver = crate::http_v1::helpers::get_profile_scoped_catalog_version(
+            &catalog.version,
+            &prof_ctx,
+        );
         let query_str = query.unwrap_or("");
         let limit_val = limit.unwrap_or(8);
 
-        let results = self
-            .state
-            .search_engine
-            .search(query_str, limit_val, &filter, &caps, &pol);
+        let results =
+            self.state
+                .search_engine
+                .search(query_str, limit_val, &filter, &catalog.items, &pol);
 
         CapabilitySearchResponse {
             version: "v1".to_string(),
@@ -612,6 +613,22 @@ impl ControlPlaneHandle {
             )
         };
 
+        let tool_definition = match self.state.tool_pins.binding(&server_id, &tool_name) {
+            Ok(definition) => definition,
+            Err(denied) => {
+                self.state
+                    .idempotency_store
+                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                    .await;
+                return Envelope::failure(
+                    trace_id,
+                    Some(req_id),
+                    Some(req_ctx),
+                    denied.into(),
+                    retry_base("not_started"),
+                );
+            }
+        };
         let mut compensable_reserved = false;
         if let Some(contract) = reversibility
             .as_ref()
@@ -851,6 +868,7 @@ impl ControlPlaneHandle {
                         state: &handle.state,
                         profile: &profile_context_clone,
                         tool_name: &tool_name_clone,
+                        tool_definition: tool_definition.as_deref(),
                         options: &options,
                         claim: idempotency_claim,
                         approval_completed: requires_approval,
@@ -926,6 +944,7 @@ impl ControlPlaneHandle {
                 if tx
                     .send(ServerMsg::CallTool {
                         name: tool_name_clone,
+                        tool_definition,
                         params: worker_args.clone(),
                         input_responses: options.input_responses.clone(),
                         request_state: options.request_state.clone(),
@@ -1071,20 +1090,15 @@ impl ControlPlaneHandle {
                             .release_execution(idempotency_key_clone.as_deref(), idempotency_claim)
                             .await;
                     }
-                    Ok(Err(UpstreamCallError::Upstream(err))) => {
-                        let err = handle.state.safe_upstream_error(err).await;
-                        handle
-                            .state
-                            .circuit_breakers
-                            .record_failure(&server_id_clone)
-                            .await;
+                    Ok(Err(failure)) => {
+                        let (error, _) = handle.state.tool_error(&server_id_clone, failure).await;
                         let _ = handle
                             .state
                             .task_registry
                             .fail_task(
                                 &task_id_clone,
-                                serde_json::json!({"code": "UPSTREAM_ERROR", "message": &err}),
-                                Some(err),
+                                serde_json::json!({"code": error.code, "message": &error.message}),
+                                Some(error.message),
                             )
                             .await;
                         handle
@@ -1310,6 +1324,7 @@ impl ControlPlaneHandle {
                     state: &self.state,
                     profile: &prof_ctx,
                     tool_name: &tool_name,
+                    tool_definition: tool_definition.as_deref(),
                     options: &options,
                     claim: idempotency_claim,
                     approval_completed: requires_approval,
@@ -1423,6 +1438,7 @@ impl ControlPlaneHandle {
         if tx
             .send(ServerMsg::CallTool {
                 name: tool_name,
+                tool_definition,
                 params: effective_args.clone(),
                 input_responses: options.input_responses,
                 request_state: options.request_state,
@@ -1579,17 +1595,16 @@ impl ControlPlaneHandle {
                     retry_base("unknown"),
                 )
             }
-            Ok(Err(UpstreamCallError::Upstream(err))) => {
-                let err = self.state.safe_upstream_error(err).await;
-                self.state.circuit_breakers.record_failure(&server_id).await;
+            Ok(Err(failure)) => {
+                let (error, execution_state) = self.state.tool_error(&server_id, failure).await;
                 if let Some(ref rec) = task_record {
                     let _ = self
                         .state
                         .task_registry
                         .fail_task(
                             &rec.task_id,
-                            serde_json::json!({"code": "UPSTREAM_ERROR", "message": &err}),
-                            Some(err.clone()),
+                            serde_json::json!({"code": &error.code, "message": &error.message}),
+                            Some(error.message.clone()),
                         )
                         .await;
                 }
@@ -1601,8 +1616,8 @@ impl ControlPlaneHandle {
                     trace_id,
                     Some(req_id),
                     Some(req_ctx),
-                    WarmplaneError::new("UPSTREAM_ERROR", err, false),
-                    retry_base("unknown"),
+                    error,
+                    retry_base(execution_state),
                 )
             }
             Err(_) => {
@@ -1901,7 +1916,7 @@ impl ControlPlaneHandle {
                 ),
                 RetryMetadata::safe("unknown"),
             ),
-            Err(_) => Envelope::failure(
+            Ok(Err(UpstreamCallError::ToolDefinitionChanged)) | Err(_) => Envelope::failure(
                 trace_id,
                 Some(req_id),
                 Some(req_ctx),
@@ -2127,6 +2142,7 @@ struct EmbeddedEmission<'a> {
     state: &'a AppState,
     profile: &'a ProfileContext,
     tool_name: &'a str,
+    tool_definition: Option<&'a str>,
     options: &'a ExecutionOptions,
     claim: Option<IdempotencyClaim>,
     approval_completed: bool,
@@ -2140,6 +2156,7 @@ impl EmbeddedEmission<'_> {
             release_at_ms,
             cancellable: true,
             tool_name: self.tool_name.to_owned(),
+            tool_definition: self.tool_definition.map(str::to_owned),
             input_responses: self.options.input_responses.clone(),
             request_state: self.options.request_state.clone(),
             profile_id: self.profile.profile_id.clone(),

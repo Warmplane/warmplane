@@ -42,6 +42,12 @@ pub async fn initialize_state(
         Some(_) => None,
         None => Some(".warmplane/state"),
     };
+    let tool_pins = match state_dir_opt {
+        Some(directory) => crate::tool_pins::ToolPins::open(
+            &std::path::Path::new(directory).join("tool_pins.json"),
+        )?,
+        None => crate::tool_pins::ToolPins::default(),
+    };
 
     let (
         event_store,
@@ -165,6 +171,7 @@ pub async fn initialize_state(
     let mut state_builder = AppState::builder()
         .servers_arc(Arc::new(RwLock::new(HashMap::new())))
         .capabilities_arc(Arc::new(RwLock::new(HashMap::new())))
+        .tool_pins(tool_pins)
         .resources_arc(Arc::new(RwLock::new(HashMap::new())))
         .prompts_arc(Arc::new(RwLock::new(HashMap::new())))
         .tool_timeout_ms(tool_timeout_ms)
@@ -314,6 +321,11 @@ pub fn build_router(app_state: AppState) -> Router {
         .route("/v1/config/import", post(http_v1::handle_import_config))
         .route("/v1/config/alias", post(http_v1::handle_update_alias))
         .route("/v1/config/policy", post(http_v1::handle_update_policy))
+        .route("/v1/config/tool-pins", get(http_v1::handle_list_tool_pins))
+        .route(
+            "/v1/config/tool-pins/approve",
+            post(http_v1::handle_approve_tool_pin),
+        )
         .route("/v1/config/profiles", post(http_v1::handle_upsert_profile))
         .route(
             "/v1/config/profiles/:id",
@@ -530,7 +542,7 @@ pub async fn security_guard_middleware(
     if path.starts_with("/v1/config/")
         && !req.method().is_safe()
         && !trust_admin
-        && !state.accepts_result_revision(None).await
+        && (!state.accepts_result_revision(None).await || state.tool_pins.has_required_servers())
     {
         return http_v1::trust_admin_required();
     }

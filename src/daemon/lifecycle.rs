@@ -293,6 +293,7 @@ impl AppState {
                 self.event_store.record("prompt", &id, "removed");
             }
         }
+        self.tool_pins.remove_server(server_id);
 
         self.refresh_server_catalog(server_id).await;
 

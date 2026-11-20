@@ -73,6 +73,7 @@ fn emission(release_at_ms: u64) -> EmissionRecord {
         release_at_ms,
         cancellable: true,
         tool_name: "send".to_string(),
+        tool_definition: None,
         input_responses: None,
         request_state: None,
         profile_id: None,

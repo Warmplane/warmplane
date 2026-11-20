@@ -56,6 +56,9 @@ pub struct EmissionRecord {
     pub cancellable: bool,
     /// Resolved upstream tool name.
     pub tool_name: String,
+    /// Definition digest bound to the held invocation before dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_definition: Option<String>,
     /// Multi-roundtrip client input responses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_responses: Option<BTreeMap<String, Value>>,
@@ -1085,6 +1088,7 @@ mod tests {
                     release_at_ms: 2_000,
                     cancellable: true,
                     tool_name: "send_message".to_string(),
+                    tool_definition: None,
                     input_responses: None,
                     request_state: None,
                     profile_id: None,
@@ -1153,6 +1157,7 @@ mod tests {
                     release_at_ms: 2_000,
                     cancellable: true,
                     tool_name: "send_message".to_string(),
+                    tool_definition: None,
                     input_responses: None,
                     request_state: None,
                     profile_id: None,
@@ -1238,6 +1243,7 @@ mod tests {
                     release_at_ms: 4_000,
                     cancellable: true,
                     tool_name: "send_message".to_string(),
+                    tool_definition: None,
                     input_responses: None,
                     request_state: None,
                     profile_id: Some("mail-profile".to_string()),
