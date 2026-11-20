@@ -67,7 +67,7 @@ pub async fn handle_get_config(State(state): State<AppState>) -> impl IntoRespon
 pub async fn handle_upsert_server(
     State(state): State<AppState>,
     admin: Option<axum::extract::Extension<TrustAdmin>>,
-    Json(payload): Json<UpsertServerRequest>,
+    Json(mut payload): Json<UpsertServerRequest>,
 ) -> impl IntoResponse {
     if payload.server.require_tool_pins
         && !admin.is_some_and(|axum::extract::Extension(TrustAdmin(admin))| admin)
@@ -84,6 +84,24 @@ pub async fn handle_upsert_server(
                 .into_response()
         }
     };
+
+    let current = config.mcp_servers.get(&payload.name);
+    if current.is_some_and(|server| server.require_tool_pins)
+        && !admin.is_some_and(|axum::extract::Extension(TrustAdmin(admin))| admin)
+    {
+        return trust_admin_required();
+    }
+    if let Some(current) = current {
+        if payload.preserve_unedited {
+            payload.server.preserve_unedited_settings(current);
+        } else if let Err(error) = payload.server.preserve_masked_credentials(current) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"ok": false, "error": error.to_string()})),
+            )
+                .into_response();
+        }
+    }
 
     config
         .mcp_servers

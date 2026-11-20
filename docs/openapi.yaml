@@ -1486,6 +1486,10 @@ components:
           type: string
         server:
           $ref: "#/components/schemas/ServerConfig"
+        preserve_unedited:
+          type: boolean
+          default: false
+          description: Preserve server settings outside the fields exposed by the Control Deck editor.
     ImportConfigRequest:
       type: object
       properties:

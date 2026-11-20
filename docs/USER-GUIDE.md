@@ -424,7 +424,7 @@ The `policy` block enforces global security boundaries, human approval gates, an
 
 #### Sanitize results before delivery
 
-Set `policy.resultSanitization` in `mcp_servers.json` to inspect upstream tool, resource, and prompt results on REST, MCP, and embedded clients. Configure it on the global policy.
+In Control Deck, use **Trust access** to connect with an administrator credential. Open **Security Governance & Redaction**, switch to the global policy, and use **Result sanitization** to enable inspection and edit rules. The same global setting is available as `policy.resultSanitization` in `mcp_servers.json` and applies to REST, MCP, and embedded clients.
 
 ```json
 {
@@ -446,7 +446,7 @@ With RBAC enabled, grant `manageTrustControls: true` to an operator role and aut
 
 #### Review upstream tool definitions
 
-Set `requireToolPins: true` on an upstream in `mcpServers` and enable persistent state. In **Security Governance & Redaction**, enter a trust administrator token under **Tool definition pins**. Expand a tool, compare its observed and approved definitions, and approve the observed digest. The same approval covers aliases and native exports of that upstream tool. An outdated review returns `409 TOOL_PIN_STALE`. Load definitions again before making a new decision.
+Enable persistent state and select **Require reviewed tool definitions** in the upstream server editor, or set `requireToolPins: true` on the upstream in `mcpServers`. In **Security Governance & Redaction**, open **Tool definition pins**, expand a tool, compare its observed and approved definitions, and approve the observed digest. The same approval covers aliases and native exports of that upstream tool. An outdated review returns `409 TOOL_PIN_STALE`. Load definitions again before making a new decision.
 
 If pin storage returns an error after authorization, refresh the definitions and review the pin again before retrying. Warmplane retains quarantine when an approval write could not be confirmed, including after reopening state.
 
@@ -456,7 +456,7 @@ Subscribe to `tool_pin.quarantined` in `policy.webhook.events` and set `secret` 
 
 #### Migrate ChatOps approvals to signed actions
 
-Enable persistent state, set the callback route to `/v1/webhooks/actions`, and explicitly subscribe to `approval.requested`. If the running daemon started without persistent state, restart it with persistence enabled before activating signed approvals. The old `/v1/webhooks/callbacks` route returns `410`. Request a fresh invocation for old cards and pending approvals carried over from an earlier daemon process.
+Enable persistent state. In the global **ChatOps and outbound webhooks** settings, enable **Send signed approval cards**, enter the destination and signing settings, and set the callback route to `/v1/webhooks/actions`. When editing the config file, subscribe to `approval.requested` explicitly. If the running daemon started without persistent state, restart it with persistence enabled before activating signed approvals. The old `/v1/webhooks/callbacks` route returns `410`. Request a fresh invocation for old cards and pending approvals carried over from an earlier daemon process.
 
 ```json
 {
@@ -471,7 +471,7 @@ Enable persistent state, set the callback route to `/v1/webhooks/actions`, and e
 }
 ```
 
-With RBAC enabled, specify one `approvalTenant` and give `actionRole` the `resolveApprovals` permission. Warmplane sends cards only for that tenant. In Control Deck, load **Approval activity** using an operator credential with the same permission. For REST task input, use the task's tenant and profile scope and submit an explicit Boolean in `inputResponses.hitl_approval.approved`. The operator identity comes from the authenticated credential or delegation.
+With RBAC enabled, specify one `approvalTenant` and give `actionRole` the `resolveApprovals` permission. Warmplane sends cards only for that tenant. In Control Deck, load **Approval activity** using an operator credential with the same permission. The profile selector scopes the task list and task actions. Approval Activity also permits tenant-wide decisions on linked tickets. For REST task input, use the task's tenant and profile scope and submit an explicit Boolean in `inputResponses.hitl_approval.approved`. The operator identity comes from the authenticated credential or delegation.
 
 - **Slack.** Set the app's Interactivity Request URL to the signed callback URL. Set the Slack app signing secret separately from the Warmplane webhook secret. Warmplane verifies Slack's timestamp and signature, acknowledges the request immediately, and posts the decision receipt to the configured destination.
 - **Teams.** Use a Workflow that posts the Adaptive Card and waits for its response, or an authenticated bot relay. Read `action_token` from the submitted action data and POST `{"action_token":"…"}` to the configured callback URL. Use incoming Workflows or a bot for the configured receipt destination.

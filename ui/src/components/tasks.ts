@@ -4,7 +4,7 @@ import { PendingApproval, TaskItem } from '../api';
 
 function renderApprovalActivity(approval: PendingApproval): string {
   const receipt = approval.decision_receipt;
-  const canDecide = approval.status === 'pending' && !approval.task_id;
+  const canDecide = approval.status === 'pending';
   const delivery = approval.receipt_delivery === 'delivered' ? 'Delivered'
     : approval.receipt_delivery === 'failed' ? 'Delivery failed'
     : 'No delivery recorded';
@@ -131,7 +131,8 @@ export function renderTasks(state: AppState): string {
                       <div style="margin-bottom: 8px;">
                         <label style="font-size: 10.5px; color: var(--text-dim); display: block; margin-bottom: 2px;">Decision:</label>
                         <select id="task-input-${escapeHtml(task.taskId)}-${escapeHtml(k)}-decision" class="form-input" style="font-size: 11.5px; font-family: var(--ff-mono); padding: 4px 8px;">
-                          <option value="true" selected>Approve &amp; Execute</option>
+                          <option value="" selected>Choose a decision</option>
+                          <option value="true">Approve &amp; Execute</option>
                           <option value="false">Reject Execution</option>
                         </select>
                       </div>
@@ -270,6 +271,7 @@ export function renderTasks(state: AppState): string {
       <p class="tool-pin-feedback" role="status">${escapeHtml(state.approvalError ?? (state.approvals.length ? '' : 'No approval tickets are visible.'))}</p>
       ${state.approvals.map(renderApprovalActivity).join('')}
     </section>
+    ${state.taskError ? `<p class="tool-pin-feedback" role="status">${escapeHtml(state.taskError)}</p>` : ''}
     <!-- Sub-header & Actions -->
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
       <div style="display: flex; align-items: center; gap: 10px;">

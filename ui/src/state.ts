@@ -34,6 +34,8 @@ export interface BatchStepState {
 export interface AppState {
   configPath: string;
   config: McpConfig;
+  configReady: boolean;
+  configError: string | null;
   serverStatuses: Record<string, { transport: string; protocol_version: string; status: string; error?: string }>;
   circuitBreakers: CircuitBreakerSnapshot[];
   clients: ClientAppStatus[];
@@ -49,6 +51,7 @@ export interface AppState {
   promptsHiddenByPolicy: number;
   catalogEvents: CatalogEventItem[];
   tasks: TaskItem[];
+  taskError: string | null;
   undoEntries: UndoEntrySummary[];
   undoError: string | null;
   undoOffset: number;
@@ -94,6 +97,8 @@ class Store {
   private state: AppState = {
     configPath: 'mcp_servers.json',
     config: { mcpServers: {} },
+    configReady: false,
+    configError: null,
     serverStatuses: {},
     circuitBreakers: [],
     clients: [],
@@ -109,6 +114,7 @@ class Store {
     promptsHiddenByPolicy: 0,
     catalogEvents: [],
     tasks: [],
+    taskError: null,
     undoEntries: [],
     undoError: null,
     undoOffset: 0,

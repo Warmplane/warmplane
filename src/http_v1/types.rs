@@ -188,6 +188,9 @@ pub struct UpsertServerRequest {
     pub name: String,
     /// Server configuration details.
     pub server: crate::config::ServerConfig,
+    /// Update the fields exposed by Control Deck while preserving unedited server settings.
+    #[serde(default)]
+    pub preserve_unedited: bool,
 }
 
 /// Request payload for ecosystem config import.

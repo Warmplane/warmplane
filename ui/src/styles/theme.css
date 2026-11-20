@@ -467,3 +467,20 @@ select option {
 .approval-details { font-size: 12px; margin: 0; }
 .approval-details dt { color: var(--text-muted); margin-bottom: 2px; }
 .approval-details dd { margin: 0 0 8px; overflow-wrap: anywhere; }
+
+.trust-settings { display: grid; gap: 12px; }
+.trust-settings h2 { margin: 0; }
+.trust-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+  gap: 12px;
+}
+.trust-settings .form-group { margin: 0; min-width: 0; }
+.trust-settings fieldset { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.trust-settings fieldset .trust-fields { margin-top: 12px; }
+.trust-settings legend { padding: 0 5px; font-size: 12px; color: var(--text-main); }
+.trust-checkbox { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-main); }
+.trust-checkbox + .trust-checkbox { margin-top: 8px; }
+.trust-checkbox input { accent-color: var(--amber-400); }
+.trust-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: flex-end; }
+.trust-actions [role="status"] { margin: 0 auto 0 0; }

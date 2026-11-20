@@ -1096,6 +1096,7 @@ async fn test_ui_and_config_rest_api() {
         Json(UpsertServerRequest {
             name: "node_srv".to_string(),
             server: new_server,
+            preserve_unedited: false,
         }),
     )
     .await

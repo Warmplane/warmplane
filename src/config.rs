@@ -933,6 +933,57 @@ impl SiemConfig {
 }
 
 impl ServerConfig {
+    pub(crate) fn preserve_unedited_settings(&mut self, current: &Self) {
+        if self.command.is_some() && current.command.is_some() {
+            self.env.clone_from(&current.env);
+        }
+        if self.url.is_some() && current.url.is_some() {
+            self.auth.clone_from(&current.auth);
+            self.headers.clone_from(&current.headers);
+            self.protocol_version.clone_from(&current.protocol_version);
+            self.allow_stateless = current.allow_stateless;
+        }
+        if let (Some(incoming), Some(stored)) = (&mut self.resilience, &current.resilience) {
+            incoming.consecutive_successes = stored.consecutive_successes;
+            incoming.health_check_interval_secs = stored.health_check_interval_secs;
+        }
+    }
+
+    pub(crate) fn preserve_masked_credentials(&mut self, current: &Self) -> Result<()> {
+        for (fields, stored) in [
+            (&mut self.env, &current.env),
+            (&mut self.headers, &current.headers),
+        ] {
+            for (key, value) in fields {
+                if value == REDACTED_TOKEN {
+                    value.clone_from(
+                        stored.get(key).context(
+                            "A masked server credential requires an existing stored value",
+                        )?,
+                    );
+                }
+            }
+        }
+        match (&mut self.auth, current.auth.as_ref()) {
+            (
+                Some(AuthConfig::Bearer { token, .. }),
+                Some(AuthConfig::Bearer { token: stored, .. }),
+            )
+            | (
+                Some(AuthConfig::Basic {
+                    password: token, ..
+                }),
+                Some(AuthConfig::Basic {
+                    password: stored, ..
+                }),
+            ) if token.as_deref() == Some(REDACTED_TOKEN) => {
+                token.clone_from(stored);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Sanitizes authentication tokens/passwords and sensitive headers in place.
     pub fn sanitize_secrets(&mut self) {
         if let Some(ref mut auth) = self.auth {

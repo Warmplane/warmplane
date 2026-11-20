@@ -39,24 +39,19 @@ export function mountToolPinReview(panel: HTMLElement) {
   panel.innerHTML = `
     <h2 class="stat-label">Tool definition pins</h2>
     <form class="trust-auth-form">
-      <div class="form-group">
-        <label for="tool-pin-token" class="form-label">Trust administrator token</label>
-        <input id="tool-pin-token" class="form-input" type="password" autocomplete="off">
-      </div>
       <button class="btn btn-ghost" type="submit">Load definitions</button>
     </form>
     <p class="tool-pin-feedback" role="status" aria-live="polite">Load definitions for servers with tool pinning enabled.</p>
     <div class="tool-pin-list"></div>
   `;
   const form = panel.querySelector<HTMLFormElement>('form')!;
-  const token = panel.querySelector<HTMLInputElement>('#tool-pin-token')!;
   const feedback = panel.querySelector<HTMLElement>('[role="status"]')!;
   const list = panel.querySelector<HTMLElement>('.tool-pin-list')!;
   let pins: ToolPinReview[] = [];
   let busy = false;
 
   async function refresh(message?: string) {
-    const result = await api.listToolPins(token.value);
+    const result = await api.listToolPins();
     pins = result.pins ?? [];
     list.innerHTML = pins.map(pinReview).join('');
     feedback.textContent = result.error ?? message
@@ -66,7 +61,6 @@ export function mountToolPinReview(panel: HTMLElement) {
   async function run(action: () => Promise<void>) {
     if (busy) return;
     busy = true;
-    token.readOnly = true;
     panel.setAttribute('aria-busy', 'true');
     try {
       await action();
@@ -74,7 +68,6 @@ export function mountToolPinReview(panel: HTMLElement) {
       feedback.textContent = 'Could not reach Warmplane. Load definitions again when the daemon is available.';
     } finally {
       panel.removeAttribute('aria-busy');
-      token.readOnly = false;
       busy = false;
     }
   }
@@ -94,8 +87,9 @@ export function mountToolPinReview(panel: HTMLElement) {
     const approval = { server: pin.server, tool: pin.tool, digest: pin.current.digest };
     void run(async () => {
       feedback.textContent = 'Saving approval…';
-      const result = await api.approveToolPin(token.value, approval);
+      const result = await api.approveToolPin(approval);
       await refresh(result.error ?? 'Definition approved.');
     });
   });
+  if (api.hasTrustToken()) void run(() => refresh());
 }
