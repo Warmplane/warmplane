@@ -614,7 +614,7 @@ pub async fn handle_update_policy(
     {
         return trust_admin_required();
     }
-    let mut config = match crate::config::load_or_default_config(&state.config_path) {
+    let config = match crate::config::load_or_default_config(&state.config_path) {
         Ok(c) => c,
         Err(e) => {
             return (
@@ -625,21 +625,7 @@ pub async fn handle_update_policy(
         }
     };
 
-    let saved = (|| {
-        state
-            .approval_registry
-            .validate_webhook_storage(payload.webhook.as_ref())?;
-        if let Some(webhook) = &mut payload.webhook {
-            let current = config
-                .policy
-                .as_ref()
-                .and_then(|policy| policy.webhook.as_ref());
-            webhook.preserve_masked_secrets(current)?;
-        }
-        config.policy = Some(payload.clone());
-        crate::config::save_config(&state.config_path, &config)
-    })();
-    if let Err(e) = saved {
+    if let Err(e) = persist_policy_update(&state, config, &mut payload) {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "ok": false, "error": e.to_string() })),
@@ -684,6 +670,25 @@ pub async fn handle_update_policy(
     });
 
     (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}
+
+fn persist_policy_update(
+    state: &AppState,
+    mut config: crate::config::McpConfig,
+    policy: &mut crate::config::PolicyConfig,
+) -> anyhow::Result<()> {
+    state
+        .approval_registry
+        .validate_webhook_storage(policy.webhook.as_ref())?;
+    if let Some(webhook) = &mut policy.webhook {
+        let current = config
+            .policy
+            .as_ref()
+            .and_then(|policy| policy.webhook.as_ref());
+        webhook.preserve_masked_secrets(current)?;
+    }
+    config.policy = Some(policy.clone());
+    crate::config::save_config(&state.config_path, &config)
 }
 
 pub(crate) fn trust_admin_required() -> axum::response::Response {

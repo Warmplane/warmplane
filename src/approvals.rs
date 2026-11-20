@@ -312,27 +312,7 @@ impl crate::daemon::AppState {
         tenant: Option<&crate::rbac::TenantContext>,
         profile: Option<&str>,
     ) -> Result<Option<DecisionReceipt>, DecisionError> {
-        let task = self
-            .task_registry
-            .get_task(task_id)
-            .await
-            .ok_or(DecisionError::TaskNotInputRequired)?;
-        let default_role = self.rbac_engine.default_role();
-        let (tenant_id, role) = tenant.map_or(("default", default_role.as_str()), |context| {
-            (context.tenant_id.as_str(), context.role.as_str())
-        });
-        let access = crate::result_sanitization::ResultAccess::new(tenant_id, profile);
-        if task
-            .result_access
-            .as_ref()
-            .is_some_and(|owner| owner != &access)
-            || !self
-                .hold_coordinator
-                .can_access_task(self, &task, tenant_id, role, profile)
-                .await
-        {
-            return Err(DecisionError::TaskNotInputRequired);
-        }
+        let task = self.authorized_input_task(task_id, tenant, profile).await?;
 
         let decision = input
             .get("hitl_approval")
@@ -359,6 +339,38 @@ impl crate::daemon::AppState {
             Ok(true) => Ok(None),
             Ok(false) => Err(DecisionError::TaskNotInputRequired),
             Err(_) => Err(DecisionError::Persistence),
+        }
+    }
+
+    async fn authorized_input_task(
+        &self,
+        task_id: &str,
+        tenant: Option<&crate::rbac::TenantContext>,
+        profile: Option<&str>,
+    ) -> Result<crate::tasks::TaskRecord, DecisionError> {
+        let task = self
+            .task_registry
+            .get_task(task_id)
+            .await
+            .ok_or(DecisionError::TaskNotInputRequired)?;
+        let default_role = self.rbac_engine.default_role();
+        let (tenant_id, role) = tenant.map_or(("default", default_role.as_str()), |context| {
+            (context.tenant_id.as_str(), context.role.as_str())
+        });
+        let access = crate::result_sanitization::ResultAccess::new(tenant_id, profile);
+        let matches_scope = task
+            .result_access
+            .as_ref()
+            .is_none_or(|owner| owner == &access);
+        if matches_scope
+            && self
+                .hold_coordinator
+                .can_access_task(self, &task, tenant_id, role, profile)
+                .await
+        {
+            Ok(task)
+        } else {
+            Err(DecisionError::TaskNotInputRequired)
         }
     }
 }
