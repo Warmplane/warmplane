@@ -4,7 +4,7 @@
 
 use axum::http::HeaderMap;
 use hmac::{Hmac, Mac};
-use serde_json::{json, Value};
+use serde_json::json;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
@@ -165,11 +165,11 @@ pub(crate) fn slack_principal(
     cfg: &WebhookConfig,
     headers: &HeaderMap,
     body: &[u8],
-    payload: &Value,
+    slack_user: Option<&str>,
     now: u64,
 ) -> Option<String> {
     verify_slack_signature(cfg, headers, body, now)?;
-    let slack_user = payload.pointer("/user/id")?.as_str()?;
+    let slack_user = slack_user?;
     if slack_user.is_empty()
         || slack_user.len() > 100
         || !slack_user.bytes().all(|byte| byte.is_ascii_alphanumeric())
@@ -194,6 +194,9 @@ fn verify_slack_signature(
         .to_str()
         .ok()?
         .strip_prefix("v0=")?;
+    if signature.len() != 64 {
+        return None;
+    }
     let signature = hex::decode(signature).ok()?;
     let secret = cfg.resolve_slack_signing_secret()?;
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).ok()?;
@@ -309,6 +312,7 @@ mod tests {
         http::{Request, StatusCode},
         Router,
     };
+    use serde_json::Value;
     use std::time::{Duration, Instant};
     use tower::ServiceExt;
 

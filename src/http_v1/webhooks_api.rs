@@ -10,7 +10,7 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::daemon::AppState;
 
@@ -55,7 +55,7 @@ pub async fn handle_webhook_action(
         Ok(payload) => payload,
         Err(message) => return action_error(StatusCode::BAD_REQUEST, "INVALID_PAYLOAD", message),
     };
-    let Some(token) = extract_action_token(&payload) else {
+    let Some(token) = payload.action_token() else {
         return action_error(
             StatusCode::UNAUTHORIZED,
             "ACTION_TOKEN_REQUIRED",
@@ -69,9 +69,17 @@ pub async fn handle_webhook_action(
             "Action token is invalid or expired",
         );
     };
+    let token = token.as_ref();
     if target_id.starts_with("appr-") {
-        return signed_approval_callback(state, headers, body_bytes, payload, target_id, token)
-            .await;
+        return signed_approval_callback(
+            state,
+            headers,
+            body_bytes,
+            payload.user.as_ref().and_then(|user| user.id.as_deref()),
+            target_id,
+            token,
+        )
+        .await;
     }
     let config = match crate::config::load_or_default_config(&state.config_path) {
         Ok(config) => config,
@@ -143,7 +151,7 @@ pub async fn handle_webhook_action(
             || crate::chatops::verify_action_token(
                 &secret,
                 "undo",
-                &token,
+                token,
                 &entry.tenant_id,
                 role,
                 now_ms,
@@ -234,7 +242,7 @@ pub async fn handle_webhook_action(
         || crate::chatops::verify_action_token(
             &secret,
             "cancel",
-            &token,
+            token,
             &emission.tenant_id,
             role,
             now_ms,
@@ -267,22 +275,77 @@ pub async fn handle_webhook_action(
     accepted_action()
 }
 
-fn decode_action_payload(bytes: &[u8]) -> Result<Value, &'static str> {
-    let body = std::str::from_utf8(bytes).map_err(|_| "Invalid UTF-8 payload")?;
-    if let Some(form) = body.strip_prefix("payload=") {
-        serde_json::from_str(&url_decode_str(form)).map_err(|_| "Invalid platform payload")
-    } else {
-        serde_json::from_slice(bytes).map_err(|_| "Invalid JSON payload")
+pub(crate) const MAX_ACTION_BODY_BYTES: usize = 64 * 1024;
+const MAX_ACTION_TOKEN_BYTES: usize = 512;
+
+#[derive(Deserialize)]
+struct ActionPayload {
+    action_token: Option<String>,
+    data: Option<ActionData>,
+    actions: Option<Vec<PlatformAction>>,
+    user: Option<PlatformUser>,
+}
+
+#[derive(Deserialize)]
+struct ActionData {
+    action_token: Option<String>,
+    custom_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PlatformAction {
+    value: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PlatformUser {
+    id: Option<String>,
+}
+
+impl ActionPayload {
+    fn action_token(&self) -> Option<std::borrow::Cow<'_, str>> {
+        let plain = self
+            .action_token
+            .as_deref()
+            .or_else(|| self.data.as_ref().and_then(ActionData::token));
+        plain
+            .map(std::borrow::Cow::Borrowed)
+            .or_else(|| unwrap_platform_token(self.actions.as_ref()?.first()?.value.as_deref()?))
     }
+}
+
+impl ActionData {
+    fn token(&self) -> Option<&str> {
+        self.action_token.as_deref().or(self.custom_id.as_deref())
+    }
+}
+
+fn decode_action_payload(bytes: &[u8]) -> Result<ActionPayload, &'static str> {
+    let body = std::str::from_utf8(bytes).map_err(|_| "Invalid UTF-8 payload")?;
+    let decoded;
+    let (json, message) = if let Some(form) = body.strip_prefix("payload=") {
+        decoded = url_decode_str(form).ok_or("Invalid platform payload")?;
+        (decoded.as_slice(), "Invalid platform payload")
+    } else {
+        (bytes, "Invalid JSON payload")
+    };
+    parse_action_json(json).map_err(|_| message)
+}
+
+fn parse_action_json<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> serde_json::Result<T> {
+    let mut input = serde_json::Deserializer::from_slice(bytes);
+    let payload = T::deserialize(&mut input)?;
+    input.end()?;
+    Ok(payload)
 }
 
 async fn signed_approval_callback(
     state: AppState,
     headers: HeaderMap,
     raw: Bytes,
-    payload: Value,
+    slack_user: Option<&str>,
     ticket: String,
-    token: String,
+    token: &str,
 ) -> axum::response::Response {
     use crate::approval_chatops::{resolve_signed, slack_principal, SignedDecisionError};
 
@@ -296,7 +359,7 @@ async fn signed_approval_callback(
     };
     if config.format == Some(crate::chatops::WebhookFormat::Slack) {
         let Some(principal) =
-            slack_principal(&config, &headers, &raw, &payload, unix_time_ms() / 1000)
+            slack_principal(&config, &headers, &raw, slack_user, unix_time_ms() / 1000)
         else {
             return action_error(
                 StatusCode::UNAUTHORIZED,
@@ -304,6 +367,7 @@ async fn signed_approval_callback(
                 "Slack callback authentication failed",
             );
         };
+        let token = token.to_owned();
         tokio::spawn(async move {
             if resolve_signed(&state, &config, &ticket, &token, Some(principal))
                 .await
@@ -315,7 +379,7 @@ async fn signed_approval_callback(
         return accepted_action();
     }
 
-    match resolve_signed(&state, &config, &ticket, &token, None).await {
+    match resolve_signed(&state, &config, &ticket, token, None).await {
         Ok(receipt) => Json(json!({"ok": true, "receipt": receipt})).into_response(),
         Err(SignedDecisionError::Invalid) => action_error(
             StatusCode::UNAUTHORIZED,
@@ -332,48 +396,39 @@ fn accepted_action() -> axum::response::Response {
     StatusCode::OK.into_response()
 }
 
-fn extract_action_token(payload: &Value) -> Option<String> {
-    if let Some(token) = payload.get("action_token").and_then(Value::as_str) {
-        return Some(token.to_string());
-    }
-    if let Some(token) = payload
-        .get("data")
-        .and_then(|data| data.get("action_token"))
-        .and_then(Value::as_str)
-    {
-        return Some(token.to_string());
-    }
-    if let Some(token) = payload
-        .get("data")
-        .and_then(|data| data.get("custom_id"))
-        .and_then(Value::as_str)
-    {
-        return Some(token.to_string());
-    }
-    let value = payload
-        .get("actions")
-        .and_then(Value::as_array)
-        .and_then(|actions| actions.first())
-        .and_then(|action| action.get("value"))?;
-    if let Some(token) = value.as_str() {
-        if let Ok(nested) = serde_json::from_str::<Value>(token) {
-            return nested
-                .get("action_token")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-        }
-        return Some(token.to_string());
-    }
-    None
-}
-
-fn parse_action_token(token: &str) -> Option<(String, u64)> {
-    let (head, signature) = token.rsplit_once('.')?;
-    if signature.len() != 32 {
+fn parse_action_token(raw: &str) -> Option<(String, u64)> {
+    if raw.len() > MAX_ACTION_TOKEN_BYTES {
         return None;
     }
+    let (head, signature) = raw.rsplit_once('.')?;
     let (target, expiry) = head.rsplit_once('.')?;
-    Some((target.to_string(), expiry.parse().ok()?))
+    if signature.len() != 32 || !signature.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    if target.is_empty()
+        || !target
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return None;
+    }
+    Some((target.to_owned(), expiry.parse().ok()?))
+}
+
+#[derive(Deserialize)]
+struct NestedAction {
+    action_token: Option<String>,
+}
+
+fn unwrap_platform_token(token: &str) -> Option<std::borrow::Cow<'_, str>> {
+    if token.len() > MAX_ACTION_TOKEN_BYTES {
+        return None;
+    }
+    if token.trim_start().starts_with('{') {
+        let value: NestedAction = parse_action_json(token.as_bytes()).ok()?;
+        return value.action_token.map(std::borrow::Cow::Owned);
+    }
+    Some(std::borrow::Cow::Borrowed(token))
 }
 
 fn unix_time_ms() -> u64 {
@@ -391,35 +446,22 @@ fn action_error(status: StatusCode, code: &str, message: &str) -> axum::response
         .into_response()
 }
 
-fn url_decode_str(input: &str) -> String {
-    let mut result = Vec::new();
+fn url_decode_str(input: &str) -> Option<Vec<u8>> {
+    let mut result = Vec::with_capacity(input.len());
     let mut bytes = input.bytes();
-    while let Some(b) = bytes.next() {
-        match b {
-            b'+' => result.push(b' '),
+    while let Some(byte) = bytes.next() {
+        let decoded = match byte {
+            b'+' => b' ',
             b'%' => {
-                let h1 = bytes.next();
-                let h2 = bytes.next();
-                if let (Some(h1), Some(h2)) = (h1, h2) {
-                    if let Ok(hex_byte) =
-                        u8::from_str_radix(&format!("{}{}", h1 as char, h2 as char), 16)
-                    {
-                        result.push(hex_byte);
-                        continue;
-                    }
-                }
-                result.push(b'%');
-                if let Some(h1) = h1 {
-                    result.push(h1);
-                }
-                if let Some(h2) = h2 {
-                    result.push(h2);
-                }
+                let mut decoded = [0];
+                hex::decode_to_slice([bytes.next()?, bytes.next()?], &mut decoded).ok()?;
+                decoded[0]
             }
-            other => result.push(other),
-        }
+            other => other,
+        };
+        result.push(decoded);
     }
-    String::from_utf8_lossy(&result).into_owned()
+    Some(result)
 }
 
 /// Handles POST `/v1/webhooks/test` sending a simulated test event to the configured webhook endpoint.
@@ -581,7 +623,45 @@ mod tests {
     use super::*;
     use crate::config::{McpConfig, PolicyConfig, WebhookConfig};
     use axum::body::to_bytes;
+    use serde_json::Value;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn action_payload_requires_the_expected_shape_and_consumes_the_body() {
+        for body in [
+            &b"[]"[..],
+            br#"{"action_token":42}"#,
+            br#"{"action_token":"one","action_token":"two"}"#,
+            br#"{} {}"#,
+            b"payload=%GG",
+        ] {
+            assert!(decode_action_payload(body).is_err());
+        }
+
+        let slack = decode_action_payload(b"payload=%7B%22user%22%3A%7B%22id%22%3A%22U123%22%7D%2C%22actions%22%3A%5B%7B%22value%22%3A%22fixture%22%7D%5D%7D").unwrap();
+        assert_eq!(slack.action_token().as_deref(), Some("fixture"));
+        assert_eq!(slack.user.unwrap().id.as_deref(), Some("U123"));
+
+        let nested =
+            decode_action_payload(br#"{"actions":[{"value":"{\"action_token\":\"fixture\"}"}]}"#)
+                .unwrap();
+        assert_eq!(nested.action_token().as_deref(), Some("fixture"));
+    }
+
+    #[tokio::test]
+    async fn action_route_rejects_oversized_bodies() {
+        use axum::body::Body;
+        use tower::ServiceExt;
+        let response = crate::daemon::server::build_router(AppState::builder().build())
+            .oneshot(
+                axum::http::Request::post("/v1/webhooks/actions")
+                    .body(Body::from(vec![b' '; MAX_ACTION_BODY_BYTES + 1]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
 
     #[tokio::test]
     async fn test_webhook_rejects_unpermitted_url() {

@@ -675,15 +675,17 @@ paths:
   /v1/webhooks/actions:
     post:
       summary: Resolve a purpose-bound signed ChatOps action
-      operationId: resolveSignedAction
+      operationId: applyChatOpsAction
+      description: Resolves a signed approval, undo, or cancel-send action. Request bodies are limited to 64 KiB.
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               type: object
               required: [action_token]
               properties:
-                action_token: {type: string}
+                action_token: {type: string, maxLength: 512}
           application/x-www-form-urlencoded:
             schema:
               type: object
@@ -691,13 +693,21 @@ paths:
                 payload: {type: string}
       responses:
         "200":
-          description: Verified Slack callback acknowledged or a JSON decision receipt returned
+          description: Signed action acknowledged or a JSON approval receipt returned
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/DecisionReceiptResponse"
+        "400":
+          description: Malformed callback payload
+        "413":
+          description: Callback body exceeds 64 KiB
         "401":
           description: Signed action or Slack request authentication failed
+        "403":
+          description: Configured role is not authorized
+        "404":
+          description: Action target is unavailable
         "409":
           description: Competing decision or expired approval
         "503":
@@ -929,27 +939,6 @@ paths:
         "404": { description: Work item belongs to another tenant }
         "503": { description: Undo storage unavailable or an audit event could not be committed }
         "403": { description: Role lacks rollback permission }
-  /v1/webhooks/actions:
-    post:
-      summary: Apply one signed ChatOps Undo or Cancel Send action
-      operationId: applyChatOpsAction
-      description: The action_token is bound to one target, tenant, action, configured role, and expiry. Valid requests are acknowledged immediately and execute in the background. Inspect the entry or task for completion and drift failures.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [action_token]
-              properties:
-                action_token: { type: string }
-              additionalProperties: true
-      responses:
-        "200": { description: Signed action accepted for background execution }
-        "401": { description: Missing, invalid, or expired action token }
-        "403": { description: Configured role is not authorized }
-        "404": { description: Target is unavailable to the token }
-        "409": { description: Cancellation lost the race to dispatch }
   /v1/tasks:
     get:
       summary: List tasks visible to the current tenant and profile

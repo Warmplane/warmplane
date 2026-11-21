@@ -481,6 +481,8 @@ With RBAC enabled, specify one `approvalTenant` and give `actionRole` the `resol
 
 The signed action uses the arguments on the card's ticket. Use Control Deck to explicitly review and replace arguments. The approval decision, upstream task outcome, and ChatOps receipt delivery appear separately in **Approval activity**. A failed receipt delivery leaves the stored decision in place.
 
+The signed action endpoint accepts callback bodies up to 64 KiB. Keep generic and Teams relay payloads small by forwarding the action token and any platform envelope needed by the integration.
+
 ---
 
 ### 4.4 WORM Audit Trail and SIEM Export Configuration

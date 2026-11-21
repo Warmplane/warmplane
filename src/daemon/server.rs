@@ -363,7 +363,12 @@ pub fn build_router(app_state: AppState) -> Router {
             "/v1/webhooks/callbacks",
             post(http_v1::handle_webhook_callback),
         )
-        .route("/v1/webhooks/actions", post(http_v1::handle_webhook_action))
+        .route(
+            "/v1/webhooks/actions",
+            post(http_v1::handle_webhook_action).layer(axum::extract::DefaultBodyLimit::max(
+                http_v1::webhooks_api::MAX_ACTION_BODY_BYTES,
+            )),
+        )
         .route("/v1/webhooks/test", post(http_v1::handle_test_webhook))
         // SEP-2663 Tasks Endpoints
         .route("/v1/tasks", get(http_v1::handle_list_tasks))
