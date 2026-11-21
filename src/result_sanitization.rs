@@ -20,6 +20,9 @@ use crate::{
 pub(crate) const REDACTED: &str = "[REDACTED]";
 const MAX_BYTES: usize = 1024 * 1024;
 const MAX_DEPTH: usize = 64;
+const MAX_PATTERNS: usize = 64;
+const MAX_PATTERN_BYTES: usize = 4 * 1024;
+const MAX_PATTERN_SET_BYTES: usize = 16 * 1024;
 const UNINSPECTABLE: &str = "warmplane-uninspectable";
 
 pub(crate) fn uninspectable_result() -> Value {
@@ -185,21 +188,14 @@ impl ResultSanitization {
             source.opaque_exceptions.iter().all(valid_exception),
             "resultSanitization opaque exceptions require a server and exact MIME type"
         );
-        let patterns = RegexSetBuilder::new(&source.patterns)
-            .size_limit(1024 * 1024)
-            .build()
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "resultSanitization contains invalid or oversized regular expressions"
-                )
-            })?;
+        let patterns = compile_patterns(&source.patterns)?;
         let fields = source
             .field_names
             .iter()
             .map(|name| name.to_lowercase())
             .collect();
         let mut digest = Sha256::new();
-        digest.update(b"warmplane-result-sanitization-v1\0");
+        digest.update(b"warmplane-result-sanitization-v2\0");
         digest.update(serde_json::to_vec(&source)?);
         Ok(Self(Arc::new(CompiledRules {
             source,
@@ -447,6 +443,25 @@ fn valid_exception(entry: &OpaqueException) -> bool {
             })
 }
 
+fn compile_patterns(patterns: &[String]) -> anyhow::Result<RegexSet> {
+    anyhow::ensure!(
+        patterns.len() <= MAX_PATTERNS
+            && patterns
+                .iter()
+                .all(|pattern| pattern.len() <= MAX_PATTERN_BYTES)
+            && patterns.iter().map(String::len).sum::<usize>() <= MAX_PATTERN_SET_BYTES,
+        "resultSanitization permits up to 64 regular expressions, 4 KiB each and 16 KiB total"
+    );
+    RegexSetBuilder::new(patterns)
+        .nest_limit(32)
+        .size_limit(256 * 1024)
+        .dfa_size_limit(512 * 1024)
+        .build()
+        .map_err(|_| {
+            anyhow::anyhow!("resultSanitization contains invalid or oversized regular expressions")
+        })
+}
+
 struct Scan<'a> {
     rules: &'a CompiledRules,
     server: &'a str,
@@ -484,10 +499,8 @@ impl Scan<'_> {
         {
             return Err(Withheld);
         }
-        if matches!(shape, Shape::Data) {
-            if let Ok(mut json @ (Value::Object(_) | Value::Array(_))) =
-                serde_json::from_str::<Value>(text)
-            {
+        if matches!(shape, Shape::Data) && text.trim_start().starts_with(['{', '[']) {
+            if let Some(mut json) = parse_embedded_json(text, MAX_DEPTH - depth)? {
                 return self.embedded_json(text, &mut json, depth);
             }
         }
@@ -506,13 +519,7 @@ impl Scan<'_> {
         json: &mut Value,
         depth: usize,
     ) -> Result<(), Withheld> {
-        let mut nested = Scan {
-            rules: self.rules,
-            server: self.server,
-            remaining: MAX_BYTES,
-            exceptions: HashSet::new(),
-        };
-        nested.visit(json, Shape::Data, depth + 1)?;
+        self.visit(json, Shape::Data, depth + 1)?;
         // Also check the original representation for patterns spanning JSON fields.
         if self.rules.patterns.is_match(text) {
             *text = REDACTED.to_owned();
@@ -584,6 +591,37 @@ impl Scan<'_> {
         self.exceptions.insert(exception.clone());
         Ok(())
     }
+}
+
+fn parse_embedded_json(text: &str, max_depth: usize) -> Result<Option<Value>, Withheld> {
+    match serde_json::from_str(text) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.is_syntax() && exceeds_json_depth(text, max_depth) => Err(Withheld),
+        Err(_) => Ok(None),
+    }
+}
+
+fn exceeds_json_depth(text: &str, max_depth: usize) -> bool {
+    let mut depth = 0usize;
+    let mut quoted = false;
+    let mut bytes = text.bytes();
+    while let Some(byte) = bytes.next() {
+        match byte {
+            b'"' => quoted = !quoted,
+            b'\\' if quoted => {
+                bytes.next();
+            }
+            b'{' | b'[' if !quoted => {
+                depth += 1;
+                if depth > max_depth {
+                    return true;
+                }
+            }
+            b'}' | b']' if !quoted => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    false
 }
 
 impl Shape {
@@ -685,6 +723,38 @@ mod tests {
         ] {
             assert!(serde_json::from_value::<ResultSanitization>(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn regular_expression_limits_are_applied_before_activation() {
+        for patterns in [
+            vec!["abc".to_owned(); MAX_PATTERNS + 1],
+            vec!["a".repeat(MAX_PATTERN_BYTES + 1)],
+            vec!["a".repeat(MAX_PATTERN_BYTES); 1 + MAX_PATTERN_SET_BYTES / MAX_PATTERN_BYTES],
+            vec![format!("{}a{}", "(?:".repeat(33), ")".repeat(33))],
+        ] {
+            assert!(compile_patterns(&patterns).is_err());
+        }
+        let pattern = compile_patterns(&["(?i)\\bexample\\b".to_owned()]).unwrap();
+        assert!(pattern.is_match("EXAMPLE"));
+    }
+
+    #[test]
+    fn embedded_json_shares_the_budget_and_rejects_deep_json() {
+        let rules: ResultSanitization =
+            serde_json::from_value(json!({"fieldNames": ["private"]})).unwrap();
+        let deep = format!("{}0{}", "[".repeat(160), "]".repeat(160));
+        let large = json!({"label": "a".repeat(MAX_BYTES / 3)}).to_string();
+        for value in [json!([deep]), json!([large.clone(), large])] {
+            assert!(rules.sanitize("test", value, Shape::Data).is_err());
+        }
+        let brackets = "[".repeat(MAX_DEPTH + 1);
+        let quoted = json!({"label": brackets, "private": "removed"}).to_string();
+        let (result, _) = rules.sanitize("test", json!(quoted), Shape::Data).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(result.as_str().unwrap()).unwrap(),
+            json!({"label": brackets, "private": REDACTED})
+        );
     }
 
     #[test]

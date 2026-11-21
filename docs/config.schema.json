@@ -261,7 +261,12 @@
       "type": "object",
       "properties": {
         "fieldNames": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-        "patterns": { "type": "array", "items": { "type": "string" } },
+        "patterns": {
+          "type": "array",
+          "maxItems": 64,
+          "description": "At most 4 KiB of UTF-8 per pattern and 16 KiB across the set. Nesting and compiled size are also bounded.",
+          "items": { "type": "string", "maxLength": 4096 }
+        },
         "opaqueExceptions": {
           "type": "array",
           "items": {
