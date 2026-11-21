@@ -46,3 +46,15 @@ rule = "dependency-surface-growth"
 path = "Cargo.toml"
 line = 44
 reason = "Reviewed regex 1.13.1 against RustSec. Result sanitization uses bounded RegexSet compilation and existence matching with a shared inspection budget."
+
+[[suppressions]]
+rule = "dependency-surface-growth"
+path = "Cargo.toml"
+line = 45
+reason = "Reviewed serde-saphyr for bounded OpenAPI YAML deserialization with parser features restricted to deserialize."
+
+[[suppressions]]
+rule = "dependency-surface-growth"
+path = "Cargo.toml"
+line = 46
+reason = "Reviewed ipnet for validating operator-configured CIDR restrictions on remote OpenAPI specification fetches."
