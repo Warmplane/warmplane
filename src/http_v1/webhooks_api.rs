@@ -9,7 +9,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use serde::Deserialize;
+use serde::{de, Deserialize};
 use serde_json::json;
 
 use crate::daemon::AppState;
@@ -282,7 +282,8 @@ const MAX_ACTION_TOKEN_BYTES: usize = 512;
 struct ActionPayload {
     action_token: Option<String>,
     data: Option<ActionData>,
-    actions: Option<Vec<PlatformAction>>,
+    #[serde(default, deserialize_with = "first_platform_action")]
+    actions: Option<PlatformAction>,
     user: Option<PlatformUser>,
 }
 
@@ -310,8 +311,28 @@ impl ActionPayload {
             .or_else(|| self.data.as_ref().and_then(ActionData::token));
         plain
             .map(std::borrow::Cow::Borrowed)
-            .or_else(|| unwrap_platform_token(self.actions.as_ref()?.first()?.value.as_deref()?))
+            .or_else(|| unwrap_platform_token(self.actions.as_ref()?.value.as_deref()?))
     }
+}
+
+fn first_platform_action<'de, D: de::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<PlatformAction>, D::Error> {
+    struct FirstAction;
+    impl<'de> de::Visitor<'de> for FirstAction {
+        type Value = Option<PlatformAction>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an array of platform actions")
+        }
+
+        fn visit_seq<S: de::SeqAccess<'de>>(self, mut seq: S) -> Result<Self::Value, S::Error> {
+            let first = seq.next_element()?;
+            while seq.next_element::<de::IgnoredAny>()?.is_some() {}
+            Ok(first)
+        }
+    }
+    deserializer.deserialize_seq(FirstAction)
 }
 
 impl ActionData {
@@ -336,7 +357,10 @@ fn parse_action_json<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Option<T> 
     if bytes.len() > MAX_ACTION_BODY_BYTES {
         return None;
     }
-    serde_json::from_slice(bytes).ok()
+    let mut input = serde_json::Deserializer::from_slice(bytes);
+    let payload = T::deserialize(&mut input).ok()?;
+    input.end().ok()?;
+    Some(payload)
 }
 
 async fn signed_approval_callback(
@@ -649,6 +673,12 @@ mod tests {
             decode_action_payload(br#"{"actions":[{"value":"{\"action_token\":\"fixture\"}"}]}"#)
                 .unwrap();
         assert_eq!(nested.action_token().as_deref(), Some("fixture"));
+
+        let first = decode_action_payload(
+            br#"{"actions":[{"value":"first"},{"value":{"platform_extension":true}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(first.action_token().as_deref(), Some("first"));
     }
 
     #[tokio::test]
