@@ -256,12 +256,13 @@ Warmplane is engineered in pure Rust with zero-cost abstractions:
 
 ## Changelog
 
-### v0.35.0 — Trust controls for existing integrations
+### v0.35.0 — Trust controls and OpenAPI integrations
 
 - **Result sanitization.** Opt-in `policy.resultSanitization` rules redact configured fields and text values that match a pattern in upstream tool, resource, and prompt results across REST, MCP, and embedded clients. Warmplane withholds results that exceed inspection limits and requires an exact exception for opaque content. The policy also covers stored responses and values passed between batch steps.
 - **Tool definition pins.** Enable `requireToolPins` per upstream to review and approve observed tool definitions in Control Deck. Tools without a matching approval are quarantined from discovery and execution. Warmplane checks the reviewed definition again before dispatching held or approved calls.
 - **Signed ChatOps approvals.** Resolve approvals through signed Slack interactions or a Teams or generic relay. Warmplane stores decision receipts and exposes delivery status separately from the approval decision and upstream task outcome.
 - **Control Deck.** Operators can configure trust controls, compare observed and approved tool definitions, and review approval activity alongside profile-scoped tasks.
+- **OpenAPI integrations.** Configure local or remote OpenAPI specifications as governed capability sources, review operation pins, and use explicitly enabled, idempotent writes. The Control Deck can record reversibility contracts against isolated test targets before activation.
 
 **ChatOps upgrade.** The legacy `/v1/webhooks/callbacks` endpoint now returns `410`. To enable signed approval cards, configure `/v1/webhooks/actions`, persistent state, and an action role. With RBAC enabled, set the approval tenant and grant the role `resolveApprovals`. Slack requires its own signing secret. Request a fresh invocation for outstanding legacy cards and pending approvals from an earlier daemon process. See [the ChatOps migration guide](docs/USER-GUIDE.md#migrate-chatops-approvals-to-signed-actions).
 
