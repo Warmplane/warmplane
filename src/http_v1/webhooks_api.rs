@@ -405,14 +405,17 @@ fn parse_action_token(raw: &str) -> Option<(String, u64)> {
     if signature.len() != 32 || !signature.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
-    if target.is_empty()
-        || !target
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-    {
+    if !valid_action_target(target) {
         return None;
     }
     Some((target.to_owned(), expiry.parse().ok()?))
+}
+
+fn valid_action_target(target: &str) -> bool {
+    !target.is_empty()
+        && target
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 #[derive(Deserialize)]
