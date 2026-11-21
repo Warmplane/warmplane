@@ -39,7 +39,7 @@ pub async fn handle_catalog_events(
     Query(query): Query<CatalogEventsQuery>,
 ) -> impl IntoResponse {
     let (events, next_cursor) = state.event_store.get_events_after(query.after.as_deref());
-    let catalog_ver = state.catalog_version.read().await.clone();
+    let catalog_ver = state.tool_catalog().await.version;
     (
         make_etag_header(&catalog_ver),
         Json(CatalogEventsResponse {
@@ -82,7 +82,7 @@ pub async fn handle_search_capabilities(
         .modes(payload.modes)
         .build();
 
-    let caps = state.capabilities.read().await;
+    let catalog = state.tool_catalog().await;
     let base_pol = state.policy.read().await;
     let pol = req_ext
         .0
@@ -90,14 +90,13 @@ pub async fn handle_search_capabilities(
         .map(|ctx| ctx.effective_policy.clone())
         .unwrap_or_else(|| base_pol.clone())
         .merge_with_profile(prof_ctx.profile_policy.as_ref());
-    let base_ver = state.catalog_version.read().await.clone();
     let catalog_ver =
-        crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
+        crate::http_v1::helpers::get_profile_scoped_catalog_version(&catalog.version, &prof_ctx);
     let limit = payload.limit.clamp(1, 100);
 
     let results = state
         .search_engine
-        .search(query_str, limit, &filter, &caps, &pol);
+        .search(query_str, limit, &filter, &catalog.items, &pol);
 
     (
         make_etag_header(&catalog_ver),
@@ -411,9 +410,9 @@ pub async fn handle_list_capabilities(
         .unwrap_or_else(|| base_pol.clone())
         .merge_with_profile(prof_ctx.profile_policy.as_ref());
 
-    let base_ver = state.catalog_version.read().await.clone();
+    let catalog = state.tool_catalog().await;
     let catalog_ver =
-        crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
+        crate::http_v1::helpers::get_profile_scoped_catalog_version(&catalog.version, &prof_ctx);
 
     if check_if_none_match(&headers, &catalog_ver) {
         state.total_etag_hits.fetch_add(1, Ordering::Relaxed);
@@ -425,7 +424,7 @@ pub async fn handle_list_capabilities(
             .into_response();
     }
 
-    let caps_guard = state.capabilities.read().await;
+    let caps_guard = catalog.items;
     let total_unfiltered = caps_guard.len();
     let mut capabilities = caps_guard
         .iter()
@@ -504,9 +503,9 @@ pub async fn handle_describe_capability(
             .into_response();
     }
 
-    let base_ver = state.catalog_version.read().await.clone();
+    let catalog = state.tool_catalog().await;
     let catalog_ver =
-        crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
+        crate::http_v1::helpers::get_profile_scoped_catalog_version(&catalog.version, &prof_ctx);
 
     if check_if_none_match(&headers, &catalog_ver) {
         return (
@@ -517,7 +516,7 @@ pub async fn handle_describe_capability(
             .into_response();
     }
 
-    let caps_guard = state.capabilities.read().await;
+    let caps_guard = catalog.items;
     match caps_guard.get(&id) {
         Some(CapabilityMeta {
             server,
@@ -915,6 +914,63 @@ struct CatalogCall {
     cancel_token: tokio_util::sync::CancellationToken,
 }
 
+impl CatalogCall {
+    async fn deliver(
+        self,
+        state: &AppState,
+        server_id: &str,
+        data: Value,
+        log: CatalogLog<'_>,
+    ) -> axum::response::Response {
+        let Self {
+            trace_id,
+            request_id,
+            req_context,
+            ..
+        } = self;
+        let data = match state
+            .sanitize_result(server_id, &trace_id, data, log.kind.result_shape())
+            .await
+        {
+            Ok(result) => {
+                if result.revision.is_none() {
+                    log.success(&trace_id, &request_id, &result.value);
+                }
+                result.value
+            }
+            Err(withheld) => {
+                let error = crate::WarmplaneError::from(withheld);
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(error_envelope(
+                        trace_id,
+                        Some(request_id),
+                        Some(req_context),
+                        crate::idempotency::RetryMetadata::safe("completed"),
+                        &error.code,
+                        error.message,
+                        false,
+                    )),
+                )
+                    .into_response();
+            }
+        };
+        (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "request_id": request_id,
+                "context": req_context,
+                "trace_id": trace_id,
+                "data": data,
+                "error": null,
+                "retry": crate::idempotency::RetryMetadata::safe("completed"),
+            })),
+        )
+            .into_response()
+    }
+}
+
 async fn dispatch_catalog_call(
     state: &AppState,
     server_id: &str,
@@ -971,20 +1027,14 @@ async fn dispatch_catalog_call(
 
     match result {
         Ok(Ok(data)) => {
-            log.success(&trace_id, &request_id, &data);
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "ok": true,
-                    "request_id": request_id,
-                    "context": req_context,
-                    "trace_id": trace_id,
-                    "data": data,
-                    "error": null,
-                    "retry": crate::idempotency::RetryMetadata::safe("completed"),
-                })),
-            )
-                .into_response()
+            CatalogCall {
+                trace_id,
+                request_id,
+                req_context,
+                cancel_token,
+            }
+            .deliver(state, server_id, data, log)
+            .await
         }
         Ok(Err(UpstreamCallError::Timeout)) => (
             StatusCode::GATEWAY_TIMEOUT,
@@ -1007,12 +1057,12 @@ async fn dispatch_catalog_call(
                 Some(req_context),
                 crate::idempotency::RetryMetadata::safe("unknown"),
                 "UPSTREAM_ERROR",
-                err,
+                state.safe_upstream_error(err).await,
                 false,
             )),
         )
             .into_response(),
-        Err(_) => (
+        Ok(Err(UpstreamCallError::ToolDefinitionChanged)) | Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(error_envelope(
                 trace_id,
@@ -1195,6 +1245,17 @@ impl CatalogCall {
 enum CatalogKind {
     Resource,
     Prompt,
+}
+
+impl CatalogKind {
+    fn result_shape(self) -> crate::result_sanitization::Shape {
+        use crate::result_sanitization::Shape;
+
+        match self {
+            Self::Resource => Shape::ResourceRead,
+            Self::Prompt => Shape::Prompt,
+        }
+    }
 }
 
 impl std::fmt::Display for CatalogKind {

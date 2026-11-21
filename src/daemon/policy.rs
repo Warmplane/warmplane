@@ -13,6 +13,8 @@ pub struct Policy {
     pub deny: Vec<String>,
     /// Keys to redact in logged payload envelopes.
     pub redact_keys: Vec<String>,
+    /// Global rules applied to upstream results before delivery.
+    pub result_sanitization: Option<crate::result_sanitization::ResultSanitization>,
     /// List of wildcard patterns requiring human operator approval.
     pub require_approval: Vec<String>,
     /// Timeout in seconds before a pending approval expires.
@@ -29,6 +31,7 @@ impl Default for Policy {
             allow: Vec::new(),
             deny: Vec::new(),
             redact_keys: Vec::new(),
+            result_sanitization: None,
             require_approval: Vec::new(),
             approval_timeout_secs: 300,
             hold_window_secs: None,
@@ -53,6 +56,7 @@ impl Policy {
             allow: config.allow,
             deny: config.deny,
             redact_keys: config.redact_keys,
+            result_sanitization: config.result_sanitization,
             require_approval: config.require_approval,
             approval_timeout_secs: config.approval_timeout_secs.unwrap_or(300),
             hold_window_secs: config.hold_window_secs,
@@ -146,6 +150,7 @@ impl Policy {
             allow,
             deny,
             redact_keys,
+            result_sanitization: self.result_sanitization.clone(),
             require_approval,
             approval_timeout_secs: if prof_pol.approval_timeout_secs > 0
                 && prof_pol.approval_timeout_secs != 300

@@ -2,7 +2,7 @@
 
 //! Dynamic server mounting, unmounting, and configuration reconciliation lifecycle operations.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use serde_json::json;
 use std::collections::HashMap;
 use tracing::{info, warn};
@@ -99,8 +99,8 @@ impl AppState {
             "http"
         };
 
-        let (new_capabilities, new_resources, new_prompts, tx) = if srv_cfg.command.is_some() {
-            crate::supervisor::spawn_supervised_stdio_server(
+        let (new_capabilities, new_resources, new_prompts, tx) =
+            crate::supervisor::spawn_configured_upstream(
                 self,
                 server_id,
                 srv_cfg,
@@ -108,23 +108,7 @@ impl AppState {
                 resource_aliases,
                 prompt_aliases,
             )
-            .await?
-        } else if srv_cfg.url.is_some() {
-            crate::supervisor::spawn_supervised_http_server(
-                self,
-                server_id,
-                srv_cfg,
-                capability_aliases,
-                resource_aliases,
-                prompt_aliases,
-            )
-            .await?
-        } else {
-            return Err(anyhow!(
-                "Server '{}' missing transport selector: set exactly one of 'command' or 'url'",
-                server_id
-            ));
-        };
+            .await?;
 
         let resilience_cfg = srv_cfg.resilience.clone().unwrap_or_default();
         self.circuit_breakers
@@ -175,9 +159,9 @@ impl AppState {
             caps_guard.retain(|id, meta| meta.server != server_id || new_ids.contains(id));
             for (id, meta) in new_capabilities {
                 info!(%server_id, capability_id = %id, "registered upstream capability");
-                caps_guard.insert(id.clone(), meta);
-                self.event_store.record("capability", &id, "added");
+                caps_guard.insert(id, meta);
             }
+            self.record_tool_catalog_events(server_id, &caps_guard);
         }
         {
             let mut res_guard = self.resources.write().await;
@@ -276,8 +260,8 @@ impl AppState {
             let mut caps_guard = self.capabilities.write().await;
             for id in removed_caps {
                 caps_guard.remove(&id);
-                self.event_store.record("capability", &id, "removed");
             }
+            self.record_tool_catalog_events(server_id, &caps_guard);
         }
         {
             let mut res_guard = self.resources.write().await;
@@ -293,6 +277,7 @@ impl AppState {
                 self.event_store.record("prompt", &id, "removed");
             }
         }
+        self.tool_pins.remove_server(server_id);
 
         self.refresh_server_catalog(server_id).await;
 
@@ -348,6 +333,12 @@ impl AppState {
         info!(config_path = %self.config_path, "reloading configuration from disk");
 
         let config = crate::config::load_config(&self.config_path)?;
+        self.approval_registry.validate_webhook_storage(
+            config
+                .policy
+                .as_ref()
+                .and_then(|policy| policy.webhook.as_ref()),
+        )?;
 
         // 1. Update security policy atomically
         {

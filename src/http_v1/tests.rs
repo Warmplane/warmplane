@@ -39,6 +39,95 @@ use serde_json::{json, Value};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
 
+#[tokio::test]
+async fn policy_update_preserves_masked_webhook_credentials() {
+    use crate::http_v1::config_api::{handle_update_policy, TrustAdmin};
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    let path = path.to_str().unwrap();
+    let config = serde_json::from_value::<crate::config::McpConfig>(json!({
+        "policy": {"webhook": {
+            "url": "https://example.invalid/events",
+            "secret": "fixture-webhook-key",
+            "authHeader": "Bearer fixture",
+            "format": "slack",
+            "slackSigningSecret": "fixture-slack-key",
+            "callbackUrl": "https://example.invalid/v1/webhooks/actions",
+            "events": ["approval.requested"],
+            "actionRole": "reviewer"
+        }}
+    }))
+    .unwrap();
+    crate::config::save_config(path, &config).unwrap();
+    let registry =
+        crate::approvals::ApprovalRegistry::open_or_create(directory.path().join("approvals.json"))
+            .unwrap();
+    let state = AppState::builder()
+        .config_path(path.to_owned())
+        .approval_registry(registry)
+        .build();
+    let response = handle_get_config(State(state.clone()))
+        .await
+        .into_response();
+    let json: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap()).unwrap();
+    let mut policy: crate::config::PolicyConfig =
+        serde_json::from_value(json["config"]["policy"].clone()).unwrap();
+    policy.deny.push("fixture.delete".into());
+    let response = handle_update_policy(
+        State(state.clone()),
+        Some(axum::Extension(TrustAdmin(true))),
+        Json(policy),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    let updated = crate::config::load_config(path).unwrap().policy.unwrap();
+    assert_eq!(updated.deny, ["fixture.delete"]);
+    assert_eq!(updated.webhook, config.policy.unwrap().webhook);
+    assert_eq!(state.policy.read().await.webhook, updated.webhook);
+}
+
+#[tokio::test]
+async fn signed_approval_configuration_requires_persistent_state() {
+    use crate::http_v1::config_api::{handle_update_policy, TrustAdmin};
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.json");
+    let path = path.to_str().unwrap();
+    let config: crate::config::McpConfig = serde_json::from_value(json!({
+        "state": {"enabled": false},
+        "policy": {"webhook": {
+            "url": "https://example.invalid/events",
+            "secret": "fixture-key",
+            "callbackUrl": "https://example.invalid/v1/webhooks/actions",
+            "events": ["approval.requested"],
+            "actionRole": "reviewer"
+        }}
+    }))
+    .unwrap();
+    assert!(crate::config::save_config(path, &config).is_err());
+    assert!(
+        crate::daemon::server::initialize_state(config.clone(), path)
+            .await
+            .is_err()
+    );
+
+    let state = AppState::builder().config_path(path.to_owned()).build();
+    let policy = config.policy.unwrap();
+    let response = handle_update_policy(
+        State(state.clone()),
+        Some(axum::Extension(TrustAdmin(true))),
+        Json(policy),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(state.policy.read().await.webhook.is_none());
+    assert!(!std::path::Path::new(path).exists());
+}
+
 #[test]
 fn redact_value_masks_nested_keys_case_insensitive() {
     let input = json!({
@@ -54,6 +143,62 @@ fn redact_value_masks_nested_keys_case_insensitive() {
     assert_eq!(redacted["token"], "<redacted>");
     assert_eq!(redacted["nested"]["Api_Key"], "<redacted>");
     assert_eq!(redacted["nested"]["safe"], 1);
+}
+
+#[tokio::test]
+async fn task_input_respects_the_task_profile() {
+    use crate::http_v1::tasks_api::{handle_update_task, UpdateTaskRequest};
+    use crate::{
+        result_sanitization::ResultAccess,
+        tasks::{CreateTaskParams, TaskStatus},
+    };
+
+    let state = AppState::builder().build();
+    let (task, waiter) = state
+        .task_registry
+        .create_scoped_task(
+            CreateTaskParams {
+                capability_id: "fixture.input".to_owned(),
+                server_id: "fixture".to_owned(),
+                args: json!({}),
+                request_id: None,
+                context: None,
+                idempotency_key: None,
+                initial_status: TaskStatus::InputRequired,
+                status_message: None,
+                input_requests: Some(std::collections::BTreeMap::from([(
+                    "answer".into(),
+                    json!({}),
+                )])),
+                ttl_ms: None,
+                poll_interval_ms: None,
+            },
+            Some(ResultAccess::new("default", Some("selected"))),
+        )
+        .await;
+    for (profile, expected) in [
+        ("different", StatusCode::BAD_REQUEST),
+        ("selected", StatusCode::OK),
+    ] {
+        let response = handle_update_task(
+            State(state.clone()),
+            Path(task.task_id.clone()),
+            None,
+            Some(axum::Extension(crate::context::ProfileContext::scoped(
+                profile,
+                ["fixture"],
+            ))),
+            Json(UpdateTaskRequest {
+                input_responses: std::collections::BTreeMap::from([(
+                    "answer".into(),
+                    json!(profile),
+                )]),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), expected);
+    }
+    assert_eq!(waiter.unwrap().await.unwrap()["answer"], "selected");
 }
 
 #[tokio::test]
@@ -792,6 +937,7 @@ async fn test_mrtr_call_capability_round_trip() {
             input_responses,
             request_state,
             reply,
+            ..
         }) = rx.recv().await
         {
             assert_eq!(name, "interactive_tool");
@@ -946,9 +1092,11 @@ async fn test_ui_and_config_rest_api() {
 
     let upsert_res = handle_upsert_server(
         State(state.clone()),
+        None,
         Json(UpsertServerRequest {
             name: "node_srv".to_string(),
             server: new_server,
+            preserve_unedited: false,
         }),
     )
     .await
@@ -1274,6 +1422,7 @@ async fn test_hitl_approval_flow_and_endpoints() {
         allow: vec!["*".to_string()],
         deny: vec![],
         redact_keys: vec![],
+        result_sanitization: None,
         require_approval: vec!["docker.run*".to_string()],
         approval_timeout_secs: 10,
         hold_window_secs: None,
@@ -1314,7 +1463,7 @@ async fn test_hitl_approval_flow_and_endpoints() {
     let approval_id = payload["approval_id"].as_str().unwrap().to_string();
 
     // 2. Test List Approvals contains our ticket
-    let list_res = handle_list_approvals(State(state.clone()))
+    let list_res = handle_list_approvals(State(state.clone()), None)
         .await
         .into_response();
     assert_eq!(list_res.status(), StatusCode::OK);
@@ -1336,6 +1485,7 @@ async fn test_hitl_approval_flow_and_endpoints() {
         let appr_res = handle_approve_ticket(
             State(state_clone.clone()),
             axum::extract::Path(approval_id_clone),
+            None,
             Json(ApproveTicketRequest {
                 operator: "sec-admin".to_string(),
                 modified_args: Some(json!({"image": "ubuntu", "command": "echo safe"})),
@@ -1372,6 +1522,7 @@ async fn test_hitl_approval_flow_and_endpoints() {
             let _ = handle_approve_ticket(
                 State(state_for_sync.clone()),
                 axum::extract::Path(second_ticket.id.clone()),
+                None,
                 Json(ApproveTicketRequest {
                     operator: "sec-admin".to_string(),
                     modified_args: Some(json!({"image": "ubuntu", "command": "echo safe"})),
@@ -1420,6 +1571,7 @@ async fn test_hitl_rejection_returns_structured_envelope() {
         allow: vec!["*".to_string()],
         deny: vec![],
         redact_keys: vec![],
+        result_sanitization: None,
         require_approval: vec!["db.drop*".to_string()],
         approval_timeout_secs: 5,
         hold_window_secs: None,
@@ -1440,6 +1592,7 @@ async fn test_hitl_rejection_returns_structured_envelope() {
             let _ = handle_reject_ticket(
                 State(state_clone.clone()),
                 axum::extract::Path(ticket.id.clone()),
+                None,
                 Json(RejectTicketRequest {
                     operator: "lead-dba".to_string(),
                     reason: Some("Cannot drop production table".to_string()),
@@ -1473,7 +1626,7 @@ async fn test_hitl_rejection_returns_structured_envelope() {
         .as_str()
         .unwrap()
         .contains("Cannot drop production table"));
-    assert_eq!(payload["error"]["operator"], "lead-dba");
+    assert_eq!(payload["error"]["operator"], "local-operator");
 }
 
 #[tokio::test]
@@ -1799,6 +1952,7 @@ async fn test_ui_config_profiles_crud() {
             url: None,
             protocol_version: None,
             allow_stateless: None,
+            require_tool_pins: false,
             headers: HashMap::new(),
             auth: None,
             resilience: None,
@@ -1875,22 +2029,6 @@ async fn test_ui_config_profiles_crud() {
 async fn test_task_update_bridges_to_approval_resolution() {
     let state = AppState::builder().build();
 
-    // 1. Create a pending approval ticket
-    let (appr_id, _rx) = state
-        .approval_registry
-        .create_approval(crate::approvals::CreateApprovalRequest {
-            capability_id: "sqlite.list_tables".to_string(),
-            server_id: "sqlite".to_string(),
-            args: json!({}),
-            sanitized_args: json!({}),
-            request_id: Some("req-test-bridge-1".to_string()),
-            context: None,
-            timeout_secs: 60,
-            webhook: None,
-        })
-        .await;
-
-    // 2. Create matching Task with the same request_id
     let mut input_requests = std::collections::BTreeMap::new();
     input_requests.insert(
         "hitl_approval".to_string(),
@@ -1920,6 +2058,29 @@ async fn test_task_update_bridges_to_approval_resolution() {
         })
         .await;
 
+    // 1. Create a pending approval ticket
+    let (appr_id, _rx) = state
+        .approval_registry
+        .create_scoped_approval(
+            crate::approvals::CreateApprovalRequest {
+                capability_id: "sqlite.list_tables".to_string(),
+                server_id: "sqlite".to_string(),
+                args: json!({}),
+                sanitized_args: json!({}),
+                request_id: Some("req-test-bridge-1".to_string()),
+                context: None,
+                timeout_secs: 60,
+                webhook: None,
+            },
+            Some(crate::approvals::ApprovalOwnership::new(
+                "default",
+                Some(&task_record.task_id),
+                &json!({}),
+                None,
+            )),
+        )
+        .await;
+
     // Verify both are pending
     let ticket_before = state.approval_registry.get(&appr_id).await.unwrap();
     assert_eq!(
@@ -1941,6 +2102,8 @@ async fn test_task_update_bridges_to_approval_resolution() {
     let update_res = crate::http_v1::tasks_api::handle_update_task(
         State(state.clone()),
         Path(task_record.task_id.clone()),
+        None,
+        None,
         Json(crate::http_v1::tasks_api::UpdateTaskRequest {
             input_responses: responses,
         }),
@@ -1958,7 +2121,7 @@ async fn test_task_update_bridges_to_approval_resolution() {
             modified_args,
             ..
         } => {
-            assert_eq!(operator, "test-admin");
+            assert_eq!(operator, "local-operator");
             assert_eq!(modified_args, Some(json!({ "table": "users" })));
         }
         _ => panic!(

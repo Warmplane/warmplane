@@ -2,7 +2,7 @@
 //! HTTP v1 handlers for WORM audit log querying, verification, export, and analytics.
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
@@ -12,7 +12,11 @@ use serde_json::json;
 
 use crate::{
     audit::{AuditEventStatus, AuditEventType, AuditQueryFilter},
+    context::ProfileContext,
     daemon::AppState,
+    idempotency::PersistedIdempotencyRecord,
+    rbac::TenantContext,
+    result_sanitization::{ResultAccess, Withheld},
 };
 
 /// Parses a string into an `AuditEventType`.
@@ -27,6 +31,7 @@ fn parse_event_type(et: &str) -> Option<AuditEventType> {
         "config_mutation" => Some(AuditEventType::ConfigMutation),
         "sampling_call" => Some(AuditEventType::SamplingCall),
         "resource_access" => Some(AuditEventType::ResourceAccess),
+        "result_sanitization" => Some(AuditEventType::ResultSanitization),
         "emission_held" => Some(AuditEventType::EmissionHeld),
         "emission_cancelled" => Some(AuditEventType::EmissionCancelled),
         _ => None,
@@ -147,11 +152,20 @@ pub struct IdempotencyListQuery {
 /// Handles GET `/v1/idempotency/records` listing cached idempotency records.
 pub async fn handle_list_idempotency_records(
     State(state): State<AppState>,
+    Extension(tenant): Extension<Option<TenantContext>>,
+    profile: Option<Extension<ProfileContext>>,
     Query(query): Query<IdempotencyListQuery>,
 ) -> impl IntoResponse {
     let limit = query.limit.unwrap_or(50);
     let offset = query.offset.unwrap_or(0);
-    let records = state.idempotency_store.list_records(limit, offset).await;
+    let mut records = Vec::new();
+    for record in state.idempotency_store.list_records(limit, offset).await {
+        if let Some(record) =
+            inspect_idempotency_record(&state, record, tenant.as_ref(), profile.as_deref()).await
+        {
+            records.push(record);
+        }
+    }
     (
         StatusCode::OK,
         Json(json!({
@@ -167,9 +181,17 @@ pub async fn handle_list_idempotency_records(
 /// Handles GET `/v1/idempotency/records/:key` fetching a single cached idempotency record.
 pub async fn handle_get_idempotency_record(
     State(state): State<AppState>,
+    Extension(tenant): Extension<Option<TenantContext>>,
+    profile: Option<Extension<ProfileContext>>,
     Path(key): Path<String>,
 ) -> impl IntoResponse {
-    match state.idempotency_store.get_record(&key).await {
+    let record = match state.idempotency_store.get_record(&key).await {
+        Some(record) => {
+            inspect_idempotency_record(&state, record, tenant.as_ref(), profile.as_deref()).await
+        }
+        None => None,
+    };
+    match record {
         Some(record) => (
             StatusCode::OK,
             Json(json!({
@@ -187,6 +209,39 @@ pub async fn handle_get_idempotency_record(
         )
             .into_response(),
     }
+}
+
+async fn inspect_idempotency_record(
+    state: &AppState,
+    mut record: PersistedIdempotencyRecord,
+    tenant: Option<&TenantContext>,
+    profile: Option<&ProfileContext>,
+) -> Option<PersistedIdempotencyRecord> {
+    if !state.trust_controls_active().await {
+        return Some(record);
+    }
+    let profile_id = profile.and_then(|profile| profile.profile_id.as_deref());
+    let access = ResultAccess::new(
+        tenant.map_or("default", |context| context.tenant_id.as_str()),
+        profile_id,
+    );
+    let default_role = state.rbac_engine.default_role();
+    let role = tenant.map_or(default_role.as_str(), |context| context.role.as_str());
+    let capability = record.capability_id.as_deref()?;
+    let local_legacy_record =
+        !state.rbac_engine.is_enabled() && profile_id.is_none() && record.result_access.is_none();
+    if (!local_legacy_record && record.result_access.as_ref() != Some(&access))
+        || !access.permits_capability(state, capability, role).await
+    {
+        return None;
+    }
+    if !state
+        .accepts_result_revision(record.result_policy_revision.as_deref())
+        .await
+    {
+        record.response = json!({"ok": false, "error": crate::WarmplaneError::from(Withheld)});
+    }
+    Some(record)
 }
 
 /// Handles GET `/v1/audit/events/:id` returning a single audit event record.

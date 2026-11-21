@@ -16,6 +16,51 @@ use crate::{
     http_v1,
 };
 
+fn initialize_audit(
+    config: Option<&crate::config::AuditConfig>,
+) -> Result<(crate::audit::SharedAuditStore, crate::audit::AuditHandle)> {
+    let audit = if let Some(audit_cfg) = config.filter(|cfg| cfg.enabled) {
+        let hmac_key_bytes = audit_cfg.resolve_hmac_key().map(|k| k.into_bytes());
+        let store = if let Some(ref path) = audit_cfg.file_path {
+            Arc::new(crate::audit::AuditStore::open_or_create_with_key(
+                path,
+                hmac_key_bytes,
+            )?)
+        } else {
+            Arc::new(crate::audit::AuditStore::in_memory_with_key(hmac_key_bytes))
+        };
+        let siem_dispatcher = audit_cfg
+            .siem
+            .clone()
+            .map(|cfg| crate::audit::SiemDispatcher::new(Some(cfg)));
+        let handle = crate::audit::spawn_audit_worker(
+            store.clone(),
+            siem_dispatcher,
+            audit_cfg
+                .buffer_capacity
+                .unwrap_or(crate::audit::DEFAULT_AUDIT_BUFFER_CAPACITY),
+            audit_cfg
+                .flush_interval_ms
+                .unwrap_or(crate::audit::DEFAULT_AUDIT_FLUSH_INTERVAL_MS),
+            audit_cfg
+                .max_batch_size
+                .unwrap_or(crate::audit::DEFAULT_AUDIT_MAX_BATCH_SIZE),
+        );
+        (store, handle)
+    } else {
+        let store = Arc::new(crate::audit::AuditStore::in_memory());
+        let handle = crate::audit::spawn_audit_worker(
+            store.clone(),
+            None,
+            crate::audit::DEFAULT_AUDIT_BUFFER_CAPACITY,
+            crate::audit::DEFAULT_AUDIT_FLUSH_INTERVAL_MS,
+            crate::audit::DEFAULT_AUDIT_MAX_BATCH_SIZE,
+        );
+        (store, handle)
+    };
+    Ok(audit)
+}
+
 /// Boots all configured upstream MCP servers and constructs global `AppState`.
 ///
 /// # Arguments
@@ -31,6 +76,8 @@ pub async fn initialize_state(
     config: McpConfig,
     config_path: impl Into<String>,
 ) -> Result<AppState> {
+    crate::config::validate_result_sanitization(&config)?;
+    crate::config::validate_approval_configuration(&config)?;
     let config_path_str = config_path.into();
     let tool_timeout_ms = config.tool_timeout_ms.unwrap_or(DEFAULT_TOOL_TIMEOUT_MS);
     let policy = Policy::from_config(config.policy.clone());
@@ -40,6 +87,12 @@ pub async fn initialize_state(
         Some(s) if s.enabled => s.dir.as_deref().or(Some(".warmplane/state")),
         Some(_) => None,
         None => Some(".warmplane/state"),
+    };
+    let tool_pins = match state_dir_opt {
+        Some(directory) => crate::tool_pins::ToolPins::open(
+            &std::path::Path::new(directory).join("tool_pins.json"),
+        )?,
+        None => crate::tool_pins::ToolPins::default(),
     };
 
     let (
@@ -101,57 +154,7 @@ pub async fn initialize_state(
 
     let search_engine = Arc::new(crate::search::HybridSearchEngine::new());
 
-    let (audit_store, audit_handle) = if let Some(ref audit_cfg) = config.audit {
-        let hmac_key_bytes = audit_cfg.resolve_hmac_key().map(|k| k.into_bytes());
-        if audit_cfg.enabled {
-            let store = if let Some(ref path) = audit_cfg.file_path {
-                Arc::new(crate::audit::AuditStore::open_or_create_with_key(
-                    path,
-                    hmac_key_bytes,
-                )?)
-            } else {
-                Arc::new(crate::audit::AuditStore::in_memory_with_key(hmac_key_bytes))
-            };
-            let siem_dispatcher = audit_cfg
-                .siem
-                .clone()
-                .map(|cfg| crate::audit::SiemDispatcher::new(Some(cfg)));
-            let handle = crate::audit::spawn_audit_worker(
-                store.clone(),
-                siem_dispatcher,
-                audit_cfg
-                    .buffer_capacity
-                    .unwrap_or(crate::audit::DEFAULT_AUDIT_BUFFER_CAPACITY),
-                audit_cfg
-                    .flush_interval_ms
-                    .unwrap_or(crate::audit::DEFAULT_AUDIT_FLUSH_INTERVAL_MS),
-                audit_cfg
-                    .max_batch_size
-                    .unwrap_or(crate::audit::DEFAULT_AUDIT_MAX_BATCH_SIZE),
-            );
-            (store, handle)
-        } else {
-            let store = Arc::new(crate::audit::AuditStore::in_memory());
-            let handle = crate::audit::spawn_audit_worker(
-                store.clone(),
-                None,
-                crate::audit::DEFAULT_AUDIT_BUFFER_CAPACITY,
-                crate::audit::DEFAULT_AUDIT_FLUSH_INTERVAL_MS,
-                crate::audit::DEFAULT_AUDIT_MAX_BATCH_SIZE,
-            );
-            (store, handle)
-        }
-    } else {
-        let store = Arc::new(crate::audit::AuditStore::in_memory());
-        let handle = crate::audit::spawn_audit_worker(
-            store.clone(),
-            None,
-            crate::audit::DEFAULT_AUDIT_BUFFER_CAPACITY,
-            crate::audit::DEFAULT_AUDIT_FLUSH_INTERVAL_MS,
-            crate::audit::DEFAULT_AUDIT_MAX_BATCH_SIZE,
-        );
-        (store, handle)
-    };
+    let (audit_store, audit_handle) = initialize_audit(config.audit.as_ref())?;
 
     let auth_token = config.auth_token.or_else(|| {
         std::env::var("WARMPLANE_AUTH_TOKEN")
@@ -164,6 +167,7 @@ pub async fn initialize_state(
     let mut state_builder = AppState::builder()
         .servers_arc(Arc::new(RwLock::new(HashMap::new())))
         .capabilities_arc(Arc::new(RwLock::new(HashMap::new())))
+        .tool_pins(tool_pins)
         .resources_arc(Arc::new(RwLock::new(HashMap::new())))
         .prompts_arc(Arc::new(RwLock::new(HashMap::new())))
         .tool_timeout_ms(tool_timeout_ms)
@@ -313,6 +317,11 @@ pub fn build_router(app_state: AppState) -> Router {
         .route("/v1/config/import", post(http_v1::handle_import_config))
         .route("/v1/config/alias", post(http_v1::handle_update_alias))
         .route("/v1/config/policy", post(http_v1::handle_update_policy))
+        .route("/v1/config/tool-pins", get(http_v1::handle_list_tool_pins))
+        .route(
+            "/v1/config/tool-pins/approve",
+            post(http_v1::handle_approve_tool_pin),
+        )
         .route("/v1/config/profiles", post(http_v1::handle_upsert_profile))
         .route(
             "/v1/config/profiles/:id",
@@ -354,7 +363,12 @@ pub fn build_router(app_state: AppState) -> Router {
             "/v1/webhooks/callbacks",
             post(http_v1::handle_webhook_callback),
         )
-        .route("/v1/webhooks/actions", post(http_v1::handle_webhook_action))
+        .route(
+            "/v1/webhooks/actions",
+            post(http_v1::handle_webhook_action).layer(axum::extract::DefaultBodyLimit::max(
+                http_v1::webhooks_api::MAX_ACTION_BODY_BYTES,
+            )),
+        )
         .route("/v1/webhooks/test", post(http_v1::handle_test_webhook))
         // SEP-2663 Tasks Endpoints
         .route("/v1/tasks", get(http_v1::handle_list_tasks))
@@ -409,6 +423,8 @@ pub async fn security_guard_middleware(
     let headers = req.headers();
     let path = req.uri().path();
     let signed_chatops_action = path == "/v1/webhooks/actions";
+    let legacy_chatops_callback = path == "/v1/webhooks/callbacks";
+    let public_chatops_route = signed_chatops_action || legacy_chatops_callback;
 
     // 1. Host Validation (prevents DNS rebinding against 127.0.0.1)
     if let Some(host_hdr) = headers.get("host").and_then(|h| h.to_str().ok()) {
@@ -419,7 +435,7 @@ pub async fn security_guard_middleware(
             || host_name == "[::1]";
 
         let configured_chatops_host =
-            signed_chatops_action && configured_chatops_callback_host(&state.config_path, host_hdr);
+            public_chatops_route && configured_chatops_callback_host(&state.config_path, host_hdr);
         if !is_valid_host && !configured_chatops_host {
             return (
                 StatusCode::FORBIDDEN,
@@ -454,79 +470,36 @@ pub async fn security_guard_middleware(
         }
     }
 
-    // 3. RBAC & Auth Token verification
-    let mut tenant_ctx = None;
-    // ChatOps actions authenticate with a purpose- and target-bound HMAC token in the payload.
-    // This is the only `/v1` exception to the ordinary bearer/RBAC middleware.
-
-    if state.rbac_engine.is_enabled() {
-        if path.starts_with("/v1/") && !signed_chatops_action {
-            let token = headers
-                .get("authorization")
-                .and_then(|h| h.to_str().ok())
-                .and_then(|v| {
-                    v.strip_prefix("Bearer ")
-                        .or_else(|| v.strip_prefix("bearer "))
-                })
-                .or_else(|| headers.get("x-warmplane-key").and_then(|h| h.to_str().ok()));
-
-            let base_pol = state.policy.read().await.clone();
-            match state.rbac_engine.authenticate(token, &base_pol) {
-                Ok(ctx) => {
-                    tenant_ctx = Some(ctx);
-                }
-                Err(err_code) => {
-                    return (
-                        StatusCode::UNAUTHORIZED,
-                        Json(serde_json::json!({
-                            "ok": false,
-                            "error": err_code,
-                            "message": "Valid Bearer token, JWT, or X-Warmplane-Key required"
-                        })),
-                    )
-                        .into_response();
-                }
-            }
-        }
-    } else if let Some(ref expected_token) = state.auth_token {
-        if !expected_token.trim().is_empty() && path.starts_with("/v1/") && !signed_chatops_action {
-            let is_authed = headers
-                .get("authorization")
-                .and_then(|h| h.to_str().ok())
-                .and_then(|v| {
-                    v.strip_prefix("Bearer ")
-                        .or_else(|| v.strip_prefix("bearer "))
-                })
-                .map(|t| {
-                    use subtle::ConstantTimeEq;
-                    t.as_bytes().ct_eq(expected_token.as_bytes()).into()
-                })
-                .unwrap_or(false)
-                || headers
-                    .get("x-warmplane-key")
-                    .and_then(|h| h.to_str().ok())
-                    .map(|t| {
-                        use subtle::ConstantTimeEq;
-                        t.as_bytes().ct_eq(expected_token.as_bytes()).into()
-                    })
-                    .unwrap_or(false);
-
-            if !is_authed {
+    let tenant_ctx = if path.starts_with("/v1/") && !public_chatops_route {
+        match authenticate_api_request(&state, headers).await {
+            Ok(tenant) => tenant,
+            Err(code) => {
                 return (
                     StatusCode::UNAUTHORIZED,
                     Json(serde_json::json!({
                         "ok": false,
-                        "error": "UNAUTHORIZED",
-                        "message": "Valid Bearer token or X-Warmplane-Key required"
+                        "error": code,
+                        "message": "Valid Bearer token or X-Warmplane-Key required",
                     })),
                 )
                     .into_response();
             }
         }
+    } else {
+        None
+    };
+
+    let trust_admin = check_trust_admin(&state, tenant_ctx.as_ref(), path);
+    if path.starts_with("/v1/config/")
+        && !req.method().is_safe()
+        && !trust_admin
+        && state.trust_controls_active().await
+    {
+        return http_v1::trust_admin_required();
     }
 
     // 4. Resolve ProfileContext
-    if path.starts_with("/v1/") {
+    if path.starts_with("/v1/") && !public_chatops_route {
         let query_profile = req.uri().query().and_then(|q| {
             for param in q.split('&') {
                 if let Some((k, v)) = param.split_once('=') {
@@ -553,11 +526,70 @@ pub async fn security_guard_middleware(
             .insert(crate::context::ProfileContext::unrestricted());
     }
 
+    req.extensions_mut()
+        .insert(http_v1::TrustAdmin(trust_admin));
     req.extensions_mut().insert(tenant_ctx);
 
     next.run(req).await
 }
 
+pub(crate) async fn authenticate_api_request(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+) -> Result<Option<crate::rbac::TenantContext>, String> {
+    let bearer = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .strip_prefix("Bearer ")
+                .or_else(|| value.strip_prefix("bearer "))
+        });
+    let api_key = headers
+        .get("x-warmplane-key")
+        .and_then(|value| value.to_str().ok());
+    if state.rbac_engine.is_enabled() {
+        let policy = state.policy.read().await.clone();
+        return state
+            .rbac_engine
+            .authenticate(bearer.or(api_key), &policy)
+            .map(Some);
+    }
+    if let Some(expected) = state
+        .auth_token
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+    {
+        use subtle::ConstantTimeEq;
+        if !bearer
+            .into_iter()
+            .chain(api_key)
+            .any(|token| bool::from(token.as_bytes().ct_eq(expected.as_bytes())))
+        {
+            return Err("UNAUTHORIZED".to_owned());
+        }
+    }
+    Ok(None)
+}
+
+fn check_trust_admin(
+    state: &AppState,
+    tenant: Option<&crate::rbac::TenantContext>,
+    path: &str,
+) -> bool {
+    if !path.starts_with("/v1/config/") {
+        return false;
+    }
+    if state.rbac_engine.is_enabled() {
+        tenant.is_some_and(|tenant| state.rbac_engine.can_manage_trust_controls(tenant))
+    } else {
+        // The middleware has already verified the configured token for this path.
+        state
+            .auth_token
+            .as_ref()
+            .is_some_and(|token| !token.trim().is_empty())
+    }
+}
 fn configured_chatops_callback_host(config_path: &str, host_header: &str) -> bool {
     let Ok(config) = crate::config::load_or_default_config(config_path) else {
         return false;

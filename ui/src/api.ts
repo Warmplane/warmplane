@@ -119,6 +119,10 @@ export interface WebhookConfig {
   events?: string[];
   callbackUrl?: string;
   callback_url?: string;
+  actionRole?: string;
+  approvalTenant?: string;
+  slackSigningSecret?: string;
+  slackSigningSecretEnv?: string;
 }
 
 export interface PolicyConfig {
@@ -126,10 +130,16 @@ export interface PolicyConfig {
   deny?: string[];
   redactKeys?: string[];
   redact_keys?: string[];
+  resultSanitization?: {
+    fieldNames?: string[];
+    patterns?: string[];
+    opaqueExceptions?: { server: string; kind: 'image' | 'audio' | 'blob'; mimeType: string }[];
+  };
   requireApproval?: string[];
   require_approval?: string[];
   approvalTimeoutSecs?: number;
   approval_timeout_secs?: number;
+  holdWindowSecs?: number;
   webhook?: WebhookConfig | string;
 }
 
@@ -190,6 +200,8 @@ export interface ListTasksResponse {
   ok: boolean;
   total: number;
   tasks: TaskItem[];
+  error?: string | { message?: string };
+  message?: string;
 }
 
 export interface UndoEntrySummary {
@@ -234,6 +246,15 @@ export interface PendingApproval {
   operator?: string;
   reason?: string;
   modified_args?: Record<string, any>;
+  task_id?: string | null;
+  decision_receipt?: {
+    decision: 'approve' | 'reject';
+    principal: string;
+    decided_at: number;
+  } | null;
+  receipt_delivery?: 'delivered' | 'failed' | null;
+  execution_status?: string | null;
+  upstream_execution_state?: string | null;
 }
 
 export interface AuditEventItem {
@@ -311,6 +332,7 @@ export interface McpServerConfig {
   url?: string;
   protocolVersion?: string;
   allowStateless?: boolean;
+  requireToolPins?: boolean;
   resilience?: ResilienceConfig;
 }
 
@@ -330,6 +352,20 @@ export interface RolePolicyConfig {
   require_approval?: string[];
   redactKeys?: string[];
   redact_keys?: string[];
+  manageTrustControls?: boolean;
+}
+
+export interface ToolPinDefinition {
+  digest: string;
+  value: unknown;
+}
+
+export interface ToolPinReview {
+  server: string;
+  tool: string | null;
+  status: 'missing' | 'matching' | 'changed' | 'unavailable';
+  current: ToolPinDefinition | null;
+  approved: ToolPinDefinition | null;
 }
 
 export interface TokenAssignment {
@@ -461,26 +497,69 @@ export interface EcosystemSource {
 
 export class WarmplaneClient {
   private baseUrl: string;
+  private approvalToken = '';
+  private trustToken = '';
 
   constructor(baseUrl: string = '') {
     this.baseUrl = baseUrl;
   }
 
+  setApprovalToken(token: string) {
+    this.approvalToken = token;
+  }
+
+  setTrustToken(token: string) {
+    this.trustToken = token;
+  }
+
+  hasTrustToken(): boolean {
+    return !!this.trustToken;
+  }
+
+  private headers(token: string, jsonBody = false, profile?: string): Headers {
+    const headers = new Headers();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    if (jsonBody) headers.set('Content-Type', 'application/json');
+    if (profile) headers.set('X-Warmplane-Profile', profile);
+    return headers;
+  }
+
+  private approvalHeaders(jsonBody = false, profile?: string): Headers {
+    return this.headers(this.approvalToken || this.trustToken, jsonBody, profile);
+  }
+
+  async listToolPins(token = this.trustToken): Promise<{ pins?: ToolPinReview[]; error?: string }> {
+    return this.requestToolPins(token);
+  }
+
+  async approveToolPin(approval: { server: string; tool: string; digest: string }): Promise<{ error?: string }> {
+    return this.requestToolPins(this.trustToken, approval);
+  }
+
+  private async requestToolPins(token: string, approval?: { server: string; tool: string; digest: string }): Promise<{ pins?: ToolPinReview[]; error?: string }> {
+    const response = await fetch(`${this.baseUrl}/v1/config/tool-pins${approval ? '/approve' : ''}`, {
+      method: approval ? 'POST' : 'GET',
+      headers: this.headers(token, !!approval),
+      body: approval ? JSON.stringify(approval) : undefined,
+    });
+    const payload = await response.json();
+    if (response.ok && payload.ok) return { pins: payload.pins };
+    return { error: apiError(payload, 'Could not load or approve tool definitions.') };
+  }
+
   async getConfig(): Promise<GetConfigResponse> {
-    const res = await fetch(`${this.baseUrl}/v1/config`);
+    const res = await fetch(`${this.baseUrl}/v1/config`, { headers: this.headers(this.trustToken || this.approvalToken) });
     return res.json();
   }
 
   async listCapabilities(profile?: string): Promise<ListCapabilitiesResponse> {
-    const headers: Record<string, string> = {};
-    if (profile) headers['X-Warmplane-Profile'] = profile;
+    const headers = this.approvalHeaders(false, profile);
     const res = await fetch(`${this.baseUrl}/v1/capabilities`, { headers });
     return res.json();
   }
 
   async listResources(profile?: string): Promise<ListResourcesResponse> {
-    const headers: Record<string, string> = {};
-    if (profile) headers['X-Warmplane-Profile'] = profile;
+    const headers = this.approvalHeaders(false, profile);
     const res = await fetch(`${this.baseUrl}/v1/resources`, { headers });
     return res.json();
   }
@@ -491,8 +570,7 @@ export class WarmplaneClient {
 
   private async timedPost(path: string, body: unknown, profile?: string): Promise<{ status: number; durationMs: number; data: any }> {
     const start = performance.now();
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (profile) headers['X-Warmplane-Profile'] = profile;
+    const headers = this.approvalHeaders(true, profile);
     const res = await fetch(`${this.baseUrl}${path}`, {
       method: 'POST',
       headers,
@@ -504,8 +582,7 @@ export class WarmplaneClient {
   }
 
   async listPrompts(profile?: string): Promise<ListPromptsResponse> {
-    const headers: Record<string, string> = {};
-    if (profile) headers['X-Warmplane-Profile'] = profile;
+    const headers = this.approvalHeaders(false, profile);
     const res = await fetch(`${this.baseUrl}/v1/prompts`, { headers });
     return res.json();
   }
@@ -516,7 +593,7 @@ export class WarmplaneClient {
 
   async getCatalogEvents(after?: string): Promise<CatalogEventsResponse> {
     const q = after ? `?after=${encodeURIComponent(after)}` : '';
-    const res = await fetch(`${this.baseUrl}/v1/catalog/events${q}`);
+    const res = await fetch(`${this.baseUrl}/v1/catalog/events${q}`, { headers: this.approvalHeaders() });
     return res.json();
   }
 
@@ -544,25 +621,25 @@ export class WarmplaneClient {
     return res.json();
   }
 
-  async upsertServer(name: string, server: McpServerConfig): Promise<{ ok: boolean; error?: string }> {
+  async upsertServer(name: string, server: McpServerConfig, preserveUnedited = false): Promise<{ ok: boolean; error?: string }> {
     const res = await fetch(`${this.baseUrl}/v1/config/servers`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, server })
+      headers: this.headers(this.trustToken, true),
+      body: JSON.stringify({ name, server, preserve_unedited: preserveUnedited })
     });
     return res.json();
   }
 
   async deleteServer(name: string): Promise<{ ok: boolean; error?: string }> {
     const res = await fetch(`${this.baseUrl}/v1/config/servers/${encodeURIComponent(name)}`, {
-      method: 'DELETE'
+      method: 'DELETE', headers: this.headers(this.trustToken)
     });
     return res.json();
   }
 
   async restartServer(name: string): Promise<{ ok: boolean; message?: string; error?: string; status?: any }> {
     const res = await fetch(`${this.baseUrl}/v1/config/servers/${encodeURIComponent(name)}/restart`, {
-      method: 'POST'
+      method: 'POST', headers: this.headers(this.trustToken)
     });
     return res.json();
   }
@@ -570,7 +647,7 @@ export class WarmplaneClient {
   async upsertProfile(name: string, servers: string[], description?: string, policy?: PolicyConfig): Promise<{ ok: boolean; error?: string }> {
     const res = await fetch(`${this.baseUrl}/v1/config/profiles`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.headers(this.trustToken, true),
       body: JSON.stringify({ name, servers, description, policy })
     });
     return res.json();
@@ -578,20 +655,20 @@ export class WarmplaneClient {
 
   async deleteProfile(name: string): Promise<{ ok: boolean; error?: string }> {
     const res = await fetch(`${this.baseUrl}/v1/config/profiles/${encodeURIComponent(name)}`, {
-      method: 'DELETE'
+      method: 'DELETE', headers: this.headers(this.trustToken)
     });
     return res.json();
   }
 
   async getEcosystemSources(): Promise<{ ok: boolean; sources: EcosystemSource[] }> {
-    const res = await fetch(`${this.baseUrl}/v1/config/ecosystem`);
+    const res = await fetch(`${this.baseUrl}/v1/config/ecosystem`, { headers: this.headers(this.trustToken) });
     return res.json();
   }
 
   async importConfig(sourcePath?: string, overwrite: boolean = false): Promise<{ ok: boolean; imported_count: number; skipped_servers: string[] }> {
     const res = await fetch(`${this.baseUrl}/v1/config/import`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.headers(this.trustToken, true),
       body: JSON.stringify({ source_path: sourcePath, overwrite })
     });
     return res.json();
@@ -602,20 +679,22 @@ export class WarmplaneClient {
       allow: policy.allow || [],
       deny: policy.deny || [],
       redactKeys: policy.redact_keys || policy.redactKeys || [],
+      resultSanitization: policy.resultSanitization,
       requireApproval: policy.require_approval || policy.requireApproval || [],
       approvalTimeoutSecs: policy.approvalTimeoutSecs || policy.approval_timeout_secs || 300,
+      holdWindowSecs: policy.holdWindowSecs,
       webhook: policy.webhook
     };
     const res = await fetch(`${this.baseUrl}/v1/config/policy`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.headers(this.trustToken, true),
       body: JSON.stringify(payload)
     });
     return res.json();
   }
 
-  async listTasks(): Promise<ListTasksResponse> {
-    const res = await fetch(`${this.baseUrl}/v1/tasks`);
+  async listTasks(profile?: string): Promise<ListTasksResponse> {
+    const res = await fetch(`${this.baseUrl}/v1/tasks`, { headers: this.approvalHeaders(false, profile) });
     return res.json();
   }
 
@@ -645,48 +724,48 @@ export class WarmplaneClient {
     return res.json();
   }
 
-  async getTask(id: string): Promise<{ ok: boolean; resultType?: string; task?: TaskItem; error?: any }> {
-    const res = await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(id)}`);
+  async getTask(id: string, profile?: string): Promise<{ ok: boolean; resultType?: string; task?: TaskItem; error?: any }> {
+    const res = await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(id)}`, { headers: this.approvalHeaders(false, profile) });
     return res.json();
   }
 
-  async updateTask(id: string, inputResponses: Record<string, any>): Promise<{ ok: boolean; resultType?: string; message?: string; error?: any }> {
+  async updateTask(id: string, inputResponses: Record<string, any>, profile?: string): Promise<{ ok: boolean; resultType?: string; message?: string; error?: any }> {
     const res = await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(id)}/update`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.approvalHeaders(true, profile),
       body: JSON.stringify({ inputResponses })
     });
     return res.json();
   }
 
-  async cancelTask(id: string, reason?: string): Promise<{ ok: boolean; resultType?: string; cancelled?: boolean; message?: string; error?: any }> {
+  async cancelTask(id: string, reason?: string, profile?: string): Promise<{ ok: boolean; resultType?: string; cancelled?: boolean; message?: string; error?: any }> {
     const res = await fetch(`${this.baseUrl}/v1/tasks/${encodeURIComponent(id)}/cancel`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.approvalHeaders(true, profile),
       body: JSON.stringify({ reason })
     });
     return res.json();
   }
 
-  async listApprovals(): Promise<{ ok: boolean; approvals: PendingApproval[]; total: number }> {
-    const res = await fetch(`${this.baseUrl}/v1/approvals`);
+  async listApprovals(): Promise<{ ok: boolean; approvals: PendingApproval[]; total: number; error?: { message?: string } }> {
+    const res = await fetch(`${this.baseUrl}/v1/approvals`, { headers: this.approvalHeaders() });
     return res.json();
   }
 
-  async approveTicket(id: string, operator: string, modifiedArgs?: Record<string, any>): Promise<{ ok: boolean; message?: string; error?: string }> {
+  async approveTicket(id: string, modifiedArgs?: Record<string, any>): Promise<{ ok: boolean; error?: { message?: string } }> {
     const res = await fetch(`${this.baseUrl}/v1/approvals/${encodeURIComponent(id)}/approve`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ operator, modified_args: modifiedArgs })
+      headers: this.approvalHeaders(true),
+      body: JSON.stringify({ modified_args: modifiedArgs })
     });
     return res.json();
   }
 
-  async rejectTicket(id: string, operator: string, reason?: string): Promise<{ ok: boolean; message?: string; error?: string }> {
+  async rejectTicket(id: string, reason?: string): Promise<{ ok: boolean; error?: { message?: string } }> {
     const res = await fetch(`${this.baseUrl}/v1/approvals/${encodeURIComponent(id)}/reject`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ operator, reason })
+      headers: this.approvalHeaders(true),
+      body: JSON.stringify({ reason })
     });
     return res.json();
   }
@@ -702,7 +781,7 @@ export class WarmplaneClient {
   ): Promise<{ ok: boolean; error?: string }> {
     const res = await fetch(`${this.baseUrl}/v1/config/alias`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.headers(this.trustToken, true),
       body: JSON.stringify({ kind, alias, target, summary, description, passthrough, reversibility })
     });
     return res.json();
@@ -710,7 +789,7 @@ export class WarmplaneClient {
 
   async reloadConfig(): Promise<{ ok: boolean; mounted?: string[]; unmounted?: string[]; warnings?: string[]; error?: string }> {
     const res = await fetch(`${this.baseUrl}/v1/config/reload`, {
-      method: 'POST'
+      method: 'POST', headers: this.headers(this.trustToken)
     });
     return res.json();
   }
@@ -781,7 +860,7 @@ export class WarmplaneClient {
   async testWebhook(url?: string, format?: string): Promise<{ ok: boolean; message?: string; error?: string; status_code?: number }> {
     const res = await fetch(`${this.baseUrl}/v1/webhooks/test`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.headers(this.trustToken, true),
       body: JSON.stringify({ url: url || undefined, format: format || undefined }),
     });
     return res.json();
@@ -807,6 +886,10 @@ export class WarmplaneClient {
     });
     return res.json();
   }
+}
+
+export function apiError(response: { error?: string | { message?: string }; message?: string }, fallback: string): string {
+  return response.message || (typeof response.error === 'string' ? response.error : response.error?.message) || fallback;
 }
 
 export const api = new WarmplaneClient();

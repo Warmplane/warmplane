@@ -1,211 +1,175 @@
-// Rust guideline compliant 2026-08-27
+// Rust guideline compliant 2026-11-20
 
-//! Human-in-the-Loop (HITL) approval endpoints for querying, approving, and rejecting suspended executions.
+//! Tenant-scoped approval views and operator decisions.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     Json,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::{
+    approvals::{Decision, DecisionError, DecisionRequest, PendingApproval},
     daemon::AppState,
     http_v1::types::{ApproveTicketRequest, RejectTicketRequest},
+    rbac::TenantContext,
 };
 
-/// Handles GET `/v1/approvals` returning active pending tickets and recent history.
-pub async fn handle_list_approvals(State(state): State<AppState>) -> impl IntoResponse {
-    let approvals = state.approval_registry.list().await;
-    (
-        StatusCode::OK,
-        Json(json!({
-            "ok": true,
-            "approvals": approvals,
-            "total": approvals.len(),
-        })),
-    )
-        .into_response()
+/// Handles GET `/v1/approvals` for the authenticated tenant.
+pub async fn handle_list_approvals(
+    State(state): State<AppState>,
+    tenant: Option<Extension<Option<TenantContext>>>,
+) -> Response {
+    let actor = match state.approval_actor(tenant_ref(&tenant)) {
+        Ok(actor) => actor,
+        Err(error) => return decision_error(error),
+    };
+    let mut approvals = Vec::new();
+    for ticket in state.approval_registry.list().await {
+        if owns_approval(&ticket, &actor.tenant) {
+            approvals.push(approval_summary(&state, ticket).await);
+        }
+    }
+    Json(json!({"ok": true, "total": approvals.len(), "approvals": approvals})).into_response()
 }
 
-/// Handles GET `/v1/approvals/:id` returning details of a single approval ticket.
+/// Handles GET `/v1/approvals/:id` for the authenticated tenant.
 pub async fn handle_get_approval(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> impl IntoResponse {
-    match state.approval_registry.get(&id).await {
-        Some(approval) => (
-            StatusCode::OK,
-            Json(json!({
-                "ok": true,
-                "approval": approval,
-            })),
-        )
-            .into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "ok": false,
-                "error": format!("Approval ticket '{}' not found", id),
-            })),
-        )
-            .into_response(),
+    tenant: Option<Extension<Option<TenantContext>>>,
+) -> Response {
+    let actor = match state.approval_actor(tenant_ref(&tenant)) {
+        Ok(actor) => actor,
+        Err(error) => return decision_error(error),
+    };
+    let ticket = state.approval_registry.get(&id).await;
+    match ticket.filter(|ticket| owns_approval(ticket, &actor.tenant)) {
+        Some(ticket) => {
+            Json(json!({"ok": true, "approval": approval_summary(&state, ticket).await}))
+                .into_response()
+        }
+        None => decision_error(DecisionError::NotFound),
     }
 }
 
-/// Handles POST `/v1/approvals/:id/approve` approving a suspended capability execution.
+/// Handles POST `/v1/approvals/:id/approve` for a verified operator.
 pub async fn handle_approve_ticket(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    tenant: Option<Extension<Option<TenantContext>>>,
     Json(payload): Json<ApproveTicketRequest>,
-) -> impl IntoResponse {
-    let webhook_cfg = state.policy.read().await.webhook.clone();
-    let opt_ticket = state.approval_registry.get(&id).await;
-    match state
-        .approval_registry
-        .approve(
-            &id,
-            payload.operator.clone(),
-            payload.modified_args.clone(),
-            webhook_cfg.as_ref(),
-        )
-        .await
-    {
-        Ok(true) => {
-            if let Some(ticket) = opt_ticket {
-                // If a matching Task exists for this approval, unblock it with input responses
-                if let Some(ref req_id) = ticket.request_id {
-                    let tasks = state.task_registry.list_tasks().await;
-                    if let Some(matching_task) = tasks
-                        .iter()
-                        .find(|t| t.request_id.as_deref() == Some(req_id.as_str()))
-                    {
-                        let mut resp_map = std::collections::BTreeMap::new();
-                        resp_map.insert(
-                            "hitl_approval".to_string(),
-                            serde_json::json!({
-                                "approved": true,
-                                "operator": payload.operator,
-                                "modified_args": payload.modified_args,
-                            }),
-                        );
-                        let _ = state
-                            .task_registry
-                            .update_task(&matching_task.task_id, resp_map)
-                            .await;
-                    }
-                }
-
-                state.audit_handle.send(crate::audit::RawAuditEvent {
-                    event_type: crate::audit::AuditEventType::ApprovalGranted,
-                    trace_id: format!("appr_{}", id),
-                    request_id: ticket.request_id,
-                    actor_id: ticket.context.as_ref().and_then(|c| c.actor_id.clone()),
-                    work_item_id: ticket.context.as_ref().and_then(|c| c.work_item_id.clone()),
-                    client_ip: None,
-                    server_id: Some(ticket.server_id),
-                    capability_id: Some(ticket.capability_id),
-                    resource_uri: None,
-                    sanitized_args: payload.modified_args.or(Some(ticket.sanitized_args)),
-                    sanitized_response: None,
-                    execution_latency_us: None,
-                    status: crate::audit::AuditEventStatus::Success,
-                    error_code: None,
-                    error_message: None,
-                    operator_id: Some(payload.operator),
-                    approval_ticket_id: Some(id.clone()),
-                    idempotency_key: None,
-                    is_replay: None,
-                });
-            }
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "ok": true,
-                    "message": format!("Ticket '{}' approved successfully", id),
-                })),
-            )
-                .into_response()
-        }
-        Ok(false) => (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "ok": false,
-                "error": format!("Ticket '{}' is not pending or already processed", id),
-            })),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "ok": false,
-                "error": e.to_string(),
-            })),
-        )
-            .into_response(),
-    }
+) -> Response {
+    resolve(&state, &id, tenant_ref(&tenant), payload.into()).await
 }
 
-/// Handles POST `/v1/approvals/:id/reject` rejecting a suspended capability execution.
+/// Handles POST `/v1/approvals/:id/reject` for a verified operator.
 pub async fn handle_reject_ticket(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    tenant: Option<Extension<Option<TenantContext>>>,
     Json(payload): Json<RejectTicketRequest>,
-) -> impl IntoResponse {
-    let webhook_cfg = state.policy.read().await.webhook.clone();
-    let opt_ticket = state.approval_registry.get(&id).await;
-    match state
-        .approval_registry
-        .reject(
-            &id,
-            payload.operator,
-            payload.reason.clone(),
-            webhook_cfg.as_ref(),
-        )
-        .await
-    {
-        Ok(true) => {
-            if let Some(ticket) = opt_ticket {
-                // If a matching Task exists for this approval, cancel it
-                if let Some(ref req_id) = ticket.request_id {
-                    let tasks = state.task_registry.list_tasks().await;
-                    if let Some(matching_task) = tasks
-                        .iter()
-                        .find(|t| t.request_id.as_deref() == Some(req_id.as_str()))
-                    {
-                        let _ = state
-                            .task_registry
-                            .cancel_task(&matching_task.task_id, payload.reason)
-                            .await;
-                    }
-                }
-            }
+) -> Response {
+    let mut rejection = DecisionRequest::unchanged(Decision::Reject);
+    rejection.reason = payload.reason;
+    resolve(&state, &id, tenant_ref(&tenant), rejection).await
+}
 
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "ok": true,
-                    "message": format!("Ticket '{}' rejected successfully", id),
-                })),
-            )
-                .into_response()
+impl From<ApproveTicketRequest> for DecisionRequest {
+    fn from(payload: ApproveTicketRequest) -> Self {
+        Self {
+            choice: Decision::Approve,
+            modified_args: payload.modified_args,
+            reason: None,
         }
-        Ok(false) => (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "ok": false,
-                "error": format!("Ticket '{}' is not pending or already processed", id),
-            })),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "ok": false,
-                "error": e.to_string(),
-            })),
-        )
-            .into_response(),
     }
+}
+
+fn tenant_ref(tenant: &Option<Extension<Option<TenantContext>>>) -> Option<&TenantContext> {
+    tenant.as_ref().and_then(|tenant| tenant.0.as_ref())
+}
+
+fn owns_approval(ticket: &PendingApproval, tenant: &str) -> bool {
+    ticket
+        .ownership
+        .as_ref()
+        .is_some_and(|owner| owner.tenant_id == tenant)
+}
+
+async fn approval_summary(state: &AppState, ticket: PendingApproval) -> Value {
+    use crate::approvals::ApprovalStatus;
+    let status = match ticket.status {
+        ApprovalStatus::Pending => "pending",
+        ApprovalStatus::Approved { .. } => "approved",
+        ApprovalStatus::Rejected { .. } => "rejected",
+        ApprovalStatus::Expired { .. } => "expired",
+    };
+    let task_id = ticket
+        .ownership
+        .as_ref()
+        .and_then(|owner| owner.task_id.as_deref());
+    let task = match task_id {
+        Some(id) => state.task_registry.get_task(id).await,
+        None => None,
+    };
+    let execution = task.as_ref().map(|task| &task.status);
+    let upstream_state = task.as_ref().and_then(|task| {
+        if task.status == crate::tasks::TaskStatus::Completed {
+            Some("completed")
+        } else {
+            task.error
+                .as_ref()
+                .and_then(|error| error.get("upstreamExecutionState"))
+                .and_then(Value::as_str)
+        }
+    });
+    json!({
+        "id": ticket.id,
+        "capability_id": ticket.capability_id,
+        "server_id": ticket.server_id,
+        "sanitized_args": ticket.sanitized_args,
+        "created_at": ticket.created_at,
+        "expires_at": ticket.expires_at,
+        "status": status,
+        "task_id": task_id,
+        "decision_receipt": ticket.decision_receipt,
+        "receipt_delivery": ticket.receipt_delivery,
+        "execution_status": execution,
+        "upstream_execution_state": upstream_state,
+    })
+}
+
+async fn resolve(
+    state: &AppState,
+    id: &str,
+    tenant: Option<&TenantContext>,
+    decision: DecisionRequest,
+) -> Response {
+    let actor = match state.approval_actor(tenant) {
+        Ok(actor) => actor,
+        Err(error) => return decision_error(error),
+    };
+    match state.decide_approval(id, &actor, decision, false).await {
+        Ok(receipt) => Json(json!({"ok": true, "receipt": receipt})).into_response(),
+        Err(error) => decision_error(error),
+    }
+}
+
+pub(crate) fn decision_error(error: DecisionError) -> Response {
+    let status = match error {
+        DecisionError::NotFound => StatusCode::NOT_FOUND,
+        DecisionError::Forbidden => StatusCode::FORBIDDEN,
+        DecisionError::Conflict => StatusCode::CONFLICT,
+        DecisionError::InvalidInput | DecisionError::TaskNotInputRequired => {
+            StatusCode::BAD_REQUEST
+        }
+        DecisionError::Persistence => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    (
+        status,
+        Json(json!({"ok": false, "error": crate::approvals::decision_error(error)})),
+    )
+        .into_response()
 }

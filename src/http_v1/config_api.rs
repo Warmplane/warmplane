@@ -16,6 +16,10 @@ use crate::{
     http_v1::types::{ImportConfigRequest, UpdateAliasRequest, UpsertServerRequest},
 };
 
+/// Authorization verified by the HTTP security middleware for trust management.
+#[derive(Clone, Copy)]
+pub struct TrustAdmin(pub(crate) bool);
+
 /// Handles GET `/v1/config` returning the active configuration and operational metrics.
 pub async fn handle_get_config(State(state): State<AppState>) -> impl IntoResponse {
     let total_reqs = state.total_catalog_requests.load(Ordering::Relaxed);
@@ -62,7 +66,8 @@ pub async fn handle_get_config(State(state): State<AppState>) -> impl IntoRespon
 /// Handles POST `/v1/config/servers` to add or update an upstream server.
 pub async fn handle_upsert_server(
     State(state): State<AppState>,
-    Json(payload): Json<UpsertServerRequest>,
+    admin: Option<axum::extract::Extension<TrustAdmin>>,
+    Json(mut payload): Json<UpsertServerRequest>,
 ) -> impl IntoResponse {
     let mut config = match crate::config::load_or_default_config(&state.config_path) {
         Ok(c) => c,
@@ -75,10 +80,12 @@ pub async fn handle_upsert_server(
         }
     };
 
-    config
-        .mcp_servers
-        .insert(payload.name.clone(), payload.server.clone());
-    if let Err(e) = crate::config::save_config(&state.config_path, &config) {
+    if !admin.is_some_and(|axum::extract::Extension(TrustAdmin(admin))| admin)
+        && requires_server_trust_admin(&config, &payload)
+    {
+        return trust_admin_required();
+    }
+    if let Err(e) = persist_server_update(&state.config_path, &mut config, &mut payload) {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "ok": false, "error": e.to_string() })),
@@ -113,6 +120,35 @@ pub async fn handle_upsert_server(
         })),
     )
         .into_response()
+}
+
+fn requires_server_trust_admin(
+    config: &crate::config::McpConfig,
+    payload: &UpsertServerRequest,
+) -> bool {
+    payload.server.require_tool_pins
+        || config
+            .mcp_servers
+            .get(&payload.name)
+            .is_some_and(|server| server.require_tool_pins)
+}
+
+fn persist_server_update(
+    path: &str,
+    config: &mut crate::config::McpConfig,
+    payload: &mut UpsertServerRequest,
+) -> anyhow::Result<()> {
+    if let Some(current) = config.mcp_servers.get(&payload.name) {
+        if payload.preserve_unedited {
+            payload.server.preserve_unedited_settings(current);
+        } else {
+            payload.server.preserve_masked_credentials(current)?;
+        }
+    }
+    config
+        .mcp_servers
+        .insert(payload.name.clone(), payload.server.clone());
+    crate::config::save_config(path, config)
 }
 
 /// Handles DELETE `/v1/config/servers/:id` to remove an upstream server.
@@ -591,9 +627,15 @@ pub async fn handle_update_alias(
 /// Handles POST `/v1/config/policy` updating security policies.
 pub async fn handle_update_policy(
     State(state): State<AppState>,
-    Json(payload): Json<crate::config::PolicyConfig>,
+    admin: Option<axum::extract::Extension<TrustAdmin>>,
+    Json(mut payload): Json<crate::config::PolicyConfig>,
 ) -> impl IntoResponse {
-    let mut config = match crate::config::load_or_default_config(&state.config_path) {
+    if !admin.is_some_and(|axum::extract::Extension(TrustAdmin(admin))| admin)
+        && policy_requires_trust_admin(&state, &payload).await
+    {
+        return trust_admin_required();
+    }
+    let config = match crate::config::load_or_default_config(&state.config_path) {
         Ok(c) => c,
         Err(e) => {
             return (
@@ -604,8 +646,7 @@ pub async fn handle_update_policy(
         }
     };
 
-    config.policy = Some(payload.clone());
-    if let Err(e) = crate::config::save_config(&state.config_path, &config) {
+    if let Err(e) = persist_policy_update(&state, config, &mut payload) {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "ok": false, "error": e.to_string() })),
@@ -623,6 +664,24 @@ pub async fn handle_update_policy(
     state.notify_resources_changed();
     state.notify_prompts_changed();
 
+    audit_policy_update(&state, payload);
+
+    (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+}
+
+async fn policy_requires_trust_admin(
+    state: &AppState,
+    payload: &crate::config::PolicyConfig,
+) -> bool {
+    payload.result_sanitization.is_some()
+        || payload
+            .webhook
+            .as_ref()
+            .is_some_and(crate::approval_chatops::subscribed)
+        || state.trust_controls_active().await
+}
+
+fn audit_policy_update(state: &AppState, payload: crate::config::PolicyConfig) {
     state.audit_handle.send(crate::audit::RawAuditEvent {
         event_type: crate::audit::AuditEventType::ConfigMutation,
         trace_id: "trace-policy-update".to_string(),
@@ -648,8 +707,89 @@ pub async fn handle_update_policy(
         idempotency_key: None,
         is_replay: None,
     });
+}
 
-    (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+fn persist_policy_update(
+    state: &AppState,
+    mut config: crate::config::McpConfig,
+    policy: &mut crate::config::PolicyConfig,
+) -> anyhow::Result<()> {
+    state
+        .approval_registry
+        .validate_webhook_storage(policy.webhook.as_ref())?;
+    if let Some(webhook) = &mut policy.webhook {
+        let current = config
+            .policy
+            .as_ref()
+            .and_then(|policy| policy.webhook.as_ref());
+        webhook.preserve_masked_secrets(current)?;
+    }
+    config.policy = Some(policy.clone());
+    crate::config::save_config(&state.config_path, &config)
+}
+
+pub(crate) fn trust_admin_required() -> axum::response::Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "ok": false,
+            "error": "TRUST_ADMIN_REQUIRED",
+            "message": "Authenticated trust control administrator required",
+        })),
+    )
+        .into_response()
+}
+
+pub(crate) async fn handle_list_tool_pins(
+    State(state): State<AppState>,
+    admin: Option<axum::extract::Extension<TrustAdmin>>,
+) -> axum::response::Response {
+    if !admin.is_some_and(|axum::extract::Extension(TrustAdmin(admin))| admin) {
+        return trust_admin_required();
+    }
+    Json(json!({"ok": true, "pins": state.tool_pins.reviews()})).into_response()
+}
+
+pub(crate) async fn handle_approve_tool_pin(
+    State(state): State<AppState>,
+    admin: Option<axum::extract::Extension<TrustAdmin>>,
+    axum::extract::Extension(tenant): axum::extract::Extension<Option<crate::rbac::TenantContext>>,
+    Json(request): Json<crate::tool_pins::ApprovePin>,
+) -> axum::response::Response {
+    use crate::tool_pins::PinApprovalError;
+
+    if !admin.is_some_and(|axum::extract::Extension(TrustAdmin(admin))| admin) {
+        return trust_admin_required();
+    }
+    let outcome = state
+        .tool_pins
+        .approve(&state, &request, tenant.and_then(|tenant| tenant.actor_id))
+        .await;
+    state.record_tool_catalog_events(&request.server, &*state.capabilities.read().await);
+    state.notify_tools_changed();
+    let (status, code, message) = match outcome {
+        Ok(pin) => return Json(json!({"ok": true, "pin": pin})).into_response(),
+        Err(PinApprovalError::Stale) => (
+            StatusCode::CONFLICT,
+            "TOOL_PIN_STALE",
+            "The observed definition changed or became unavailable",
+        ),
+        Err(PinApprovalError::Audit) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "AUDIT_PERSISTENCE_FAILED",
+            "Could not authorize the approval in the audit store",
+        ),
+        Err(PinApprovalError::Storage) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "TOOL_PIN_STORAGE_FAILED",
+            "Could not durably save the approval",
+        ),
+    };
+    (
+        status,
+        Json(json!({"ok": false, "error": {"code": code, "message": message}})),
+    )
+        .into_response()
 }
 
 /// Handles POST `/v1/config/profiles` to add or update a profile constellation.

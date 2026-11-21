@@ -149,6 +149,16 @@ pub struct RolePolicyConfig {
     /// Allows this role to expose self-undo through an explicitly opted-in MCP profile.
     #[serde(default, rename = "allowAgentSelfUndo")]
     pub allow_agent_self_undo: bool,
+    /// Allows authenticated operators to manage global trust controls.
+    #[serde(default, rename = "manageTrustControls")]
+    pub manage_trust_controls: bool,
+    /// Allows authenticated or explicitly delegated operators to resolve approval tickets.
+    #[serde(
+        default,
+        rename = "resolveApprovals",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub resolve_approvals: bool,
 }
 
 /// Role-level permissions for listing and executing undo actions.

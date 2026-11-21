@@ -422,6 +422,67 @@ The `policy` block enforces global security boundaries, human approval gates, an
 - **Webhook HMAC Signing**: Outbound webhook requests are signed with HMAC-SHA256 in the `X-Warmplane-Signature-256` header using `secret` or `secretEnv`.
 - **SSRF Prevention & Allowlist**: Simulated test webhooks (`/v1/webhooks/test`) require HTTP/HTTPS and only send to `policy.webhook.url` or destinations explicitly listed in `policy.webhook.allowedUrls`.
 
+#### Sanitize results before delivery
+
+In Control Deck, use **Trust access** to connect with an administrator credential. Open **Security Governance & Redaction**, switch to the global policy, and use **Result sanitization** to enable inspection and edit rules. The same global setting is available as `policy.resultSanitization` in `mcp_servers.json` and applies to REST, MCP, and embedded clients.
+
+```json
+{
+  "fieldNames": ["customerToken", "privateNote"],
+  "patterns": ["customer-[0-9]+"],
+  "opaqueExceptions": [
+    {"server": "reports", "kind": "image", "mimeType": "image/png"}
+  ]
+}
+```
+
+Field names match case-insensitively in structured results and JSON carried in MCP text. A regex match replaces the entire text value with `[REDACTED]`. Warmplane withholds results when a rule matches a required protocol field, a payload exceeds 1 MiB of decoded inspection data or 64 levels of nesting, or opaque content lacks an exact server, kind, and MIME match. Supported opaque kinds are `image`, `audio`, and `blob`. An empty object enables inspection and blocks opaque content. `redactKeys` continues to control log redaction.
+
+The regex policy accepts up to 64 patterns, with 4 KiB of UTF-8 per pattern and 16 KiB total. Pattern nesting is capped at 32 and the compiled set is capped at 256 KiB. JSON inside MCP text shares the result's inspection budget, including the text and its parsed contents. Warmplane withholds cached results from the previous sanitizer version while the policy is enabled.
+
+Warmplane sanitizes before output shaping, task storage, and batch interpolation. A batch cannot forward a result value containing the redaction marker. `RESULT_WITHHELD` with `upstream_execution_state: completed` means the upstream call returned and the policy withheld its payload. Keep the same idempotency key when checking that execution again.
+
+Enabling or changing the policy withholds previously stored responses that lack the current revision. The task and idempotency stores retain their execution records until their existing expiration or local retention procedures remove them. Back up the state directory before retiring pre-existing raw records. Keep old idempotency records for their normal TTL when clients may retry completed mutations. Historical audit logs follow their existing retention and integrity rules.
+
+With RBAC enabled, grant `manageTrustControls: true` to an operator role and authenticate its requests to edit trust controls through REST. When RBAC is disabled, set the daemon token to manage trust controls through REST. Filesystem operators can edit local configuration directly.
+
+#### Review upstream tool definitions
+
+Enable persistent state and select **Require reviewed tool definitions** in the upstream server editor, or set `requireToolPins: true` on the upstream in `mcpServers`. In **Security Governance & Redaction**, open **Tool definition pins**, expand a tool, compare its observed and approved definitions, and approve the observed digest. The same approval covers aliases and native exports of that upstream tool. An outdated review returns `409 TOOL_PIN_STALE`. Load definitions again before making a new decision.
+
+If pin storage returns an error after authorization, refresh the definitions and review the pin again before retrying. Warmplane retains quarantine when an approval write could not be confirmed, including after reopening state.
+
+Tools without a matching approval are quarantined from discovery, search, and execution. Warmplane refreshes pinned servers every 15 seconds and on supported tool-list notifications. It withholds tools if discovery fails or the observation is older than 30 seconds. The worker checks the prepared definition again immediately before dispatch. If that revision changed while the tool was held or awaiting approval, submit a new invocation after reviewing the change. Held calls from an earlier daemon process require a fresh request when their observation cannot be verified.
+
+Subscribe to `tool_pin.quarantined` in `policy.webhook.events` and set `secret` or `secretEnv` to receive signed notices with the server ID and quarantine reason.
+
+#### Migrate ChatOps approvals to signed actions
+
+Enable persistent state. In the global **ChatOps and outbound webhooks** settings, enable **Send signed approval cards**, enter the destination and signing settings, and set the callback route to `/v1/webhooks/actions`. When editing the config file, subscribe to `approval.requested` explicitly. If the running daemon started without persistent state, restart it with persistence enabled before activating signed approvals. The old `/v1/webhooks/callbacks` route returns `410`. Request a fresh invocation for old cards and pending approvals carried over from an earlier daemon process.
+
+```json
+{
+  "url": "https://example.invalid/incoming",
+  "format": "slack",
+  "events": ["approval.requested"],
+  "callbackUrl": "https://warmplane.example.invalid/v1/webhooks/actions",
+  "secretEnv": "WARMPLANE_WEBHOOK_SECRET",
+  "slackSigningSecretEnv": "WARMPLANE_SLACK_SIGNING_SECRET",
+  "actionRole": "approval-operator",
+  "approvalTenant": "engineering"
+}
+```
+
+With RBAC enabled, specify one `approvalTenant` and give `actionRole` the `resolveApprovals` permission. Warmplane sends cards only for that tenant. In Control Deck, load **Approval activity** using an operator credential with the same permission. The profile selector scopes the task list and task actions. Approval Activity also permits tenant-wide decisions on linked tickets. For REST task input, use the task's tenant and profile scope and submit an explicit Boolean in `inputResponses.hitl_approval.approved`. The operator identity comes from the authenticated credential or delegation.
+
+- **Slack.** Set the app's Interactivity Request URL to the signed callback URL. Set the Slack app signing secret separately from the Warmplane webhook secret. Warmplane verifies Slack's timestamp and signature, acknowledges the request immediately, and posts the decision receipt to the configured destination.
+- **Teams.** Use a Workflow that posts the Adaptive Card and waits for its response, or an authenticated bot relay. Read `action_token` from the submitted action data and POST `{"action_token":"…"}` to the configured callback URL. Use incoming Workflows or a bot for the configured receipt destination.
+- **Generic.** Read `data.approve_token` and `data.reject_token` from the signed event and POST the chosen token as `action_token`. The server returns the persisted receipt. A repeated valid token for the same decision returns that receipt, and a conflicting decision returns `409`.
+
+The signed action uses the arguments on the card's ticket. Use Control Deck to explicitly review and replace arguments. The approval decision, upstream task outcome, and ChatOps receipt delivery appear separately in **Approval activity**. A failed receipt delivery leaves the stored decision in place.
+
+The signed action endpoint accepts callback bodies up to 64 KiB. Keep generic and Teams relay payloads small by forwarding the action token and any platform envelope needed by the integration.
+
 ---
 
 ### 4.4 WORM Audit Trail and SIEM Export Configuration

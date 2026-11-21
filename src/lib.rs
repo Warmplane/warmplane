@@ -1,6 +1,7 @@
 // Rust guideline compliant 2026-11-18
 //! Warmplane: Local control plane and facade proxy for Model Context Protocol (MCP) sessions.
 
+mod approval_chatops;
 pub mod approvals;
 pub mod audit;
 pub mod batch_executor;
@@ -24,12 +25,14 @@ pub mod models;
 pub mod oauth2;
 pub mod operations;
 pub mod rbac;
+pub mod result_sanitization;
 pub mod sampling;
 pub mod search;
 pub mod storage;
 pub mod supervisor;
 pub mod tasks;
 pub mod telemetry;
+mod tool_pins;
 pub mod undo;
 pub mod vault;
 

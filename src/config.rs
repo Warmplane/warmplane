@@ -450,6 +450,13 @@ pub struct ServerConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub allow_stateless: Option<bool>,
+    /// Requires an operator-approved definition for every tool from this server.
+    #[serde(
+        default,
+        rename = "requireToolPins",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub require_tool_pins: bool,
     /// Additional static HTTP headers.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub headers: HashMap<String, String>,
@@ -546,6 +553,27 @@ pub struct WebhookConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub action_role: Option<String>,
+    /// Tenant delegated to receive and resolve approval cards.
+    #[serde(
+        default,
+        rename = "approvalTenant",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub approval_tenant: Option<String>,
+    /// Slack app signing secret for authenticating interactive callback requests.
+    #[serde(
+        default,
+        rename = "slackSigningSecret",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub slack_signing_secret: Option<String>,
+    /// Environment variable holding the Slack app signing secret.
+    #[serde(
+        default,
+        rename = "slackSigningSecretEnv",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub slack_signing_secret_env: Option<String>,
     /// Optional custom HTTP headers map.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headers: Option<HashMap<String, String>>,
@@ -575,9 +603,43 @@ pub(crate) fn resolve_env_or_direct(
 }
 
 impl WebhookConfig {
+    pub(crate) fn preserve_masked_secrets(&mut self, current: Option<&Self>) -> Result<()> {
+        for (value, previous) in [
+            (
+                &mut self.secret,
+                current.and_then(|cfg| cfg.secret.as_ref()),
+            ),
+            (
+                &mut self.auth_header,
+                current.and_then(|cfg| cfg.auth_header.as_ref()),
+            ),
+            (
+                &mut self.slack_signing_secret,
+                current.and_then(|cfg| cfg.slack_signing_secret.as_ref()),
+            ),
+        ] {
+            if value.as_deref() == Some(REDACTED_TOKEN) {
+                *value = Some(
+                    previous
+                        .filter(|value| value.as_str() != REDACTED_TOKEN)
+                        .context("A masked webhook credential requires an existing stored value")?
+                        .clone(),
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Resolves the HMAC signing secret from env var or direct value.
     pub fn resolve_secret(&self) -> Option<String> {
         resolve_env_or_direct(self.secret_env.as_deref(), self.secret.as_deref())
+    }
+
+    pub(crate) fn resolve_slack_signing_secret(&self) -> Option<String> {
+        resolve_env_or_direct(
+            self.slack_signing_secret_env.as_deref(),
+            self.slack_signing_secret.as_deref(),
+        )
     }
 }
 
@@ -598,6 +660,13 @@ pub struct PolicyConfig {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub redact_keys: Vec<String>,
+    /// Compiled global policy for sanitizing upstream results before delivery.
+    #[serde(
+        default,
+        rename = "resultSanitization",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub result_sanitization: Option<crate::result_sanitization::ResultSanitization>,
     /// List of capability ID patterns requiring human operator approval before execution.
     #[serde(
         default,
@@ -827,6 +896,9 @@ impl WebhookConfig {
         if self.auth_header.is_some() {
             self.auth_header = Some("********".to_string());
         }
+        if self.slack_signing_secret.is_some() {
+            self.slack_signing_secret = Some("********".to_owned());
+        }
     }
 }
 
@@ -861,6 +933,57 @@ impl SiemConfig {
 }
 
 impl ServerConfig {
+    pub(crate) fn preserve_unedited_settings(&mut self, current: &Self) {
+        if self.command.is_some() && current.command.is_some() {
+            self.env.clone_from(&current.env);
+        }
+        if self.url.is_some() && current.url.is_some() {
+            self.auth.clone_from(&current.auth);
+            self.headers.clone_from(&current.headers);
+            self.protocol_version.clone_from(&current.protocol_version);
+            self.allow_stateless = current.allow_stateless;
+        }
+        if let (Some(incoming), Some(stored)) = (&mut self.resilience, &current.resilience) {
+            incoming.consecutive_successes = stored.consecutive_successes;
+            incoming.health_check_interval_secs = stored.health_check_interval_secs;
+        }
+    }
+
+    pub(crate) fn preserve_masked_credentials(&mut self, current: &Self) -> Result<()> {
+        for (fields, stored) in [
+            (&mut self.env, &current.env),
+            (&mut self.headers, &current.headers),
+        ] {
+            for (key, value) in fields {
+                if value == REDACTED_TOKEN {
+                    value.clone_from(
+                        stored.get(key).context(
+                            "A masked server credential requires an existing stored value",
+                        )?,
+                    );
+                }
+            }
+        }
+        match (&mut self.auth, current.auth.as_ref()) {
+            (
+                Some(AuthConfig::Bearer { token, .. }),
+                Some(AuthConfig::Bearer { token: stored, .. }),
+            )
+            | (
+                Some(AuthConfig::Basic {
+                    password: token, ..
+                }),
+                Some(AuthConfig::Basic {
+                    password: stored, ..
+                }),
+            ) if token.as_deref() == Some(REDACTED_TOKEN) => {
+                token.clone_from(stored);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Sanitizes authentication tokens/passwords and sensitive headers in place.
     pub fn sanitize_secrets(&mut self) {
         if let Some(ref mut auth) = self.auth {
@@ -1021,6 +1144,7 @@ pub fn resolve_client_port(
 }
 
 fn validate_config(config: &McpConfig) -> Result<()> {
+    validate_result_sanitization(config)?;
     validate_policy_holds_and_webhooks(config)?;
     validate_reversibility_contracts(&config.capability_aliases)?;
     for (server_id, server) in &config.mcp_servers {
@@ -1047,7 +1171,33 @@ fn validate_hold_window(value: Option<u64>, context: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn validate_result_sanitization(config: &McpConfig) -> Result<()> {
+    if let Some(rules) = config
+        .policy
+        .as_ref()
+        .and_then(|policy| policy.result_sanitization.as_ref())
+    {
+        for server in rules.exception_servers() {
+            anyhow::ensure!(
+                config.mcp_servers.contains_key(server),
+                "resultSanitization exception references unknown server '{server}'"
+            );
+        }
+    }
+    anyhow::ensure!(
+        !config.profiles.values().any(|profile| {
+            profile
+                .policy
+                .as_ref()
+                .is_some_and(|policy| policy.result_sanitization.is_some())
+        }),
+        "resultSanitization is supported only in the global policy"
+    );
+    Ok(())
+}
+
 fn validate_policy_holds_and_webhooks(config: &McpConfig) -> Result<()> {
+    validate_approval_configuration(config)?;
     if let Some(policy) = &config.policy {
         validate_hold_window(policy.hold_window_secs, "policy.holdWindowSecs")?;
         if let Some(webhook) = &policy.webhook {
@@ -1069,10 +1219,35 @@ fn validate_action_webhook(
     webhook: &WebhookConfig,
     rbac: Option<&crate::rbac::RbacConfig>,
 ) -> Result<()> {
+    anyhow::ensure!(
+        !webhook
+            .events
+            .iter()
+            .any(|event| event == "tool_pin.quarantined")
+            || webhook.secret.is_some()
+            || webhook.secret_env.is_some(),
+        "policy.webhook.secret or secretEnv is required when subscribing to tool_pin.quarantined"
+    );
     for event in ["undo.action_available", "emission.held"] {
         if webhook.events.iter().any(|configured| configured == event) {
             validate_webhook_subscription(event, webhook, rbac)?;
         }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_approval_configuration(config: &McpConfig) -> Result<()> {
+    if let Some(webhook) = config
+        .policy
+        .as_ref()
+        .and_then(|policy| policy.webhook.as_ref())
+    {
+        crate::approval_chatops::validate_approval_webhook(webhook, config.rbac.as_ref())?;
+        anyhow::ensure!(
+            !crate::approval_chatops::subscribed(webhook)
+                || config.state.as_ref().is_none_or(|state| state.enabled),
+            "Signed approvals require persistent state"
+        );
     }
     Ok(())
 }
@@ -1577,6 +1752,7 @@ mod tests {
             url: None,
             protocol_version: None,
             allow_stateless: None,
+            require_tool_pins: false,
             headers: HashMap::new(),
             auth: None,
             resilience: None,

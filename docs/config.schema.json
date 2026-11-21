@@ -82,6 +82,7 @@
           "items": { "type": "string" },
           "default": []
         },
+        "resultSanitization": { "$ref": "#/$defs/resultSanitization" },
         "requireApproval": {
           "type": "array",
           "items": { "type": "string" },
@@ -131,7 +132,9 @@
                 },
                 "additionalProperties": false
               },
-              "allowAgentSelfUndo": { "type": "boolean", "default": false }
+              "allowAgentSelfUndo": { "type": "boolean", "default": false },
+              "manageTrustControls": { "type": "boolean", "default": false },
+              "resolveApprovals": { "type": "boolean", "default": false }
             }
           }
         }
@@ -254,6 +257,32 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "resultSanitization": {
+      "type": "object",
+      "properties": {
+        "fieldNames": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "patterns": {
+          "type": "array",
+          "maxItems": 64,
+          "description": "At most 4 KiB of UTF-8 per pattern and 16 KiB across the set. Nesting and compiled size are also bounded.",
+          "items": { "type": "string", "maxLength": 4096 }
+        },
+        "opaqueExceptions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "server": { "type": "string", "minLength": 1 },
+              "kind": { "enum": ["image", "audio", "blob"] },
+              "mimeType": { "type": "string", "minLength": 3 }
+            },
+            "required": ["server", "kind", "mimeType"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "policyConfig": {
       "type": "object",
       "properties": {
@@ -351,6 +380,8 @@
         "url": { "type": "string", "format": "uri" },
         "secret": { "type": "string" },
         "secretEnv": { "type": "string" },
+        "slackSigningSecret": { "type": "string" },
+        "slackSigningSecretEnv": { "type": "string" },
         "authHeader": { "type": "string" },
         "headers": {
           "type": "object",
@@ -365,9 +396,10 @@
         "events": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Optional event filter for legacy approval notifications. ChatOps action events require explicit opt-in even when this list is empty."
+          "description": "Explicitly subscribed ChatOps events, including signed approval.requested cards."
         },
         "callbackUrl": { "type": "string", "format": "uri" },
+        "approvalTenant": { "type": "string", "minLength": 1 },
         "actionRole": { "type": "string", "minLength": 1, "description": "RBAC role assigned to signed ChatOps action buttons." }
       },
       "additionalProperties": false
@@ -401,6 +433,7 @@
         "url": { "type": "string", "format": "uri" },
         "protocolVersion": { "type": "string" },
         "allowStateless": { "type": "boolean" },
+        "requireToolPins": { "type": "boolean", "default": false },
         "headers": {
           "type": "object",
           "additionalProperties": { "type": "string" },

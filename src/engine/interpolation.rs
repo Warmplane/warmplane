@@ -8,37 +8,77 @@ use std::collections::HashMap;
 
 /// Resolves references to prior batch step outputs recursively.
 pub fn interpolate_step_references(val: &Value, outputs: &HashMap<String, Value>) -> Value {
+    interpolate_batch_value(val, &|id| Ok(outputs.get(id).map(|value| (value, false))))
+        .unwrap_or_else(|_| val.clone())
+}
+
+pub(crate) fn interpolate_batch_args(
+    val: &Value,
+    outputs: &HashMap<String, crate::result_sanitization::Delivery>,
+    revision: Option<&str>,
+) -> Result<Value> {
+    interpolate_batch_value(val, &|id| {
+        let Some(output) = outputs.get(id) else {
+            return Ok(None);
+        };
+        if revision.is_some() && revision != output.revision.as_deref() {
+            bail!("Batch reference targets a stale result");
+        }
+        Ok(Some((&output.value, output.revision.is_some())))
+    })
+}
+
+fn interpolate_batch_value<'a>(
+    val: &Value,
+    lookup: &impl Fn(&str) -> Result<Option<(&'a Value, bool)>>,
+) -> Result<Value> {
     match val {
         Value::String(text) if text.starts_with('$') => {
             let reference = &text[1..];
-            resolve_step_reference(reference, outputs).unwrap_or_else(|| val.clone())
+            Ok(resolve_step_reference(reference, lookup)?.unwrap_or_else(|| val.clone()))
         }
-        Value::Array(items) => Value::Array(
+        Value::Array(items) => Ok(Value::Array(
             items
                 .iter()
-                .map(|item| interpolate_step_references(item, outputs))
-                .collect(),
-        ),
-        Value::Object(fields) => Value::Object(
+                .map(|item| interpolate_batch_value(item, lookup))
+                .collect::<Result<_>>()?,
+        )),
+        Value::Object(fields) => Ok(Value::Object(
             fields
                 .iter()
-                .map(|(key, value)| (key.clone(), interpolate_step_references(value, outputs)))
-                .collect(),
-        ),
-        scalar => scalar.clone(),
+                .map(|(key, value)| Ok((key.clone(), interpolate_batch_value(value, lookup)?)))
+                .collect::<Result<_>>()?,
+        )),
+        scalar => Ok(scalar.clone()),
     }
 }
 
-fn resolve_step_reference(reference: &str, outputs: &HashMap<String, Value>) -> Option<Value> {
+fn resolve_step_reference<'a>(
+    reference: &str,
+    lookup: &impl Fn(&str) -> Result<Option<(&'a Value, bool)>>,
+) -> Result<Option<Value>> {
+    use crate::result_sanitization::{contains_redaction, REDACTED};
+
     let mut parts = reference.splitn(2, '.');
-    let step_id = parts.next()?;
-    let mut value = outputs.get(step_id)?;
-    if let Some(path) = parts.next() {
-        for segment in path.split('.') {
-            value = value.get(segment)?;
+    let Some(step_id) = parts.next() else {
+        return Ok(None);
+    };
+    let Some((mut value, enforce)) = lookup(step_id)? else {
+        return Ok(None);
+    };
+    for segment in parts.flat_map(|path| path.split('.')) {
+        if enforce && value.as_str().is_some_and(|text| text.contains(REDACTED)) {
+            bail!("Batch reference targets a protected result");
         }
+        let Some(next) = value.get(segment) else {
+            return Ok(None);
+        };
+        value = next;
     }
-    Some(value.clone())
+    if enforce && contains_redaction(value) {
+        bail!("Batch reference targets a protected result");
+    }
+    Ok(Some(value.clone()))
 }
 
 /// Resolves `${args.path}`, `${result.path}`, and `${snapshot.path}` references recursively.

@@ -1,6 +1,55 @@
 import { escapeHtml } from '../escape';
 import { AppState } from '../state';
-import { TaskItem } from '../api';
+import { PendingApproval, TaskItem } from '../api';
+
+function renderApprovalActivity(approval: PendingApproval): string {
+  const receipt = approval.decision_receipt;
+  const canDecide = approval.status === 'pending';
+  const delivery = approval.receipt_delivery === 'delivered' ? 'Delivered'
+    : approval.receipt_delivery === 'failed' ? 'Delivery failed'
+    : 'No delivery recorded';
+  return `
+    <details class="tool-pin-review">
+      <summary><code>${escapeHtml(approval.capability_id)}</code>
+        <span class="tool-pin-status">${escapeHtml(approval.status)}</span>
+      </summary>
+      <div class="tool-pin-comparison">
+        <div class="tool-pin-definition">
+          <strong>Reviewed arguments</strong>
+          <pre tabindex="0">${escapeHtml(JSON.stringify(approval.sanitized_args ?? {}, null, 2))}</pre>
+        </div>
+        <dl class="approval-details">
+          <dt>Ticket</dt><dd><code>${escapeHtml(approval.id)}</code></dd>
+          <dt>Decided by</dt><dd>${escapeHtml(receipt?.principal ?? 'Awaiting decision')}</dd>
+          <dt>Execution</dt><dd>${escapeHtml(approval.upstream_execution_state ?? approval.execution_status ?? 'No execution status recorded')}</dd>
+          <dt>ChatOps receipt</dt><dd>${delivery}</dd>
+        </dl>
+      </div>
+      ${canDecide ? `
+        <button type="button" class="btn btn-primary" data-approval-choice="approve" data-approval-target="${escapeHtml(approval.id)}">Approve invocation</button>
+        <button type="button" class="btn btn-ghost" data-approval-choice="reject" data-approval-target="${escapeHtml(approval.id)}">Reject</button>
+      ` : ''}
+    </details>
+  `;
+}
+
+function renderApprovalPanel(state: AppState): string {
+  return `
+    <section class="bento-card" style="margin-bottom: 16px;">
+      <h2 class="stat-label">Approval activity</h2>
+      <form class="trust-auth-form" id="approval-auth-form">
+        <div class="form-group">
+          <label class="form-label" for="approval-operator-token">Approval operator token</label>
+          <input class="form-input" type="password" autocomplete="off" id="approval-operator-token">
+        </div>
+        <button class="btn btn-ghost" type="submit">Load approvals</button>
+      </form>
+      <p class="tool-pin-feedback" role="status">${escapeHtml(state.approvalError ?? (state.approvals.length ? '' : 'No approval tickets are visible.'))}</p>
+      ${state.approvals.map(renderApprovalActivity).join('')}
+    </section>
+    ${state.taskError ? `<p class="tool-pin-feedback" role="status">${escapeHtml(state.taskError)}</p>` : ''}
+  `;
+}
 
 export function renderTasks(state: AppState): string {
   const tasks = state.tasks || [];
@@ -100,13 +149,15 @@ export function renderTasks(state: AppState): string {
                       <div style="margin-bottom: 8px;">
                         <label style="font-size: 10.5px; color: var(--text-dim); display: block; margin-bottom: 2px;">Decision:</label>
                         <select id="task-input-${escapeHtml(task.taskId)}-${escapeHtml(k)}-decision" class="form-input" style="font-size: 11.5px; font-family: var(--ff-mono); padding: 4px 8px;">
-                          <option value="true" selected>Approve &amp; Execute</option>
+                          <option value="" selected>Choose a decision</option>
+                          <option value="true">Approve &amp; Execute</option>
                           <option value="false">Reject Execution</option>
                         </select>
                       </div>
                       <div>
-                        <label style="font-size: 10.5px; color: var(--text-dim); display: block; margin-bottom: 2px;">Parameters (Editable):</label>
-                        <textarea id="task-input-${escapeHtml(task.taskId)}-${escapeHtml(k)}" class="form-textarea" rows="3" style="color: var(--green-400); font-family: var(--ff-mono); font-size: 11.5px;">${escapeHtml(initialVal)}</textarea>
+                        <div class="tool-pin-definition"><strong>Reviewed arguments</strong><pre tabindex="0">${escapeHtml(initialVal)}</pre></div>
+                        <label class="form-label" for="task-input-${escapeHtml(task.taskId)}-${escapeHtml(k)}">Replacement arguments (optional)</label>
+                        <textarea id="task-input-${escapeHtml(task.taskId)}-${escapeHtml(k)}" class="form-textarea" rows="3"></textarea>
                       </div>
                     </div>
                   `;
@@ -226,6 +277,7 @@ export function renderTasks(state: AppState): string {
   }).join('');
 
   return `
+    ${renderApprovalPanel(state)}
     <!-- Sub-header & Actions -->
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
       <div style="display: flex; align-items: center; gap: 10px;">

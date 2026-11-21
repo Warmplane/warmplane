@@ -4,7 +4,9 @@ use anyhow::Result;
 use opentelemetry::{global, trace::TracerProvider as _, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{runtime::Tokio, trace::TracerProvider, Resource};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{
+    filter::filter_fn, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter,
+};
 
 /// Resource guard managing OpenTelemetry tracer provider shutdown on drop.
 pub struct TelemetryGuard {
@@ -27,8 +29,11 @@ impl Drop for TelemetryGuard {
 /// # Errors
 /// Returns an error if OTLP exporter initialization fails.
 pub fn init() -> Result<TelemetryGuard> {
+    // The protocol client can trace response bodies before Warmplane inspects them.
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,warmplane=debug"));
+    let protocol_filter =
+        filter_fn(|meta| meta.target() != "rmcp" && !meta.target().starts_with("rmcp::"));
 
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
@@ -47,6 +52,7 @@ pub fn init() -> Result<TelemetryGuard> {
 
     if !otel_enabled {
         tracing_subscriber::registry()
+            .with(protocol_filter)
             .with(env_filter)
             .with(fmt_layer)
             .init();
@@ -80,6 +86,7 @@ pub fn init() -> Result<TelemetryGuard> {
     let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
     tracing_subscriber::registry()
+        .with(protocol_filter)
         .with(env_filter)
         .with(fmt_layer)
         .with(otel_layer)

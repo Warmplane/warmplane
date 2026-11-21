@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, Mutex, RwLock};
 use tracing::error;
 
-use crate::storage::AtomicFile;
+use crate::{result_sanitization::ResultAccess, storage::AtomicFile};
 
 /// Canonical deterministic idempotency-key derivation algorithm.
 ///
@@ -54,7 +54,7 @@ pub fn derive_idempotency_key(
 }
 
 /// Recursively sorts object keys to produce deterministic, canonical JSON strings.
-fn canonicalize_json(v: &Value) -> String {
+pub(crate) fn canonicalize_json(v: &Value) -> String {
     match v {
         Value::Null => "null".to_string(),
         Value::Bool(b) => b.to_string(),
@@ -130,6 +130,8 @@ enum EntryState {
 struct IdempotencyEntry {
     state: EntryState,
     capability_id: Option<String>,
+    result_policy_revision: Option<String>,
+    result_access: Option<ResultAccess>,
     created_at: Instant,
     created_at_epoch_secs: u64,
     completed_at_epoch_secs: Option<u64>,
@@ -157,6 +159,12 @@ pub struct PersistedIdempotencyRecord {
     pub capability_id: Option<String>,
     /// Completed JSON payload.
     pub response: Value,
+    /// Effective sanitization policy revision used to produce the stored response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_policy_revision: Option<String>,
+    /// Scope authenticated when the execution was claimed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_access: Option<ResultAccess>,
     /// Unix timestamp when the operation first started.
     pub created_at_epoch_secs: u64,
     /// Unix timestamp when the operation completed.
@@ -249,6 +257,8 @@ impl IdempotencyStore {
                     IdempotencyEntry {
                         state: EntryState::Completed(record.response.clone()),
                         capability_id: record.capability_id.clone(),
+                        result_policy_revision: record.result_policy_revision.clone(),
+                        result_access: record.result_access.clone(),
                         created_at: created_instant,
                         created_at_epoch_secs: record.created_at_epoch_secs,
                         completed_at_epoch_secs: record.completed_at_epoch_secs,
@@ -287,6 +297,8 @@ impl IdempotencyStore {
                             key: k.clone(),
                             capability_id: entry.capability_id.clone(),
                             response: val.clone(),
+                            result_policy_revision: entry.result_policy_revision.clone(),
+                            result_access: entry.result_access.clone(),
                             created_at_epoch_secs: entry.created_at_epoch_secs,
                             completed_at_epoch_secs: entry.completed_at_epoch_secs,
                             replay_count: entry.replay_count,
@@ -322,7 +334,17 @@ impl IdempotencyStore {
         capability_id: Option<String>,
         trace_id: Option<String>,
     ) -> DeduplicateResult {
-        let key_ref = key.as_ref();
+        self.check_or_start_scoped(key.as_ref(), capability_id, trace_id, None)
+            .await
+    }
+
+    async fn check_or_start_scoped(
+        &self,
+        key_ref: &str,
+        capability_id: Option<String>,
+        trace_id: Option<String>,
+        result_access: Option<ResultAccess>,
+    ) -> DeduplicateResult {
         let mut map = self.entries.write().await;
         let now = Instant::now();
         let now_epoch_secs = SystemTime::now()
@@ -374,6 +396,8 @@ impl IdempotencyStore {
             IdempotencyEntry {
                 state: EntryState::InProgress { claim, result },
                 capability_id,
+                result_policy_revision: None,
+                result_access,
                 created_at: now,
                 created_at_epoch_secs: now_epoch_secs,
                 completed_at_epoch_secs: None,
@@ -389,10 +413,16 @@ impl IdempotencyStore {
         key: &str,
         capability_id: &str,
         trace_id: &str,
+        access: ResultAccess,
     ) -> ExecutionClaim {
         loop {
             match self
-                .check_or_start_with_meta(key, Some(capability_id.into()), Some(trace_id.into()))
+                .check_or_start_scoped(
+                    key,
+                    Some(capability_id.into()),
+                    Some(trace_id.into()),
+                    Some(access.clone()),
+                )
                 .await
             {
                 DeduplicateResult::New(claim) => return ExecutionClaim::New(claim),
@@ -428,8 +458,19 @@ impl IdempotencyStore {
     ///
     /// A stale claim leaves the current entry untouched.
     pub async fn complete(&self, key: impl AsRef<str>, claim: IdempotencyClaim, result: Value) {
+        self.complete_with_revision(key.as_ref(), claim, result, None)
+            .await;
+    }
+
+    pub(crate) async fn complete_with_revision(
+        &self,
+        key: &str,
+        claim: IdempotencyClaim,
+        result: Value,
+        revision: Option<String>,
+    ) {
         let mut map = self.entries.write().await;
-        let Some(entry) = map.get_mut(key.as_ref()) else {
+        let Some(entry) = map.get_mut(key) else {
             return;
         };
         let EntryState::InProgress {
@@ -445,6 +486,7 @@ impl IdempotencyStore {
 
         let _ = sender.send(result.clone());
         entry.state = EntryState::Completed(result);
+        entry.result_policy_revision = revision;
         entry.completed_at_epoch_secs = Some(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -464,6 +506,8 @@ impl IdempotencyStore {
                     key: key.as_ref().to_string(),
                     capability_id: entry.capability_id.clone(),
                     response: res.clone(),
+                    result_policy_revision: entry.result_policy_revision.clone(),
+                    result_access: entry.result_access.clone(),
                     created_at_epoch_secs: entry.created_at_epoch_secs,
                     completed_at_epoch_secs: entry.completed_at_epoch_secs,
                     replay_count: entry.replay_count,
@@ -490,6 +534,8 @@ impl IdempotencyStore {
                         key: k.clone(),
                         capability_id: entry.capability_id.clone(),
                         response: res.clone(),
+                        result_policy_revision: entry.result_policy_revision.clone(),
+                        result_access: entry.result_access.clone(),
                         created_at_epoch_secs: entry.created_at_epoch_secs,
                         completed_at_epoch_secs: entry.completed_at_epoch_secs,
                         replay_count: entry.replay_count,

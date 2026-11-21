@@ -46,6 +46,7 @@ async fn test_hitl_end_to_end_wildcard_matching_and_approval() {
         allow: vec!["*".to_string()],
         deny: vec![],
         redact_keys: vec!["token".to_string()],
+        result_sanitization: None,
         require_approval: vec!["kubernetes.delete_*".to_string()],
         approval_timeout_secs: Some(15),
         hold_window_secs: None,
@@ -78,6 +79,7 @@ async fn test_hitl_end_to_end_wildcard_matching_and_approval() {
         let approve_res = handle_approve_ticket(
             State(state_clone),
             axum::extract::Path(ticket.id.clone()),
+            None,
             Json(ApproveTicketRequest {
                 operator: "devops-lead".to_string(),
                 modified_args: None,

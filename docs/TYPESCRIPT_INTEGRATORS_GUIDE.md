@@ -668,6 +668,14 @@ try {
 | `APPROVAL_PENDING` | 202 | Intercepted by HITL — awaiting operator decision |
 | `CIRCUIT_OPEN` | 503 | Upstream circuit breaker tripped |
 | `UPSTREAM_TIMEOUT` | 504 | Upstream exceeded `toolTimeoutMs` |
+| `RESULT_WITHHELD` | 502 | The result policy withheld a live or stored payload |
+| `TOOL_DEFINITION_UNAPPROVED` | 403 | The current tool definition lacks an applicable approval |
+
+With `policy.resultSanitization` enabled, `RESULT_WITHHELD` can carry a completed upstream execution state. Keep the original idempotency key if you check a withheld mutation again. Task status and ledger metadata can remain visible while the stored result is withheld after a policy change.
+
+The pinned tool catalog's ETag changes when tool visibility changes. If an invocation is refused after a definition changes, refresh the catalog and submit a new request after an operator approves the current definition.
+
+Under RBAC, authenticate approval and task input requests with a token for the ticket tenant and a role with `resolveApprovals`. Send `{"inputResponses":{"hitl_approval":{"approved":true}}}` for a linked task. If the task was created in a profile, include that profile in the `X-Warmplane-Profile` header on task input requests. The `receipt` describes the persisted decision. Read the task separately for execution status.
 
 See the [User Guide](USER-GUIDE.md) for the complete error code table and the [Whitepaper](WHITEPAPER.md) for architectural context.
 

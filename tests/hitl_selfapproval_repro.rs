@@ -13,7 +13,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
-use warmplane::approvals::{ApprovalStatus, CreateApprovalRequest};
+use warmplane::approvals::{ApprovalOwnership, ApprovalStatus, CreateApprovalRequest};
 use warmplane::daemon::{AppState, Policy};
 use warmplane::http_v1::handle_update_task;
 use warmplane::http_v1::tasks_api::UpdateTaskRequest;
@@ -29,27 +29,45 @@ fn state() -> AppState {
 }
 
 /// Creates a pending approval ticket linked to `request_id`.
-async fn pending_approval(state: &AppState, request_id: &str) -> String {
-    let (id, _rx) = state
+async fn pending_approval(
+    state: &AppState,
+    request_id: &str,
+    task_id: &str,
+) -> (
+    String,
+    tokio::sync::oneshot::Receiver<warmplane::approvals::ApprovalResolution>,
+) {
+    let (id, rx) = state
         .approval_registry
-        .create_approval(CreateApprovalRequest {
-            capability_id: "kubernetes.delete_pod".to_string(),
-            server_id: "k8s".to_string(),
-            args: json!({"pod": "prod-1"}),
-            sanitized_args: json!({"pod": "prod-1"}),
-            request_id: Some(request_id.to_string()),
-            context: None,
-            timeout_secs: 600,
-            webhook: None,
-        })
+        .create_scoped_approval(
+            CreateApprovalRequest {
+                capability_id: "kubernetes.delete_pod".to_string(),
+                server_id: "k8s".to_string(),
+                args: json!({"pod": "prod-1"}),
+                sanitized_args: json!({"pod": "prod-1"}),
+                request_id: Some(request_id.to_string()),
+                context: None,
+                timeout_secs: 600,
+                webhook: None,
+            },
+            Some(ApprovalOwnership::new(
+                "default",
+                Some(task_id),
+                &json!({"pod": "prod-1"}),
+                None,
+            )),
+        )
         .await;
-    id
+    (id, rx)
 }
 
 /// Creates a task awaiting input, linked to `request_id`.
 async fn input_required_task(state: &AppState, request_id: &str) -> String {
     let mut input_requests = BTreeMap::new();
-    input_requests.insert("reason".to_string(), json!("confirm deletion"));
+    input_requests.insert(
+        "hitl_approval".to_string(),
+        json!({"type": "approval_review"}),
+    );
 
     let (record, _rx) = state
         .task_registry
@@ -75,6 +93,8 @@ async fn update(state: &AppState, task_id: &str, responses: BTreeMap<String, Val
     handle_update_task(
         State(state.clone()),
         axum::extract::Path(task_id.to_string()),
+        None,
+        None,
         Json(UpdateTaskRequest {
             input_responses: responses,
         }),
@@ -102,11 +122,11 @@ async fn status_of(state: &AppState, appr_id: &str) -> ApprovalStatus {
 #[tokio::test]
 async fn empty_input_responses_do_not_approve_a_pending_ticket() {
     let state = state();
-    let appr_id = pending_approval(&state, "req-empty").await;
     let task_id = input_required_task(&state, "req-empty").await;
+    let (appr_id, _waiter) = pending_approval(&state, "req-empty", &task_id).await;
 
     let code = update(&state, &task_id, responses(vec![])).await;
-    assert_eq!(code, StatusCode::OK);
+    assert_eq!(code, StatusCode::BAD_REQUEST);
 
     let status = status_of(&state, &appr_id).await;
     assert!(
@@ -117,10 +137,26 @@ async fn empty_input_responses_do_not_approve_a_pending_ticket() {
 }
 
 #[tokio::test]
+async fn unlinked_approval_task_rejects_generic_input() {
+    let state = state();
+    let task_id = input_required_task(&state, "req-unlinked").await;
+    let code = update(
+        &state,
+        &task_id,
+        responses(vec![("reason", json!("continue"))]),
+    )
+    .await;
+    assert_eq!(code, StatusCode::BAD_REQUEST);
+    let task = state.task_registry.get_task(&task_id).await.unwrap();
+    assert_eq!(task.status, TaskStatus::InputRequired);
+    assert!(task.input_responses.is_empty());
+}
+
+#[tokio::test]
 async fn non_boolean_decision_does_not_approve_a_pending_ticket() {
     let state = state();
-    let appr_id = pending_approval(&state, "req-strfalse").await;
     let task_id = input_required_task(&state, "req-strfalse").await;
+    let (appr_id, _waiter) = pending_approval(&state, "req-strfalse", &task_id).await;
 
     // `"approved": "false"` is a string, not a boolean. Reading it through a
     // truthy default would turn an explicit denial into an approval.
@@ -147,8 +183,8 @@ async fn non_boolean_decision_does_not_approve_a_pending_ticket() {
 #[tokio::test]
 async fn explicit_boolean_approval_still_works() {
     let state = state();
-    let appr_id = pending_approval(&state, "req-yes").await;
     let task_id = input_required_task(&state, "req-yes").await;
+    let (appr_id, _waiter) = pending_approval(&state, "req-yes", &task_id).await;
 
     let code = update(
         &state,
@@ -172,8 +208,8 @@ async fn explicit_boolean_approval_still_works() {
 #[tokio::test]
 async fn explicit_boolean_rejection_still_works() {
     let state = state();
-    let appr_id = pending_approval(&state, "req-no").await;
     let task_id = input_required_task(&state, "req-no").await;
+    let (appr_id, _waiter) = pending_approval(&state, "req-no", &task_id).await;
 
     let code = update(
         &state,

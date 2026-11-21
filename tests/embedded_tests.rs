@@ -445,11 +445,7 @@ async fn compensable_daily_limit_requires_approval_before_another_forward_call()
         "hitl_approval".to_string(),
         json!({"approved": true}),
     )]);
-    assert!(state
-        .task_registry
-        .update_task(&task_id, responses)
-        .await
-        .unwrap());
+    assert!(handle.update_task(&task_id, responses).await.ok);
     let Some(ServerMsg::CallTool { reply, .. }) =
         tokio::time::timeout(std::time::Duration::from_secs(2), upstream_rx.recv())
             .await
@@ -484,6 +480,7 @@ async fn test_embedded_warmplane_call_capability_lifecycle() {
             auth: None,
             protocol_version: None,
             allow_stateless: Some(true),
+            require_tool_pins: false,
             headers: HashMap::new(),
             resilience: None,
         },
@@ -638,6 +635,7 @@ async fn test_embedded_task_management_lifecycle() {
             auth: None,
             protocol_version: None,
             allow_stateless: Some(true),
+            require_tool_pins: false,
             headers: HashMap::new(),
             resilience: None,
         },
@@ -773,6 +771,7 @@ async fn test_embedded_async_task_hitl_and_completion_lifecycle() {
             auth: None,
             protocol_version: None,
             allow_stateless: Some(true),
+            require_tool_pins: false,
             headers: HashMap::new(),
             resilience: None,
         },

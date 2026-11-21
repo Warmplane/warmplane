@@ -10,6 +10,8 @@ fn test_slack_block_kit_formatting() {
     let data = json!({
         "id": "appr-1724700000-99",
         "capability_id": "postgres.drop_table",
+        "approve_token": "approve-fixture-token",
+        "reject_token": "reject-fixture-token",
         "server_id": "production_db",
         "sanitized_args": {
             "table": "users"
@@ -20,7 +22,7 @@ fn test_slack_block_kit_formatting() {
         WebhookFormat::Slack,
         "approval.requested",
         &data,
-        Some("https://warmplane.internal/v1/webhooks/callbacks"),
+        Some("https://warmplane.internal/v1/webhooks/actions"),
     );
 
     let blocks = payload
@@ -37,8 +39,8 @@ fn test_slack_block_kit_formatting() {
     let action_block = blocks.iter().find(|b| b["type"] == "actions").unwrap();
     let elements = action_block["elements"].as_array().unwrap();
     assert_eq!(elements.len(), 2);
-    assert_eq!(elements[0]["text"]["text"], "✅ Approve");
-    assert_eq!(elements[1]["text"]["text"], "❌ Reject");
+    assert_eq!(elements[0]["text"]["text"], "Approve");
+    assert_eq!(elements[1]["text"]["text"], "Reject");
 }
 
 #[test]
@@ -46,6 +48,8 @@ fn test_discord_embed_formatting() {
     let data = json!({
         "id": "appr-1724700000-99",
         "capability_id": "docker.stop_container",
+        "approve_token": "approve-fixture-token",
+        "reject_token": "reject-fixture-token",
         "server_id": "local_docker",
         "sanitized_args": {
             "container_id": "c-101"
@@ -72,7 +76,7 @@ fn test_discord_embed_formatting() {
         .unwrap();
     assert_eq!(components.len(), 1);
     let buttons = components[0]["components"].as_array().unwrap();
-    assert_eq!(buttons.len(), 3);
+    assert_eq!(buttons.len(), 2);
 }
 
 #[test]
@@ -80,6 +84,8 @@ fn test_teams_adaptive_card_formatting() {
     let data = json!({
         "id": "appr-1724700000-99",
         "capability_id": "payments.refund",
+        "approve_token": "approve-fixture-token",
+        "reject_token": "reject-fixture-token",
         "server_id": "stripe",
         "sanitized_args": {
             "charge_id": "ch_123"

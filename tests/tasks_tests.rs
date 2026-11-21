@@ -49,6 +49,7 @@ async fn test_tasks_lifecycle_and_hitl_integration() {
         allow: vec!["*".to_string()],
         deny: vec![],
         redact_keys: vec!["card_number".to_string()],
+        result_sanitization: None,
         require_approval: vec!["payments.*".to_string()],
         approval_timeout_secs: Some(30),
         hold_window_secs: None,
@@ -125,6 +126,8 @@ async fn test_tasks_lifecycle_and_hitl_integration() {
     let update_resp = handle_update_task(
         State(state.clone()),
         axum::extract::Path(task_id.clone()),
+        None,
+        None,
         Json(UpdateTaskRequest {
             input_responses: responses,
         }),

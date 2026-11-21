@@ -543,6 +543,55 @@ paths:
       responses:
         "200":
           description: Summary of mounted, unmounted, and updated servers
+  /v1/config/tool-pins:
+    get:
+      summary: Review upstream tool definitions and approvals as a trust administrator
+      operationId: listToolPins
+      responses:
+        "200":
+          description: Definitions from servers that require pins
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: {type: boolean}
+                  pins:
+                    type: array
+                    items: {$ref: "#/components/schemas/ToolPin"}
+        "403":
+          description: Authenticated trust administrator required
+  /v1/config/tool-pins/approve:
+    post:
+      summary: Persist approval of an exact observed upstream definition
+      operationId: approveToolPin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [server, tool, digest]
+              properties:
+                server: {type: string}
+                tool: {type: string}
+                digest: {type: string}
+      responses:
+        "200":
+          description: Current pin review state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: {type: boolean}
+                  pin: {$ref: "#/components/schemas/ToolPin"}
+        "403":
+          description: Authenticated trust administrator required
+        "409":
+          description: The observed definition changed or became unavailable
+        "503":
+          description: Audit authorization or pin persistence failed
   /v1/approvals:
     get:
       summary: List pending and resolved human approval tickets
@@ -591,7 +640,11 @@ paths:
               $ref: "#/components/schemas/ApproveTicketRequest"
       responses:
         "200":
-          description: Ticket approved and execution resumed
+          description: Approval decision persisted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecisionReceiptResponse"
         "409":
           description: Ticket is not pending or already resolved
   /v1/approvals/{id}/reject:
@@ -612,9 +665,61 @@ paths:
               $ref: "#/components/schemas/RejectTicketRequest"
       responses:
         "200":
-          description: Ticket rejected
+          description: Rejection decision persisted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecisionReceiptResponse"
         "409":
           description: Ticket is not pending or already resolved
+  /v1/webhooks/actions:
+    post:
+      summary: Resolve a purpose-bound signed ChatOps action
+      operationId: applyChatOpsAction
+      description: Resolves a signed approval, undo, or cancel-send action. Request bodies are limited to 64 KiB.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action_token]
+              properties:
+                action_token: {type: string, maxLength: 512}
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                payload: {type: string}
+      responses:
+        "200":
+          description: Signed action acknowledged or a JSON approval receipt returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecisionReceiptResponse"
+        "400":
+          description: Malformed callback payload
+        "413":
+          description: Callback body exceeds 64 KiB
+        "401":
+          description: Signed action or Slack request authentication failed
+        "403":
+          description: Configured role is not authorized
+        "404":
+          description: Action target is unavailable
+        "409":
+          description: Competing decision or expired approval
+        "503":
+          description: Decision could not be durably persisted
+  /v1/webhooks/callbacks:
+    post:
+      summary: Retired approval callback
+      operationId: retiredApprovalCallback
+      deprecated: true
+      responses:
+        "410":
+          description: Use /v1/webhooks/actions
   /v1/audit/events:
     get:
       summary: Query paginated WORM audit events with filters
@@ -834,27 +939,6 @@ paths:
         "404": { description: Work item belongs to another tenant }
         "503": { description: Undo storage unavailable or an audit event could not be committed }
         "403": { description: Role lacks rollback permission }
-  /v1/webhooks/actions:
-    post:
-      summary: Apply one signed ChatOps Undo or Cancel Send action
-      operationId: applyChatOpsAction
-      description: The action_token is bound to one target, tenant, action, configured role, and expiry. Valid requests are acknowledged immediately and execute in the background. Inspect the entry or task for completion and drift failures.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [action_token]
-              properties:
-                action_token: { type: string }
-              additionalProperties: true
-      responses:
-        "200": { description: Signed action accepted for background execution }
-        "401": { description: Missing, invalid, or expired action token }
-        "403": { description: Configured role is not authorized }
-        "404": { description: Target is unavailable to the token }
-        "409": { description: Cancellation lost the race to dispatch }
   /v1/tasks:
     get:
       summary: List tasks visible to the current tenant and profile
@@ -903,11 +987,17 @@ paths:
   /v1/tasks/{id}/update:
     post:
       summary: Submit input responses to a suspended task
+      description: Submit input in the task's tenant and profile scope. Approval tasks require an explicit Boolean decision.
       operationId: updateTask
       parameters:
         - in: path
           name: id
           required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Warmplane-Profile
+          required: false
           schema:
             type: string
       requestBody:
@@ -1347,6 +1437,9 @@ components:
           example: "2026-07-28"
         allowStateless:
           type: [boolean, "null"]
+        requireToolPins:
+          type: boolean
+          default: false
         headers:
           type: object
           additionalProperties:
@@ -1355,6 +1448,25 @@ components:
           type: object
         resilience:
           $ref: "#/components/schemas/ResilienceConfig"
+    ToolPinDefinition:
+      type: object
+      properties:
+        digest: {type: string}
+        value: {type: object}
+    ToolPin:
+      type: object
+      properties:
+        server: {type: string}
+        tool: {type: [string, "null"]}
+        status: {type: string, enum: [missing, matching, changed, unavailable]}
+        current:
+          oneOf:
+            - $ref: "#/components/schemas/ToolPinDefinition"
+            - type: "null"
+        approved:
+          oneOf:
+            - $ref: "#/components/schemas/ToolPinDefinition"
+            - type: "null"
     UpsertServerRequest:
       type: object
       required: [name, server]
@@ -1363,6 +1475,10 @@ components:
           type: string
         server:
           $ref: "#/components/schemas/ServerConfig"
+        preserve_unedited:
+          type: boolean
+          default: false
+          description: Preserve server settings outside the fields exposed by the Control Deck editor.
     ImportConfigRequest:
       type: object
       properties:
@@ -1571,6 +1687,13 @@ components:
           format: uri
         actionRole:
           type: string
+        approvalTenant:
+          type: string
+        slackSigningSecret:
+          type: string
+          writeOnly: true
+        slackSigningSecretEnv:
+          type: string
     PolicyConfig:
       type: object
       properties:
@@ -1592,48 +1715,70 @@ components:
           type: array
           items:
             type: string
+        resultSanitization:
+          $ref: "#/components/schemas/ResultSanitization"
         holdWindowSecs:
           type: integer
           minimum: 1
         webhook:
           $ref: "#/components/schemas/WebhookConfig"
-    ApprovalStatus:
+    ResultSanitization:
       type: object
-      required: [status]
+      additionalProperties: false
       properties:
-        status:
-          type: string
-          enum: [pending, approved, rejected, expired]
-        operator:
-          type: string
-        timestamp:
-          type: integer
-        reason:
-          type: string
-        modified_args:
-          type: object
+        fieldNames:
+          type: array
+          items: {type: string, minLength: 1}
+        patterns:
+          type: array
+          maxItems: 64
+          description: At most 4 KiB of UTF-8 per pattern and 16 KiB across the set. Nesting and compiled size are also bounded.
+          items: {type: string, maxLength: 4096}
+        opaqueExceptions:
+          type: array
+          items:
+            type: object
+            required: [server, kind, mimeType]
+            additionalProperties: false
+            properties:
+              server: {type: string}
+              kind: {type: string, enum: [image, audio, blob]}
+              mimeType: {type: string}
+    DecisionReceipt:
+      type: object
+      required: [ticket_id, decision, principal, decided_at, argument_digest]
+      properties:
+        ticket_id: {type: string}
+        decision: {type: string, enum: [approve, reject]}
+        principal: {type: string}
+        decided_at: {type: integer}
+        argument_digest: {type: string}
+    DecisionReceiptResponse:
+      type: object
+      required: [ok, receipt]
+      properties:
+        ok: {type: boolean}
+        receipt:
+          $ref: "#/components/schemas/DecisionReceipt"
     ApprovalTicket:
       type: object
-      required: [id, capability_id, server_id, args, sanitized_args, status, created_at, expires_at]
+      required: [id, capability_id, server_id, sanitized_args, status, created_at, expires_at]
       properties:
-        id:
-          type: string
-        capability_id:
-          type: string
-        server_id:
-          type: string
-        args:
-          type: object
-        sanitized_args:
-          type: object
-        request_id:
-          type: [string, "null"]
-        status:
-          $ref: "#/components/schemas/ApprovalStatus"
-        created_at:
-          type: integer
-        expires_at:
-          type: integer
+        id: {type: string}
+        capability_id: {type: string}
+        server_id: {type: string}
+        sanitized_args: {type: object}
+        task_id: {type: [string, "null"]}
+        status: {type: string, enum: [pending, approved, rejected, expired]}
+        created_at: {type: integer}
+        expires_at: {type: integer}
+        decision_receipt:
+          oneOf:
+            - $ref: "#/components/schemas/DecisionReceipt"
+            - type: "null"
+        receipt_delivery: {type: [string, "null"], enum: [delivered, failed, null]}
+        execution_status: {type: [string, "null"]}
+        upstream_execution_state: {type: [string, "null"]}
     ListApprovalsResponse:
       type: object
       required: [ok, approvals, total]
@@ -1656,18 +1801,18 @@ components:
           $ref: "#/components/schemas/ApprovalTicket"
     ApproveTicketRequest:
       type: object
-      required: [operator]
       properties:
         operator:
           type: string
+          deprecated: true
         modified_args:
           type: object
     RejectTicketRequest:
       type: object
-      required: [operator]
       properties:
         operator:
           type: string
+          deprecated: true
         reason:
           type: string
     SuccessEnvelope:
@@ -1720,6 +1865,8 @@ components:
                 - INVALID_ARGS
                 - UPSTREAM_TIMEOUT
                 - UPSTREAM_ERROR
+                - RESULT_WITHHELD
+                - TOOL_DEFINITION_UNAPPROVED
                 - POLICY_DENIED
                 - APPROVAL_PENDING
                 - APPROVAL_TIMEOUT
@@ -1844,7 +1991,15 @@ components:
           description: Target capability ID
         response:
           type: object
-          description: Cached execution response payload
+          description: Cached execution response or a policy withholding error
+        result_policy_revision:
+          type: string
+          description: Sanitization revision used to produce the stored response
+        result_access:
+          type: object
+          properties:
+            tenant_id: {type: string}
+            profile_id: {type: [string, "null"]}
         created_at_epoch_secs:
           type: integer
           description: Unix timestamp when key was initialized

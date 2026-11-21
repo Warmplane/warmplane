@@ -27,6 +27,8 @@ pub enum AuditEventType {
     SamplingCall,
     /// Resource read or prompt fetch event.
     ResourceAccess,
+    /// Result delivery policy withheld a payload or permitted an opaque exception.
+    ResultSanitization,
     /// A delayable emission was accepted and is waiting for its release deadline.
     EmissionHeld,
     /// A pending delayable emission was cancelled before dispatch.

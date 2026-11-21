@@ -1,15 +1,16 @@
 import { escapeHtml } from './escape';
 import { store, BatchStepState, AppState } from './state';
-import { api } from './api';
-import { ReversibilityConfig } from './api';
+import { api, apiError } from './api';
+import type { McpServerConfig, PolicyConfig, ReversibilityConfig } from './api';
+import { readResultRules, readWebhook } from './components/trust-settings';
 import { renderOverview } from './components/overview';
 import { renderServers } from './components/servers';
 import { renderPlayground, renderResourceList, renderPromptList, generateSampleArgsFromSchema } from './components/playground';
 import { renderTasks } from './components/tasks';
 import { renderUndoFeed } from './components/undo';
-import { renderApprovals } from './components/approvals';
 import { renderAudit } from './components/audit';
 import { renderPolicy } from './components/policy';
+import { mountToolPinReview } from './components/tool-pins';
 import { getSavedAlias, renderAliasList, renderAliases } from './components/aliases';
 import type { AliasKind, AliasTestStatus } from './components/aliases';
 import { bindCapabilityAutocomplete, closeCapabilitySuggestions } from './components/capability-autocomplete';
@@ -22,6 +23,10 @@ class WarmplaneApp {
   private activeTemplateFilter: string = '';
   private selectedTemplate: ServerTemplate | null = null;
   private pendingClientId: string | null = null;
+  private taskRefresh = 0;
+  private approvalRefresh = 0;
+  private configIdentity = 0;
+  private savingTrustPolicy = false;
 
   async init() {
     const port = window.location.port ? `:${window.location.port}` : '';
@@ -31,6 +36,7 @@ class WarmplaneApp {
     await this.refreshData();
     this.initSSE();
     this.bindUndoFeedActions();
+    this.bindApprovalActions();
     this.render();
 
     store.subscribe(() => {
@@ -72,19 +78,44 @@ class WarmplaneApp {
     });
   }
 
+  private bindApprovalActions() {
+    const main = document.getElementById('app-main');
+    main?.addEventListener('submit', event => {
+      if (!(event.target instanceof HTMLFormElement) || event.target.id !== 'approval-auth-form') return;
+      event.preventDefault();
+      const token = event.target.querySelector<HTMLInputElement>('#approval-operator-token');
+      if (token?.value.trim()) {
+        this.configIdentity++;
+        api.setApprovalToken(token.value.trim());
+        token.value = '';
+        store.setState({ approvals: [], tasks: [], approvalError: null, taskError: null });
+        void this.refreshData();
+      } else {
+        void Promise.all([this.refreshApprovals(), this.refreshTasks()]);
+      }
+    });
+    main?.addEventListener('click', event => {
+      if (!(event.target instanceof Element)) return;
+      const button = event.target.closest<HTMLButtonElement>('[data-approval-target]');
+      const id = button?.dataset.approvalTarget;
+      if (!id) return;
+      if (button.dataset.approvalChoice === 'approve') void this.submitApproval(id);
+      if (button.dataset.approvalChoice === 'reject') void this.promptReject(id);
+    });
+  }
+
   async refreshData() {
     try {
       const state = store.getState();
+      const identity = this.configIdentity;
       const filters = state.auditFilters;
       const prof = state.activeProfile || undefined;
-      const [configRes, capsRes, resRes, promptsRes, eventsRes, apprRes, tasksRes, auditEventsRes, auditStatsRes, clientsRes, secretsRes] = await Promise.all([
+      const [configRes, capsRes, resRes, promptsRes, eventsRes, auditEventsRes, auditStatsRes, clientsRes, secretsRes] = await Promise.all([
         api.getConfig(),
         api.listCapabilities(prof),
         api.listResources(prof),
         api.listPrompts(prof),
         api.getCatalogEvents(),
-        api.listApprovals(),
-        api.listTasks(),
         api.listAuditEvents({
           server_id: filters.serverId !== 'all' ? filters.serverId : undefined,
           event_type: filters.eventType !== 'all' ? filters.eventType : undefined,
@@ -96,7 +127,11 @@ class WarmplaneApp {
         api.getAuditStats(),
         api.getClients().catch(() => ({ ok: false, clients: [] })),
         api.getSecrets().catch(() => ({ ok: false, secrets: [], keychain_service: 'warmplane' })),
+        this.refreshApprovals(),
+        this.refreshTasks(),
       ]);
+
+      if (identity !== this.configIdentity || state.activeProfile !== store.getState().activeProfile) return;
 
       if (clientsRes && clientsRes.ok && Array.isArray(clientsRes.clients)) {
         store.setState({ clients: clientsRes.clients });
@@ -108,6 +143,8 @@ class WarmplaneApp {
 
       if (configRes.ok) {
         store.setState({
+          configReady: true,
+          configError: null,
           configPath: configRes.config_path,
           config: configRes.config,
           serverStatuses: configRes.server_statuses || {},
@@ -119,6 +156,8 @@ class WarmplaneApp {
             totalToolDurationUs: configRes.metrics?.total_tool_duration_us || 0,
           }
         });
+      } else {
+        store.setState({ configReady: false, configError: apiError(configRes, 'Configuration could not be loaded.') });
       }
 
       if (capsRes && Array.isArray(capsRes.capabilities)) {
@@ -160,18 +199,6 @@ class WarmplaneApp {
       if (eventsRes && Array.isArray(eventsRes.events)) {
         store.setState({
           catalogEvents: eventsRes.events
-        });
-      }
-
-      if (apprRes && Array.isArray(apprRes.approvals)) {
-        store.setState({
-          approvals: apprRes.approvals
-        });
-      }
-
-      if (tasksRes && Array.isArray(tasksRes.tasks)) {
-        store.setState({
-          tasks: tasksRes.tasks
         });
       }
 
@@ -332,7 +359,70 @@ class WarmplaneApp {
   }
 
   async refreshApprovals() {
-    await this.refreshCollection(() => api.listApprovals(), res => res && Array.isArray(res.approvals) ? { approvals: res.approvals } : null, 'Failed to refresh approvals:');
+    const generation = ++this.approvalRefresh;
+    const failed = 'Could not load approval tickets.';
+    const response = await api.listApprovals().catch(() => ({ ok: false, approvals: [], error: failed }));
+    if (generation === this.approvalRefresh) {
+      store.setState({
+        approvals: response.approvals ?? [],
+        approvalError: response.ok ? null : apiError(response, failed),
+      });
+    }
+  }
+
+  openTrustAccess() {
+    this.closeModals();
+    const modal = document.getElementById('modal-trust-access');
+    const input = document.querySelector<HTMLInputElement>('#trust-access-token');
+    const disconnect = document.querySelector<HTMLButtonElement>('#trust-disconnect');
+    const status = document.getElementById('trust-access-status');
+    if (disconnect) disconnect.hidden = !api.hasTrustToken();
+    if (status) status.textContent = api.hasTrustToken() ? 'Connected for this tab.' : 'Use a trust administrator credential to load and edit protected configuration.';
+    if (input) input.value = '';
+    modal?.classList.add('active');
+    input?.focus();
+  }
+
+  async connectTrustAdministrator(event: SubmitEvent) {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const input = form.querySelector<HTMLInputElement>('#trust-access-token')!;
+    const status = form.querySelector<HTMLElement>('#trust-access-status')!;
+    const submit = form.querySelector<HTMLButtonElement>('button[type=submit]')!;
+    const token = input.value.trim();
+    if (!token || submit.disabled) return;
+    submit.disabled = true;
+    input.readOnly = true;
+    status.textContent = 'Checking administrator access…';
+    try {
+      const response = await api.listToolPins(token);
+      if (response.error) {
+        status.textContent = response.error;
+        return;
+      }
+      input.value = '';
+      await this.setTrustAccess(token);
+    } catch {
+      status.textContent = 'Could not verify administrator access. Check the daemon connection.';
+    } finally {
+      submit.disabled = false;
+      input.readOnly = false;
+    }
+  }
+
+  async disconnectTrustAdministrator() {
+    await this.setTrustAccess('');
+  }
+
+  private async setTrustAccess(token: string) {
+    this.configIdentity++;
+    api.setTrustToken(token);
+    document.getElementById('tool-pins-panel')?.remove();
+    store.setState({ config: { mcpServers: {} }, configReady: false, configError: null, tasks: [], approvals: [] });
+    this.closeModals();
+    const button = document.getElementById('trust-access-button');
+    if (button) button.textContent = token ? 'Trust access · Connected' : 'Trust access';
+    await this.refreshData();
   }
 
   initSSE() {
@@ -406,7 +496,7 @@ class WarmplaneApp {
 
   async cancelHeldTask(taskId: string) {
     if (!confirm('Cancel this send before it is released?')) return;
-    const response = await api.cancelTask(taskId, 'Cancelled from Control Deck Action Feed');
+    const response = await api.cancelTask(taskId, 'Cancelled from Control Deck Action Feed', store.getState().activeProfile ?? undefined);
     if (!response.ok) alert(`Cancellation failed: ${response.error?.message || response.error?.code || 'Request failed'}`);
     await this.refreshTasks();
   }
@@ -493,7 +583,7 @@ class WarmplaneApp {
         mainEl.innerHTML = renderAudit();
         break;
       case 'policy':
-        mainEl.innerHTML = renderPolicy();
+        this.renderPolicyView(mainEl);
         break;
       case 'secrets':
         mainEl.innerHTML = renderSecrets();
@@ -627,7 +717,13 @@ class WarmplaneApp {
 
   // SEP-2663 Tasks & HITL Actions
   async refreshTasks() {
-    await this.refreshCollection(() => api.listTasks(), res => res && Array.isArray(res.tasks) ? { tasks: res.tasks } : null, 'Failed to refresh tasks:');
+    const generation = ++this.taskRefresh;
+    const profile = store.getState().activeProfile ?? undefined;
+    const failed = 'Could not load tasks for this profile.';
+    const response = await api.listTasks(profile).catch(() => ({ ok: false, tasks: [], error: failed }));
+    if (generation === this.taskRefresh) {
+      store.setState({ tasks: response.tasks ?? [], taskError: response.ok ? null : apiError(response, failed) });
+    }
   }
 
   filterTasksByStatus(status: string) {
@@ -648,23 +744,9 @@ class WarmplaneApp {
       for (const k of inputKeys) {
         const reqDef = inputReqs[k];
         if (reqDef && reqDef.type === 'approval_review') {
-          const decisionEl = document.getElementById(`task-input-${taskId}-${k}-decision`) as HTMLSelectElement | null;
-          const argsEl = document.getElementById(`task-input-${taskId}-${k}`) as HTMLTextAreaElement | null;
-          const isApproved = decisionEl ? decisionEl.value === 'true' : true;
-          let modArgs: any = undefined;
-          if (argsEl && argsEl.value.trim()) {
-            try {
-              modArgs = JSON.parse(argsEl.value.trim());
-            } catch {
-              alert('Invalid JSON in parameters editor');
-              return;
-            }
-          }
-          responses[k] = {
-            approved: isApproved,
-            modified_args: modArgs,
-            reason: isApproved ? undefined : 'Operator rejected execution via Tasks review',
-          };
+          const decision = this.readTaskApproval(taskId, k);
+          if (!decision) return;
+          responses[k] = decision;
         } else {
           const el = document.getElementById(`task-input-${taskId}-${k}`) as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null;
           if (el) {
@@ -690,9 +772,9 @@ class WarmplaneApp {
     }
 
     try {
-      const res = await api.updateTask(taskId, responses);
+      const res = await api.updateTask(taskId, responses, store.getState().activeProfile ?? undefined);
       if (res.ok) {
-        await this.refreshTasks();
+        await Promise.all([this.refreshTasks(), this.refreshApprovals()]);
       } else {
         alert(`Task update failed: ${res.error?.message || res.error || 'Unknown error'}`);
       }
@@ -701,12 +783,37 @@ class WarmplaneApp {
     }
   }
 
+  private readTaskApproval(taskId: string, k: string) {
+    const decisionEl = document.getElementById(`task-input-${taskId}-${k}-decision`) as HTMLSelectElement | null;
+    const argsEl = document.getElementById(`task-input-${taskId}-${k}`) as HTMLTextAreaElement | null;
+    if (!decisionEl?.value) {
+      alert('Choose whether to approve or reject this invocation.');
+      decisionEl?.focus();
+      return;
+    }
+    const isApproved = decisionEl.value === 'true';
+    let modArgs: any = undefined;
+    if (isApproved && argsEl && argsEl.value.trim()) {
+      try {
+        modArgs = JSON.parse(argsEl.value.trim());
+      } catch {
+        alert('Invalid JSON in parameters editor');
+        return;
+      }
+    }
+    return {
+      approved: isApproved,
+      modified_args: modArgs,
+      reason: isApproved ? undefined : 'Operator rejected execution via Tasks review',
+    };
+  }
+
   async promptCancelTask(taskId: string) {
     const reason = prompt('Reason for cancelling task:');
     if (reason === null) return;
 
     try {
-      const res = await api.cancelTask(taskId, reason || undefined);
+      const res = await api.cancelTask(taskId, reason || undefined, store.getState().activeProfile ?? undefined);
       if (res.ok) {
         await this.refreshTasks();
       } else {
@@ -737,7 +844,7 @@ class WarmplaneApp {
     modal.classList.add('active');
 
     try {
-      const res = await api.getTask(taskId);
+      const res = await api.getTask(taskId, store.getState().activeProfile ?? undefined);
       if (!res.ok || !res.task) {
         if (bodyEl) {
           bodyEl.innerHTML = `
@@ -878,11 +985,8 @@ class WarmplaneApp {
     }
   }
 
-  // HITL Approval Actions (Legacy compatibility)
   async submitApproval(id: string) {
-    const operatorInput = document.getElementById(`appr-operator-${id}`) as HTMLInputElement | null;
     const argsInput = document.getElementById(`appr-args-${id}`) as HTMLTextAreaElement | null;
-    const operator = operatorInput?.value.trim() || 'security-operator';
 
     let modifiedArgs: any = undefined;
     if (argsInput && argsInput.value.trim()) {
@@ -894,27 +998,24 @@ class WarmplaneApp {
       }
     }
 
-    const res = await api.approveTicket(id, operator, modifiedArgs);
+    const res = await api.approveTicket(id, modifiedArgs);
     if (res.ok) {
       await this.refreshApprovals();
       await this.refreshTasks();
     } else {
-      alert(`Approval failed: ${res.error || 'Unknown error'}`);
+      alert(`Approval failed: ${res.error?.message || 'Unknown error'}`);
     }
   }
 
   async promptReject(id: string) {
     const reason = prompt('Reason for rejection (will be returned to the calling agent):');
     if (reason === null) return;
-    const operatorInput = document.getElementById(`appr-operator-${id}`) as HTMLInputElement | null;
-    const operator = operatorInput?.value.trim() || 'security-operator';
-
-    const res = await api.rejectTicket(id, operator, reason);
+    const res = await api.rejectTicket(id, reason);
     if (res.ok) {
       await this.refreshApprovals();
       await this.refreshTasks();
     } else {
-      alert(`Rejection failed: ${res.error || 'Unknown error'}`);
+      alert(`Rejection failed: ${res.error?.message || 'Unknown error'}`);
     }
   }
 
@@ -1509,76 +1610,70 @@ class WarmplaneApp {
     await this.refreshData();
   }
 
-  async saveWebhookConfig() {
-    const urlEl = document.getElementById('policy-webhook-url') as HTMLInputElement | null;
-    const formatEl = document.getElementById('policy-webhook-format') as HTMLSelectElement | null;
-    const secretEl = document.getElementById('policy-webhook-secret') as HTMLInputElement | null;
-
-    const url = urlEl ? urlEl.value.trim() : '';
-    const format = formatEl ? (formatEl.value as any) : 'generic';
-    const secret = secretEl ? secretEl.value.trim() : '';
-
-    const state = store.getState();
-    const current = state.config.policy || {};
-
-    const webhook = url ? {
-      url,
-      format,
-      secret: secret && !secret.startsWith('WARMPLANE_') && !secret.includes('_') ? secret : undefined,
-      secret_env: secret && (secret.startsWith('WARMPLANE_') || secret.includes('_')) ? secret : undefined,
-      events: ['approval.requested', 'circuit_breaker.tripped', 'policy.violation'],
-    } : undefined;
-
-    const res = await api.savePolicy({
-      ...current,
-      webhook,
-    });
-
-    if (res.ok) {
-      alert('Webhook settings saved successfully');
-    } else {
-      alert(`Failed to save webhook settings: ${res.error || 'Unknown error'}`);
+  private renderPolicyView(main: HTMLElement) {
+    const pinPanel = main.querySelector<HTMLElement>('#tool-pins-panel');
+    const forms = [...main.querySelectorAll<HTMLFormElement>('form[data-policy-key]')];
+    const focused = document.activeElement;
+    main.innerHTML = renderPolicy();
+    for (const form of forms) {
+      const replacement = document.getElementById(form.id);
+      if (replacement && replacement.dataset.policyKey === form.dataset.policyKey) {
+        replacement.replaceWith(form);
+        if (focused instanceof HTMLElement && form.contains(focused)) focused.focus({ preventScroll: true });
+      }
     }
-    await this.refreshData();
+    const replacement = main.querySelector<HTMLElement>('#tool-pins-panel');
+    if (replacement && pinPanel) replacement.replaceWith(pinPanel);
+    else if (replacement) mountToolPinReview(replacement);
+  }
+
+  async saveResultSanitization(event: SubmitEvent) {
+    await this.saveTrustPolicy(event, (policy, data) => ({ ...policy, resultSanitization: readResultRules(data) }));
+  }
+
+  async saveWebhookConfig(event: SubmitEvent) {
+    await this.saveTrustPolicy(event, (policy, data, rbacEnabled) => ({ ...policy, webhook: readWebhook(data, policy.webhook, rbacEnabled) }));
+  }
+
+  private async saveTrustPolicy(
+    event: SubmitEvent,
+    update: (policy: PolicyConfig, data: FormData, rbacEnabled: boolean) => PolicyConfig,
+  ) {
+    event.preventDefault();
+    if (this.savingTrustPolicy) return;
+    const form = event.currentTarget as HTMLFormElement;
+    const status = form.querySelector<HTMLElement>('[role=status]')!;
+    const submit = form.querySelector<HTMLButtonElement>('button[type=submit]')!;
+    const data = new FormData(form);
+    const identity = this.configIdentity;
+    this.savingTrustPolicy = true;
+    submit.disabled = true;
+    status.textContent = 'Saving…';
+    try {
+      const config = await api.getConfig();
+      if (identity !== this.configIdentity) return;
+      if (!config.ok) throw new Error(apiError(config, 'Configuration could not be loaded.'));
+      const policy = update(config.config.policy ?? {}, data, config.config.rbac?.enabled === true);
+      const result = await api.savePolicy(policy);
+      if (!result.ok) throw new Error(apiError(result, 'Settings could not be saved.'));
+      form.remove();
+      await this.refreshData();
+      const updatedStatus = document.getElementById(form.id)?.querySelector('[role=status]');
+      if (updatedStatus) updatedStatus.textContent = 'Settings saved.';
+    } catch (error) {
+      status.textContent = error instanceof Error ? error.message : 'Settings could not be saved.';
+    } finally {
+      this.savingTrustPolicy = false;
+      submit.disabled = false;
+    }
   }
 
   async testWebhook() {
-    const urlEl = document.getElementById('policy-webhook-url') as HTMLInputElement | null;
-    const formatEl = document.getElementById('policy-webhook-format') as HTMLSelectElement | null;
-    const url = urlEl ? urlEl.value.trim() : undefined;
-    const format = formatEl ? formatEl.value : undefined;
-
-    const state = store.getState();
-    const currentWebhookUrl = typeof state.config.policy?.webhook === 'object' ? state.config.policy.webhook?.url : undefined;
-    if (url && url !== currentWebhookUrl) {
-      // Save webhook settings first so URL is in the server's allowlist
-      await this.saveWebhookConfig();
-    }
-
-    const statusEl = document.getElementById('policy-webhook-status');
-    if (statusEl) {
-      statusEl.textContent = 'Sending test event...';
-      statusEl.style.color = 'var(--cyan-400)';
-    }
-
-    try {
-      const res = await api.testWebhook(url, format);
-      if (res.ok) {
-        alert(`Test webhook sent successfully! (${res.message})`);
-        if (statusEl) {
-          statusEl.textContent = `✔ Test sent (HTTP ${res.status_code || 200})`;
-          statusEl.style.color = 'var(--green-400)';
-        }
-      } else {
-        alert(`Test webhook failed: ${res.error || 'Unknown error'}`);
-        if (statusEl) {
-          statusEl.textContent = `✖ Failed: ${res.error}`;
-          statusEl.style.color = 'var(--red-400)';
-        }
-      }
-    } catch (e: any) {
-      alert(`Error sending test webhook: ${e.message}`);
-    }
+    const status = document.querySelector<HTMLElement>('#chatops-settings-form [role=status]');
+    if (!status) return;
+    status.textContent = 'Sending a test event to the saved destination…';
+    const result = await api.testWebhook().catch(() => ({ ok: false, error: 'Could not reach Warmplane.' }));
+    status.textContent = result.ok ? 'Test event sent.' : apiError(result, 'Test event could not be sent.');
   }
 
   testPolicySandbox(id: string) {
@@ -1816,6 +1911,8 @@ class WarmplaneApp {
 
   private populateServerModal(serverName?: string, serverCfg?: any) {
     const editing = serverName !== undefined;
+    const pins = document.querySelector<HTMLInputElement>('#modal-srv-require-tool-pins');
+    if (pins) pins.checked = !!serverCfg?.requireToolPins;
     const title = document.getElementById('modal-srv-title');
     const banner = document.getElementById('modal-srv-template-banner');
     if (title) title.textContent = editing ? `Edit Server '${serverName}'` : 'Add Upstream MCP Server';
@@ -1846,26 +1943,32 @@ class WarmplaneApp {
     const nameInput = document.getElementById('modal-srv-name') as HTMLInputElement | null;
     const name = nameInput?.value.trim();
     const transport = (document.getElementById('modal-srv-transport') as HTMLSelectElement)?.value;
-    if (!name) {
+    if (!nameInput || !name) {
       alert('Server name is required');
       return;
     }
 
-    // Only prompt overwrite check if user is adding a new server (input not disabled for edit)
-    if (nameInput && !nameInput.disabled) {
-      const state = store.getState();
-      const existingServers = state.config.mcpServers || {};
-      if (existingServers[name]) {
-        if (!confirm(`Server '${name}' already exists in configuration. Do you want to overwrite it?`)) {
-          return;
-        }
-      }
+    const state = store.getState();
+    if (!state.configReady) {
+      alert('Load the current configuration through Trust access before saving a server.');
+      return;
+    }
+    const editing = nameInput.disabled;
+    if (!editing && state.config.mcpServers?.[name]) {
+      if (confirm(`Server '${name}' already exists. Open its settings?`)) this.openEditServerModal(name);
+      return;
     }
 
-    let serverPayload: any = {};
+    const serverPayload: McpServerConfig = {
+      requireToolPins: document.querySelector<HTMLInputElement>('#modal-srv-require-tool-pins')?.checked ?? false,
+    };
     if (transport === 'stdio') {
       const cmdStr = (document.getElementById('modal-srv-command') as HTMLInputElement)?.value.trim();
-      const parts = cmdStr.split(/\s+/).filter(Boolean);
+      const current = editing ? state.config.mcpServers?.[name] : undefined;
+      const originalCommand = current?.command ? [current.command, ...(current.args ?? [])].join(' ').trim() : '';
+      const parts = current?.command && cmdStr === originalCommand
+        ? [current.command, ...(current.args ?? [])]
+        : cmdStr.split(/\s+/).filter(Boolean);
       if (parts.length === 0) {
         alert('Command is required');
         return;
@@ -1881,26 +1984,14 @@ class WarmplaneApp {
       serverPayload.url = url;
     }
 
-    const ftVal = (document.getElementById('modal-srv-ft') as HTMLInputElement)?.value.trim();
-    const cdVal = (document.getElementById('modal-srv-cd') as HTMLInputElement)?.value.trim();
-    const autoRestartVal = (document.getElementById('modal-srv-autorestart') as HTMLSelectElement)?.value;
-    const maxRestartsVal = (document.getElementById('modal-srv-maxrestarts') as HTMLInputElement)?.value.trim();
+    serverPayload.resilience = this.readServerResilience('modal');
 
-    if (ftVal || cdVal || autoRestartVal || maxRestartsVal) {
-      serverPayload.resilience = {
-        failureThreshold: ftVal ? Number(ftVal) : 3,
-        cooldownMs: cdVal ? Number(cdVal) : 30000,
-        autoRestart: autoRestartVal !== 'false',
-        maxRestarts: maxRestartsVal ? Number(maxRestartsVal) : 5
-      };
-    }
-
-    const res = await api.upsertServer(name, serverPayload);
+    const res = await api.upsertServer(name, serverPayload, editing);
     if (res.ok) {
       this.closeModals();
       await this.refreshData();
     } else {
-      alert(`Failed to save server: ${res.error}`);
+      alert(apiError(res, 'Server settings could not be saved.'));
     }
   }
 
@@ -2122,27 +2213,16 @@ class WarmplaneApp {
       }
     }
 
-    const payload: any = {
+    const payload: McpServerConfig = {
       command: tmpl.command,
-      args: args
+      args,
+      requireToolPins: existingServers[serverId]?.requireToolPins,
     };
     if (Object.keys(env).length > 0) {
       payload.env = env;
     }
 
-    const ftVal = (document.getElementById('cfg-srv-ft') as HTMLInputElement)?.value.trim();
-    const cdVal = (document.getElementById('cfg-srv-cd') as HTMLInputElement)?.value.trim();
-    const autoRestartVal = (document.getElementById('cfg-srv-autorestart') as HTMLSelectElement)?.value;
-    const maxRestartsVal = (document.getElementById('cfg-srv-maxrestarts') as HTMLInputElement)?.value.trim();
-
-    if (ftVal || cdVal || autoRestartVal || maxRestartsVal) {
-      payload.resilience = {
-        failureThreshold: ftVal ? Number(ftVal) : 3,
-        cooldownMs: cdVal ? Number(cdVal) : 30000,
-        autoRestart: autoRestartVal !== 'false',
-        maxRestarts: maxRestartsVal ? Number(maxRestartsVal) : 5
-      };
-    }
+    payload.resilience = this.readServerResilience('cfg');
 
     const res = await api.upsertServer(serverId, payload);
     if (res.ok) {
@@ -2151,6 +2231,21 @@ class WarmplaneApp {
     } else {
       alert(`Failed to save server: ${res.error}`);
     }
+  }
+
+  private readServerResilience(prefix: 'cfg' | 'modal'): McpServerConfig['resilience'] {
+    const value = (field: string) => document.querySelector<HTMLInputElement | HTMLSelectElement>(`#${prefix}-srv-${field}`)?.value.trim();
+    const threshold = value('ft');
+    const cooldown = value('cd');
+    const restart = value('autorestart');
+    const restarts = value('maxrestarts');
+    if (!threshold && !cooldown && !restart && !restarts) return undefined;
+    return {
+      failureThreshold: threshold ? Number(threshold) : 3,
+      cooldownMs: cooldown ? Number(cooldown) : 30000,
+      autoRestart: restart !== 'false',
+      maxRestarts: restarts ? Number(restarts) : 5,
+    };
   }
 
   // Ecosystem Actions
@@ -2800,7 +2895,7 @@ class WarmplaneApp {
   }
 
   async setActiveProfile(profileId: string | null) {
-    store.setState({ activeProfile: profileId || null });
+    store.setState({ activeProfile: profileId || null, tasks: [], taskError: null });
     await this.refreshData();
   }
 

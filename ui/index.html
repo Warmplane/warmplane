@@ -235,6 +235,7 @@
         </div>
       </div>
       <div style="display: flex; gap: 8px;">
+        <button type="button" class="btn btn-ghost" id="trust-access-button" onclick="window.app.openTrustAccess()">Trust access</button>
         <button class="btn btn-ghost" onclick="window.app.openImportModal()">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
           Import Config
@@ -253,6 +254,26 @@
       <!-- Dynamic workspace content rendered here -->
     </div>
   </main>
+
+  <div class="modal-backdrop" id="modal-trust-access" onclick="if(event.target === this) window.app.closeModals()">
+    <section class="modal-box" role="dialog" aria-modal="true" aria-labelledby="trust-access-title">
+      <div class="modal-header">
+        <h2 class="modal-title" id="trust-access-title">Trust administrator access</h2>
+        <button type="button" class="btn btn-ghost" aria-label="Close" onclick="window.app.closeModals()">✕</button>
+      </div>
+      <form id="trust-access-form" onsubmit="window.app.connectTrustAdministrator(event)">
+        <div class="form-group">
+          <label for="trust-access-token" class="form-label">Trust administrator token</label>
+          <input id="trust-access-token" class="form-input" type="password" autocomplete="off" required>
+        </div>
+        <p class="tool-pin-feedback" id="trust-access-status" role="status"></p>
+        <div class="trust-actions">
+          <button type="button" class="btn btn-ghost" id="trust-disconnect" onclick="window.app.disconnectTrustAdministrator()" hidden>Disconnect</button>
+          <button type="submit" class="btn btn-primary">Connect</button>
+        </div>
+      </form>
+    </section>
+  </div>
 
   <!-- MODAL: ADD / EDIT SERVER -->
   <div class="modal-backdrop" id="modal-add-server" onclick="if(event.target === this) window.app.closeModals()">
@@ -283,6 +304,10 @@
       <div class="form-group" id="modal-group-url" style="display: none;">
         <label class="form-label">Remote Endpoint URL</label>
         <input type="text" class="form-input" id="modal-srv-url" placeholder="https://api.example.com/sse">
+      </div>
+      <div class="form-group">
+        <label class="trust-checkbox"><input type="checkbox" id="modal-srv-require-tool-pins"> Require reviewed tool definitions</label>
+        <p class="tool-pin-feedback">Tools stay quarantined until their definitions are approved under Security Governance &amp; Redaction.</p>
       </div>
 
       <details style="margin-top: 14px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px;">

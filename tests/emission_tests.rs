@@ -73,6 +73,7 @@ fn emission(release_at_ms: u64) -> EmissionRecord {
         release_at_ms,
         cancellable: true,
         tool_name: "send".to_string(),
+        tool_definition: None,
         input_responses: None,
         request_state: None,
         profile_id: None,
@@ -1507,6 +1508,8 @@ async fn approval_argument_edits_are_the_payload_held_and_dispatched() {
     let updated = warmplane::http_v1::tasks_api::handle_update_task(
         State(state.clone()),
         Path(task_id.clone()),
+        None,
+        None,
         Json(warmplane::http_v1::tasks_api::UpdateTaskRequest {
             input_responses: responses,
         }),

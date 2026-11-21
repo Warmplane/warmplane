@@ -20,7 +20,7 @@ use crate::{
     batch_executor::{execute_batch, BatchCallResponse, BatchStep},
     config::{McpConfig, ReversibilityClass, ReversibilityConfig},
     context::{ProfileContext, RequestContext},
-    context_filter::{distill_value, DistillationOptions},
+    context_filter::DistillationOptions,
     daemon::{
         initialize_state,
         state::AppState,
@@ -28,6 +28,7 @@ use crate::{
         Policy,
     },
     idempotency::{IdempotencyClaim, RetryMetadata},
+    result_sanitization::{ResultAccess, Shape},
     tasks::{CreateTaskParams, EmissionPhase, EmissionRecord},
 };
 
@@ -82,6 +83,7 @@ impl EmbeddedWarmplane {
 #[derive(Clone)]
 pub struct ControlPlaneHandle {
     state: AppState,
+    tenant: Option<crate::rbac::TenantContext>,
 }
 
 // Keep the thin undo facade methods and their context forwarding consistent.
@@ -97,7 +99,43 @@ macro_rules! forward_undo_entry {
 impl ControlPlaneHandle {
     /// Creates a new `ControlPlaneHandle` wrapping an active `AppState`.
     pub fn new(state: AppState) -> Self {
-        Self { state }
+        Self {
+            state,
+            tenant: None,
+        }
+    }
+
+    pub(crate) fn with_tenant_context(
+        mut self,
+        tenant: Option<crate::rbac::TenantContext>,
+    ) -> Self {
+        self.tenant = tenant;
+        self
+    }
+
+    fn tenant_id(&self) -> &str {
+        self.tenant
+            .as_ref()
+            .map_or("default", |tenant| tenant.tenant_id.as_str())
+    }
+
+    fn caller_role(&self) -> String {
+        self.tenant.as_ref().map_or_else(
+            || self.state.rbac_engine.default_role(),
+            |tenant| tenant.role.clone(),
+        )
+    }
+
+    async fn effective_policy(&self, profile: &ProfileContext) -> Policy {
+        let base = self.state.policy.read().await.clone();
+        self.tenant
+            .as_ref()
+            .map_or(base.clone(), |tenant| {
+                self.state
+                    .rbac_engine
+                    .compute_effective_policy(&tenant.role, &base)
+            })
+            .merge_with_profile(profile.profile_policy.as_ref())
     }
 
     /// Returns a reference to the underlying daemon `AppState`.
@@ -270,7 +308,7 @@ impl ControlPlaneHandle {
         profile: Option<&str>,
     ) -> Result<CapabilitiesListResponse> {
         let prof_ctx = self.resolve_profile_context(profile).await;
-        let caps_guard = self.state.capabilities.read().await;
+        let caps_guard = self.state.tool_catalog().await.items;
         let mut capabilities = caps_guard
             .iter()
             .filter(|(_, meta)| prof_ctx.is_server_allowed(&meta.server))
@@ -301,7 +339,7 @@ impl ControlPlaneHandle {
     ) -> Envelope<CapabilityDetail> {
         let trace_id = next_trace_id();
         let prof_ctx = self.resolve_profile_context(profile).await;
-        let caps_guard = self.state.capabilities.read().await;
+        let caps_guard = self.state.tool_catalog().await.items;
 
         match caps_guard.get(id) {
             Some(meta) if prof_ctx.is_server_allowed(&meta.server) => Envelope::success(
@@ -366,18 +404,19 @@ impl ControlPlaneHandle {
         }
         let filter = filter_builder.build();
 
-        let caps = self.state.capabilities.read().await;
-        let pol = self.state.policy.read().await;
-        let base_ver = self.state.catalog_version.read().await.clone();
-        let catalog_ver =
-            crate::http_v1::helpers::get_profile_scoped_catalog_version(&base_ver, &prof_ctx);
+        let catalog = self.state.tool_catalog().await;
+        let pol = self.effective_policy(&prof_ctx).await;
+        let catalog_ver = crate::http_v1::helpers::get_profile_scoped_catalog_version(
+            &catalog.version,
+            &prof_ctx,
+        );
         let query_str = query.unwrap_or("");
         let limit_val = limit.unwrap_or(8);
 
-        let results = self
-            .state
-            .search_engine
-            .search(query_str, limit_val, &filter, &caps, &pol);
+        let results =
+            self.state
+                .search_engine
+                .search(query_str, limit_val, &filter, &catalog.items, &pol);
 
         CapabilitySearchResponse {
             version: "v1".to_string(),
@@ -405,7 +444,11 @@ impl ControlPlaneHandle {
             .request_id
             .clone()
             .unwrap_or_else(|| trace_id.clone());
-        let req_ctx = options.context.clone().unwrap_or_default();
+        let mut req_ctx = options.context.clone().unwrap_or_default();
+        if let Some(tenant) = &self.tenant {
+            req_ctx.actor_id.clone_from(&tenant.actor_id);
+            req_ctx.grant_id.clone_from(&tenant.grant_id);
+        }
         let suppress_undo_registration = options.suppress_undo_registration;
         let explicit_key = options.idempotency_key.clone();
         let idempotency_key = explicit_key.or_else(|| {
@@ -427,162 +470,93 @@ impl ControlPlaneHandle {
             RetryMetadata::unsafe_op
         };
 
-        if let Some(key) = idempotency_key.as_deref() {
-            if let Some(task) = self.state.task_registry.find_by_idempotency_key(key).await {
-                if task.emission.is_some() {
-                    if !self
-                        .state
-                        .hold_coordinator
-                        .can_access_task(
-                            &self.state,
-                            &task,
-                            "default",
-                            &self.state.rbac_engine.default_role(),
-                            prof_ctx.profile_id.as_deref(),
-                        )
-                        .await
-                    {
-                        return Envelope::failure(
-                            trace_id,
-                            Some(req_id),
-                            Some(req_ctx),
-                            WarmplaneError::new(
-                                "POLICY_DENIED",
-                                "Held task is not accessible to this caller",
-                                false,
-                            ),
-                            retry_base("not_started"),
-                        );
-                    }
-                    return Envelope::success(
-                        trace_id,
-                        Some(req_id),
-                        Some(req_ctx),
-                        serde_json::to_value(crate::tasks::TaskResponse::from(&task))
-                            .unwrap_or_default(),
-                        retry_base(
-                            if matches!(
-                                task.status,
-                                crate::tasks::TaskStatus::Completed
-                                    | crate::tasks::TaskStatus::Failed
-                                    | crate::tasks::TaskStatus::Cancelled
-                            ) {
-                                "completed"
-                            } else {
-                                "in_progress"
-                            },
-                        ),
-                    );
-                }
-            }
-        }
-
-        // Check Idempotency Store
-        let idempotency_claim = if let Some(key) = idempotency_key.as_deref() {
-            match self
-                .state
-                .idempotency_store
-                .claim_or_replay(key, capability_id, &trace_id)
-                .await
-            {
-                crate::idempotency::ExecutionClaim::New(claim) => Some(claim),
-                crate::idempotency::ExecutionClaim::Replay { response, .. } => {
-                    if let Ok(env) = serde_json::from_value::<Envelope<Value>>(response.clone()) {
-                        return env;
-                    }
-                    return Envelope::success(
-                        trace_id,
-                        Some(req_id),
-                        Some(req_ctx),
-                        response,
-                        retry_base("completed"),
-                    );
-                }
-            }
-        } else {
-            None
+        let identity = EmbeddedCallIdentity {
+            trace: &trace_id,
+            request: &req_id,
+            context: &req_ctx,
+            key: idempotency_key.as_deref(),
+            retry: retry_base,
+        };
+        let replay = EmbeddedToolReplay {
+            handle: self,
+            capability: capability_id,
+            profile: &prof_ctx,
+            identity,
+        };
+        let idempotency_claim = match replay.claim(idempotency_key.as_deref()).await {
+            std::ops::ControlFlow::Continue(claim) => claim,
+            std::ops::ControlFlow::Break(receipt) => return receipt,
         };
 
         if !args.is_object() {
-            self.state
-                .idempotency_store
-                .release_execution(idempotency_key.as_deref(), idempotency_claim)
+            return identity
+                .reject(
+                    &self.state,
+                    idempotency_claim,
+                    WarmplaneError::new("INVALID_ARGS", "'args' must be a JSON object", false),
+                    "not_started",
+                )
                 .await;
-            return Envelope::failure(
-                trace_id,
-                Some(req_id),
-                Some(req_ctx),
-                WarmplaneError::new("INVALID_ARGS", "'args' must be a JSON object", false),
-                retry_base("not_started"),
-            );
         }
 
-        let (mut requires_approval, approval_timeout_secs, webhook_cfg, redact_keys) = {
-            let pol = self.state.policy.read().await;
+        let (mut requires_approval, approval_timeout_secs, redact_keys) = {
+            let pol = self.effective_policy(&prof_ctx).await;
             if !pol.allows(capability_id) {
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                return identity
+                    .reject(
+                        &self.state,
+                        idempotency_claim,
+                        WarmplaneError::new(
+                            "POLICY_DENIED",
+                            format!("Capability '{}' blocked by policy", capability_id),
+                            false,
+                        ),
+                        "not_started",
+                    )
                     .await;
-                return Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    WarmplaneError::new(
-                        "POLICY_DENIED",
-                        format!("Capability '{}' blocked by policy", capability_id),
-                        false,
-                    ),
-                    retry_base("not_started"),
-                );
             }
             (
                 pol.requires_approval(capability_id),
                 pol.approval_timeout_secs,
-                pol.webhook.clone(),
                 pol.redact_keys.clone(),
             )
         };
 
+        let webhook_cfg = self.state.policy.read().await.webhook.clone();
+
         let (server_id, tool_name, reversibility) = {
             let caps_guard = self.state.capabilities.read().await;
             let Some(meta) = caps_guard.get(capability_id) else {
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                return identity
+                    .reject(
+                        &self.state,
+                        idempotency_claim,
+                        WarmplaneError::new(
+                            "TOOL_NOT_FOUND",
+                            format!("Capability '{}' not found", capability_id),
+                            false,
+                        ),
+                        "not_started",
+                    )
                     .await;
-                return Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    WarmplaneError::new(
-                        "TOOL_NOT_FOUND",
-                        format!("Capability '{}' not found", capability_id),
-                        false,
-                    ),
-                    retry_base("not_started"),
-                );
             };
 
             if !prof_ctx.is_server_allowed(&meta.server) {
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                    .await;
-                return Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    WarmplaneError::new(
-                        "TOOL_NOT_IN_PROFILE",
-                        format!(
+                return identity
+                    .reject(
+                        &self.state,
+                        idempotency_claim,
+                        WarmplaneError::new(
+                            "TOOL_NOT_IN_PROFILE",
+                            format!(
                             "Capability '{}' belongs to server '{}' which is not in active profile",
                             capability_id, meta.server
                         ),
-                        false,
-                    ),
-                    retry_base("not_started"),
-                );
+                            false,
+                        ),
+                        "not_started",
+                    )
+                    .await;
             }
 
             (
@@ -592,34 +566,39 @@ impl ControlPlaneHandle {
             )
         };
 
+        let tool_definition = match self.state.tool_pins.binding(&server_id, &tool_name) {
+            Ok(definition) => definition,
+            Err(denied) => {
+                return identity
+                    .reject(&self.state, idempotency_claim, denied.into(), "not_started")
+                    .await;
+            }
+        };
         let mut compensable_reserved = false;
         if let Some(contract) = reversibility
             .as_ref()
             .filter(|contract| contract.class == crate::config::ReversibilityClass::Compensable)
         {
             if self.state.undo_ledger.is_none() {
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                return identity
+                    .reject(
+                        &self.state,
+                        idempotency_claim,
+                        WarmplaneError::new(
+                            "UNDO_STORAGE_UNAVAILABLE",
+                            "Persistent usage storage is required for compensable capabilities",
+                            false,
+                        ),
+                        "not_started",
+                    )
                     .await;
-                return Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    WarmplaneError::new(
-                        "UNDO_STORAGE_UNAVAILABLE",
-                        "Persistent usage storage is required for compensable capabilities",
-                        false,
-                    ),
-                    retry_base("not_started"),
-                );
             }
             if !requires_approval {
                 match undo::reserve_compensable(
                     &self.state,
                     contract,
                     capability_id,
-                    "default",
+                    self.tenant_id(),
                     prof_ctx.profile_id.as_deref(),
                     idempotency_key.as_deref(),
                     false,
@@ -629,21 +608,18 @@ impl ControlPlaneHandle {
                     Ok(true) => compensable_reserved = true,
                     Ok(false) => requires_approval = true,
                     Err(error) => {
-                        self.state
-                            .idempotency_store
-                            .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                        return identity
+                            .reject(
+                                &self.state,
+                                idempotency_claim,
+                                WarmplaneError::new(
+                                    "COMPENSABLE_LIMIT_STORAGE_FAILED",
+                                    error.to_string(),
+                                    true,
+                                ),
+                                "not_started",
+                            )
                             .await;
-                        return Envelope::failure(
-                            trace_id,
-                            Some(req_id),
-                            Some(req_ctx),
-                            WarmplaneError::new(
-                                "COMPENSABLE_LIMIT_STORAGE_FAILED",
-                                error.to_string(),
-                                true,
-                            ),
-                            retry_base("not_started"),
-                        );
                     }
                 }
             }
@@ -689,21 +665,57 @@ impl ControlPlaneHandle {
             let (task_record, task_rx) = self
                 .state
                 .task_registry
-                .create_task(crate::tasks::CreateTaskParams {
-                    capability_id: capability_id.to_string(),
-                    server_id: server_id.clone(),
-                    args: args.clone(),
-                    request_id: Some(req_id.clone()),
-                    context: Some(req_ctx.clone()),
-                    idempotency_key: idempotency_key.clone(),
-                    initial_status,
-                    status_message: status_msg,
-                    input_requests,
-                    ttl_ms: Some(approval_timeout_secs * 1000),
-                    poll_interval_ms: Some(1000),
-                })
+                .create_scoped_task(
+                    crate::tasks::CreateTaskParams {
+                        capability_id: capability_id.to_string(),
+                        server_id: server_id.clone(),
+                        args: args.clone(),
+                        request_id: Some(req_id.clone()),
+                        context: Some(req_ctx.clone()),
+                        idempotency_key: idempotency_key.clone(),
+                        initial_status,
+                        status_message: status_msg,
+                        input_requests,
+                        ttl_ms: Some(approval_timeout_secs * 1000),
+                        poll_interval_ms: Some(1000),
+                    },
+                    Some(ResultAccess::new(
+                        self.tenant_id(),
+                        prof_ctx.profile_id.as_deref(),
+                    )),
+                )
                 .await;
 
+            let approval = if requires_approval {
+                let (_, receiver) = self
+                    .state
+                    .approval_registry
+                    .create_scoped_approval(
+                        crate::approvals::CreateApprovalRequest {
+                            capability_id: capability_id.to_owned(),
+                            server_id: server_id.clone(),
+                            args: args.clone(),
+                            sanitized_args: crate::http_v1::helpers::redact_value(
+                                args.clone(),
+                                &redact_keys,
+                            ),
+                            request_id: Some(req_id.clone()),
+                            context: Some(req_ctx.clone()),
+                            timeout_secs: approval_timeout_secs,
+                            webhook: webhook_cfg.as_ref(),
+                        },
+                        Some(crate::approvals::ApprovalOwnership::new(
+                            self.tenant_id(),
+                            Some(&task_record.task_id),
+                            &args,
+                            tool_definition.as_deref(),
+                        )),
+                    )
+                    .await;
+                Some(receiver)
+            } else {
+                None
+            };
             let handle = self.clone();
             let task_id_clone = task_record.task_id.clone();
             let server_id_clone = server_id.clone();
@@ -718,67 +730,26 @@ impl ControlPlaneHandle {
             let capability_id_clone = capability_id.to_string();
             let compensable_reserved_clone = compensable_reserved;
             let suppress_undo_registration_clone = suppress_undo_registration;
-            let policy_for_undo = {
-                let policy = self.state.policy.read().await;
-                policy.merge_with_profile(prof_ctx.profile_policy.as_ref())
-            };
+            let policy_for_undo = self.effective_policy(&prof_ctx).await;
 
             tokio::spawn(async move {
-                let mut worker_args = args_clone.clone();
-                if requires_approval {
-                    if let Some(trx) = task_rx {
-                        match trx.await {
-                            Ok(responses) => {
-                                if let Some(appr) = responses.get("hitl_approval") {
-                                    if appr.get("approved").and_then(Value::as_bool) == Some(true) {
-                                        if let Some(mod_args) = appr.get("modified_args").cloned() {
-                                            worker_args = mod_args;
-                                        }
-                                    } else {
-                                        let reason = appr
-                                            .get("reason")
-                                            .and_then(Value::as_str)
-                                            .map(ToString::to_string);
-                                        let _ = handle
-                                            .state
-                                            .task_registry
-                                            .cancel_task(&task_id_clone, reason)
-                                            .await;
-                                        handle
-                                            .state
-                                            .idempotency_store
-                                            .release_execution(
-                                                idempotency_key_clone.as_deref(),
-                                                idempotency_claim,
-                                            )
-                                            .await;
-                                        return;
-                                    }
-                                }
-                            }
-                            Err(_) => {
-                                let _ = handle
-                                    .state
-                                    .task_registry
-                                    .fail_task(
-                                        &task_id_clone,
-                                        serde_json::json!({"code": "APPROVAL_TIMEOUT"}),
-                                        Some("Approval request timed out or cancelled".to_string()),
-                                    )
-                                    .await;
-                                handle
-                                    .state
-                                    .idempotency_store
-                                    .release_execution(
-                                        idempotency_key_clone.as_deref(),
-                                        idempotency_claim,
-                                    )
-                                    .await;
-                                return;
-                            }
-                        }
-                    }
-                }
+                let worker_args = if let Some(approval) = approval {
+                    let resolution = crate::approvals::wait_for_decision(approval, task_rx).await;
+                    let Some(args) = resolution
+                        .arguments_for_task(&handle.state, &task_id_clone, args_clone.clone())
+                        .await
+                    else {
+                        handle
+                            .state
+                            .idempotency_store
+                            .release_execution(idempotency_key_clone.as_deref(), idempotency_claim)
+                            .await;
+                        return;
+                    };
+                    args
+                } else {
+                    args_clone.clone()
+                };
 
                 if !compensable_reserved_clone {
                     if let Some(contract) = reversibility_clone.as_ref().filter(|contract| {
@@ -788,7 +759,7 @@ impl ControlPlaneHandle {
                             &handle.state,
                             contract,
                             &capability_id_clone,
-                            "default",
+                            handle.tenant_id(),
                             profile_context_clone.profile_id.as_deref(),
                             idempotency_key_clone.as_deref(),
                             true,
@@ -826,8 +797,10 @@ impl ControlPlaneHandle {
                 {
                     EmbeddedEmission {
                         state: &handle.state,
+                        tenant: handle.tenant.as_ref(),
                         profile: &profile_context_clone,
                         tool_name: &tool_name_clone,
+                        tool_definition: tool_definition.as_deref(),
                         options: &options,
                         claim: idempotency_claim,
                         approval_completed: requires_approval,
@@ -903,6 +876,7 @@ impl ControlPlaneHandle {
                 if tx
                     .send(ServerMsg::CallTool {
                         name: tool_name_clone,
+                        tool_definition,
                         params: worker_args.clone(),
                         input_responses: options.input_responses.clone(),
                         request_state: options.request_state.clone(),
@@ -941,7 +915,9 @@ impl ControlPlaneHandle {
                             .circuit_breakers
                             .record_success(&server_id_clone)
                             .await;
-                        if !suppress_undo_registration_clone {
+                        if !suppress_undo_registration_clone
+                            && !crate::result_sanitization::is_uninspectable_result(&data)
+                        {
                             if let Some(contract) = &reversibility_clone {
                                 if let Err(error) = undo::register_inverse(
                                     &handle.state,
@@ -954,7 +930,7 @@ impl ControlPlaneHandle {
                                         snapshot_hash,
                                         context: &req_ctx_clone,
                                         batch_id: None,
-                                        tenant_id: "default",
+                                        tenant_id: handle.tenant_id(),
                                         profile_id: profile_context_clone.profile_id.as_deref(),
                                     },
                                     &profile_context_clone,
@@ -1000,11 +976,15 @@ impl ControlPlaneHandle {
                                 }
                             }
                         }
-                        let distilled_data = distill_value(data, &distill_opts);
-                        let outcome = handle
+                        let (outcome, revision) = handle
                             .state
-                            .task_registry
-                            .complete_execution(&task_id_clone, distilled_data)
+                            .complete_tool_delivery(
+                                &server_id_clone,
+                                &trace_id_clone,
+                                data,
+                                Some(&task_id_clone),
+                                &distill_opts,
+                            )
                             .await;
 
                         let env = EnvelopeBuilder::new(trace_id_clone, retry_base("completed"))
@@ -1018,7 +998,7 @@ impl ControlPlaneHandle {
                                 handle
                                     .state
                                     .idempotency_store
-                                    .complete(key, claim, val)
+                                    .complete_with_revision(key, claim, val, revision)
                                     .await;
                             }
                         }
@@ -1044,19 +1024,15 @@ impl ControlPlaneHandle {
                             .release_execution(idempotency_key_clone.as_deref(), idempotency_claim)
                             .await;
                     }
-                    Ok(Err(UpstreamCallError::Upstream(err))) => {
-                        handle
-                            .state
-                            .circuit_breakers
-                            .record_failure(&server_id_clone)
-                            .await;
+                    Ok(Err(failure)) => {
+                        let (error, _) = handle.state.tool_error(&server_id_clone, failure).await;
                         let _ = handle
                             .state
                             .task_registry
                             .fail_task(
                                 &task_id_clone,
-                                serde_json::json!({"code": "UPSTREAM_ERROR", "message": &err}),
-                                Some(err),
+                                serde_json::json!({"code": error.code, "message": &error.message}),
+                                Some(error.message),
                             )
                             .await;
                         handle
@@ -1118,113 +1094,98 @@ impl ControlPlaneHandle {
             let (rec, trx) = self
                 .state
                 .task_registry
-                .create_task(crate::tasks::CreateTaskParams {
-                    capability_id: capability_id.to_string(),
-                    server_id: server_id.clone(),
-                    args: args.clone(),
-                    request_id: Some(req_id.clone()),
-                    context: Some(req_ctx.clone()),
-                    idempotency_key: idempotency_key.clone(),
-                    initial_status: crate::tasks::TaskStatus::InputRequired,
-                    status_message: Some(format!(
-                        "Execution suspended awaiting operator approval for capability '{}'",
-                        capability_id
+                .create_scoped_task(
+                    crate::tasks::CreateTaskParams {
+                        capability_id: capability_id.to_string(),
+                        server_id: server_id.clone(),
+                        args: args.clone(),
+                        request_id: Some(req_id.clone()),
+                        context: Some(req_ctx.clone()),
+                        idempotency_key: idempotency_key.clone(),
+                        initial_status: crate::tasks::TaskStatus::InputRequired,
+                        status_message: Some(format!(
+                            "Execution suspended awaiting operator approval for capability '{}'",
+                            capability_id
+                        )),
+                        input_requests: Some(input_requests),
+                        ttl_ms: Some(approval_timeout_secs * 1000),
+                        poll_interval_ms: Some(1000),
+                    },
+                    Some(ResultAccess::new(
+                        self.tenant_id(),
+                        prof_ctx.profile_id.as_deref(),
                     )),
-                    input_requests: Some(input_requests),
-                    ttl_ms: Some(approval_timeout_secs * 1000),
-                    poll_interval_ms: Some(1000),
-                })
+                )
                 .await;
 
             let (_approval_id, rx) = self
                 .state
                 .approval_registry
-                .create_approval(crate::approvals::CreateApprovalRequest {
-                    capability_id: capability_id.to_string(),
-                    server_id: server_id.clone(),
-                    args: args.clone(),
-                    sanitized_args: sanitized,
-                    request_id: Some(req_id.clone()),
-                    context: Some(req_ctx.clone()),
-                    timeout_secs: approval_timeout_secs,
-                    webhook: webhook_cfg.as_ref(),
-                })
+                .create_scoped_approval(
+                    crate::approvals::CreateApprovalRequest {
+                        capability_id: capability_id.to_string(),
+                        server_id: server_id.clone(),
+                        args: args.clone(),
+                        sanitized_args: sanitized,
+                        request_id: Some(req_id.clone()),
+                        context: Some(req_ctx.clone()),
+                        timeout_secs: approval_timeout_secs,
+                        webhook: webhook_cfg.as_ref(),
+                    },
+                    Some(crate::approvals::ApprovalOwnership::new(
+                        self.tenant_id(),
+                        Some(&rec.task_id),
+                        &args,
+                        tool_definition.as_deref(),
+                    )),
+                )
                 .await;
 
-            // Wait for either the HITL approval channel or task input responses
-            tokio::select! {
-                resolution = rx => {
-                    let res = match resolution {
-                        Ok(r) => r,
-                        Err(_) => crate::approvals::ApprovalResolution::Expired,
-                    };
-                    match res {
-                        crate::approvals::ApprovalResolution::Approved { modified_args, .. } => {
-                            if let Some(mod_args) = modified_args {
-                                effective_args = mod_args;
-                            }
-                        }
-                        crate::approvals::ApprovalResolution::Rejected { operator, reason } => {
-                            let _ = self.state.task_registry.cancel_task(&rec.task_id, reason.clone()).await;
-                            self.state.idempotency_store
-                                .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                                .await;
-                            return Envelope::failure(
-                                trace_id,
-                                Some(req_id),
-                                Some(req_ctx),
-                                WarmplaneError::operator_rejected(operator, reason),
-                                retry_base("not_started"),
-                            );
-                        }
-                        crate::approvals::ApprovalResolution::Expired => {
-                            let _ = self.state.task_registry.fail_task(&rec.task_id, serde_json::json!({"code": "APPROVAL_TIMEOUT"}), Some("Approval request timed out".to_string())).await;
-                            self.state.idempotency_store
-                                .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                                .await;
-                            return Envelope::failure(
-                                trace_id,
-                                Some(req_id),
-                                Some(req_ctx),
+            use crate::approvals::ApprovalResolution;
+            match crate::approvals::wait_for_decision(rx, trx).await {
+                ApprovalResolution::Approved { modified_args, .. } => {
+                    if self
+                        .state
+                        .task_registry
+                        .update_task(&rec.task_id, Default::default())
+                        .await
+                        .ok()
+                        != Some(true)
+                    {
+                        return identity
+                            .reject(
+                                &self.state,
+                                idempotency_claim,
                                 WarmplaneError::new(
-                                    "APPROVAL_TIMEOUT",
-                                    format!("Approval request timed out after {}s", approval_timeout_secs),
-                                    true,
+                                    "APPROVAL_TASK_UNAVAILABLE",
+                                    "Approval task no longer permits execution",
+                                    false,
                                 ),
-                                retry_base("not_started"),
-                            );
-                        }
+                                "not_started",
+                            )
+                            .await;
+                    }
+                    if let Some(args) = modified_args {
+                        effective_args = args;
                     }
                 }
-                task_res = async {
-                    if let Some(trx) = trx {
-                        trx.await.ok()
-                    } else {
-                        None
-                    }
-                } => {
-                    if let Some(responses) = task_res {
-                        if let Some(appr) = responses.get("hitl_approval") {
-                            if appr.get("approved").and_then(Value::as_bool) == Some(true) {
-                                if let Some(mod_args) = appr.get("modified_args").cloned() {
-                                    effective_args = mod_args;
-                                }
-                            } else {
-                                let reason = appr.get("reason").and_then(Value::as_str).map(ToString::to_string);
-                                let _ = self.state.task_registry.cancel_task(&rec.task_id, reason.clone()).await;
-                                self.state.idempotency_store
-                                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                                    .await;
-                                return Envelope::failure(
-                                    trace_id,
-                                    Some(req_id),
-                                    Some(req_ctx),
-                                    WarmplaneError::operator_rejected("client-agent", reason),
-                                    retry_base("not_started"),
-                                );
-                            }
+                rejection => {
+                    let error = match &rejection {
+                        ApprovalResolution::Rejected { operator, reason } => {
+                            WarmplaneError::operator_rejected(operator.clone(), reason.clone())
                         }
-                    }
+                        _ => WarmplaneError::new(
+                            "APPROVAL_TIMEOUT",
+                            "Approval request timed out or was cancelled",
+                            true,
+                        ),
+                    };
+                    rejection
+                        .arguments_for_task(&self.state, &rec.task_id, Value::Null)
+                        .await;
+                    return identity
+                        .reject(&self.state, idempotency_claim, error, "not_started")
+                        .await;
                 }
             }
             Some(rec)
@@ -1241,7 +1202,7 @@ impl ControlPlaneHandle {
                     &self.state,
                     contract,
                     capability_id,
-                    "default",
+                    self.tenant_id(),
                     prof_ctx.profile_id.as_deref(),
                     idempotency_key.as_deref(),
                     true,
@@ -1250,21 +1211,18 @@ impl ControlPlaneHandle {
                 {
                     Ok(true) => {}
                     Ok(false) | Err(_) => {
-                        self.state
-                            .idempotency_store
-                            .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                        return identity
+                            .reject(
+                                &self.state,
+                                idempotency_claim,
+                                WarmplaneError::new(
+                                    "COMPENSABLE_LIMIT_STORAGE_FAILED",
+                                    "Could not reserve compensable invocation",
+                                    true,
+                                ),
+                                "not_started",
+                            )
                             .await;
-                        return Envelope::failure(
-                            trace_id,
-                            Some(req_id),
-                            Some(req_ctx),
-                            WarmplaneError::new(
-                                "COMPENSABLE_LIMIT_STORAGE_FAILED",
-                                "Could not reserve compensable invocation",
-                                true,
-                            ),
-                            retry_base("not_started"),
-                        );
                     }
                 }
             }
@@ -1277,8 +1235,10 @@ impl ControlPlaneHandle {
             return HeldCapabilityCall {
                 emission: EmbeddedEmission {
                     state: &self.state,
+                    tenant: self.tenant.as_ref(),
                     profile: &prof_ctx,
                     tool_name: &tool_name,
+                    tool_definition: tool_definition.as_deref(),
                     options: &options,
                     claim: idempotency_claim,
                     approval_completed: requires_approval,
@@ -1309,21 +1269,18 @@ impl ControlPlaneHandle {
                         )
                         .await;
                 }
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                return identity
+                    .reject(
+                        &self.state,
+                        idempotency_claim,
+                        WarmplaneError::new(
+                            "SERVER_UNREACHABLE",
+                            format!("Server '{}' is unreachable", server_id),
+                            true,
+                        ),
+                        "not_started",
+                    )
                     .await;
-                return Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    WarmplaneError::new(
-                        "SERVER_UNREACHABLE",
-                        format!("Server '{}' is unreachable", server_id),
-                        true,
-                    ),
-                    retry_base("not_started"),
-                );
             };
             tx
         };
@@ -1346,17 +1303,14 @@ impl ControlPlaneHandle {
                     )
                     .await;
             }
-            self.state
-                .idempotency_store
-                .release_execution(idempotency_key.as_deref(), idempotency_claim)
+            return identity
+                .reject(
+                    &self.state,
+                    idempotency_claim,
+                    WarmplaneError::new("CIRCUIT_OPEN", cb_err.to_string(), false),
+                    "not_started",
+                )
                 .await;
-            return Envelope::failure(
-                trace_id,
-                Some(req_id),
-                Some(req_ctx),
-                WarmplaneError::new("CIRCUIT_OPEN", cb_err.to_string(), false),
-                retry_base("not_started"),
-            );
         }
 
         let (snapshot, snapshot_hash) = match capture_call_snapshot(
@@ -1370,19 +1324,16 @@ impl ControlPlaneHandle {
         {
             Ok(snapshot) => snapshot,
             Err(failure) => {
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
+                return identity
+                    .reject(
+                        &self.state,
+                        idempotency_claim,
+                        failure.into_error(
+                            "Persistent undo ledger is required for reversible capabilities",
+                        ),
+                        "not_started",
+                    )
                     .await;
-                return Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    failure.into_error(
-                        "Persistent undo ledger is required for reversible capabilities",
-                    ),
-                    retry_base("not_started"),
-                );
             }
         };
 
@@ -1392,6 +1343,7 @@ impl ControlPlaneHandle {
         if tx
             .send(ServerMsg::CallTool {
                 name: tool_name,
+                tool_definition,
                 params: effective_args.clone(),
                 input_responses: options.input_responses,
                 request_state: options.request_state,
@@ -1412,194 +1364,65 @@ impl ControlPlaneHandle {
                     )
                     .await;
             }
-            self.state
-                .idempotency_store
-                .release_execution(idempotency_key.as_deref(), idempotency_claim)
+            return identity
+                .reject(
+                    &self.state,
+                    idempotency_claim,
+                    WarmplaneError::new(
+                        "SERVER_UNREACHABLE",
+                        format!("Server '{}' mailbox is closed", server_id),
+                        true,
+                    ),
+                    "not_started",
+                )
                 .await;
-            return Envelope::failure(
-                trace_id,
-                Some(req_id),
-                Some(req_ctx),
-                WarmplaneError::new(
-                    "SERVER_UNREACHABLE",
-                    format!("Server '{}' mailbox is closed", server_id),
-                    true,
-                ),
-                retry_base("not_started"),
-            );
         }
 
-        let result = reply_rx.await;
+        let completion = EmbeddedToolCompletion {
+            state: &self.state,
+            server: &server_id,
+            identity,
+            task: task_record.as_ref(),
+            claim: idempotency_claim,
+        };
+        let data = match reply_rx.await {
+            Ok(Ok(data)) => data,
+            Ok(Err(error)) => return completion.upstream_failure(Ok(error)).await,
+            Err(error) => return completion.upstream_failure(Err(error)).await,
+        };
+        self.state.circuit_breakers.record_success(&server_id).await;
+        self.state
+            .total_tool_duration_us
+            .fetch_add(start_time.elapsed().as_micros() as u64, Ordering::Relaxed);
 
-        match result {
-            Ok(Ok(data)) => {
-                self.state.circuit_breakers.record_success(&server_id).await;
-                let elapsed_us = start_time.elapsed().as_micros() as u64;
-                self.state
-                    .total_tool_duration_us
-                    .fetch_add(elapsed_us, Ordering::Relaxed);
-
-                if !suppress_undo_registration {
-                    if let Some(contract) = &reversibility {
-                        if let Err(error) = undo::register_inverse(
-                            &self.state,
-                            contract,
-                            undo::ForwardCall {
-                                capability: capability_id,
-                                args: &effective_args,
-                                result: &data,
-                                snapshot: &snapshot,
-                                snapshot_hash,
-                                context: &req_ctx,
-                                batch_id: None,
-                                tenant_id: "default",
-                                profile_id: prof_ctx.profile_id.as_deref(),
-                            },
-                            &prof_ctx,
-                            &self
-                                .state
-                                .policy
-                                .read()
-                                .await
-                                .merge_with_profile(prof_ctx.profile_policy.as_ref()),
-                        )
-                        .await
-                        {
-                            if let Some(ref rec) = task_record {
-                                let _ = self
-                                    .state
-                                    .task_registry
-                                    .fail_task(
-                                        &rec.task_id,
-                                        serde_json::json!({"code": "UNDO_REGISTRATION_FAILED"}),
-                                        Some(error.to_string()),
-                                    )
-                                    .await;
-                            }
-                            return Envelope::failure(
-                                trace_id,
-                                Some(req_id),
-                                Some(req_ctx),
-                                WarmplaneError::new(
-                                    "UNDO_REGISTRATION_FAILED",
-                                    format!("Forward call succeeded but inverse registration failed: {error}"),
-                                    false,
-                                ),
-                                retry_base("completed"),
-                            );
-                        }
-                    }
-                }
-                let distilled_data = distill_value(data, &distill_opts);
-                let outcome = match task_record.as_ref() {
-                    Some(record) => {
-                        self.state
-                            .task_registry
-                            .complete_execution(&record.task_id, distilled_data)
-                            .await
-                    }
-                    None => Ok(distilled_data),
-                };
-                let env = EnvelopeBuilder::new(trace_id, retry_base("completed"))
-                    .request_id(Some(req_id))
-                    .context(Some(req_ctx))
-                    .outcome(outcome);
-
-                if let (Some(key), Some(claim)) = (idempotency_key.as_deref(), idempotency_claim) {
-                    if let Ok(val) = serde_json::to_value(&env) {
-                        self.state.idempotency_store.complete(key, claim, val).await;
-                    }
-                }
-
-                env
-            }
-            Ok(Err(UpstreamCallError::Timeout)) => {
-                self.state.circuit_breakers.record_failure(&server_id).await;
-                if let Some(ref rec) = task_record {
-                    let _ = self
-                        .state
-                        .task_registry
-                        .fail_task(
-                            &rec.task_id,
-                            serde_json::json!({"code": "UPSTREAM_TIMEOUT"}),
-                            Some(format!(
-                                "Tool call timed out after {}ms",
-                                self.state.tool_timeout_ms
-                            )),
-                        )
-                        .await;
-                }
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                    .await;
-                Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    WarmplaneError::new(
-                        "UPSTREAM_TIMEOUT",
-                        format!("Tool call timed out after {}ms", self.state.tool_timeout_ms),
-                        true,
-                    ),
-                    retry_base("unknown"),
-                )
-            }
-            Ok(Err(UpstreamCallError::Upstream(err))) => {
-                self.state.circuit_breakers.record_failure(&server_id).await;
-                if let Some(ref rec) = task_record {
-                    let _ = self
-                        .state
-                        .task_registry
-                        .fail_task(
-                            &rec.task_id,
-                            serde_json::json!({"code": "UPSTREAM_ERROR", "message": &err}),
-                            Some(err.clone()),
-                        )
-                        .await;
-                }
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                    .await;
-                Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    WarmplaneError::new("UPSTREAM_ERROR", err, false),
-                    retry_base("unknown"),
-                )
-            }
-            Err(_) => {
-                self.state.circuit_breakers.record_failure(&server_id).await;
-                if let Some(ref rec) = task_record {
-                    let _ = self
-                        .state
-                        .task_registry
-                        .fail_task(
-                            &rec.task_id,
-                            serde_json::json!({"code": "INTERNAL_ERROR"}),
-                            Some("Server actor task dropped reply channel".to_string()),
-                        )
-                        .await;
-                }
-                self.state
-                    .idempotency_store
-                    .release_execution(idempotency_key.as_deref(), idempotency_claim)
-                    .await;
-                Envelope::failure(
-                    trace_id,
-                    Some(req_id),
-                    Some(req_ctx),
-                    WarmplaneError::new(
-                        "INTERNAL_ERROR",
-                        "Server actor task dropped reply channel",
-                        true,
-                    ),
-                    retry_base("unknown"),
-                )
+        if let Some(contract) = reversibility.as_ref().filter(|_| {
+            !suppress_undo_registration
+                && !crate::result_sanitization::is_uninspectable_result(&data)
+        }) {
+            let forward = undo::ForwardCall {
+                capability: capability_id,
+                args: &effective_args,
+                result: &data,
+                snapshot: &snapshot,
+                snapshot_hash,
+                context: &req_ctx,
+                batch_id: None,
+                tenant_id: self.tenant_id(),
+                profile_id: prof_ctx.profile_id.as_deref(),
+            };
+            let policy = self
+                .state
+                .policy
+                .read()
+                .await
+                .merge_with_profile(prof_ctx.profile_policy.as_ref());
+            if let Err(error) =
+                undo::register_inverse(&self.state, contract, forward, &prof_ctx, &policy).await
+            {
+                return completion.inverse_failure(error).await;
             }
         }
+        completion.deliver(data, &distill_opts).await
     }
 
     /// Executes an ordered sequence of tool execution steps, interpolating prior step outputs.
@@ -1644,7 +1467,7 @@ impl ControlPlaneHandle {
         let req_id = options.request_id.unwrap_or_else(|| trace_id.clone());
         let req_ctx = options.context.unwrap_or_default();
 
-        if !self.state.policy.read().await.allows(resource_id) {
+        if !self.effective_policy(&prof_ctx).await.allows(resource_id) {
             return Envelope::failure(
                 trace_id,
                 Some(req_id),
@@ -1699,7 +1522,7 @@ impl ControlPlaneHandle {
             trace_id,
             req_id,
             req_ctx,
-            "Resource read",
+            Shape::ResourceRead,
             |reply| ServerMsg::ReadResource {
                 uri,
                 input_responses: options.input_responses,
@@ -1719,7 +1542,7 @@ impl ControlPlaneHandle {
         let req_id = options.request_id.unwrap_or_else(|| trace_id.clone());
         let req_ctx = options.context.unwrap_or_default();
 
-        if !self.state.policy.read().await.allows(prompt_id) {
+        if !self.effective_policy(&prof_ctx).await.allows(prompt_id) {
             return Envelope::failure(
                 trace_id,
                 Some(req_id),
@@ -1772,7 +1595,7 @@ impl ControlPlaneHandle {
         let arguments = options
             .arguments
             .and_then(|value| value.as_object().cloned());
-        self.dispatch_catalog_call(server, trace_id, req_id, req_ctx, "Prompt get", |reply| {
+        self.dispatch_catalog_call(server, trace_id, req_id, req_ctx, Shape::Prompt, |reply| {
             ServerMsg::GetPrompt {
                 name,
                 arguments,
@@ -1790,7 +1613,7 @@ impl ControlPlaneHandle {
         trace_id: String,
         req_id: String,
         req_ctx: RequestContext,
-        operation: &str,
+        shape: Shape,
         message: impl FnOnce(
             oneshot::Sender<std::result::Result<Value, UpstreamCallError>>,
         ) -> ServerMsg,
@@ -1829,13 +1652,18 @@ impl ControlPlaneHandle {
         }
 
         match reply_rx.await {
-            Ok(Ok(data)) => Envelope::success(
-                trace_id,
-                Some(req_id),
-                Some(req_ctx),
-                data,
-                RetryMetadata::safe("completed"),
-            ),
+            Ok(Ok(data)) => {
+                let outcome = self
+                    .state
+                    .sanitize_result(&server, &trace_id, data, shape)
+                    .await
+                    .map(|result| result.value)
+                    .map_err(WarmplaneError::from);
+                EnvelopeBuilder::new(trace_id, RetryMetadata::safe("completed"))
+                    .request_id(Some(req_id))
+                    .context(Some(req_ctx))
+                    .outcome(outcome)
+            }
             Ok(Err(UpstreamCallError::Timeout)) => Envelope::failure(
                 trace_id,
                 Some(req_id),
@@ -1843,7 +1671,7 @@ impl ControlPlaneHandle {
                 WarmplaneError::new(
                     "UPSTREAM_TIMEOUT",
                     format!(
-                        "{operation} timed out after {}ms",
+                        "Upstream request timed out after {}ms",
                         self.state.tool_timeout_ms
                     ),
                     true,
@@ -1854,10 +1682,14 @@ impl ControlPlaneHandle {
                 trace_id,
                 Some(req_id),
                 Some(req_ctx),
-                WarmplaneError::new("UPSTREAM_ERROR", err, false),
+                WarmplaneError::new(
+                    "UPSTREAM_ERROR",
+                    self.state.safe_upstream_error(err).await,
+                    false,
+                ),
                 RetryMetadata::safe("unknown"),
             ),
-            Err(_) => Envelope::failure(
+            Ok(Err(UpstreamCallError::ToolDefinitionChanged)) | Err(_) => Envelope::failure(
                 trace_id,
                 Some(req_id),
                 Some(req_ctx),
@@ -1872,8 +1704,19 @@ impl ControlPlaneHandle {
     /// # Returns
     /// A vector of [`TaskResponse`] wire representations sorted from newest to oldest.
     pub async fn list_tasks(&self) -> Vec<TaskResponse> {
+        self.list_tasks_for_profile(None).await
+    }
+
+    /// Lists tasks visible to the embedded caller in the selected profile.
+    pub async fn list_tasks_for_profile(&self, profile: Option<&str>) -> Vec<TaskResponse> {
         let tasks = self.state.task_registry.list_tasks().await;
-        tasks.iter().map(TaskResponse::from).collect()
+        let mut responses = Vec::with_capacity(tasks.len());
+        for task in &tasks {
+            if self.can_read_task_result(task, profile).await {
+                responses.push(self.state.task_view(task).await);
+            }
+        }
+        responses
     }
 
     /// Retrieves a task by its task ID, performing TTL checks.
@@ -1884,28 +1727,57 @@ impl ControlPlaneHandle {
     /// # Returns
     /// An [`Envelope`] containing the [`TaskResponse`] if found, or an error envelope if not found.
     pub async fn get_task(&self, task_id: &str) -> Envelope<TaskResponse> {
+        self.get_task_for_profile(task_id, None).await
+    }
+
+    /// Retrieves the task result visible to the embedded caller in the selected profile.
+    pub async fn get_task_for_profile(
+        &self,
+        task_id: &str,
+        profile: Option<&str>,
+    ) -> Envelope<TaskResponse> {
         let trace_id = next_trace_id();
         if let Some(record) = self.state.task_registry.get_task(task_id).await {
-            Envelope::success(
-                trace_id,
-                record.request_id.clone(),
-                record.context.clone(),
-                TaskResponse::from(&record),
-                RetryMetadata::safe("completed"),
-            )
-        } else {
-            Envelope::failure(
-                trace_id,
-                None,
-                None,
-                WarmplaneError::new(
-                    "TASK_NOT_FOUND",
-                    format!("Task '{}' not found", task_id),
-                    false,
-                ),
-                RetryMetadata::safe("not_started"),
-            )
+            if self.can_read_task_result(&record, profile).await {
+                return Envelope::success(
+                    trace_id,
+                    record.request_id.clone(),
+                    record.context.clone(),
+                    self.state.task_view(&record).await,
+                    RetryMetadata::safe("completed"),
+                );
+            }
         }
+        Envelope::failure(
+            trace_id,
+            None,
+            None,
+            WarmplaneError::new(
+                "TASK_NOT_FOUND",
+                format!("Task '{}' not found", task_id),
+                false,
+            ),
+            RetryMetadata::safe("not_started"),
+        )
+    }
+
+    async fn can_read_task_result(
+        &self,
+        task: &crate::tasks::TaskRecord,
+        profile: Option<&str>,
+    ) -> bool {
+        !self.state.trust_controls_active().await
+            || self
+                .state
+                .hold_coordinator
+                .can_access_task(
+                    &self.state,
+                    task,
+                    self.tenant_id(),
+                    &self.caller_role(),
+                    profile,
+                )
+                .await
     }
 
     /// Resolves an `InputRequired` task by submitting client input responses.
@@ -1921,36 +1793,43 @@ impl ControlPlaneHandle {
         task_id: &str,
         input_responses: std::collections::BTreeMap<String, Value>,
     ) -> Envelope<bool> {
+        self.update_task_for_profile(task_id, input_responses, None)
+            .await
+    }
+
+    /// Submits input for an embedded task in the selected profile.
+    pub async fn update_task_for_profile(
+        &self,
+        task_id: &str,
+        input_responses: std::collections::BTreeMap<String, Value>,
+        profile: Option<&str>,
+    ) -> Envelope<bool> {
         let trace_id = next_trace_id();
         match self
             .state
-            .task_registry
-            .update_task(task_id, input_responses)
+            .submit_task_input(task_id, input_responses, self.tenant.as_ref(), profile)
             .await
         {
-            Ok(true) => {
+            Ok(_) => {
                 Envelope::success(trace_id, None, None, true, RetryMetadata::safe("completed"))
             }
-            Ok(false) => Envelope::failure(
+            Err(crate::approvals::DecisionError::TaskNotInputRequired) => Envelope::failure(
                 trace_id,
                 None,
                 None,
                 WarmplaneError::new(
                     "TASK_UPDATE_REJECTED",
-                    format!(
-                        "Task '{}' is not in 'input_required' status or does not exist",
-                        task_id
-                    ),
+                    "Task is unavailable or no longer requires input",
                     false,
                 ),
                 RetryMetadata::safe("not_started"),
             ),
-            Err(e) => Envelope::failure(
+            Err(error) => Envelope::failure(
                 trace_id,
                 None,
                 None,
-                WarmplaneError::new("INTERNAL_ERROR", e.to_string(), false),
-                RetryMetadata::safe("unknown"),
+                crate::approvals::decision_error(error),
+                RetryMetadata::safe("not_started"),
             ),
         }
     }
@@ -2039,10 +1918,290 @@ impl ControlPlaneHandle {
     }
 }
 
+#[derive(Clone, Copy)]
+struct EmbeddedCallIdentity<'a> {
+    trace: &'a str,
+    request: &'a str,
+    context: &'a RequestContext,
+    key: Option<&'a str>,
+    retry: fn(&'static str) -> RetryMetadata,
+}
+
+impl EmbeddedCallIdentity<'_> {
+    fn envelope(
+        &self,
+        outcome: Result<Value, WarmplaneError>,
+        status: &'static str,
+    ) -> Envelope<Value> {
+        EnvelopeBuilder::new(self.trace, (self.retry)(status))
+            .request_id(Some(self.request.to_owned()))
+            .context(Some(self.context.clone()))
+            .outcome(outcome)
+    }
+
+    async fn reject(
+        &self,
+        state: &AppState,
+        claim: Option<IdempotencyClaim>,
+        error: WarmplaneError,
+        status: &'static str,
+    ) -> Envelope<Value> {
+        state
+            .idempotency_store
+            .release_execution(self.key, claim)
+            .await;
+        self.envelope(Err(error), status)
+    }
+}
+
+struct EmbeddedToolReplay<'a> {
+    handle: &'a ControlPlaneHandle,
+    capability: &'a str,
+    profile: &'a ProfileContext,
+    identity: EmbeddedCallIdentity<'a>,
+}
+
+impl EmbeddedToolReplay<'_> {
+    async fn claim(
+        &self,
+        key: Option<&str>,
+    ) -> std::ops::ControlFlow<Envelope<Value>, Option<IdempotencyClaim>> {
+        use crate::idempotency::ExecutionClaim;
+        use std::ops::ControlFlow;
+
+        let Some(key) = key else {
+            return ControlFlow::Continue(None);
+        };
+        if let Some(receipt) = self.held_receipt(key).await {
+            return ControlFlow::Break(receipt);
+        }
+        let access = ResultAccess::new(self.handle.tenant_id(), self.profile.profile_id.as_deref());
+        match self
+            .handle
+            .state
+            .idempotency_store
+            .claim_or_replay(key, self.capability, self.identity.trace, access.clone())
+            .await
+        {
+            ExecutionClaim::New(claim) => ControlFlow::Continue(Some(claim)),
+            ExecutionClaim::Replay { response, .. } => {
+                ControlFlow::Break(self.cached_receipt(key, response, &access).await)
+            }
+        }
+    }
+
+    async fn held_receipt(&self, key: &str) -> Option<Envelope<Value>> {
+        let state = &self.handle.state;
+        let task = state.task_registry.find_by_idempotency_key(key).await?;
+        task.emission.as_ref()?;
+        if !state
+            .hold_coordinator
+            .can_access_task(
+                state,
+                &task,
+                self.handle.tenant_id(),
+                &self.handle.caller_role(),
+                self.profile.profile_id.as_deref(),
+            )
+            .await
+        {
+            return Some(self.identity.envelope(
+                Err(WarmplaneError::new(
+                    "POLICY_DENIED",
+                    "Held task is not accessible to this caller",
+                    false,
+                )),
+                "not_started",
+            ));
+        }
+        let status = if matches!(
+            task.status,
+            crate::tasks::TaskStatus::Completed
+                | crate::tasks::TaskStatus::Failed
+                | crate::tasks::TaskStatus::Cancelled
+        ) {
+            "completed"
+        } else {
+            "in_progress"
+        };
+        Some(self.identity.envelope(
+            Ok(serde_json::to_value(state.task_view(&task).await).unwrap_or_default()),
+            status,
+        ))
+    }
+
+    async fn cached_receipt(
+        &self,
+        key: &str,
+        response: Value,
+        access: &ResultAccess,
+    ) -> Envelope<Value> {
+        let allowed = self
+            .handle
+            .state
+            .validate_replay(
+                key,
+                self.capability,
+                &response,
+                access,
+                &self.handle.caller_role(),
+            )
+            .await;
+        if let Err(error) = allowed {
+            return self.identity.envelope(Err(error), "completed");
+        }
+        serde_json::from_value(response.clone())
+            .unwrap_or_else(|_| self.identity.envelope(Ok(response), "completed"))
+    }
+}
+
+struct EmbeddedToolCompletion<'a> {
+    state: &'a AppState,
+    server: &'a str,
+    identity: EmbeddedCallIdentity<'a>,
+    task: Option<&'a crate::tasks::TaskRecord>,
+    claim: Option<IdempotencyClaim>,
+}
+
+impl EmbeddedToolCompletion<'_> {
+    async fn finish_failure(
+        &self,
+        error: WarmplaneError,
+        execution_state: &'static str,
+        include_message: bool,
+    ) -> Envelope<Value> {
+        if let Some(task) = self.task {
+            let mut details = serde_json::json!({"code": error.code});
+            if include_message {
+                details["message"] = serde_json::json!(error.message);
+            }
+            let _ = self
+                .state
+                .task_registry
+                .fail_task(&task.task_id, details, Some(error.message.clone()))
+                .await;
+        }
+        self.state
+            .idempotency_store
+            .release_execution(self.identity.key, self.claim)
+            .await;
+        self.identity.envelope(Err(error), execution_state)
+    }
+
+    async fn upstream_failure(
+        &self,
+        result: Result<UpstreamCallError, oneshot::error::RecvError>,
+    ) -> Envelope<Value> {
+        let (error, execution_state, include_message) = match result {
+            Ok(UpstreamCallError::Timeout) => {
+                self.state
+                    .circuit_breakers
+                    .record_failure(self.server)
+                    .await;
+                (
+                    WarmplaneError::new(
+                        "UPSTREAM_TIMEOUT",
+                        format!("Tool call timed out after {}ms", self.state.tool_timeout_ms),
+                        true,
+                    ),
+                    "unknown",
+                    false,
+                )
+            }
+            Ok(failure) => {
+                let (error, execution_state) = self.state.tool_error(self.server, failure).await;
+                (error, execution_state, true)
+            }
+            Err(_) => {
+                self.state
+                    .circuit_breakers
+                    .record_failure(self.server)
+                    .await;
+                (
+                    WarmplaneError::new(
+                        "INTERNAL_ERROR",
+                        "Server actor task dropped reply channel",
+                        true,
+                    ),
+                    "unknown",
+                    false,
+                )
+            }
+        };
+        self.finish_failure(error, execution_state, include_message)
+            .await
+    }
+
+    async fn inverse_failure(&self, error: anyhow::Error) -> Envelope<Value> {
+        let message = self
+            .state
+            .safe_upstream_error(format!(
+                "Forward call succeeded but inverse registration failed: {error}"
+            ))
+            .await;
+        if let Some(task) = self.task {
+            self.state
+                .task_registry
+                .fail_execution(
+                    &task.task_id,
+                    "UNDO_REGISTRATION_FAILED",
+                    &message,
+                    "completed",
+                )
+                .await;
+        }
+        let envelope = self.identity.envelope(
+            Err(WarmplaneError::new(
+                "UNDO_REGISTRATION_FAILED",
+                message,
+                false,
+            )),
+            "completed",
+        );
+        self.cache(&envelope, None).await;
+        envelope
+    }
+
+    async fn cache(&self, envelope: &Envelope<Value>, revision: Option<String>) {
+        if let Some((key, claim)) = self.identity.key.zip(self.claim) {
+            if let Ok(value) = serde_json::to_value(envelope) {
+                self.state
+                    .idempotency_store
+                    .complete_with_revision(key, claim, value, revision)
+                    .await;
+            }
+        }
+    }
+
+    async fn deliver(&self, data: Value, options: &DistillationOptions) -> Envelope<Value> {
+        let (outcome, revision) = self
+            .state
+            .complete_tool_delivery(
+                self.server,
+                self.identity.trace,
+                data,
+                self.task.map(|record| record.task_id.as_str()),
+                options,
+            )
+            .await;
+        let envelope = EnvelopeBuilder::new(
+            self.identity.trace.to_owned(),
+            (self.identity.retry)("completed"),
+        )
+        .request_id(Some(self.identity.request.to_owned()))
+        .context(Some(self.identity.context.clone()))
+        .outcome(outcome);
+        self.cache(&envelope, revision).await;
+        envelope
+    }
+}
+
 struct EmbeddedEmission<'a> {
     state: &'a AppState,
+    tenant: Option<&'a crate::rbac::TenantContext>,
     profile: &'a ProfileContext,
     tool_name: &'a str,
+    tool_definition: Option<&'a str>,
     options: &'a ExecutionOptions,
     claim: Option<IdempotencyClaim>,
     approval_completed: bool,
@@ -2056,12 +2215,20 @@ impl EmbeddedEmission<'_> {
             release_at_ms,
             cancellable: true,
             tool_name: self.tool_name.to_owned(),
+            tool_definition: self.tool_definition.map(str::to_owned),
             input_responses: self.options.input_responses.clone(),
             request_state: self.options.request_state.clone(),
             profile_id: self.profile.profile_id.clone(),
-            tenant_id: "default".to_string(),
-            role: self.state.rbac_engine.default_role(),
-            authorization_expires_at_epoch_secs: None,
+            tenant_id: self
+                .tenant
+                .map_or_else(|| "default".to_owned(), |tenant| tenant.tenant_id.clone()),
+            role: self.tenant.map_or_else(
+                || self.state.rbac_engine.default_role(),
+                |tenant| tenant.role.clone(),
+            ),
+            authorization_expires_at_epoch_secs: self
+                .tenant
+                .and_then(|tenant| tenant.grant_expires_at_epoch_secs),
             approval_completed: self.approval_completed,
             batch_id: None,
             step_id: None,
@@ -2152,7 +2319,7 @@ impl HeldCapabilityCall<'_> {
             );
         };
         if let Some(outcome) = self.wait_for_result(&task.task_id, hold_ms).await {
-            return self.complete(outcome).await;
+            return self.into_envelope(outcome, "completed");
         }
         let receipt = crate::tasks::TaskResponse::from(&task);
         self.into_envelope(
@@ -2236,36 +2403,25 @@ impl HeldCapabilityCall<'_> {
             .hold_coordinator
             .wait_for_terminal(state, task_id, wait)
             .await?;
-        match task.status {
-            TaskStatus::Completed => Some(Ok(task.result.unwrap_or(Value::Null))),
-            TaskStatus::Failed | TaskStatus::Cancelled => {
-                let code = task
+        let view = state.task_view(&task).await;
+        match view.status {
+            TaskStatus::Completed if view.error.is_none() => {
+                Some(Ok(view.result.unwrap_or(Value::Null)))
+            }
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled => {
+                let code = view
                     .error
                     .as_ref()
                     .and_then(|error| error.get("code"))
                     .and_then(Value::as_str)
                     .unwrap_or("EMISSION_FAILED");
-                let message = task
+                let message = view
                     .status_message
                     .unwrap_or_else(|| "Held emission did not complete".to_string());
                 Some(Err(WarmplaneError::new(code, message, false)))
             }
             _ => None,
         }
-    }
-
-    async fn complete(self, result: Result<Value, WarmplaneError>) -> Envelope<Value> {
-        let state = self.emission.state;
-        let claim = self.idempotency_key.zip(self.emission.claim);
-        let envelope = self.into_envelope(result, "completed");
-        if envelope.ok {
-            if let Some((key, claim)) = claim {
-                if let Ok(value) = serde_json::to_value(&envelope) {
-                    state.idempotency_store.complete(key, claim, value).await;
-                }
-            }
-        }
-        envelope
     }
 
     fn into_envelope(
