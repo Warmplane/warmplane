@@ -91,6 +91,8 @@ pub(crate) async fn read_checked_state(
     let (reply_tx, reply_rx) = oneshot::channel();
     upstream
         .send(ServerMsg::CallTool {
+            dispatch_claim: None,
+            dispatch_access: None,
             tool_definition: state
                 .tool_pins
                 .binding(&server_id, &tool_name)
@@ -131,6 +133,7 @@ async fn checked_snapshot_response(
     let result = match result {
         Ok(result) => result,
         Err(UpstreamCallError::Timeout) => bail!("state-check upstream timed out"),
+        Err(UpstreamCallError::Dispatch(failure)) => bail!(failure.message),
         Err(UpstreamCallError::Upstream(message)) => {
             let message = state.safe_upstream_error(message).await;
             bail!("state-check failed: {message}");

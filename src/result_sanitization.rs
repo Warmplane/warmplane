@@ -178,6 +178,16 @@ impl ResultAccess {
     }
 }
 
+fn is_uncertain_outcome(record: &crate::idempotency::PersistedIdempotencyRecord) -> bool {
+    record.retain_receipt
+        && record
+            .response
+            .pointer("/error/code")
+            .and_then(Value::as_str)
+            == Some("UPSTREAM_OUTCOME_UNKNOWN")
+        && record.response.get("data").is_none()
+}
+
 impl ResultSanitization {
     fn compile(source: Rules) -> anyhow::Result<Self> {
         anyhow::ensure!(
@@ -344,10 +354,13 @@ impl AppState {
         access: &ResultAccess,
         role: &str,
     ) -> Result<(), WarmplaneError> {
-        if !self.trust_controls_active().await {
+        let record = self.idempotency_store.get_record(key).await;
+        if self
+            .is_legacy_unscoped_replay(access, record.as_ref())
+            .await
+        {
             return Ok(());
         }
-        let record = self.idempotency_store.get_record(key).await;
         let Some(record) = record.filter(|record| {
             record.response == *response && record.capability_id.as_deref() == Some(capability)
         }) else {
@@ -365,10 +378,22 @@ impl AppState {
         if !self
             .accepts_result_revision(record.result_policy_revision.as_deref())
             .await
+            && !is_uncertain_outcome(&record)
         {
             return Err(Withheld.into());
         }
         Ok(())
+    }
+
+    async fn is_legacy_unscoped_replay(
+        &self,
+        access: &ResultAccess,
+        record: Option<&crate::idempotency::PersistedIdempotencyRecord>,
+    ) -> bool {
+        !self.trust_controls_active().await
+            && !self.rbac_engine.is_enabled()
+            && access.profile_id.is_none()
+            && record.is_none_or(|record| record.result_access.is_none())
     }
 
     pub(crate) async fn task_view(

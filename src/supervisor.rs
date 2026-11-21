@@ -44,6 +44,7 @@ macro_rules! handle_supervisor_msg {
                 input_responses,
                 request_state,
                 reply,
+                ..
             } => {
                 if $state
                     .tool_pins
@@ -215,7 +216,7 @@ pub fn derive_tool_signature(capability_id: &str, input_schema: &Value) -> Strin
     }
 }
 
-fn capability_metadata(
+pub(crate) fn capability_metadata(
     tools: &[rmcp::model::Tool],
     server_id: &str,
     aliases: &HashMap<String, AliasTarget>,
@@ -601,9 +602,7 @@ async fn reconcile_restarted_catalog(
 ) {
     {
         let mut caps_guard = state.capabilities.write().await;
-        caps_guard.retain(|_, meta| meta.server != server_id);
-        caps_guard.extend(new_capabilities);
-        state.record_tool_catalog_events(server_id, &caps_guard);
+        replace_mcp_capabilities(state, server_id, &mut caps_guard, new_capabilities);
     }
     {
         let new_res_map: HashMap<String, ResourceMeta> = new_resources.into_iter().collect();
@@ -642,6 +641,26 @@ async fn reconcile_restarted_catalog(
 
     state.refresh_server_catalog(server_id).await;
     state.notify_tools_changed();
+}
+
+pub(crate) fn replace_mcp_capabilities(
+    state: &AppState,
+    server: &str,
+    catalog: &mut HashMap<String, CapabilityMeta>,
+    candidates: Vec<(String, CapabilityMeta)>,
+) {
+    catalog.retain(|_, capability| capability.server != server);
+    for (id, candidate) in candidates {
+        if catalog
+            .get(&id)
+            .is_some_and(|active| state.tool_pins.is_compiled_source(&active.server))
+        {
+            warn!(%server, capability_id = %id, "MCP capability conflicts with an active OpenAPI source");
+        } else {
+            catalog.insert(id, candidate);
+        }
+    }
+    state.record_tool_catalog_events(server, catalog);
 }
 
 #[cfg(test)]
@@ -850,10 +869,7 @@ impl PinnedUpstream {
             let Some(changed) = self.publish(&discovery) else {
                 return;
             };
-            capabilities.retain(|_, capability| capability.server != self.server.as_ref());
-            capabilities.extend(fresh);
-            self.state
-                .record_tool_catalog_events(&self.server, &capabilities);
+            replace_mcp_capabilities(&self.state, &self.server, &mut capabilities, fresh);
             changed
         };
         self.state.refresh_server_catalog(&self.server).await;

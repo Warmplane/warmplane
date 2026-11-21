@@ -67,7 +67,7 @@ async fn policy_update_preserves_masked_webhook_credentials() {
         .config_path(path.to_owned())
         .approval_registry(registry)
         .build();
-    let response = handle_get_config(State(state.clone()))
+    let response = handle_get_config(State(state.clone()), None)
         .await
         .into_response();
     let json: Value =
@@ -1078,13 +1078,15 @@ async fn test_ui_and_config_rest_api() {
     );
 
     // 2. Test Get Config (empty/default)
-    let get_cfg_res = handle_get_config(State(state.clone()))
+    let get_cfg_res = handle_get_config(State(state.clone()), None)
         .await
         .into_response();
     assert_eq!(get_cfg_res.status(), StatusCode::OK);
 
     // 3. Test Upsert Server
     let new_server = crate::config::ServerConfig {
+        test_only: false,
+        open_api: None,
         command: Some("node".to_string()),
         args: vec!["index.js".to_string()],
         ..Default::default()
@@ -1092,6 +1094,7 @@ async fn test_ui_and_config_rest_api() {
 
     let upsert_res = handle_upsert_server(
         State(state.clone()),
+        None,
         None,
         Json(UpsertServerRequest {
             name: "node_srv".to_string(),
@@ -1112,7 +1115,7 @@ async fn test_ui_and_config_rest_api() {
     assert_eq!(eco_res.status(), StatusCode::OK);
 
     // 5. Test Reload Config handler
-    let reload_res = handle_reload_config(State(state.clone()))
+    let reload_res = handle_reload_config(State(state.clone()), None, None)
         .await
         .into_response();
     assert_eq!(reload_res.status(), StatusCode::OK);
@@ -1382,7 +1385,7 @@ async fn test_get_config_sanitizes_secrets() {
         .server_configs(mcp_servers)
         .build();
 
-    let res = handle_get_config(State(state)).await.into_response();
+    let res = handle_get_config(State(state), None).await.into_response();
     let payload = http_test::assert_json_response(res, StatusCode::OK).await;
 
     // Verify secrets are masked
@@ -1946,6 +1949,8 @@ async fn test_ui_config_profiles_crud() {
     mcp_servers.insert(
         "s1".to_string(),
         crate::config::ServerConfig {
+            test_only: false,
+            open_api: None,
             command: Some("echo".to_string()),
             args: vec![],
             env: HashMap::new(),
@@ -2295,6 +2300,7 @@ async fn test_handle_delete_server_cascades_profiles_and_aliases() {
     let res = crate::http_v1::config_api::handle_delete_server(
         State(state.clone()),
         Path("sqlite".to_string()),
+        None,
     )
     .await
     .into_response();

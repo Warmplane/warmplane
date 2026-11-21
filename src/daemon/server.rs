@@ -73,7 +73,7 @@ fn initialize_audit(
 /// # Errors
 /// Returns an error if an upstream server connection or protocol handshake fails.
 pub async fn initialize_state(
-    config: McpConfig,
+    mut config: McpConfig,
     config_path: impl Into<String>,
 ) -> Result<AppState> {
     crate::config::validate_result_sanitization(&config)?;
@@ -156,7 +156,7 @@ pub async fn initialize_state(
 
     let (audit_store, audit_handle) = initialize_audit(config.audit.as_ref())?;
 
-    let auth_token = config.auth_token.or_else(|| {
+    let auth_token = config.auth_token.take().or_else(|| {
         std::env::var("WARMPLANE_AUTH_TOKEN")
             .ok()
             .filter(|t| !t.trim().is_empty())
@@ -204,16 +204,7 @@ pub async fn initialize_state(
     );
 
     for (server_id, srv_cfg) in &config.mcp_servers {
-        if let Err(e) = state
-            .mount_upstream_server(
-                server_id,
-                srv_cfg,
-                &config.capability_aliases,
-                &config.resource_aliases,
-                &config.prompt_aliases,
-            )
-            .await
-        {
+        if let Err(e) = mount_initial_source(&state, &config, server_id, srv_cfg).await {
             tracing::warn!(
                 server_id = %server_id,
                 error = %e,
@@ -241,6 +232,35 @@ pub async fn initialize_state(
     state.hold_coordinator.recover(&state).await;
 
     Ok(state)
+}
+
+async fn mount_initial_source(
+    state: &AppState,
+    config: &crate::config::McpConfig,
+    id: &str,
+    server: &crate::config::ServerConfig,
+) -> anyhow::Result<()> {
+    if let Some(source) = &server.open_api {
+        let _ = crate::openapi::mount(
+            state,
+            id,
+            server,
+            source,
+            &config.capability_aliases,
+            crate::openapi::MountOrigin::Startup,
+        )
+        .await;
+        return Ok(());
+    }
+    state
+        .mount_upstream_server(
+            id,
+            server,
+            &config.capability_aliases,
+            &config.resource_aliases,
+            &config.prompt_aliases,
+        )
+        .await
 }
 
 /// Starts the HTTP daemon server listening on the specified TCP port.
@@ -316,6 +336,18 @@ pub fn build_router(app_state: AppState) -> Router {
         )
         .route("/v1/config/import", post(http_v1::handle_import_config))
         .route("/v1/config/alias", post(http_v1::handle_update_alias))
+        .route(
+            "/v1/config/reversibility/draft",
+            post(crate::undo::draft::handle_generate),
+        )
+        .route(
+            "/v1/config/reversibility/record",
+            post(crate::undo::draft::record::handle_record),
+        )
+        .route(
+            "/v1/config/reversibility/activate",
+            post(crate::undo::draft::record::handle_activate),
+        )
         .route("/v1/config/policy", post(http_v1::handle_update_policy))
         .route("/v1/config/tool-pins", get(http_v1::handle_list_tool_pins))
         .route(
@@ -577,7 +609,7 @@ fn check_trust_admin(
     tenant: Option<&crate::rbac::TenantContext>,
     path: &str,
 ) -> bool {
-    if !path.starts_with("/v1/config/") {
+    if path != "/v1/config" && !path.starts_with("/v1/config/") {
         return false;
     }
     if state.rbac_engine.is_enabled() {

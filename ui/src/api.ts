@@ -325,7 +325,59 @@ export interface ResilienceConfig {
   healthCheckIntervalSecs?: number;
 }
 
+export type OpenApiAuth = { type: 'none' } | { type: 'bearer'; tokenEnv: string };
+
+export interface OpenApiSourceConfig {
+  baseUrl: string;
+  operations: string[];
+  mutations?: string[];
+  auth: OpenApiAuth;
+  specPath?: string;
+  remoteSpec?: { url: string; auth: OpenApiAuth; privateNetworks?: string[] };
+}
+
+export interface ServerStatus {
+  transport: string;
+  protocol_version?: string;
+  status: string;
+  error?: string;
+  operation_count?: number;
+  active_revision?: string;
+  last_validated_at_ms?: number;
+  serving_previous_revision?: boolean;
+  remote_spec?: boolean;
+}
+
+export interface ReversibilityDraftRequest {
+  forward: string;
+  ttlSecs: number;
+  preSnapshot: NonNullable<ReversibilityConfig['preSnapshot']>;
+  preUndoCheck: NonNullable<ReversibilityConfig['preUndoCheck']>;
+  inverse: NonNullable<ReversibilityConfig['inverse']>;
+  testTarget: NonNullable<ReversibilityConfig['testTarget']>;
+}
+
+export interface ReversibilityDraft {
+  forward: string;
+  contract: ReversibilityConfig;
+  revisions: Record<string, string>;
+  dynamicMappings: string[];
+  requiresTest: boolean;
+}
+
+export interface ReversibilityReply {
+  ok: boolean;
+  draft?: ReversibilityDraft;
+  reviewToken?: string;
+  confirmationToken?: string;
+  testForward?: string;
+  error?: string | { message?: string };
+  result?: { error_code?: string };
+}
+
 export interface McpServerConfig {
+  openApi?: OpenApiSourceConfig;
+  testOnly?: boolean;
   command?: string;
   args?: string[];
   env?: Record<string, string>;
@@ -443,7 +495,7 @@ export interface GetConfigResponse {
   ok: boolean;
   config_path: string;
   config: McpConfig;
-  server_statuses?: Record<string, { transport: string; protocol_version: string; status: string }>;
+  server_statuses?: Record<string, ServerStatus>;
   circuit_breakers?: CircuitBreakerSnapshot[];
   metrics?: {
     total_catalog_requests: number;
@@ -701,6 +753,15 @@ export class WarmplaneClient {
   async listUndo(offset = 0, limit = 50): Promise<{ ok: boolean; result?: { entries: UndoEntrySummary[]; total: number; offset: number; limit: number }; error?: any }> {
     const res = await fetch(`${this.baseUrl}/v1/undo?offset=${offset}&limit=${limit}`);
     return res.json();
+  }
+
+  async reversibility(action: 'draft' | 'record' | 'activate', payload: unknown, profile?: string): Promise<ReversibilityReply> {
+    const response = await fetch(`${this.baseUrl}/v1/config/reversibility/${action}`, {
+      method: 'POST',
+      headers: this.headers(this.trustToken, true, profile),
+      body: JSON.stringify(payload),
+    });
+    return response.json();
   }
 
   async testUndoContract(alias: string): Promise<{ ok: boolean; result?: any; error?: any }> {

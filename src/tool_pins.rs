@@ -170,6 +170,10 @@ impl AppState {
     ) -> (crate::WarmplaneError, &'static str) {
         use crate::daemon::UpstreamCallError;
         match failure {
+            UpstreamCallError::Dispatch(failure) => (
+                crate::WarmplaneError::new(failure.code, failure.message, false),
+                failure.execution_state,
+            ),
             UpstreamCallError::ToolDefinitionChanged => (PinDenied.into(), "not_started"),
             UpstreamCallError::Upstream(message) => {
                 self.circuit_breakers.record_failure(server).await;
@@ -248,15 +252,52 @@ pub(crate) enum PinApprovalError {
 struct Observation {
     session: PinSession,
     epoch: u64,
+    kind: ObservationKind,
     observed_at: Option<Instant>,
     definitions: Definitions,
     bindings: BTreeMap<String, String>,
 }
 
+enum ObservationKind {
+    Live,
+    Compiled { review_required: bool },
+}
+
 impl Observation {
     fn is_current(&self) -> bool {
-        self.observed_at
-            .is_some_and(|at| at.elapsed() <= MAX_OBSERVATION_AGE)
+        self.observed_at.is_some_and(|at| {
+            matches!(self.kind, ObservationKind::Compiled { .. })
+                || at.elapsed() <= MAX_OBSERVATION_AGE
+        })
+    }
+
+    fn review_required(&self) -> bool {
+        !matches!(
+            self.kind,
+            ObservationKind::Compiled {
+                review_required: false
+            }
+        )
+    }
+
+    fn update(&mut self, definitions: Definitions) {
+        self.bindings = definitions
+            .iter()
+            .map(|(tool, current)| {
+                let binding = self
+                    .definitions
+                    .get(tool)
+                    .filter(|previous| previous.digest == current.digest)
+                    .and_then(|_| self.bindings.get(tool))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        format!("{}:{:032x}", current.digest, rand::random::<u128>())
+                    });
+                (tool.clone(), binding)
+            })
+            .collect();
+        self.definitions = definitions;
+        self.observed_at = Some(Instant::now());
     }
 }
 
@@ -306,21 +347,19 @@ impl PinState {
     }
 
     fn binding(&self, server: &str, tool: &str) -> Result<Option<&str>, PinDenied> {
-        if !self.observations.contains_key(server) {
+        let Some(observation) = self.observations.get(server) else {
             return Ok(None);
+        };
+        if observation.review_required() {
+            let observed = self.observed(server, tool).ok_or(PinDenied)?;
+            let approved = self.approved(server, tool).ok_or(PinDenied)?;
+            if approved.digest != observed.digest
+                || self.uncertain.iter().any(|(s, t)| s == server && t == tool)
+            {
+                return Err(PinDenied);
+            }
         }
-        let observed = self.observed(server, tool).ok_or(PinDenied)?;
-        let approved = self.approved(server, tool).ok_or(PinDenied)?;
-        if approved.digest != observed.digest
-            || self.uncertain.iter().any(|(s, t)| s == server && t == tool)
-        {
-            return Err(PinDenied);
-        }
-        let binding = self
-            .observations
-            .get(server)
-            .and_then(|item| item.bindings.get(tool))
-            .ok_or(PinDenied)?;
+        let binding = observation.bindings.get(tool).ok_or(PinDenied)?;
         Ok(Some(binding))
     }
 
@@ -382,7 +421,36 @@ impl ToolPins {
     }
 
     pub(crate) fn has_required_servers(&self) -> bool {
-        !self.read().observations.is_empty()
+        self.read()
+            .observations
+            .values()
+            .any(Observation::review_required)
+    }
+
+    pub(crate) fn has_storage(&self) -> bool {
+        self.storage.is_some()
+    }
+
+    pub(crate) fn is_compiled_source(&self, server: &str) -> bool {
+        self.read()
+            .observations
+            .get(server)
+            .is_some_and(|observation| matches!(observation.kind, ObservationKind::Compiled { .. }))
+    }
+
+    pub(crate) fn matches_compiled_definitions(&self, server: &str, tools: &[Tool]) -> bool {
+        let state = self.read();
+        state.observations.get(server).is_some_and(|observation| {
+            observation.definitions.len() == tools.len()
+                && tools.iter().all(|tool| {
+                    observation
+                        .definitions
+                        .get(tool.name.as_ref())
+                        .is_some_and(|definition| {
+                            definition.digest == Definition::from_tool(tool).digest
+                        })
+                })
+        })
     }
 
     pub(crate) fn begin_session(
@@ -403,6 +471,7 @@ impl ToolPins {
             Observation {
                 session,
                 epoch: 0,
+                kind: ObservationKind::Live,
                 observed_at: None,
                 definitions: BTreeMap::new(),
                 bindings: BTreeMap::new(),
@@ -413,6 +482,81 @@ impl ToolPins {
 
     pub(crate) fn remove_server(&self, server: &str) {
         self.write().observations.remove(server);
+    }
+
+    pub(crate) fn publish_compiled(
+        &self,
+        server: &str,
+        review_required: bool,
+        revoke_stale: bool,
+        tools: &[Tool],
+    ) -> anyhow::Result<PinSession> {
+        let definitions: Definitions = tools
+            .iter()
+            .map(|tool| (tool.name.to_string(), Definition::from_tool(tool)))
+            .collect();
+        let mut state = self.write();
+        if revoke_stale {
+            self.revoke_compiled(&mut state, server, &definitions)?;
+        }
+        let session = PinSession(rand::random());
+        let kind = ObservationKind::Compiled { review_required };
+        let item = state
+            .observations
+            .entry(server.to_owned())
+            .or_insert_with(|| Observation {
+                session,
+                epoch: 0,
+                kind: ObservationKind::Live,
+                observed_at: None,
+                definitions: Definitions::new(),
+                bindings: BTreeMap::new(),
+            });
+        item.session = session;
+        item.kind = kind;
+        item.update(definitions);
+        Ok(session)
+    }
+
+    fn revoke_compiled(
+        &self,
+        state: &mut PinState,
+        server: &str,
+        definitions: &Definitions,
+    ) -> anyhow::Result<()> {
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Remote OpenAPI sources require persistent tool pin storage")
+        })?;
+        let pending_storage = self.pending_storage.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Remote OpenAPI sources require persistent tool pin storage")
+        })?;
+        let mut approved = state.approved.clone();
+        if let Some(previous) = approved.get_mut(server) {
+            let mut pending = state.uncertain.clone();
+            let count = previous.len();
+            previous.retain(|name, definition| {
+                let unchanged = definitions
+                    .get(name)
+                    .is_some_and(|item| item.digest == definition.digest);
+                if !unchanged {
+                    pending.insert((server.to_owned(), name.clone()));
+                }
+                unchanged
+            });
+            if previous.len() != count {
+                pending_storage.save(&pending)?;
+                state.uncertain = pending;
+                storage.save(&approved)?;
+                state.approved = approved;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn withdraw_compiled(&self, server: &str) -> anyhow::Result<()> {
+        let mut state = self.write();
+        state.observations.remove(server);
+        self.revoke_compiled(&mut state, server, &Definitions::new())
     }
 
     pub(crate) fn invalidate(
@@ -470,23 +614,7 @@ impl ToolPins {
             return None;
         }
         let changed = !item.is_current() || !same_digests(&item.definitions, &definitions);
-        item.bindings = definitions
-            .iter()
-            .map(|(tool, current)| {
-                let binding = item
-                    .definitions
-                    .get(tool)
-                    .filter(|previous| previous.digest == current.digest)
-                    .and_then(|_| item.bindings.get(tool))
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        format!("{}:{:032x}", current.digest, rand::random::<u128>())
-                    });
-                (tool.clone(), binding)
-            })
-            .collect();
-        item.definitions = definitions;
-        item.observed_at = Some(Instant::now());
+        item.update(definitions);
         Some(changed)
     }
 
@@ -535,6 +663,9 @@ impl ToolPins {
         let state = self.read();
         let mut result = Vec::new();
         for (server, item) in &state.observations {
+            if !item.review_required() {
+                continue;
+            }
             let tools: BTreeSet<_> = item
                 .definitions
                 .keys()

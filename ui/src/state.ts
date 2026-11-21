@@ -1,5 +1,6 @@
 import {
   McpConfig,
+  ServerStatus,
   CapabilityItem,
   ResourceItem,
   PromptItem,
@@ -36,7 +37,7 @@ export interface AppState {
   config: McpConfig;
   configReady: boolean;
   configError: string | null;
-  serverStatuses: Record<string, { transport: string; protocol_version: string; status: string; error?: string }>;
+  serverStatuses: Record<string, ServerStatus>;
   circuitBreakers: CircuitBreakerSnapshot[];
   clients: ClientAppStatus[];
   clientFilterCategory: string;

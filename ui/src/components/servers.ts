@@ -1,7 +1,62 @@
 import { escapeHtml } from '../escape';
 import { store } from '../state';
 import { api } from '../api';
+import type { McpServerConfig, ServerStatus } from '../api';
 import { findTemplateForServer } from '../templates';
+
+export function renderOpenApiStatus(status: ServerStatus | undefined, remote: boolean): string {
+  const source = status?.remote_spec || remote ? 'Remote spec' : 'Local spec';
+  const revision = status?.active_revision;
+  const count = status?.operation_count;
+  const details = [
+    source,
+    count === undefined ? undefined : `${count} ${count === 1 ? 'operation' : 'operations'}`,
+    revision ? `Revision ${revision.slice(0, 12)}` : undefined,
+    status?.last_validated_at_ms ? `Validated ${new Date(status.last_validated_at_ms).toLocaleString()}` : undefined,
+  ];
+  return `${escapeHtml(details.filter(Boolean).join(' · '))}
+    ${status?.serving_previous_revision ? '<span style="color: var(--amber-300);"> · Serving previous revision</span>' : ''}`;
+}
+
+export function serverConnection(config: McpServerConfig | undefined, status: ServerStatus | undefined) {
+  if (config?.openApi || status?.transport === 'openapi') {
+    return {
+      transport: 'OpenAPI',
+      protocolBadge: '<span class="brand-badge">OpenAPI</span>',
+      cardProtocol: '',
+      address: renderOpenApiStatus(status, Boolean(config?.openApi?.remoteSpec)),
+      diagnosticsLabel: 'Specification',
+      reloadLabel: 'Reload spec',
+      editable: false,
+    };
+  }
+  const command = config?.command;
+  const address = command ? `${command} ${(config?.args || []).join(' ')}` : config?.url;
+  return {
+    transport: command ? 'stdio' : 'http / sse',
+    protocolBadge: protocolBadge(status?.protocol_version || '2026-07-28'),
+    cardProtocol: status?.protocol_version ? protocolBadge(status.protocol_version) : '',
+    address: `${command ? 'Command: ' : 'URL: '}<code>${escapeHtml(address || '')}</code>`,
+    diagnosticsLabel: 'Process Supervision',
+    reloadLabel: '⚡ Restart',
+    editable: true,
+  };
+}
+
+function protocolBadge(version: string) {
+  return `<span class="brand-badge">Protocol: ${escapeHtml(version)}</span>`;
+}
+
+function renderAvailability(server: string, error: string | undefined, missing: string[], degraded: boolean): string {
+  return degraded && (error || missing.length) ? `
+        <div style="background: rgba(239, 68, 68, 0.08); border-left: 3px solid var(--amber-400); border-radius: var(--radius-xs); padding: 8px 12px; margin-top: 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+          <div style="font-size: 11px; color: var(--amber-300); font-family: var(--ff-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+            <span style="font-weight: 700; color: var(--amber-400);">⚠️ Diagnostics:</span> ${escapeHtml(error || `Missing required environment variable(s): ${missing.join(', ')}`)}
+          </div>
+          <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10.5px; color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3);" onclick="window.app.openServerDiagnosticsModal('${escapeHtml(server)}')">Details</button>
+        </div>
+      ` : '';
+}
 
 export function renderServers(): string {
   const state = store.getState();
@@ -30,9 +85,8 @@ export function renderServers(): string {
   } else {
     contentHtml = keys.map(k => {
       const s = servers[k];
-      const transport = s.command ? 'stdio' : 'http / sse';
-      const cmd = s.command ? `${s.command} ${(s.args || []).join(' ')}` : s.url;
-      const statusInfo = state.serverStatuses[k] || { status: 'connected', protocol_version: '2026-07-28' };
+      const statusInfo = state.serverStatuses[k];
+      const connection = serverConnection(s, statusInfo);
       const isIncludedInProfile = !isProfileActive || includedServers.includes(k);
 
       const template = findTemplateForServer(k, s.command, s.args);
@@ -67,23 +121,17 @@ export function renderServers(): string {
       const res = s.resilience || state.config.resilience;
       const resDetails = res ? `FT: ${res.failureThreshold || 3} · Cooldown: ${(res.cooldownMs || 30000) / 1000}s · AutoRestart: ${res.autoRestart !== false ? 'ON' : 'OFF'}` : 'Default Resilience';
 
+      const status = statusInfo?.status || 'unavailable';
       const hasMissingKeys = missingRequiredEnv.length > 0;
-      const isDegraded = statusInfo.status === 'degraded' || hasMissingKeys;
-      const isError = statusInfo.status === 'error' || statusInfo.status === 'disconnected';
+      const isDegraded = status === 'degraded' || hasMissingKeys;
+      const isError = ['error', 'disconnected', 'unavailable'].includes(status);
       const statusColor = hasMissingKeys ? 'var(--amber-400)' : isDegraded ? 'var(--amber-400)' : isError ? 'var(--red-400)' : 'var(--green-400)';
 
       const statusBadgeText = hasMissingKeys 
-        ? `Status: ${escapeHtml(statusInfo.status)} (Missing Keys)` 
-        : `Status: ${escapeHtml(statusInfo.status)}`;
+        ? `Status: ${escapeHtml(status)} (Missing Keys)`
+        : `Status: ${escapeHtml(status)}`;
 
-      const errorBannerHtml = (isDegraded || isError) && (statusInfo.error || hasMissingKeys) ? `
-        <div style="background: rgba(239, 68, 68, 0.08); border-left: 3px solid var(--amber-400); border-radius: var(--radius-xs); padding: 8px 12px; margin-top: 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px;">
-          <div style="font-size: 11px; color: var(--amber-300); font-family: var(--ff-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-            <span style="font-weight: 700; color: var(--amber-400);">⚠️ Diagnostics:</span> ${escapeHtml(statusInfo.error || `Missing required environment variable(s): ${missingRequiredEnv.map(m => m.key).join(', ')}`)}
-          </div>
-          <button class="btn btn-ghost" style="padding: 2px 8px; font-size: 10.5px; color: var(--amber-300); border-color: rgba(251, 191, 36, 0.3);" onclick="window.app.openServerDiagnosticsModal('${escapeHtml(k)}')">Details</button>
-        </div>
-      ` : '';
+      const errorBannerHtml = renderAvailability(k, statusInfo?.error, missingRequiredEnv.map(field => field.key), isDegraded || isError);
 
       const profileBoundaryBadge = isProfileActive ? (
         isIncludedInProfile
@@ -108,24 +156,24 @@ export function renderServers(): string {
               <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap;">
                 <span style="width: 8px; height: 8px; border-radius: 50%; background: ${statusColor}; display: inline-block;"></span>
                 <span style="font-size: 15px; font-weight: 700; color: var(--text-main);">${escapeHtml(k)}</span>
-                <span class="brand-badge">${transport}</span>
+                <span class="brand-badge">${connection.transport}</span>
                 <span class="brand-badge" style="color: ${statusColor}; border-color: ${hasMissingKeys ? 'rgba(245, 158, 11, 0.5); background: rgba(245, 158, 11, 0.1);' : 'rgba(245, 158, 11, 0.3);'}">${statusBadgeText}</span>
-                <span class="brand-badge" style="color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.25);">Protocol: ${statusInfo.protocol_version}</span>
+                ${connection.cardProtocol}
                 ${cbBadge}
                 ${profileBoundaryBadge}
               </div>
               <div style="font-family: var(--ff-mono); font-size: 12px; color: var(--text-muted); margin-top: 4px;">
-                ${s.command ? 'Command: ' : 'URL: '}<code>${escapeHtml(cmd || '')}</code>
+                ${connection.address}
               </div>
               <div style="display: flex; gap: 14px; font-family: var(--ff-mono); font-size: 11px; color: var(--text-dim); margin-top: 4px; align-items: center; flex-wrap: wrap;">
-                <span>🛡️ ${escapeHtml(resDetails)}</span>
+                ${connection.editable ? `<span>🛡️ ${escapeHtml(resDetails)}</span>` : '<span>Configure in the local settings file</span>'}
                 ${s.env && Object.keys(s.env).length > 0 ? `<span>Env: ${envBadges}</span>` : ''}
               </div>
             </div>
             <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0;">
-              <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px; color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);" onclick="window.app.restartServer('${escapeHtml(k)}')">⚡ Restart</button>
+              <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px; color: var(--cyan-400); border-color: rgba(34, 211, 238, 0.3);" onclick="window.app.restartServer('${escapeHtml(k)}')">${connection.reloadLabel}</button>
               <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openServerDiagnosticsModal('${escapeHtml(k)}')">🔍 Diagnostics</button>
-              <button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openEditServerModal('${escapeHtml(k)}')">✏️ Edit</button>
+              ${connection.editable ? `<button class="btn btn-ghost" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.openEditServerModal('${escapeHtml(k)}')">✏️ Edit</button>` : ''}
               <button class="btn btn-danger" style="padding: 4px 10px; font-size: 11.5px;" onclick="window.app.deleteServer('${escapeHtml(k)}')">${isProfileActive ? 'Delete Globally' : 'Remove'}</button>
             </div>
           </div>

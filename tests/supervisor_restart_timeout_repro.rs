@@ -56,6 +56,8 @@ fn state() -> AppState {
 /// A stdio server config whose child hangs forever without speaking MCP.
 fn hanging_server() -> ServerConfig {
     ServerConfig {
+        test_only: false,
+        open_api: None,
         command: Some("cat".to_string()),
         args: vec![],
         env: HashMap::new(),
@@ -79,6 +81,8 @@ async fn call_tool(
 ) -> Result<Result<Value, UpstreamCallError>, String> {
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     tx.send(ServerMsg::CallTool {
+        dispatch_claim: None,
+        dispatch_access: None,
         tool_definition: None,
         name: name.to_string(),
         params: json!({}),
@@ -102,6 +106,9 @@ async fn ask(tx: &tokio::sync::mpsc::Sender<ServerMsg>) -> Result<(), String> {
         Ok(_) | Err(UpstreamCallError::Upstream(_)) => Ok(()),
         Err(UpstreamCallError::Timeout) => Err("upstream call timed out".to_string()),
         Err(UpstreamCallError::ToolDefinitionChanged) => Err("tool definition changed".to_string()),
+        Err(error @ UpstreamCallError::Dispatch(_)) => {
+            Err(format!("unexpected tool error: {error:?}"))
+        }
     }
 }
 
@@ -138,6 +145,8 @@ async fn stdio_restart_handshake_times_out_and_leaves_supervisor_responsive() {
 async fn stdio_negotiates_a_legacy_session_on_startup_and_restart() {
     let state = state();
     let config = ServerConfig {
+        test_only: false,
+        open_api: None,
         command: Some(
             std::env::current_exe()
                 .unwrap()
@@ -274,6 +283,8 @@ async fn http_negotiates_a_legacy_session_and_enforces_response_limits() {
     });
     let state = state();
     let config = ServerConfig {
+        test_only: false,
+        open_api: None,
         command: None,
         url: Some(url),
         allow_stateless: Some(false),

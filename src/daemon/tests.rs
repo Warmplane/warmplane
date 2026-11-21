@@ -48,6 +48,8 @@ async fn test_initialize_state_degraded_boot() {
     mcp_servers.insert(
         "broken_server".to_string(),
         ServerConfig {
+            test_only: false,
+            open_api: None,
             command: Some("non_existent_binary_xyz_1234".to_string()),
             args: vec![],
             env: HashMap::new(),

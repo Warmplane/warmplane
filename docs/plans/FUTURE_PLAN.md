@@ -52,6 +52,8 @@ See the [Trust Controls Plan](TRUST_CONTROLS.md) for implementation decisions, m
 
 ### 2. OpenAPI onboarding and reversibility authoring
 
+See the [OpenAPI Onboarding Plan](OPENAPI_ONBOARDING.md) for the implementation checkpoints, acceptance criteria, and inventory pilot.
+
 - Ingest operator-selected OpenAPI 3.0 and 3.1 operations as a capability source. Start with explicitly allowlisted, read-only operations from local specs. Add controlled remote spec ingestion and explicitly enabled mutations as follow-on work. Generate stable IDs and compact signatures from operation metadata. Document supported path/query/body serialization, content types, references, and response mapping. Address unsupported input during validation, before activation.
 - Keep configured base URLs and credentials under operator control. Keep credentials out of schemas and downstream results. Define reference resolution, outbound network policy, redirects, size limits, timeouts, and spec reload behavior before enabling remote ingestion. Use normal authorization, pinning, audit, retry, and output policy for generated capabilities. Expose the existing output shaping options where the returned type supports them.
 - Generate **draft** inverse and pre-snapshot templates from explicitly matched operations and field mappings. Treat HTTP method and naming conventions as hints. Require an operator to verify semantics, target identity, permissions, and drift handling. Keep irreversible operations explicit. Retain compensation limits and approval checks for approved compensable actions.

@@ -536,6 +536,83 @@ paths:
       responses:
         "200":
           description: Policy updated
+  /v1/config/reversibility/draft:
+    post:
+      summary: Generate a reversible contract draft as a trust administrator
+      operationId: generateReversibilityDraft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReversibilityDraftRequest"
+      responses:
+        "200":
+          description: Draft contract, observed capability revisions, and dynamic mappings requiring testing
+        "400":
+          description: The selected capabilities or mappings cannot form a draft
+        "403":
+          description: Trust administration authorization is required
+  /v1/config/reversibility/record:
+    post:
+      summary: Run a confirmed contract test on the configured isolated source
+      operationId: recordReversibilityDraft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [draft, revisions, confirmationToken, confirmed]
+              properties:
+                draft:
+                  $ref: "#/components/schemas/ReversibilityDraftRequest"
+                revisions:
+                  type: object
+                  additionalProperties: {type: string}
+                confirmationToken:
+                  type: string
+                confirmed:
+                  const: true
+      responses:
+        "200":
+          description: Verified cleanup, the tested draft, and a short-lived review token
+        "403":
+          description: Trust administration and undo permission are required
+        "409":
+          description: The test was unconfirmed, stale, or failed
+  /v1/config/reversibility/activate:
+    post:
+      summary: Save a tested draft using its single-use review token
+      operationId: activateReversibilityDraft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [draft, revisions, reviewToken, alias]
+              properties:
+                draft:
+                  $ref: "#/components/schemas/ReversibilityDraftRequest"
+                revisions:
+                  type: object
+                  additionalProperties: {type: string}
+                reviewToken:
+                  type: string
+                alias:
+                  type: string
+      responses:
+        "200":
+          description: Contract saved and reload attempted
+        "202":
+          description: Contract saved and reload needs attention
+        "403":
+          description: Trust administration authorization is required
+        "409":
+          description: Test evidence is stale, expired, or belongs to another draft
   /v1/config/reload:
     post:
       summary: Hot-reload daemon configuration and upstream servers from disk
@@ -1562,6 +1639,24 @@ components:
         entry_status:
           type: string
           enum: [armed, executing, reverted, expired, failed]
+    ReversibilityDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [forward, ttlSecs, preSnapshot, inverse, preUndoCheck, testTarget]
+      properties:
+        forward:
+          type: string
+        ttlSecs:
+          type: integer
+          minimum: 1
+        preSnapshot:
+          $ref: "#/components/schemas/UndoReadConfig"
+        preUndoCheck:
+          $ref: "#/components/schemas/UndoReadConfig"
+        inverse:
+          $ref: "#/components/schemas/UndoInverseConfig"
+        testTarget:
+          $ref: "#/components/schemas/ReversibilityConfig/properties/testTarget"
     ReversibilityConfig:
       type: object
       required: [class]

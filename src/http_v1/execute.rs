@@ -367,6 +367,14 @@ pub async fn handle_call_capability(
                 let (reply_tx, reply_rx) = oneshot::channel();
                 if tx
                     .send(ServerMsg::CallTool {
+                        dispatch_claim: idempotency_key_clone.clone().zip(idempotency_claim),
+                        dispatch_access: Some(crate::daemon::types::ToolDispatchAccess {
+                            capability: capability_clone.clone(),
+                            role: caller_role_clone.clone(),
+                            profile: profile_clone.profile_id.clone(),
+                            grant_expires_at_epoch_secs: caller_grant_expires_at_epoch_secs_clone,
+                            approval_completed: true,
+                        }),
                         name: tool_name_clone,
                         tool_definition,
                         params: worker_args.clone(),
@@ -878,6 +886,14 @@ pub async fn handle_call_capability(
     let (reply_tx, reply_rx) = oneshot::channel();
     if tx
         .send(ServerMsg::CallTool {
+            dispatch_claim: idempotency_key.clone().zip(idempotency_claim),
+            dispatch_access: Some(crate::daemon::types::ToolDispatchAccess {
+                capability: payload.capability_id.clone(),
+                role: caller_role.clone(),
+                profile: prof_ctx.profile_id.clone(),
+                grant_expires_at_epoch_secs: caller_grant_expires_at_epoch_secs,
+                approval_completed: requires_approval,
+            }),
             name: tool_name,
             tool_definition,
             params: effective_args.clone(),

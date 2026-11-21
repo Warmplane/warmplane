@@ -2,6 +2,7 @@
 
 //! Persistent undo records and content-addressed snapshots.
 
+pub(crate) mod draft;
 mod fiber;
 mod operator;
 mod store;

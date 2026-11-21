@@ -202,6 +202,8 @@ For HTTP/SSE upstreams, Warmplane supports:
 - Custom HTTP headers.
 - Authentication schemas: static credentials (`bearer`, `basic`) and dynamic `oauth2` (OAuth 2.1 / OIDC) flows featuring PKCE (`S256`), dynamic server discovery (RFC 9728 & RFC 8414), RFC 9207 / SEP-2468 `iss` matching, scope accumulation during step-up challenges, and silent token refreshing via rotated refresh tokens.
 
+An OpenAPI source compiles operator-selected operations into the same capability catalog and dispatches them through a dedicated HTTP worker. The invocation destination is operator-configured. A remote spec fetch uses a separate TLS client, credential, and egress policy. The accepted definition is bound to the worker revision and uses the existing authorization, pinning, and output policy. Configured writes persist a dispatch reservation before submission so a restart can preserve an uncertain outcome under the same idempotency key. Reversibility recording maps the reviewed contract onto explicitly designated test capabilities, then issues short-lived activation evidence bound to the operator, profile, and current capability revisions.
+
 ### 3.3 Human-in-the-Loop (HITL) Execution Governance
 
 Warmplane introduces an integrated HITL suspension engine:

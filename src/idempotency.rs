@@ -1,6 +1,6 @@
 // Rust guideline compliant 2026-08-22
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -129,6 +129,8 @@ enum EntryState {
 
 struct IdempotencyEntry {
     state: EntryState,
+    guarded_outcome: Option<Value>,
+    retain_receipt: bool,
     capability_id: Option<String>,
     result_policy_revision: Option<String>,
     result_access: Option<ResultAccess>,
@@ -142,7 +144,8 @@ struct IdempotencyEntry {
 impl IdempotencyEntry {
     fn is_live(&self, now: Instant, completed_ttl: Duration) -> bool {
         let ttl = match self.state {
-            EntryState::InProgress { .. } => IN_PROGRESS_TIMEOUT,
+            EntryState::InProgress { .. } if self.guarded_outcome.is_none() => IN_PROGRESS_TIMEOUT,
+            EntryState::InProgress { .. } => completed_ttl,
             EntryState::Completed(_) => completed_ttl,
         };
         now.duration_since(self.created_at) < ttl
@@ -159,6 +162,9 @@ pub struct PersistedIdempotencyRecord {
     pub capability_id: Option<String>,
     /// Completed JSON payload.
     pub response: Value,
+    /// Whether a submitted mutation's receipt must remain available until it expires.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub retain_receipt: bool,
     /// Effective sanitization policy revision used to produce the stored response.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_policy_revision: Option<String>,
@@ -256,6 +262,8 @@ impl IdempotencyStore {
                     k.clone(),
                     IdempotencyEntry {
                         state: EntryState::Completed(record.response.clone()),
+                        guarded_outcome: None,
+                        retain_receipt: record.retain_receipt,
                         capability_id: record.capability_id.clone(),
                         result_policy_revision: record.result_policy_revision.clone(),
                         result_access: record.result_access.clone(),
@@ -288,30 +296,46 @@ impl IdempotencyStore {
         if let Some(ref store) = self.storage {
             let _persistence = self.persistence.lock().await;
             let guard = self.entries.read().await;
-            let mut persisted = HashMap::new();
-            for (k, entry) in guard.iter() {
-                if let EntryState::Completed(ref val) = entry.state {
-                    persisted.insert(
-                        k.clone(),
-                        PersistedIdempotencyRecord {
-                            key: k.clone(),
-                            capability_id: entry.capability_id.clone(),
-                            response: val.clone(),
-                            result_policy_revision: entry.result_policy_revision.clone(),
-                            result_access: entry.result_access.clone(),
-                            created_at_epoch_secs: entry.created_at_epoch_secs,
-                            completed_at_epoch_secs: entry.completed_at_epoch_secs,
-                            replay_count: entry.replay_count,
-                            first_trace_id: entry.first_trace_id.clone(),
-                        },
-                    );
-                }
-            }
+            let persisted = persisted_entries(&guard);
             drop(guard);
             if let Err(e) = store.save(&persisted) {
                 error!(error = %e, path = %store.path().display(), "failed to persist idempotency cache to disk");
             }
         }
+    }
+
+    pub(crate) fn is_persistent(&self) -> bool {
+        self.storage.is_some()
+    }
+
+    pub(crate) async fn guard_dispatch(&self, key: &str, claim: IdempotencyClaim) -> Result<()> {
+        let store = self
+            .storage
+            .as_ref()
+            .context("Durable idempotency is disabled")?;
+        let _persistence = self.persistence.lock().await;
+        let mut entries = self.entries.write().await;
+        let entry = entries
+            .get_mut(key)
+            .context("Dispatch claim is unavailable")?;
+        anyhow::ensure!(
+            matches!(entry.state, EntryState::InProgress { claim: owner, .. } if owner == claim)
+                && entry.guarded_outcome.is_none(),
+            "Dispatch claim is already reserved or has been replaced"
+        );
+        entry.guarded_outcome = Some(serde_json::json!({
+            "ok": false,
+            "trace_id": entry.first_trace_id.as_deref().unwrap_or(""),
+            "error": {
+                "code": "UPSTREAM_OUTCOME_UNKNOWN",
+                "message": "The OpenAPI mutation may have been submitted. Reconcile upstream state before starting a new invocation.",
+                "retryable": false
+            },
+            "retry": RetryMetadata::unsafe_op("unknown")
+        }));
+        entry.retain_receipt = true;
+        store.save(&persisted_entries(&entries))?;
+        Ok(())
     }
 
     /// Checks existing idempotency state or marks a new key as in-progress.
@@ -379,7 +403,9 @@ impl IdempotencyStore {
             if map.len() >= 4096 {
                 let keys: Vec<String> = map
                     .iter()
-                    .filter(|(_, entry)| matches!(entry.state, EntryState::Completed(_)))
+                    .filter(|(_, entry)| {
+                        !entry.retain_receipt && matches!(entry.state, EntryState::Completed(_))
+                    })
                     .take(1024)
                     .map(|(key, _)| key.clone())
                     .collect();
@@ -395,6 +421,8 @@ impl IdempotencyStore {
             key_ref.to_string(),
             IdempotencyEntry {
                 state: EntryState::InProgress { claim, result },
+                guarded_outcome: None,
+                retain_receipt: false,
                 capability_id,
                 result_policy_revision: None,
                 result_access,
@@ -486,6 +514,7 @@ impl IdempotencyStore {
 
         let _ = sender.send(result.clone());
         entry.state = EntryState::Completed(result);
+        entry.guarded_outcome = None;
         entry.result_policy_revision = revision;
         entry.completed_at_epoch_secs = Some(
             SystemTime::now()
@@ -506,6 +535,7 @@ impl IdempotencyStore {
                     key: key.as_ref().to_string(),
                     capability_id: entry.capability_id.clone(),
                     response: res.clone(),
+                    retain_receipt: entry.retain_receipt,
                     result_policy_revision: entry.result_policy_revision.clone(),
                     result_access: entry.result_access.clone(),
                     created_at_epoch_secs: entry.created_at_epoch_secs,
@@ -534,6 +564,7 @@ impl IdempotencyStore {
                         key: k.clone(),
                         capability_id: entry.capability_id.clone(),
                         response: res.clone(),
+                        retain_receipt: entry.retain_receipt,
                         result_policy_revision: entry.result_policy_revision.clone(),
                         result_access: entry.result_access.clone(),
                         created_at_epoch_secs: entry.created_at_epoch_secs,
@@ -572,14 +603,48 @@ impl IdempotencyStore {
     /// A stale claim leaves the current entry untouched.
     pub async fn remove(&self, key: &str, claim: IdempotencyClaim) {
         let mut map = self.entries.write().await;
-        if map.get(key).is_some_and(|entry| {
+        if let Some(entry) = map.get_mut(key).filter(|entry| {
             matches!(entry.state, EntryState::InProgress { claim: owner, .. } if owner == claim)
         }) {
+            if let Some(result) = entry.guarded_outcome.clone() {
+                drop(map);
+                self.complete_with_revision(key, claim, result, None).await;
+                return;
+            }
             map.remove(key);
             drop(map);
             self.sync_to_disk().await;
         }
     }
+}
+
+fn persisted_entries(
+    entries: &HashMap<String, IdempotencyEntry>,
+) -> HashMap<String, PersistedIdempotencyRecord> {
+    entries
+        .iter()
+        .filter_map(|(key, entry)| {
+            let response = match &entry.state {
+                EntryState::Completed(result) => result,
+                EntryState::InProgress { .. } => entry.guarded_outcome.as_ref()?,
+            };
+            Some((
+                key.clone(),
+                PersistedIdempotencyRecord {
+                    key: key.clone(),
+                    capability_id: entry.capability_id.clone(),
+                    response: response.clone(),
+                    retain_receipt: entry.retain_receipt,
+                    result_policy_revision: entry.result_policy_revision.clone(),
+                    result_access: entry.result_access.clone(),
+                    created_at_epoch_secs: entry.created_at_epoch_secs,
+                    completed_at_epoch_secs: entry.completed_at_epoch_secs,
+                    replay_count: entry.replay_count,
+                    first_trace_id: entry.first_trace_id.clone(),
+                },
+            ))
+        })
+        .collect()
 }
 
 impl Default for IdempotencyStore {

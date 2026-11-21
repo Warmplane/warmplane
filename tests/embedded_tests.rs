@@ -473,6 +473,8 @@ async fn test_embedded_warmplane_call_capability_lifecycle() {
     mcp_servers.insert(
         "offline_srv".to_string(),
         ServerConfig {
+            test_only: false,
+            open_api: None,
             command: None,
             args: vec![],
             env: HashMap::new(),
@@ -628,6 +630,8 @@ async fn test_embedded_task_management_lifecycle() {
     mcp_servers.insert(
         "offline_srv".to_string(),
         ServerConfig {
+            test_only: false,
+            open_api: None,
             command: None,
             args: vec![],
             env: HashMap::new(),
@@ -764,6 +768,8 @@ async fn test_embedded_async_task_hitl_and_completion_lifecycle() {
     mcp_servers.insert(
         "mock_srv".to_string(),
         ServerConfig {
+            test_only: false,
+            open_api: None,
             command: None,
             args: vec![],
             env: HashMap::new(),

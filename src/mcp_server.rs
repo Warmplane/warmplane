@@ -949,9 +949,8 @@ impl FacadeMcpServer {
                 self.state.safe_upstream_error(message).await,
                 None,
             )),
-            Ok(Err(UpstreamCallError::ToolDefinitionChanged)) | Err(_) => {
-                Err(McpError::internal_error("Actor task died", None))
-            }
+            Ok(Err(UpstreamCallError::Dispatch(_) | UpstreamCallError::ToolDefinitionChanged))
+            | Err(_) => Err(McpError::internal_error("Actor task died", None)),
         }
     }
 

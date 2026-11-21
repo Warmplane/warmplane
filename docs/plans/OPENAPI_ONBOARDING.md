@@ -115,3 +115,28 @@ For each cut, update the Warmplane skill, User Guide, and relevant integrator gu
 3. May a production and test source share the same origin under different prefixes? Proposed default is a distinct origin for recorder probes until isolation can be verified independently.
 4. May the first write pilot retry a request after possible submission? Proposed default is to require a confirmed upstream idempotency contract before enabling that behavior.
 5. Must the first remote pilot resume after a restart while the spec host is unavailable? Proposed default is to require a successful fetch after restart. An operator can explicitly switch to a reviewed local spec during an outage.
+
+## Inventory pilot
+
+Run the [synthetic inventory API](../../tests/fixtures/openapi/inventory_pilot.py) on loopback with an isolated configuration. The fixture serves `getAsset` and `listAssets`, requires a synthetic bearer credential, and includes a field for testing result sanitization.
+
+```sh
+export WARMPLANE_INVENTORY_PILOT_TOKEN=synthetic-inventory-bearer
+pilot_dir=$(mktemp -d)
+python3 tests/fixtures/openapi/inventory_pilot.py "$pilot_dir" &
+inventory_process=$!
+trap 'kill "$inventory_process" 2>/dev/null || true' EXIT
+while [ ! -s "$pilot_dir/mcp_servers.json" ]; do sleep 1; done
+warmplane daemon --config "$pilot_dir/mcp_servers.json" --port 9296
+```
+
+Open Control Deck at `http://127.0.0.1:9296/ui`, connect through **Trust access** with the fixture credential `inventory-pilot-admin`, and approve both inventory definitions in **Tool definition pins**. In the Playground, call `inventory.getAsset` with `{"path":{"assetId":"A42"}}` and `inventory.listAssets` with `{"query":{"tag":"stock"}}`. Both responses should show `[REDACTED]` for the protected field.
+
+The macOS arm64 debug-build pilot used a 2,192-byte spec, 40 unique authenticated reads, and 12 full reloads. Timing measured the complete local REST round trip, including durable local state where used.
+
+| Pilot operation | Samples | p50 | p95 |
+| --- | ---: | ---: | ---: |
+| Authenticated asset read | 40 | 11.95 ms | 13.15 ms |
+| Spec reload with unchanged definitions | 12 | 3.25 ms | 6.47 ms |
+
+The pilot exercised CLI configuration validation, quarantine and approval, source authentication, query serialization, result sanitization, stable pins over reload, recovery from an invalid refresh, and source withdrawal. The [Rust integration fixtures](../../tests/openapi_sources.rs) exercise embedded calls, mutation replay and restart, and isolated contract recording using independent synthetic inventory instances.

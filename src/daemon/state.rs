@@ -25,6 +25,9 @@ pub struct AppState {
     /// Compact capability catalog metadata map.
     pub capabilities: SharedCapabilities,
     pub(crate) tool_pins: Arc<crate::tool_pins::ToolPins>,
+    pub(crate) upstream_lifecycle: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) open_api_mounts: Arc<crate::openapi::Mounts>,
+    pub(crate) reversibility_reviews: Arc<crate::undo::draft::record::Reviews>,
     /// Compact resource catalog metadata map.
     pub resources: SharedResources,
     /// Compact prompt catalog metadata map.
@@ -442,6 +445,9 @@ impl AppStateBuilder {
             servers: self.servers.unwrap_or_default(),
             capabilities: self.capabilities.unwrap_or_default(),
             tool_pins: Arc::new(self.tool_pins.unwrap_or_default()),
+            upstream_lifecycle: Arc::default(),
+            open_api_mounts: Arc::default(),
+            reversibility_reviews: Arc::default(),
             resources: self.resources.unwrap_or_default(),
             prompts: self.prompts.unwrap_or_default(),
             tool_timeout_ms: self.tool_timeout_ms.unwrap_or(DEFAULT_TOOL_TIMEOUT_MS),

@@ -170,6 +170,8 @@ pub fn parse_client_dialect_source(
                         servers.insert(
                             s_name.clone(),
                             ServerConfig {
+                                test_only: false,
+                                open_api: None,
                                 command: Some(cmd.to_string()),
                                 args,
                                 env,
@@ -186,6 +188,8 @@ pub fn parse_client_dialect_source(
                         servers.insert(
                             s_name.clone(),
                             ServerConfig {
+                                test_only: false,
+                                open_api: None,
                                 command: None,
                                 args: vec![],
                                 env: HashMap::new(),
@@ -235,6 +239,8 @@ pub fn parse_client_dialect_source(
                             servers.insert(
                                 s_name.clone(),
                                 ServerConfig {
+                                    test_only: false,
+                                    open_api: None,
                                     command: Some(p.to_string()),
                                     args,
                                     env,
@@ -252,6 +258,8 @@ pub fn parse_client_dialect_source(
                         servers.insert(
                             s_name.clone(),
                             ServerConfig {
+                                test_only: false,
+                                open_api: None,
                                 command: None,
                                 args: vec![],
                                 env: HashMap::new(),

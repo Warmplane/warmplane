@@ -116,249 +116,47 @@ pub async fn handle_test_undo_contract(
             "Alias has no reversibility contract",
         );
     };
-    let Some(test_target) = contract.test_target.as_deref() else {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "UNDO_TEST_TARGET_REQUIRED",
-            "Configure reversibility.testTarget before testing this alias",
-        );
-    };
-    let Some(pre_snapshot) = contract.pre_snapshot.as_deref() else {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "UNDO_TEST_SNAPSHOT_REQUIRED",
-            "A preSnapshot is required to verify observational equivalence",
-        );
-    };
-    let Some(inverse) = contract.inverse.as_deref() else {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "UNDO_TEST_INVERSE_REQUIRED",
-            "The reversibility contract has no inverse",
-        );
-    };
-    let Some(test_sender) = state.servers.read().await.get(&test_target.server).cloned() else {
-        return error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "UNDO_TEST_SERVER_UNAVAILABLE",
-            "Configured test server is not connected",
-        );
-    };
-    if !access.profile.is_server_allowed(&test_target.server) {
-        return error_response(
-            StatusCode::FORBIDDEN,
-            "PROFILE_DENIED",
-            "The configured test server is outside the active profile",
-        );
-    }
-    let forward_id = alias_target.target().to_string();
-    let mut capability_map = state.capabilities.read().await.clone();
-    let mut remap_ids = vec![
-        forward_id.clone(),
-        pre_snapshot.capability.clone(),
-        inverse.capability.clone(),
-    ];
-    if let Some(check) = contract.pre_undo_check.as_deref() {
-        remap_ids.push(check.capability.clone());
-    }
-    remap_ids.sort();
-    remap_ids.dedup();
-    for capability_id in remap_ids {
-        let Some(meta) = capability_map.get_mut(&capability_id) else {
-            return error_response(
-                StatusCode::NOT_FOUND,
-                "UNDO_TEST_CAPABILITY_MISSING",
-                "A contract capability is not in the active catalog",
-            );
-        };
-        meta.server = test_target.server.clone();
-        meta.reversibility = None;
-        if capability_id == forward_id {
-            meta.reversibility = Some(contract.clone());
-        }
-    }
-
-    let temporary_state = match TemporaryUndoTestDir::create() {
-        Ok(directory) => directory,
-        Err(_) => {
-            return error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "UNDO_TEST_STORAGE_UNAVAILABLE",
-                "Temporary test storage is unavailable",
-            )
-        }
-    };
-    let snapshot_store =
-        match crate::undo::SnapshotStore::open(temporary_state.path().join("artifacts")) {
-            Ok(store) => store,
-            Err(_) => {
-                return error_response(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "UNDO_TEST_STORAGE_UNAVAILABLE",
-                    "Temporary test storage is unavailable",
-                )
-            }
-        };
-    let ledger = match crate::undo::UndoLedgerStore::open(temporary_state.path().join("undo.json"))
-    {
-        Ok(ledger) => ledger,
-        Err(_) => {
-            return error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "UNDO_TEST_STORAGE_UNAVAILABLE",
-                "Temporary test storage is unavailable",
-            )
-        }
-    };
-    let isolated_config_path = temporary_state.path().join("config.json");
-    if crate::config::save_config(
-        isolated_config_path.to_string_lossy().as_ref(),
-        &crate::config::McpConfig::default(),
-    )
-    .is_err()
-    {
-        return error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "UNDO_TEST_STORAGE_UNAVAILABLE",
-            "Temporary test configuration is unavailable",
-        );
-    }
-    let mut test_state = state.clone();
-    let test_policy = state
-        .rbac_engine
-        .compute_effective_policy(&access.role, &access.policy)
-        .merge_with_profile(access.profile.profile_policy.as_ref());
-    if !test_policy.allows(&forward_id)
-        || !test_policy.allows(&pre_snapshot.capability)
-        || !test_policy.allows(&inverse.capability)
-    {
-        return error_response(
-            StatusCode::FORBIDDEN,
-            "POLICY_DENIED",
-            "The test contract is denied by the current effective policy",
-        );
-    }
-    test_state.servers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
-        test_target.server.clone(),
-        test_sender,
-    )])));
-    test_state.capabilities = Arc::new(tokio::sync::RwLock::new(capability_map));
-    test_state.policy = Arc::new(tokio::sync::RwLock::new(test_policy.clone()));
-    test_state.snapshot_store = Some(snapshot_store.clone());
-    test_state.undo_ledger = Some(ledger.clone());
-    test_state.config_path = isolated_config_path.to_string_lossy().to_string();
-    test_state.task_registry = crate::tasks::TaskRegistry::default();
-    test_state.hold_coordinator = crate::emissions::HoldCoordinator::default();
-    let test_handle = crate::engine::ControlPlaneHandle::new(test_state.clone());
-    let options = crate::engine::ExecutionOptions {
-        profile: access.profile.profile_id.clone(),
-        context: Some(crate::context::RequestContext {
-            operation_id: Some(crate::http_v1::next_trace_id()),
-            work_item_id: None,
-            actor_id: access.actor_id.clone(),
-            grant_id: None,
-        }),
-        ..Default::default()
-    };
-    let forward_result = test_handle
-        .call_capability(&forward_id, test_target.args.clone(), options)
-        .await;
-    if !forward_result.ok {
-        return test_result(
-            false,
-            &request.alias,
-            &test_target.server,
-            false,
-            "UNDO_TEST_FORWARD_FAILED",
-        );
-    }
-    let Some(entry) = ledger.entries().await.into_iter().last() else {
-        return test_result(
-            false,
-            &request.alias,
-            &test_target.server,
-            false,
-            "UNDO_TEST_REGISTRATION_FAILED",
-        );
-    };
-    let Some(snapshot_hash) = entry.snapshot_artifact_hash.as_deref() else {
-        return test_result(
-            false,
-            &request.alias,
-            &test_target.server,
-            false,
-            "UNDO_TEST_SNAPSHOT_MISSING",
-        );
-    };
-    let initial_state = match snapshot_store.get(snapshot_hash) {
-        Ok(snapshot) => snapshot,
-        Err(_) => {
-            return test_result(
-                false,
-                &request.alias,
-                &test_target.server,
-                false,
-                "UNDO_TEST_SNAPSHOT_MISSING",
-            )
-        }
-    };
-    let inverse_options = crate::engine::ExecutionOptions {
-        suppress_undo_registration: true,
-        profile: access.profile.profile_id.clone(),
-        context: entry
-            .work_item_id
-            .as_ref()
-            .map(|work_item_id| crate::context::RequestContext {
-                operation_id: entry.operation_id.clone(),
-                work_item_id: Some(work_item_id.clone()),
-                actor_id: entry.actor_id.clone(),
-                grant_id: None,
-            }),
-        ..Default::default()
-    };
-    let inverse_result = test_handle
-        .call_capability(
-            &entry.resolved_inverse_capability,
-            entry.resolved_inverse_args.clone(),
-            inverse_options,
-        )
-        .await;
-    if !inverse_result.ok {
-        return test_result(
-            false,
-            &request.alias,
-            &test_target.server,
-            false,
-            "UNDO_TEST_INVERSE_FAILED",
-        );
-    }
-    let observed_state = match crate::engine::undo::read_checked_state(
-        &test_state,
-        pre_snapshot,
-        &test_target.args,
-        &access.profile,
-        &test_policy,
+    run_undo_contract_test(
+        &state,
+        &access,
+        &request.alias,
+        alias_target.target(),
+        &contract,
     )
     .await
-    {
-        Ok(state) => state,
-        Err(_) => {
-            return test_result(
-                false,
-                &request.alias,
-                &test_target.server,
-                false,
-                "UNDO_TEST_VERIFY_FAILED",
-            )
-        }
+}
+
+pub(crate) async fn run_undo_contract_test(
+    state: &AppState,
+    access: &UndoAccessContext,
+    alias: &str,
+    forward_id: &str,
+    contract: &crate::config::ReversibilityConfig,
+) -> axum::response::Response {
+    let (forward, contract) = match resolve_test_operations(state, forward_id, contract).await {
+        Ok(resolved) => resolved,
+        Err(error) => return error.response(),
     };
-    let equivalent = observed_state == initial_state;
+    let test = match TestContract::new(&forward, &contract) {
+        Ok(test) => test,
+        Err(error) => return error.response(),
+    };
+    let runtime = match UndoTestRuntime::initialize(state, access, &test).await {
+        Ok(runtime) => runtime,
+        Err(error) => return error.response(),
+    };
+    let result = runtime.run(access, &test).await;
+    let (equivalent, error_code) = match result {
+        Ok(true) => (true, None),
+        Ok(false) => (false, Some("UNDO_TEST_STATE_MISMATCH")),
+        Err(code) => (false, Some(code)),
+    };
     let result = UndoContractTestResponse {
         ok: equivalent,
-        alias: request.alias,
-        test_server: test_target.server.clone(),
+        alias: alias.to_owned(),
+        test_server: test.target.server.clone(),
         observationally_equivalent: equivalent,
-        error_code: (!equivalent).then(|| "UNDO_TEST_STATE_MISMATCH".to_string()),
+        error_code: error_code.map(str::to_owned),
     };
     let status = if equivalent {
         StatusCode::OK
@@ -368,25 +166,327 @@ pub async fn handle_test_undo_contract(
     (status, Json(json!({"ok": result.ok, "result": result}))).into_response()
 }
 
-fn test_result(
-    ok: bool,
-    alias: &str,
-    test_server: &str,
-    observationally_equivalent: bool,
-    error_code: &str,
-) -> axum::response::Response {
-    let result = UndoContractTestResponse {
-        ok,
-        alias: alias.to_string(),
-        test_server: test_server.to_string(),
-        observationally_equivalent,
-        error_code: Some(error_code.to_string()),
+struct TestError {
+    status: StatusCode,
+    code: &'static str,
+    message: &'static str,
+}
+
+impl TestError {
+    fn new(status: StatusCode, code: &'static str, message: &'static str) -> Self {
+        Self {
+            status,
+            code,
+            message,
+        }
+    }
+
+    fn response(self) -> axum::response::Response {
+        error_response(self.status, self.code, self.message)
+    }
+}
+
+async fn resolve_test_operations(
+    state: &AppState,
+    forward: &str,
+    contract: &crate::config::ReversibilityConfig,
+) -> Result<(String, crate::config::ReversibilityConfig), TestError> {
+    let mut contract = contract.clone();
+    let Some(target) = contract
+        .test_target
+        .as_ref()
+        .map(|target| target.server.clone())
+    else {
+        return Ok((forward.to_owned(), contract));
     };
-    (
-        StatusCode::BAD_GATEWAY,
-        Json(json!({"ok": false, "result": result})),
-    )
-        .into_response()
+    if !state
+        .server_configs
+        .read()
+        .await
+        .get(&target)
+        .is_some_and(|config| config.open_api.is_some())
+    {
+        return Ok((forward.to_owned(), contract));
+    }
+    let catalog = state.tool_catalog().await;
+    let resolve = |id: &str| {
+        let live = catalog
+            .items
+            .get(id)
+            .or_else(|| {
+                catalog
+                    .items
+                    .values()
+                    .find(|item| format!("{}.{}", item.server, item.tool) == id)
+            })
+            .ok_or_else(|| anyhow::anyhow!("A contract capability is unavailable"))?;
+        catalog
+            .items
+            .iter()
+            .find(|(_, meta)| meta.server == target && meta.tool == live.tool)
+            .map(|(id, _)| id.clone())
+            .ok_or_else(|| anyhow::anyhow!("The corresponding test operation is unavailable"))
+    };
+    let missing = |_| {
+        TestError::new(
+            StatusCode::NOT_FOUND,
+            "UNDO_TEST_CAPABILITY_MISSING",
+            "A corresponding contract operation is unavailable on the test source",
+        )
+    };
+    let forward = resolve(forward).map_err(missing)?;
+    contract.remap_capabilities(resolve).map_err(missing)?;
+    Ok((forward, contract))
+}
+
+struct TestContract<'a> {
+    forward: &'a str,
+    target: &'a crate::config::UndoTestTargetConfig,
+    snapshot: &'a crate::config::PreSnapshotConfig,
+    contract: &'a crate::config::ReversibilityConfig,
+    capabilities: Vec<&'a str>,
+}
+
+impl<'a> TestContract<'a> {
+    fn new(
+        forward: &'a str,
+        contract: &'a crate::config::ReversibilityConfig,
+    ) -> Result<Self, TestError> {
+        let missing = |code, message| TestError::new(StatusCode::BAD_REQUEST, code, message);
+        let target = contract.test_target.as_deref().ok_or_else(|| {
+            missing(
+                "UNDO_TEST_TARGET_REQUIRED",
+                "Configure reversibility.testTarget before testing this alias",
+            )
+        })?;
+        let snapshot = contract.pre_snapshot.as_deref().ok_or_else(|| {
+            missing(
+                "UNDO_TEST_SNAPSHOT_REQUIRED",
+                "A preSnapshot is required to verify observational equivalence",
+            )
+        })?;
+        let inverse = contract.inverse.as_deref().ok_or_else(|| {
+            missing(
+                "UNDO_TEST_INVERSE_REQUIRED",
+                "The reversibility contract has no inverse",
+            )
+        })?;
+        let mut capabilities = vec![
+            forward,
+            snapshot.capability.as_str(),
+            inverse.capability.as_str(),
+        ];
+        if let Some(check) = contract.pre_undo_check.as_deref() {
+            capabilities.push(&check.capability);
+        }
+        capabilities.sort_unstable();
+        capabilities.dedup();
+        Ok(Self {
+            forward,
+            target,
+            snapshot,
+            contract,
+            capabilities,
+        })
+    }
+
+    async fn catalog(
+        &self,
+        state: &AppState,
+    ) -> Result<HashMap<String, crate::daemon::CapabilityMeta>, TestError> {
+        let active = state.capabilities.read().await;
+        let mut catalog = HashMap::new();
+        for id in &self.capabilities {
+            let mut meta = active.get(*id).cloned().ok_or_else(|| {
+                TestError::new(
+                    StatusCode::NOT_FOUND,
+                    "UNDO_TEST_CAPABILITY_MISSING",
+                    "A contract capability is not in the active catalog",
+                )
+            })?;
+            meta.server.clone_from(&self.target.server);
+            meta.reversibility = (*id == self.forward).then(|| self.contract.clone());
+            catalog.insert((*id).to_owned(), meta);
+        }
+        Ok(catalog)
+    }
+}
+
+struct UndoTestRuntime {
+    state: AppState,
+    policy: crate::daemon::Policy,
+    snapshots: crate::undo::SnapshotStore,
+    ledger: crate::undo::UndoLedgerStore,
+    _directory: TemporaryUndoTestDir,
+}
+
+impl UndoTestRuntime {
+    async fn initialize(
+        live: &AppState,
+        access: &UndoAccessContext,
+        test: &TestContract<'_>,
+    ) -> Result<Self, TestError> {
+        let policy = Self::test_policy(live, access, test)?;
+        let sender = live
+            .servers
+            .read()
+            .await
+            .get(&test.target.server)
+            .cloned()
+            .ok_or_else(|| {
+                TestError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "UNDO_TEST_SERVER_UNAVAILABLE",
+                    "Configured test server is not connected",
+                )
+            })?;
+        let capabilities = test.catalog(live).await?;
+        let (directory, path, snapshots, ledger) = Self::storage().map_err(|_| {
+            TestError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "UNDO_TEST_STORAGE_UNAVAILABLE",
+                "Temporary test storage is unavailable",
+            )
+        })?;
+        let mut state = live.clone();
+        state.servers = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+            test.target.server.clone(),
+            sender,
+        )])));
+        state.capabilities = Arc::new(tokio::sync::RwLock::new(capabilities));
+        state.policy = Arc::new(tokio::sync::RwLock::new(policy.clone()));
+        state.snapshot_store = Some(snapshots.clone());
+        state.undo_ledger = Some(ledger.clone());
+        state.config_path = path;
+        state.task_registry = crate::tasks::TaskRegistry::default();
+        state.hold_coordinator = crate::emissions::HoldCoordinator::default();
+        Ok(Self {
+            state,
+            policy,
+            snapshots,
+            ledger,
+            _directory: directory,
+        })
+    }
+
+    fn test_policy(
+        live: &AppState,
+        access: &UndoAccessContext,
+        test: &TestContract<'_>,
+    ) -> Result<crate::daemon::Policy, TestError> {
+        if !access.profile.is_server_allowed(&test.target.server) {
+            return Err(TestError::new(
+                StatusCode::FORBIDDEN,
+                "PROFILE_DENIED",
+                "The configured test server is outside the active profile",
+            ));
+        }
+        let mut policy = live
+            .rbac_engine
+            .compute_effective_policy(&access.role, &access.policy)
+            .merge_with_profile(access.profile.profile_policy.as_ref());
+        if test.capabilities.iter().any(|id| !policy.allows(id)) {
+            return Err(TestError::new(
+                StatusCode::FORBIDDEN,
+                "POLICY_DENIED",
+                "The test contract is denied by the current effective policy",
+            ));
+        }
+        policy.webhook = None;
+        Ok(policy)
+    }
+
+    fn storage() -> anyhow::Result<(
+        TemporaryUndoTestDir,
+        String,
+        crate::undo::SnapshotStore,
+        crate::undo::UndoLedgerStore,
+    )> {
+        let directory = TemporaryUndoTestDir::create()?;
+        let snapshots = crate::undo::SnapshotStore::open(directory.path().join("artifacts"))?;
+        let ledger = crate::undo::UndoLedgerStore::open(directory.path().join("undo.json"))?;
+        let path = directory
+            .path()
+            .join("config.json")
+            .to_string_lossy()
+            .into_owned();
+        crate::config::save_config(&path, &crate::config::McpConfig::default())?;
+        Ok((directory, path, snapshots, ledger))
+    }
+
+    async fn run(
+        &self,
+        access: &UndoAccessContext,
+        test: &TestContract<'_>,
+    ) -> Result<bool, &'static str> {
+        self.forward(access, test).await?;
+        let entry = self
+            .ledger
+            .entries()
+            .await
+            .into_iter()
+            .last()
+            .ok_or("UNDO_TEST_REGISTRATION_FAILED")?;
+        let snapshot = entry
+            .snapshot_artifact_hash
+            .as_deref()
+            .ok_or("UNDO_TEST_SNAPSHOT_MISSING")?;
+        let before = self
+            .snapshots
+            .get(snapshot)
+            .map_err(|_| "UNDO_TEST_SNAPSHOT_MISSING")?;
+        let result =
+            crate::undo::execute_undo(&self.state, access, &entry.undo_id, false, None).await;
+        if !result.as_ref().is_ok_and(|result| result.ok) {
+            return Err("UNDO_TEST_INVERSE_FAILED");
+        }
+        let after = crate::engine::undo::read_checked_state(
+            &self.state,
+            test.snapshot,
+            &test.target.args,
+            &access.profile,
+            &self.policy,
+        )
+        .await
+        .map_err(|_| "UNDO_TEST_VERIFY_FAILED")?;
+        Ok(before == after)
+    }
+
+    async fn forward(
+        &self,
+        access: &UndoAccessContext,
+        test: &TestContract<'_>,
+    ) -> Result<(), &'static str> {
+        let handle = crate::engine::ControlPlaneHandle::new(self.state.clone())
+            .with_tenant_context(Some(crate::rbac::TenantContext {
+                tenant_id: access.tenant_id.clone(),
+                role: access.role.clone(),
+                actor_id: access.actor_id.clone(),
+                grant_id: access.request_context.grant_id.clone(),
+                grant_expires_at_epoch_secs: access.grant_expires_at_epoch_secs,
+                effective_policy: self.policy.clone(),
+            }));
+        let options = crate::engine::ExecutionOptions {
+            request_id: Some(crate::http_v1::next_trace_id()),
+            profile: access.profile.profile_id.clone(),
+            context: Some(crate::context::RequestContext {
+                operation_id: Some(crate::http_v1::next_trace_id()),
+                actor_id: access.actor_id.clone(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = handle
+            .call_capability(test.forward, test.target.args.clone(), options)
+            .await;
+        if result.ok {
+            Ok(())
+        } else if result.retry.upstream_execution_state == "unknown" {
+            Err("UNDO_TEST_FORWARD_OUTCOME_UNKNOWN")
+        } else {
+            Err("UNDO_TEST_FORWARD_FAILED")
+        }
+    }
 }
 
 /// Handles `GET /v1/undo`.
@@ -550,7 +650,7 @@ async fn execute_undo_http(
     }
 }
 
-async fn make_access(
+pub(crate) async fn make_access(
     state: &AppState,
     tenant: Option<&crate::rbac::TenantContext>,
     profile: Option<&axum::extract::Extension<crate::context::ProfileContext>>,
