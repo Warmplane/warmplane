@@ -329,14 +329,14 @@ fn decode_action_payload(bytes: &[u8]) -> Result<ActionPayload, &'static str> {
     } else {
         (bytes, "Invalid JSON payload")
     };
-    parse_action_json(json).map_err(|_| message)
+    parse_action_json(json).ok_or(message)
 }
 
-fn parse_action_json<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> serde_json::Result<T> {
-    let mut input = serde_json::Deserializer::from_slice(bytes);
-    let payload = T::deserialize(&mut input)?;
-    input.end()?;
-    Ok(payload)
+fn parse_action_json<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Option<T> {
+    if bytes.len() > MAX_ACTION_BODY_BYTES {
+        return None;
+    }
+    serde_json::from_slice(bytes).ok()
 }
 
 async fn signed_approval_callback(
@@ -428,7 +428,7 @@ fn unwrap_platform_token(token: &str) -> Option<std::borrow::Cow<'_, str>> {
         return None;
     }
     if token.trim_start().starts_with('{') {
-        let value: NestedAction = parse_action_json(token.as_bytes()).ok()?;
+        let value: NestedAction = parse_action_json(token.as_bytes())?;
         return value.action_token.map(std::borrow::Cow::Owned);
     }
     Some(std::borrow::Cow::Borrowed(token))
