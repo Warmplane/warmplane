@@ -519,3 +519,4 @@ SHA-256 catalog version. `ETag` headers on all catalog reads, `If-None-Match` co
 | [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) | Structured logs, OTLP config, trace correlation |
 | [docs/INSTALL.md](docs/INSTALL.md) | Build variants, distribution notes |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production deployment runbook |
+| [Future work](docs/plans/FUTURE_PLAN.md) | Proposed roadmap, dependencies, and release criteria |
