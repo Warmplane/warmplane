@@ -63,6 +63,12 @@ async fn main() -> anyhow::Result<()> {
 
 ---
 
+### OpenAPI capability sources
+
+Use `EmbeddedWarmplane::start_from_path` when a source uses a spec path relative to the configuration file. `ControlPlaneHandle::reload_from_disk` reconciles those sources from the same file. Use the existing discovery and `call_capability` methods for OpenAPI capability IDs. The described schema groups path and query arguments under `path` and `query`. Successful JSON results arrive under `structuredContent`.
+
+Typed `ServerConfig` initializers include `open_api` and `test_only`. Ordinary MCP sources use `None` and `false`. When matching `ServerMsg::CallTool`, use `..` to ignore the dispatch claim and authorization context. The [OpenAPI source configuration](USER-GUIDE.md#openapi-http-sources) lists operator settings.
+
 ### Delayable Emissions
 
 Embedded `call_capability` calls and `batch_call` steps honor delayable alias contracts. Required HITL approval resolves before the hold timer starts; operator-modified arguments are the payload that will be dispatched. For an asynchronous receipt, set `ExecutionOptions::with_async_task(true)`. The returned envelope data contains a `TaskResponse` with `phase`, `releaseAtMs`, `cancellable`, and `requestId`. Cancel through `ControlPlaneHandle::cancel_task`; a `false`/error outcome means dispatch has already been claimed or the task is not cancellable. A dropped call future does not cancel an accepted hold. Pending holds resume after daemon restart following current policy, profile, capability, and server checks. A recovered `dispatching` task fails with `EMISSION_OUTCOME_UNKNOWN` and is never automatically resent.

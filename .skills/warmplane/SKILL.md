@@ -25,6 +25,10 @@ Warmplane aggregates multiple upstream MCP servers behind a single runtime. It k
 
 ## 3. Workflows
 
+OpenAPI operations use the same discovery and invocation workflows as MCP tools. Configure an `openApi` source in `mcpServers` and call its allowlisted namespaced capability or alias. Describe the tool for its `path`, `query`, and optional `body` arguments. Remote specs require persistent tool pins and separate fetch settings. See the [OpenAPI source configuration](../../docs/USER-GUIDE.md#openapi-http-sources).
+
+Use the reversibility recorder in **Facade & Alias Studio** to create a draft, confirm a test against a configured `testOnly` source, and activate the tested contract. If a write may have reached the upstream, keep the same idempotency key when checking its outcome. See the [recording workflow](../../docs/USER-GUIDE.md#generate-and-record-a-reversibility-draft).
+
 ### W1: Connect & Call over Stdio MCP
 Configure your client (e.g. `.cursor/mcp.json`, `opencode.json`):
 ```json

@@ -1,0 +1,41 @@
+openapi: 3.1.1
+info:
+  title: Inventory fixture
+  version: '1'
+paths:
+  /assets/{assetId}:
+    parameters:
+      - $ref: '#/components/parameters/AssetId'
+    get:
+      operationId: getAsset
+      description: Read an asset by identifier
+      responses:
+        '200':
+          $ref: '#/components/responses/InventoryResult'
+  /assets:
+    get:
+      operationId: listAssets
+      parameters:
+        - name: tag
+          in: query
+          schema: {type: string, maxLength: 24}
+      responses:
+        '200':
+          $ref: '#/components/responses/InventoryResult'
+components:
+  parameters:
+    AssetId:
+      name: assetId
+      in: path
+      required: true
+      schema: {type: string, minLength: 1}
+  responses:
+    InventoryResult:
+      description: A fixture-only response
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              asset: {type: string}
+              private: {type: string}

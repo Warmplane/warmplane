@@ -74,8 +74,11 @@ impl EmbeddedWarmplane {
     pub async fn start_from_path(
         config_path: impl AsRef<str>,
     ) -> Result<(ControlPlaneHandle, CancellationToken)> {
-        let cfg = crate::config::load_config(config_path.as_ref())?;
-        Self::start(cfg).await
+        let config_path = config_path.as_ref();
+        let cfg = crate::config::load_config(config_path)?;
+        let state = initialize_state(cfg, config_path).await?;
+        let shutdown = state.shutdown_token.clone();
+        Ok((ControlPlaneHandle::new(state), shutdown))
     }
 }
 
@@ -97,6 +100,14 @@ macro_rules! forward_undo_entry {
 }
 
 impl ControlPlaneHandle {
+    /// Reloads the active configuration file and reconciles upstream sources.
+    ///
+    /// # Errors
+    /// Returns an error if the configuration file cannot be read or validated.
+    pub async fn reload_from_disk(&self) -> Result<Value> {
+        self.state.reload_from_disk().await
+    }
+
     /// Creates a new `ControlPlaneHandle` wrapping an active `AppState`.
     pub fn new(state: AppState) -> Self {
         Self {
@@ -117,6 +128,24 @@ impl ControlPlaneHandle {
         self.tenant
             .as_ref()
             .map_or("default", |tenant| tenant.tenant_id.as_str())
+    }
+
+    fn dispatch_access(
+        &self,
+        capability: &str,
+        profile: &ProfileContext,
+        approved: bool,
+    ) -> crate::daemon::types::ToolDispatchAccess {
+        crate::daemon::types::ToolDispatchAccess {
+            capability: capability.to_owned(),
+            role: self.caller_role(),
+            profile: profile.profile_id.clone(),
+            grant_expires_at_epoch_secs: self
+                .tenant
+                .as_ref()
+                .and_then(|tenant| tenant.grant_expires_at_epoch_secs),
+            approval_completed: approved,
+        }
     }
 
     fn caller_role(&self) -> String {
@@ -875,6 +904,12 @@ impl ControlPlaneHandle {
                 let (reply_tx, reply_rx) = oneshot::channel();
                 if tx
                     .send(ServerMsg::CallTool {
+                        dispatch_claim: idempotency_key_clone.clone().zip(idempotency_claim),
+                        dispatch_access: Some(handle.dispatch_access(
+                            &capability_id_clone,
+                            &profile_context_clone,
+                            requires_approval,
+                        )),
                         name: tool_name_clone,
                         tool_definition,
                         params: worker_args.clone(),
@@ -1342,6 +1377,12 @@ impl ControlPlaneHandle {
 
         if tx
             .send(ServerMsg::CallTool {
+                dispatch_claim: idempotency_key.clone().zip(idempotency_claim),
+                dispatch_access: Some(self.dispatch_access(
+                    capability_id,
+                    &prof_ctx,
+                    requires_approval,
+                )),
                 name: tool_name,
                 tool_definition,
                 params: effective_args.clone(),
@@ -1689,7 +1730,8 @@ impl ControlPlaneHandle {
                 ),
                 RetryMetadata::safe("unknown"),
             ),
-            Ok(Err(UpstreamCallError::ToolDefinitionChanged)) | Err(_) => Envelope::failure(
+            Ok(Err(UpstreamCallError::Dispatch(_) | UpstreamCallError::ToolDefinitionChanged))
+            | Err(_) => Envelope::failure(
                 trace_id,
                 Some(req_id),
                 Some(req_ctx),

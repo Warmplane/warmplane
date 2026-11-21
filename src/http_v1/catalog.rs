@@ -1062,7 +1062,8 @@ async fn dispatch_catalog_call(
             )),
         )
             .into_response(),
-        Ok(Err(UpstreamCallError::ToolDefinitionChanged)) | Err(_) => (
+        Ok(Err(UpstreamCallError::Dispatch(_) | UpstreamCallError::ToolDefinitionChanged))
+        | Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(error_envelope(
                 trace_id,

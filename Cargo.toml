@@ -42,6 +42,8 @@ sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"
 regex = "1.13"
+serde-saphyr = { version = "1.2", default-features = false, features = ["deserialize"] }
+ipnet = "2.12"
 subtle = "2.6"
 fastembed = { version = "4.5", optional = true }
 openssl = { version = "0.10", features = ["vendored"], optional = true }
@@ -64,6 +66,7 @@ path = "src/main.rs"
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
 tower = { version = "0.5", features = ["util"] }
+tokio-rustls = { version = "0.26", default-features = false }
 
 [[bench]]
 name = "search_bench"

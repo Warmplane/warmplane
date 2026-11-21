@@ -91,6 +91,19 @@ impl AppState {
         resource_aliases: &HashMap<String, crate::config::AliasTarget>,
         prompt_aliases: &HashMap<String, crate::config::AliasTarget>,
     ) -> Result<()> {
+        if let Some(source) = &srv_cfg.open_api {
+            return crate::openapi::mount(
+                self,
+                server_id,
+                srv_cfg,
+                source,
+                capability_aliases,
+                crate::openapi::MountOrigin::Management(None),
+            )
+            .await;
+        }
+        let _lifecycle = self.upstream_lifecycle.lock().await;
+        self.withdraw_previous_source(server_id, srv_cfg).await?;
         info!(%server_id, "dynamically mounting upstream server");
 
         let transport_type = if srv_cfg.command.is_some() {
@@ -154,14 +167,12 @@ impl AppState {
 
         {
             let mut caps_guard = self.capabilities.write().await;
-            let new_ids: std::collections::HashSet<String> =
-                new_capabilities.iter().map(|(id, _)| id.clone()).collect();
-            caps_guard.retain(|id, meta| meta.server != server_id || new_ids.contains(id));
-            for (id, meta) in new_capabilities {
-                info!(%server_id, capability_id = %id, "registered upstream capability");
-                caps_guard.insert(id, meta);
-            }
-            self.record_tool_catalog_events(server_id, &caps_guard);
+            crate::supervisor::replace_mcp_capabilities(
+                self,
+                server_id,
+                &mut caps_guard,
+                new_capabilities,
+            );
         }
         {
             let mut res_guard = self.resources.write().await;
@@ -207,12 +218,34 @@ impl AppState {
         Ok(())
     }
 
+    async fn withdraw_previous_source(
+        &self,
+        server_id: &str,
+        candidate: &ServerConfig,
+    ) -> Result<()> {
+        self.open_api_mounts.cancel(server_id);
+        let previous = self.server_configs.read().await.get(server_id).cloned();
+        if must_withdraw_openapi(previous.as_ref(), candidate) {
+            self.unmount_locked(server_id, true).await?;
+        }
+        Ok(())
+    }
+
     /// Unmounts an upstream server dynamically from `AppState`.
     ///
     /// # Arguments
     /// * `server_id` - Identifier of server to unmount.
     pub async fn unmount_upstream_server(&self, server_id: &str) {
+        let _lifecycle = self.upstream_lifecycle.lock().await;
+        if let Err(error) = self.unmount_locked(server_id, true).await {
+            warn!(%server_id, %error, "could not persist upstream pin revocation");
+        }
+    }
+
+    pub(crate) async fn unmount_locked(&self, server_id: &str, revoke: bool) -> Result<()> {
         info!(%server_id, "dynamically unmounting upstream server");
+        self.open_api_mounts.cancel(server_id);
+        let pin_result = self.retire_upstream_pins(server_id, revoke).await;
 
         {
             let mut servers_guard = self.servers.write().await;
@@ -277,8 +310,6 @@ impl AppState {
                 self.event_store.record("prompt", &id, "removed");
             }
         }
-        self.tool_pins.remove_server(server_id);
-
         self.refresh_server_catalog(server_id).await;
 
         if has_removed_caps {
@@ -297,6 +328,22 @@ impl AppState {
             "unmounted",
             json!({"action":"unmount_server"}),
         );
+        pin_result
+    }
+
+    async fn retire_upstream_pins(&self, server_id: &str, revoke: bool) -> Result<()> {
+        let remote = self
+            .server_configs
+            .read()
+            .await
+            .get(server_id)
+            .is_some_and(is_remote_openapi);
+        if remote && revoke {
+            self.tool_pins.withdraw_compiled(server_id)
+        } else {
+            self.tool_pins.remove_server(server_id);
+            Ok(())
+        }
     }
 
     /// Performs graceful shutdown of all upstream servers and background worker queues.
@@ -313,7 +360,8 @@ impl AppState {
         };
 
         for server_id in server_ids {
-            self.unmount_upstream_server(&server_id).await;
+            let _lifecycle = self.upstream_lifecycle.lock().await;
+            let _ = self.unmount_locked(&server_id, false).await;
         }
 
         // 2. Flush and drain audit queue
@@ -330,6 +378,13 @@ impl AppState {
     /// # Errors
     /// Returns an error if loading or parsing the config file fails.
     pub async fn reload_from_disk(&self) -> Result<serde_json::Value> {
+        self.reload_from_disk_as(None).await
+    }
+
+    pub(crate) async fn reload_from_disk_as(
+        &self,
+        actor: Option<&str>,
+    ) -> Result<serde_json::Value> {
         info!(config_path = %self.config_path, "reloading configuration from disk");
 
         let config = crate::config::load_config(&self.config_path)?;
@@ -352,10 +407,11 @@ impl AppState {
         self.rbac_engine.reload(config.rbac.clone());
 
         // 2. Identify active servers vs disk servers
-        let current_server_ids: Vec<String> = {
-            let srv_guard = self.servers.read().await;
+        let mut current_server_ids: std::collections::BTreeSet<String> = {
+            let srv_guard = self.server_configs.read().await;
             srv_guard.keys().cloned().collect()
         };
+        current_server_ids.extend(self.open_api_mounts.pending_servers());
 
         let mut unmounted = Vec::new();
         let mut mounted = Vec::new();
@@ -371,15 +427,26 @@ impl AppState {
 
         // Mount new or updated servers
         for (server_id, srv_cfg) in &config.mcp_servers {
-            let res = self
-                .mount_upstream_server(
+            let res = if let Some(source) = &srv_cfg.open_api {
+                crate::openapi::mount(
+                    self,
+                    server_id,
+                    srv_cfg,
+                    source,
+                    &config.capability_aliases,
+                    crate::openapi::MountOrigin::Management(actor),
+                )
+                .await
+            } else {
+                self.mount_upstream_server(
                     server_id,
                     srv_cfg,
                     &config.capability_aliases,
                     &config.resource_aliases,
                     &config.prompt_aliases,
                 )
-                .await;
+                .await
+            };
 
             match res {
                 Ok(_) => {
@@ -405,4 +472,23 @@ impl AppState {
             "catalog_version": self.catalog_version.read().await.clone(),
         }))
     }
+}
+
+fn is_remote_openapi(config: &ServerConfig) -> bool {
+    config
+        .open_api
+        .as_ref()
+        .is_some_and(|source| source.remote_spec.is_some())
+}
+
+pub(crate) fn must_withdraw_openapi(
+    previous: Option<&ServerConfig>,
+    candidate: &ServerConfig,
+) -> bool {
+    previous.is_some_and(|previous| {
+        let source_changed = previous.open_api != candidate.open_api;
+        let switches_transport = previous.open_api.is_some() != candidate.open_api.is_some();
+        switches_transport
+            || (source_changed && (is_remote_openapi(previous) || is_remote_openapi(candidate)))
+    })
 }

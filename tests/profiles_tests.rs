@@ -25,6 +25,8 @@ async fn test_profile_http_filtering_and_etag_caching() {
     initial_config.mcp_servers.insert(
         "server_a".to_string(),
         ServerConfig {
+            test_only: false,
+            open_api: None,
             command: Some("echo".to_string()),
             args: vec![],
             env: HashMap::new(),
@@ -40,6 +42,8 @@ async fn test_profile_http_filtering_and_etag_caching() {
     initial_config.mcp_servers.insert(
         "server_b".to_string(),
         ServerConfig {
+            test_only: false,
+            open_api: None,
             command: Some("echo".to_string()),
             args: vec![],
             env: HashMap::new(),

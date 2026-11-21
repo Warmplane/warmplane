@@ -254,6 +254,24 @@ pub struct ReversibilityConfig {
     pub inverse: Option<Box<InverseConfig>>,
 }
 
+impl ReversibilityConfig {
+    pub(crate) fn remap_capabilities(
+        &mut self,
+        mut resolve: impl FnMut(&str) -> Result<String>,
+    ) -> Result<()> {
+        for read in [&mut self.pre_snapshot, &mut self.pre_undo_check]
+            .into_iter()
+            .flatten()
+        {
+            read.capability = resolve(&read.capability)?;
+        }
+        if let Some(inverse) = &mut self.inverse {
+            inverse.capability = resolve(&inverse.capability)?;
+        }
+        Ok(())
+    }
+}
+
 /// Upstream target reserved for an observational undo contract test.
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 pub struct UndoTestTargetConfig {
@@ -424,6 +442,16 @@ impl Default for StateConfig {
 /// Upstream server configuration definition.
 #[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq)]
 pub struct ServerConfig {
+    /// Declares an isolated non-production target eligible for reversibility recording.
+    #[serde(
+        default,
+        rename = "testOnly",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub test_only: bool,
+    /// HTTP API capability source compiled from an operator-selected OpenAPI specification.
+    #[serde(default, rename = "openApi", skip_serializing_if = "Option::is_none")]
+    pub open_api: Option<OpenApiSourceConfig>,
     /// Executable command for stdio-based servers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
@@ -466,6 +494,54 @@ pub struct ServerConfig {
     /// Optional per-server resilience and circuit breaker overrides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resilience: Option<crate::circuit_breaker::ResilienceConfig>,
+}
+
+/// Operator-controlled settings for an OpenAPI capability source.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenApiSourceConfig {
+    /// Local JSON or YAML document, relative to the configuration directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_path: Option<std::path::PathBuf>,
+    /// HTTPS spec endpoint and its independent fetch policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_spec: Option<RemoteOpenApiSpec>,
+    /// HTTP API destination and optional path prefix.
+    pub base_url: String,
+    /// Allowed operation IDs, using exact case-sensitive matching.
+    pub operations: Vec<String>,
+    /// Explicitly enabled mutating operations from the allowed operations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mutations: Vec<String>,
+    /// Authentication at the invocation destination.
+    pub auth: OpenApiAuth,
+}
+
+/// Settings for obtaining a specification from an operator-selected HTTPS endpoint.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteOpenApiSpec {
+    /// Exact HTTPS spec document URL.
+    pub url: String,
+    /// Authentication for the spec request.
+    pub auth: OpenApiAuth,
+    /// Operator-authorized CIDRs for private addresses of the spec endpoint.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub private_networks: Vec<String>,
+}
+
+/// Credential binding for HTTP requests from an OpenAPI source.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OpenApiAuth {
+    /// Sends no authorization header.
+    None,
+    /// Reads the bearer credential from the process environment.
+    Bearer {
+        /// Environment variable containing the bearer credential.
+        #[serde(rename = "tokenEnv")]
+        token_env: String,
+    },
 }
 
 /// Upstream authentication configuration types.
@@ -934,6 +1010,7 @@ impl SiemConfig {
 
 impl ServerConfig {
     pub(crate) fn preserve_unedited_settings(&mut self, current: &Self) {
+        self.test_only = current.test_only;
         if self.command.is_some() && current.command.is_some() {
             self.env.clone_from(&current.env);
         }
@@ -1284,10 +1361,7 @@ fn validate_reversibility_contracts(
 ) -> Result<()> {
     for (alias, target) in capability_aliases {
         if let Some(contract) = target.reversibility() {
-            validate_contract_limits(alias, contract)?;
-            validate_contract_requirements(alias, contract)?;
-            validate_contract_verification(alias, contract)?;
-            validate_snapshot_and_inverse(alias, contract)?;
+            validate_reversibility_contract(alias, contract)?;
         }
     }
     let mut contracts = HashMap::new();
@@ -1303,6 +1377,16 @@ fn validate_reversibility_contracts(
         }
     }
     Ok(())
+}
+
+pub(crate) fn validate_reversibility_contract(
+    alias: &str,
+    contract: &ReversibilityConfig,
+) -> Result<()> {
+    validate_contract_limits(alias, contract)?;
+    validate_contract_requirements(alias, contract)?;
+    validate_contract_verification(alias, contract)?;
+    validate_snapshot_and_inverse(alias, contract)
 }
 
 fn requires_inverse(contract: &ReversibilityConfig) -> bool {
@@ -1423,6 +1507,9 @@ fn validate_snapshot_and_inverse(alias: &str, contract: &ReversibilityConfig) ->
 }
 
 fn validate_server_transport(server_id: &str, server: &ServerConfig) -> Result<()> {
+    if let Some(source) = &server.open_api {
+        return crate::openapi::validate_source(server_id, server, source);
+    }
     let has_command = server
         .command
         .as_ref()
@@ -1746,6 +1833,8 @@ mod tests {
 
     fn empty_server() -> ServerConfig {
         ServerConfig {
+            test_only: false,
+            open_api: None,
             command: None,
             args: vec![],
             env: HashMap::new(),

@@ -186,6 +186,77 @@ const TARGET_PREFIX_BYTES: usize = 39;
 /// # Returns
 /// `value` unchanged when it fits the column, otherwise a truncated copy with
 /// an ellipsis appended.
+fn print_server_row(name: &str, s: &ServerConfig) {
+    let transport = if s.open_api.is_some() {
+        "openapi"
+    } else if s.command.is_some() {
+        "stdio"
+    } else {
+        "http"
+    };
+    let target = if let Some(cmd) = &s.command {
+        let full = format!("{} {}", cmd, s.args.join(" "));
+        truncate_target(&full)
+    } else if let Some(url) = &s.url {
+        truncate_target(url)
+    } else if let Some(source) = &s.open_api {
+        truncate_target(&source.base_url)
+    } else {
+        "-".to_string()
+    };
+
+    let auth = server_auth_label(s.auth.as_ref());
+
+    println!(
+        "{:<20} {:<8} {:<45} {:<15}",
+        name.cyan(),
+        transport,
+        target,
+        auth
+    );
+}
+
+fn server_auth_label(auth: Option<&AuthConfig>) -> &'static str {
+    match auth {
+        Some(AuthConfig::Bearer {
+            token_env: Some(_), ..
+        }) => "Bearer (env)",
+        Some(AuthConfig::Bearer { .. }) => "Bearer (static)",
+        Some(AuthConfig::Basic {
+            password_env: Some(_),
+            ..
+        }) => "Basic (env)",
+        Some(AuthConfig::Basic { .. }) => "Basic (static)",
+        Some(AuthConfig::Oauth2 { .. }) => "OAuth2 PKCE",
+        None => "-",
+    }
+}
+
+fn print_server_transport(server: &ServerConfig) {
+    if let Some(cmd) = &server.command {
+        println!("  {} stdio", "Transport:".bold());
+        println!("  {} {}", "Command:".bold(), cmd);
+        println!("  {} {:?}", "Arguments:".bold(), server.args);
+        if !server.env.is_empty() {
+            println!("  {} {:?}", "Environment:".bold(), server.env);
+        }
+    } else if let Some(url) = &server.url {
+        println!("  {} http", "Transport:".bold());
+        println!("  {} {}", "URL:".bold(), url);
+        if let Some(auth) = &server.auth {
+            println!("  {} {:?}", "Auth:".bold(), auth);
+        }
+    } else if let Some(source) = &server.open_api {
+        println!("  {} OpenAPI", "Transport:".bold());
+        println!("  {} {}", "API base URL:".bold(), source.base_url);
+        println!(
+            "  {} {}",
+            "Operations:".bold(),
+            source.operations.join(", ")
+        );
+    }
+}
+
 fn truncate_target(value: &str) -> String {
     if value.len() <= TARGET_MAX_BYTES {
         return value.to_string();
@@ -370,37 +441,7 @@ pub async fn handle_server_command(cmd: ServerCommands) -> Result<()> {
                 println!("{}", "-".repeat(90).dimmed());
 
                 for (name, s) in &mcp_config.mcp_servers {
-                    let transport = if s.command.is_some() { "stdio" } else { "http" };
-                    let target = if let Some(cmd) = &s.command {
-                        let full = format!("{} {}", cmd, s.args.join(" "));
-                        truncate_target(&full)
-                    } else if let Some(url) = &s.url {
-                        truncate_target(url)
-                    } else {
-                        "-".to_string()
-                    };
-
-                    let auth = match &s.auth {
-                        Some(AuthConfig::Bearer {
-                            token_env: Some(_), ..
-                        }) => "Bearer (env)",
-                        Some(AuthConfig::Bearer { .. }) => "Bearer (static)",
-                        Some(AuthConfig::Basic {
-                            password_env: Some(_),
-                            ..
-                        }) => "Basic (env)",
-                        Some(AuthConfig::Basic { .. }) => "Basic (static)",
-                        Some(AuthConfig::Oauth2 { .. }) => "OAuth2 PKCE",
-                        None => "-",
-                    };
-
-                    println!(
-                        "{:<20} {:<8} {:<45} {:<15}",
-                        name.cyan(),
-                        transport,
-                        target,
-                        auth
-                    );
+                    print_server_row(name, s);
                 }
             }
         }
@@ -416,20 +457,7 @@ pub async fn handle_server_command(cmd: ServerCommands) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(server)?);
             } else {
                 println!("{} {}", "Server:".bold(), name.cyan().bold());
-                if let Some(cmd) = &server.command {
-                    println!("  {} stdio", "Transport:".bold());
-                    println!("  {} {}", "Command:".bold(), cmd);
-                    println!("  {} {:?}", "Arguments:".bold(), server.args);
-                    if !server.env.is_empty() {
-                        println!("  {} {:?}", "Environment:".bold(), server.env);
-                    }
-                } else if let Some(url) = &server.url {
-                    println!("  {} http", "Transport:".bold());
-                    println!("  {} {}", "URL:".bold(), url);
-                    if let Some(auth) = &server.auth {
-                        println!("  {} {:?}", "Auth:".bold(), auth);
-                    }
-                }
+                print_server_transport(server);
                 if let Some(res) = &server.resilience {
                     println!(
                         "  {} failure_threshold={}, cooldown_ms={}, auto_restart={}, max_restarts={}",
@@ -634,11 +662,16 @@ pub async fn trigger_daemon_reload(port: Option<u16>, config_path: &str) -> Resu
     );
 
     let client = reqwest::Client::new();
-    let res = client
-        .post(format!(
-            "http://127.0.0.1:{}/v1/config/reload",
-            resolved_port
-        ))
+    let url = format!("http://127.0.0.1:{resolved_port}/v1/config/reload");
+    let token = std::env::var("WARMPLANE_AUTH_TOKEN")
+        .ok()
+        .filter(|token| !token.trim().is_empty())
+        .or(load_or_default_config(config_path)?.auth_token);
+    let mut request = client.post(url);
+    if let Some(token) = token {
+        request = request.bearer_auth(token);
+    }
+    let res = request
         .send()
         .await
         .with_context(|| format!("Could not reach daemon at 127.0.0.1:{}", resolved_port))?;

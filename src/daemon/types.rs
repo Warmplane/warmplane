@@ -16,6 +16,10 @@ pub enum ServerMsg {
         name: String,
         /// Approved definition digest captured before preparing or holding the call.
         tool_definition: Option<String>,
+        /// Scoped idempotency key and its unique execution claim for mutating HTTP dispatch.
+        dispatch_claim: Option<(String, crate::idempotency::IdempotencyClaim)>,
+        /// Authorization context for a final policy check in the HTTP worker.
+        dispatch_access: Option<ToolDispatchAccess>,
         /// Execution parameters.
         params: Value,
         /// Multi-roundtrip client input responses.
@@ -51,15 +55,62 @@ pub enum ServerMsg {
     },
 }
 
+/// Authenticated scope carried from a capability entry point to the upstream worker.
+pub struct ToolDispatchAccess {
+    pub(crate) capability: String,
+    pub(crate) role: String,
+    pub(crate) profile: Option<String>,
+    pub(crate) grant_expires_at_epoch_secs: Option<u64>,
+    pub(crate) approval_completed: bool,
+}
+
 /// Upstream MCP execution error categories.
 #[derive(Debug, Clone)]
 pub enum UpstreamCallError {
+    /// A policy, argument, or execution-state failure produced by the HTTP worker.
+    Dispatch(ToolDispatchFailure),
     /// Upstream error message string.
     Upstream(String),
     /// Operation timed out.
     Timeout,
     /// The worker blocked dispatch because the approved definition changed or was unavailable.
     ToolDefinitionChanged,
+}
+
+/// An HTTP worker failure with a caller-safe diagnostic and known dispatch state.
+#[derive(Debug, Clone)]
+pub struct ToolDispatchFailure {
+    pub(crate) code: &'static str,
+    pub(crate) message: &'static str,
+    pub(crate) execution_state: &'static str,
+}
+
+impl UpstreamCallError {
+    pub(crate) const INVALID_ARGUMENTS: Self = Self::before_dispatch(
+        "INVALID_ARGUMENTS",
+        "Arguments do not match the OpenAPI operation",
+    );
+    pub(crate) const DISPATCH_DENIED: Self = Self::before_dispatch(
+        "POLICY_DENIED",
+        "The current policy or profile blocks OpenAPI dispatch",
+    );
+    pub(crate) const RESERVATION_FAILED: Self = Self::before_dispatch(
+        "DISPATCH_RESERVATION_FAILED",
+        "Could not reserve durable OpenAPI dispatch state",
+    );
+    pub(crate) const OUTCOME_UNKNOWN: Self = Self::Dispatch(ToolDispatchFailure {
+        code: "UPSTREAM_OUTCOME_UNKNOWN",
+        message: "The OpenAPI mutation may have been submitted. Reconcile upstream state before starting a new invocation.",
+        execution_state: "unknown",
+    });
+
+    const fn before_dispatch(code: &'static str, message: &'static str) -> Self {
+        Self::Dispatch(ToolDispatchFailure {
+            code,
+            message,
+            execution_state: "not_started",
+        })
+    }
 }
 
 /// Metadata describing a registered capability tool.

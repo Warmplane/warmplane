@@ -23,6 +23,7 @@ pub mod interactive;
 pub mod mcp_server;
 pub mod models;
 pub mod oauth2;
+mod openapi;
 pub mod operations;
 pub mod rbac;
 pub mod result_sanitization;

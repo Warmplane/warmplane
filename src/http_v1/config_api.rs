@@ -21,21 +21,27 @@ use crate::{
 pub struct TrustAdmin(pub(crate) bool);
 
 /// Handles GET `/v1/config` returning the active configuration and operational metrics.
-pub async fn handle_get_config(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn handle_get_config(
+    State(state): State<AppState>,
+    admin: Option<axum::extract::Extension<TrustAdmin>>,
+) -> impl IntoResponse {
+    let trust_admin = admin.is_some_and(|axum::extract::Extension(TrustAdmin(allowed))| allowed);
     let total_reqs = state.total_catalog_requests.load(Ordering::Relaxed);
     let etag_hits = state.total_etag_hits.load(Ordering::Relaxed);
     let tool_calls = state.total_tool_calls.load(Ordering::Relaxed);
     let tool_duration_us = state.total_tool_duration_us.load(Ordering::Relaxed);
     let mut srv_configs = state.server_configs.read().await.clone();
-    for srv in srv_configs.values_mut() {
-        srv.sanitize_secrets();
+    for server in srv_configs.values_mut() {
+        server.sanitize_secrets();
     }
+    hide_openapi_configuration(&mut srv_configs, trust_admin);
     let srv_statuses = state.server_statuses.read().await.clone();
     let circuit_breakers = state.circuit_breakers.all_statuses().await;
 
     match crate::config::load_or_default_config(&state.config_path) {
         Ok(mut config) => {
             config.sanitize_secrets();
+            hide_openapi_configuration(&mut config.mcp_servers, trust_admin);
             (
                 StatusCode::OK,
                 Json(json!({
@@ -63,10 +69,22 @@ pub async fn handle_get_config(State(state): State<AppState>) -> impl IntoRespon
     }
 }
 
+fn hide_openapi_configuration(
+    servers: &mut std::collections::HashMap<String, crate::config::ServerConfig>,
+    trust_admin: bool,
+) {
+    if !trust_admin {
+        for server in servers.values_mut() {
+            server.open_api = None;
+        }
+    }
+}
+
 /// Handles POST `/v1/config/servers` to add or update an upstream server.
 pub async fn handle_upsert_server(
     State(state): State<AppState>,
     admin: Option<axum::extract::Extension<TrustAdmin>>,
+    tenant: Option<axum::extract::Extension<Option<crate::rbac::TenantContext>>>,
     Json(mut payload): Json<UpsertServerRequest>,
 ) -> impl IntoResponse {
     let mut config = match crate::config::load_or_default_config(&state.config_path) {
@@ -94,15 +112,14 @@ pub async fn handle_upsert_server(
     }
 
     // Hot-mount the newly added/updated server into active daemon state
-    let mount_result = state
-        .mount_upstream_server(
-            &payload.name,
-            &payload.server,
-            &config.capability_aliases,
-            &config.resource_aliases,
-            &config.prompt_aliases,
-        )
-        .await;
+    let mount_result = mount_managed_source(
+        &state,
+        &config,
+        &payload.name,
+        &payload.server,
+        configuration_actor(&tenant),
+    )
+    .await;
 
     let warning = mount_result.err().map(|e| e.to_string());
 
@@ -127,10 +144,11 @@ fn requires_server_trust_admin(
     payload: &UpsertServerRequest,
 ) -> bool {
     payload.server.require_tool_pins
+        || payload.server.open_api.is_some()
         || config
             .mcp_servers
             .get(&payload.name)
-            .is_some_and(|server| server.require_tool_pins)
+            .is_some_and(|server| server.require_tool_pins || server.open_api.is_some())
 }
 
 fn persist_server_update(
@@ -151,10 +169,19 @@ fn persist_server_update(
     crate::config::save_config(path, config)
 }
 
+fn openapi_management_denied(
+    server: Option<&crate::config::ServerConfig>,
+    admin: Option<&axum::extract::Extension<TrustAdmin>>,
+) -> bool {
+    server.is_some_and(|config| config.open_api.is_some())
+        && !admin.is_some_and(|axum::extract::Extension(TrustAdmin(allowed))| *allowed)
+}
+
 /// Handles DELETE `/v1/config/servers/:id` to remove an upstream server.
 pub async fn handle_delete_server(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    admin: Option<axum::extract::Extension<TrustAdmin>>,
 ) -> impl IntoResponse {
     let mut config = match crate::config::load_or_default_config(&state.config_path) {
         Ok(c) => c,
@@ -167,6 +194,9 @@ pub async fn handle_delete_server(
         }
     };
 
+    if openapi_management_denied(config.mcp_servers.get(&id), admin.as_ref()) {
+        return trust_admin_required();
+    }
     if config.mcp_servers.remove(&id).is_none() {
         return (
             StatusCode::NOT_FOUND,
@@ -330,6 +360,8 @@ pub async fn handle_import_config(
 pub async fn handle_restart_server(
     State(state): State<AppState>,
     Path(server_id): Path<String>,
+    admin: Option<axum::extract::Extension<TrustAdmin>>,
+    tenant: Option<axum::extract::Extension<Option<crate::rbac::TenantContext>>>,
 ) -> impl IntoResponse {
     let config = match crate::config::load_or_default_config(&state.config_path) {
         Ok(c) => c,
@@ -352,16 +384,20 @@ pub async fn handle_restart_server(
                 .into_response(),
         };
 
-    state.unmount_upstream_server(&server_id).await;
-    match state
-        .mount_upstream_server(
-            &server_id,
-            &srv_cfg,
-            &config.capability_aliases,
-            &config.resource_aliases,
-            &config.prompt_aliases,
-        )
-        .await
+    if openapi_management_denied(Some(&srv_cfg), admin.as_ref()) {
+        return trust_admin_required();
+    }
+    if srv_cfg.open_api.is_none() {
+        state.unmount_upstream_server(&server_id).await;
+    }
+    match mount_managed_source(
+        &state,
+        &config,
+        &server_id,
+        &srv_cfg,
+        configuration_actor(&tenant),
+    )
+    .await
     {
         Ok(()) => {
             let statuses_guard = state.server_statuses.read().await;
@@ -386,8 +422,18 @@ pub async fn handle_restart_server(
 }
 
 /// Handles POST `/v1/config/reload` explicitly triggering a hot-reloading reconciliation from disk.
-pub async fn handle_reload_config(State(state): State<AppState>) -> impl IntoResponse {
-    match state.reload_from_disk().await {
+pub async fn handle_reload_config(
+    State(state): State<AppState>,
+    admin: Option<axum::extract::Extension<TrustAdmin>>,
+    tenant: Option<axum::extract::Extension<Option<crate::rbac::TenantContext>>>,
+) -> impl IntoResponse {
+    let actor = configuration_actor(&tenant);
+    if !admin.is_some_and(|axum::extract::Extension(TrustAdmin(allowed))| allowed)
+        && has_openapi_sources(&state).await
+    {
+        return trust_admin_required();
+    }
+    match state.reload_from_disk_as(actor).await {
         Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -395,6 +441,59 @@ pub async fn handle_reload_config(State(state): State<AppState>) -> impl IntoRes
         )
             .into_response(),
     }
+}
+
+fn configuration_actor(
+    tenant: &Option<axum::extract::Extension<Option<crate::rbac::TenantContext>>>,
+) -> Option<&str> {
+    tenant
+        .as_ref()
+        .and_then(|extension| extension.0.as_ref())
+        .and_then(|tenant| tenant.actor_id.as_deref())
+}
+
+async fn mount_managed_source(
+    state: &AppState,
+    config: &crate::config::McpConfig,
+    name: &str,
+    server: &crate::config::ServerConfig,
+    actor: Option<&str>,
+) -> anyhow::Result<()> {
+    if let Some(source) = &server.open_api {
+        return crate::openapi::mount(
+            state,
+            name,
+            server,
+            source,
+            &config.capability_aliases,
+            crate::openapi::MountOrigin::Management(actor),
+        )
+        .await;
+    }
+    state
+        .mount_upstream_server(
+            name,
+            server,
+            &config.capability_aliases,
+            &config.resource_aliases,
+            &config.prompt_aliases,
+        )
+        .await
+}
+
+async fn has_openapi_sources(state: &AppState) -> bool {
+    state
+        .server_configs
+        .read()
+        .await
+        .values()
+        .any(|server| server.open_api.is_some())
+        || crate::config::load_or_default_config(&state.config_path).is_ok_and(|config| {
+            config
+                .mcp_servers
+                .values()
+                .any(|server| server.open_api.is_some())
+        })
 }
 
 /// Handles GET `/v1/clients` returning status of all supported external AI clients.

@@ -264,6 +264,8 @@ async fn test_e2e_config_file_hot_reload() {
     mcp_servers.insert(
         "server_alpha".to_string(),
         ServerConfig {
+            test_only: false,
+            open_api: None,
             command: Some("echo".to_string()),
             args: vec!["alpha".to_string()],
             env: HashMap::new(),
@@ -299,6 +301,8 @@ async fn test_e2e_config_file_hot_reload() {
     updated_servers.insert(
         "server_beta".to_string(),
         ServerConfig {
+            test_only: false,
+            open_api: None,
             command: Some("echo".to_string()),
             args: vec!["beta".to_string()],
             env: HashMap::new(),
@@ -514,6 +518,8 @@ async fn test_e2e_supervisor_crash_detection_and_degraded_status() {
     mcp_servers.insert(
         "failing_server".to_string(),
         ServerConfig {
+            test_only: false,
+            open_api: None,
             command: Some("false".to_string()),
             args: vec![],
             env: HashMap::new(),
@@ -563,6 +569,8 @@ async fn test_e2e_http_supervisor_degraded_boot_on_unreachable_endpoint() {
     mcp_servers.insert(
         "offline_http_server".to_string(),
         ServerConfig {
+            test_only: false,
+            open_api: None,
             command: None,
             args: vec![],
             env: HashMap::new(),
@@ -608,6 +616,8 @@ async fn test_e2e_server_restart_endpoint() {
     mcp_servers.insert(
         "restart_test_srv".to_string(),
         ServerConfig {
+            test_only: false,
+            open_api: None,
             command: Some("echo".to_string()),
             args: vec!["hello".to_string()],
             env: HashMap::new(),

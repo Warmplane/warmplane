@@ -1,3 +1,5 @@
+import { renderReversibilityRecorder } from './reversibility-recorder';
+
 export function renderReversibilityEditor(): string {
   return `
     <section id="reversibility-editor" data-alias-form-section="tool" style="margin-top:16px;padding:16px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface-hover);">
@@ -46,6 +48,7 @@ export function renderReversibilityEditor(): string {
           <p class="text-dim" style="font-size:10px;margin:8px 0 0;">Contract testing requires a pre-call snapshot and a dedicated non-production server.</p>
         </section>
       </div>
+      ${renderReversibilityRecorder()}
     </section>
   `;
 }

@@ -283,6 +283,44 @@ Example:
 
 ---
 
+#### OpenAPI HTTP sources
+
+Add an `openApi` entry under `mcpServers` to expose selected OpenAPI 3.0 or 3.1 operations without a wrapper. Use the same server ID in profiles and tool pins. Each selected operation is available as `<server>.<operationId>` unless an alias overrides it.
+
+```json
+{
+  "mcpServers": {
+    "inventory": {
+      "requireToolPins": true,
+      "openApi": {
+        "specPath": "specs/inventory.yaml",
+        "baseUrl": "https://inventory.example.invalid/api",
+        "operations": ["getAsset", "listAssets"],
+        "auth": {"type": "bearer", "tokenEnv": "INVENTORY_TOKEN"}
+      }
+    }
+  }
+}
+```
+
+Resolve a relative `specPath` from the configuration directory. Use `{"type":"none"}` for an operation whose effective OpenAPI security requirements allow unauthenticated access. The configured base URL controls the request origin and path prefix. Calls use the input schema shown by tool describe. A path argument and a query argument go in distinct objects, for example `{"path":{"assetId":"A42"},"query":{"tag":"stock"}}`. Successful JSON responses use the normal tool result with a `structuredContent` field. Existing authorization, approval, and result sanitization settings apply.
+
+For an HTTPS registry, replace `specPath` with `remoteSpec`. Configure separate fetch credentials and require persistent tool pins. Use `privateNetworks` with the registry's approved CIDRs when it runs on a private network.
+
+```json
+{
+  "url": "https://specs.example.invalid/inventory.yaml",
+  "auth": {"type":"bearer","tokenEnv":"INVENTORY_REGISTRY_TOKEN"},
+  "privateNetworks": ["10.42.0.0/24"]
+}
+```
+
+Remote sources load on startup and explicit reload. Reload from the CLI or connect with a trust administrator credential and use **Reload spec** on the Control Deck source card. The card shows the last validated revision and whether an earlier revision is serving after a failed refresh. Review new and changed definitions in **Tool definition pins**. The fetcher follows no redirects or external document references. An unavailable registry at startup leaves the source unavailable until a successful reload. For a local fallback, replace the remote configuration with a reviewed local spec and approve its definitions.
+
+Local sources can enable selected `POST`, `PUT`, `PATCH`, and `DELETE` operations by also listing their IDs in `mutations`. Use persistent state and configure approvals for the write operations. JSON request bodies use the `body` argument and a supported schema. Give a mutation a stable idempotency key for one intended invocation. If Warmplane reports `UPSTREAM_OUTCOME_UNKNOWN`, reconcile upstream state before using a new key. Warmplane records a reservation before submission and returns the stored outcome for the same key within its normal retention window. Remote sources accept read-only operations.
+
+To withdraw a source, remove its configuration and reload. Before downgrading to a release without OpenAPI support, restore a configuration containing only supported upstream sources. An HTTP request already submitted may have taken effect.
+
 ### 4.2 Authentication Protocols
 
 Warmplane supports Bearer token, HTTP Basic, and enterprise OAuth 2.1 / OpenID Connect (OIDC) authentication.
@@ -377,7 +415,7 @@ The `policy` block enforces global security boundaries, human approval gates, an
 - **Undo Contract Configuration in the UI**: In **Facade & Alias Studio**, create or edit a tool alias and choose **Execution reversibility**. The editor supports delayable, reversible, compensable, and explicitly irreversible contracts. It exposes the fields applicable to each class, including snapshot and drift-check reads, inverse templates, TTL, daily limit, and an isolated test target. Argument templates are entered as JSON objects, and validation messages appear next to the fields that need attention. In capability fields, use the arrow keys to browse suggestions, Enter to select, and Escape to dismiss. Live refreshes and tab switches preserve the current draft for the page session. The alias list shows each saved contract class. Choose **Test saved contract** on an alias with a test target to run its saved configuration while keeping any unsaved edits. Choosing **Not configured** removes the alias contract. Server-side configuration validation still applies.
 - **State-Check Approval Rules**: Snapshot and drift-check capabilities must be allowed without approval by the effective policy. Warmplane blocks internal checks matching `requireApproval` before dispatch. A blocked pre-snapshot prevents the forward call. A blocked post-state capture reports inverse registration failure after the forward effect. A blocked pre-undo check leaves the inverse armed.
 - **Snapshot and Inverse Templates**: Template strings support `${args.path}`, `${result.path}`, and `${snapshot.path}`. An exact placeholder preserves the referenced JSON type; embedded placeholders are rendered as strings. A configured `preSnapshot` runs before the forward call and may select a JSONPath with `captureJsonPath`. Snapshot JSON is stored by SHA-256 content hash under the state directory. `inverse` supplies the compensating capability and arguments.
-- **Undo Contract Testing**: Set `testTarget.server` to a dedicated test MCP server that exposes the same tool names and `testTarget.args` to fixed safe test inputs. The `preSnapshot` is required so Warmplane can compare the final observed state with the original snapshot. Run `warmplane undo test <alias>` or use **Test undo contract** in the Playground. The test command sends both forward and inverse calls only to the configured test server and reports the result without returning state or tool output values.
+- **Undo Contract Testing**: Set `testTarget.server` to a dedicated test source that exposes the same tool names and `testTarget.args` to fixed safe test inputs. The `preSnapshot` is required so Warmplane can compare the final observed state with the original snapshot. Run `warmplane undo test <alias>` or use **Test undo contract** in the Playground. The test command sends both forward and inverse calls only to the configured test server and reports the result without returning state or tool output values.
 - **Drift Protection**: Optional `preUndoCheck` uses the same read contract shape as `preSnapshot`. Warmplane captures the expected post-execution state hash when it registers the inverse, then rereads the state immediately before undo. A mismatch returns `UNDO_STATE_DRIFT`, leaves the entry armed, and does not dispatch the inverse.
 - **Shared Operator State**: Connect agents to the daemon MCP HTTP `/mcp` endpoint when using the Action Feed or operator REST/CLI controls for their actions. A separately launched stdio process owns its own runtime ledger and event bus. Sharing a state directory between processes does not synchronize their live state.
 - **Operator Undo**: `GET /v1/undo` lists tenant-owned entries; `GET /v1/undo/{undo_id}` shows a safe summary; `POST /v1/undo/{undo_id}/execute` runs one inverse; and `POST /v1/undo/work-items/{work_item_id}/rollback` runs eligible entries in reverse order. Responses omit inverse arguments and snapshot contents. Cross-tenant IDs return `404`. With RBAC enabled, configure `undoPermissions` (`list`, `execute`, `rollback`, `forceExpired`) per role. Every expiry override requires the dedicated `forceExpired` permission on the caller's role, `forceExpired: true`, and a non-empty `reason`; the reason is recorded in the audit event. The CLI exposes the same operations under `warmplane undo list|show|run|rollback`; `WARMPLANE_OPERATOR_TOKEN` supplies a bearer token when needed.
@@ -385,6 +423,14 @@ The `policy` block enforces global security boundaries, human approval gates, an
 - **MCP Agent Self-Undo**: The `undo_execute` tool is hidden and rejected unless the caller's RBAC role sets `allowAgentSelfUndo: true`. When a profile is active, that profile must also set `allowAgentSelfUndo: true`. It accepts an explicit `undo_id` or a `work_item_id` to execute that work item's newest armed inverse. The tool does not accept inverse arguments or snapshot data.
 - **Undo Window and Recovery**: `ttlSecs` defaults to 3,600 seconds. Rollback orders entries newest first and breaks equal timestamps by reverse persisted registration order. Automatic rollback checks expiry at each claim. An inverse interrupted while `executing` remains unavailable for automatic redispatch because its upstream outcome may be unknown. Inspect upstream state and the audit trail before reconciliation.
 - **Compensable Daily Limit**: `dailyLimit` is required for `compensable` contracts and counts invocations over a rolling 24-hour period per tenant, profile, and capability. Once reached, Warmplane routes the invocation through the existing human approval flow.
+#### Generate and record a reversibility draft
+
+Mark the dedicated source with `"testOnly": true` in `mcpServers`. Configure a separate origin and credential binding for an HTTP test source, or a distinct command or arguments and environment binding for stdio. Expose matching tool names and input schemas. Give the operator trust administration access and, with RBAC enabled, the undo execute permission. If the operator uses a profile, include both the live and test sources in it.
+
+In **Facade & Alias Studio**, select **Reversible**, a forward operation, an undo window, a snapshot read, a drift check, an inverse, and fixed test arguments. Use **Generate draft** to validate the mappings and review the resolved test target. **Export JSON** downloads the draft. The recorder accepts a single typed template reference per mapped value, such as `${args.path.assetId}` or `${snapshot}`. A dynamic mapping still needs the isolated test.
+
+Confirm and choose **Run isolated test**. Warmplane reads the fixture, makes one governed forward call, checks its post-state, and attempts cleanup through the undo engine. If a forward outcome is uncertain, check the fixture and resolve its state before starting a new test. The recorder reports the outcome without returning fixture values from reads or writes. Use **Activate tested contract** to apply the reviewed draft. Changing a selected capability, target, or draft requires a fresh review. The review token expires after 15 minutes and is single-use.
+
 - **Reversibility Example**:
 
   ```json

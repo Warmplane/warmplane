@@ -14,7 +14,8 @@ use crate::{
     approvals::ApprovalResolution,
     config::{ReversibilityClass, ReversibilityConfig},
     daemon::{AppState, ServerMsg, UpstreamCallError},
-    result_sanitization::Delivery,
+    idempotency::{ExecutionClaim, IdempotencyClaim},
+    result_sanitization::{Delivery, ResultAccess},
     tasks::{
         CreateTaskParams, EmissionCancelResult, EmissionPhase, EmissionRecord, TaskRecord,
         TaskStatus,
@@ -490,6 +491,137 @@ impl BatchStepExecution<'_, '_> {
         args: Value,
         approval_task: Option<&str>,
     ) -> Result<Delivery, StepFailure> {
+        let reservation = match self.claim_openapi_mutation(target, &args).await? {
+            BatchReservation::None => None,
+            BatchReservation::New(key, claim) => Some((key, claim)),
+            BatchReservation::Replay(delivery) => return Ok(delivery),
+        };
+        let result = self
+            .dispatch_reserved(target, args, approval_task, reservation.as_ref())
+            .await;
+        if let Some((key, claim)) = reservation {
+            self.finish_mutation(key, claim, &result).await;
+        }
+        result
+    }
+
+    async fn claim_openapi_mutation(
+        &self,
+        target: &StepTarget,
+        args: &Value,
+    ) -> Result<BatchReservation, StepFailure> {
+        let batch = self.batch;
+        let state = batch.state;
+        if !crate::openapi::is_mutation(state, &target.server, &target.tool).await {
+            return Ok(BatchReservation::None);
+        }
+        let scope = &batch.scope;
+        let access = ResultAccess::new(scope.tenant_id, scope.profile.profile_id.as_deref());
+        if !access
+            .permits_capability(state, &self.step.capability_id, scope.role)
+            .await
+        {
+            return Err(StepFailure::Regular(
+                "Batch write is outside the current policy or profile".to_owned(),
+            ));
+        }
+        let key = crate::idempotency::derive_idempotency_key(
+            format!("batch:{}:{}", target.server, target.tool),
+            &serde_json::json!([
+                scope.tenant_id,
+                scope.profile.profile_id,
+                self.step.id,
+                args
+            ]),
+            batch
+                .context
+                .and_then(|context| context.actor_id.as_deref()),
+            batch.request_id,
+        );
+        match state
+            .idempotency_store
+            .claim_or_replay(
+                &key,
+                &self.step.capability_id,
+                batch.trace_id,
+                access.clone(),
+            )
+            .await
+        {
+            ExecutionClaim::New(claim) => Ok(BatchReservation::New(key, claim)),
+            ExecutionClaim::Replay { response, .. } => self
+                .replay_mutation(&key, response, &access)
+                .await
+                .map(BatchReservation::Replay),
+        }
+    }
+
+    async fn replay_mutation(
+        &self,
+        key: &str,
+        response: Value,
+        access: &ResultAccess,
+    ) -> Result<Delivery, StepFailure> {
+        let batch = self.batch;
+        batch
+            .state
+            .validate_replay(
+                key,
+                &self.step.capability_id,
+                &response,
+                access,
+                batch.scope.role,
+            )
+            .await
+            .map_err(|error| StepFailure::Stop(error.message))?;
+        let revision = batch
+            .state
+            .idempotency_store
+            .get_record(key)
+            .await
+            .and_then(|record| record.result_policy_revision);
+        if let Some(message) = response.pointer("/error/message").and_then(Value::as_str) {
+            return Err(StepFailure::Stop(message.to_owned()));
+        }
+        response
+            .get("data")
+            .cloned()
+            .map(|value| Delivery { value, revision })
+            .ok_or_else(|| {
+                StepFailure::Stop("Stored batch mutation outcome is unavailable".to_owned())
+            })
+    }
+
+    async fn finish_mutation(
+        &self,
+        key: String,
+        claim: IdempotencyClaim,
+        result: &Result<Delivery, StepFailure>,
+    ) {
+        let store = &self.batch.state.idempotency_store;
+        match result {
+            Ok(delivery) => {
+                store
+                    .complete_with_revision(
+                        &key,
+                        claim,
+                        serde_json::json!({"ok": true, "data": delivery.value}),
+                        delivery.revision.clone(),
+                    )
+                    .await
+            }
+            Err(StepFailure::Held(_)) => {}
+            Err(_) => store.remove(&key, claim).await,
+        }
+    }
+
+    async fn dispatch_reserved(
+        &self,
+        target: &StepTarget,
+        args: Value,
+        approval_task: Option<&str>,
+        reservation: Option<&(String, IdempotencyClaim)>,
+    ) -> Result<Delivery, StepFailure> {
         let state = self.batch.state;
         self.batch
             .state
@@ -509,7 +641,7 @@ impl BatchStepExecution<'_, '_> {
             .filter(|contract| contract.class == ReversibilityClass::Delayable)
         {
             let task = self
-                .accept_emission(target, &args, contract, approval_task)
+                .accept_emission(target, &args, contract, approval_task, reservation)
                 .await
                 .map_err(StepFailure::Regular)?;
             let delivery = self.wait_for_emission(&task.task_id).await?;
@@ -528,7 +660,7 @@ impl BatchStepExecution<'_, '_> {
         }
 
         let value = self
-            .call_and_register_inverse(target, &args)
+            .call_and_register_inverse(target, &args, reservation, approval_task.is_some())
             .await
             .map_err(StepFailure::Regular)?;
         let delivery = state
@@ -750,6 +882,7 @@ impl BatchStepExecution<'_, '_> {
         args: &Value,
         contract: &ReversibilityConfig,
         approval_task: Option<&str>,
+        reservation: Option<&(String, IdempotencyClaim)>,
     ) -> Result<TaskRecord, String> {
         let batch = self.batch;
         let scope = &batch.scope;
@@ -759,7 +892,7 @@ impl BatchStepExecution<'_, '_> {
         let release_at_ms =
             crate::emissions::release_deadline_ms(hold_secs).map_err(|error| error.to_string())?;
         let emission = EmissionRecord {
-            idempotency_claim: None,
+            idempotency_claim: reservation.map(|(_, claim)| *claim),
             phase: EmissionPhase::PendingEmission,
             release_at_ms,
             cancellable: true,
@@ -775,7 +908,7 @@ impl BatchStepExecution<'_, '_> {
             batch_id: batch.request_id.map(str::to_owned),
             step_id: Some(self.step.id.clone()),
         };
-        if let Some(id) = approval_task {
+        if let Some(id) = approval_task.filter(|_| reservation.is_none()) {
             return batch
                 .state
                 .hold_coordinator
@@ -795,7 +928,9 @@ impl BatchStepExecution<'_, '_> {
                     args: args.clone(),
                     request_id: batch.request_id.map(str::to_owned),
                     context: batch.context.cloned(),
-                    idempotency_key: self.idempotency_key.clone(),
+                    idempotency_key: reservation
+                        .map(|(key, _)| key.clone())
+                        .or_else(|| self.idempotency_key.clone()),
                     initial_status: TaskStatus::Working,
                     status_message: Some(
                         "Waiting for the batch emission release deadline".to_string(),
@@ -896,11 +1031,15 @@ impl BatchStepExecution<'_, '_> {
         &self,
         target: &StepTarget,
         args: &Value,
+        reservation: Option<&(String, IdempotencyClaim)>,
+        approval_completed: bool,
     ) -> Result<Value, String> {
         let batch = self.batch;
         let contract = target.reversibility.as_ref();
         let (snapshot, snapshot_hash) = self.capture_snapshot(contract, args).await?;
-        let value = self.call_upstream(target, args).await?;
+        let value = self
+            .call_upstream(target, args, reservation, approval_completed)
+            .await?;
         if let Some(contract) =
             contract.filter(|_| !crate::result_sanitization::is_uninspectable_result(&value))
         {
@@ -930,9 +1069,23 @@ impl BatchStepExecution<'_, '_> {
         Ok(value)
     }
 
-    async fn call_upstream(&self, target: &StepTarget, args: &Value) -> Result<Value, String> {
+    async fn call_upstream(
+        &self,
+        target: &StepTarget,
+        args: &Value,
+        reservation: Option<&(String, IdempotencyClaim)>,
+        approval_completed: bool,
+    ) -> Result<Value, String> {
         let state = self.batch.state;
-        let result = send_step_call(state, target, args).await;
+        let scope = &self.batch.scope;
+        let access = crate::daemon::types::ToolDispatchAccess {
+            capability: self.step.capability_id.clone(),
+            role: scope.role.to_owned(),
+            profile: scope.profile.profile_id.clone(),
+            grant_expires_at_epoch_secs: scope.authorization_expires_at_epoch_secs,
+            approval_completed,
+        };
+        let result = send_step_call(state, target, args, reservation.cloned(), access).await;
         if result.is_ok() {
             state.circuit_breakers.record_success(&target.server).await;
         } else {
@@ -985,10 +1138,18 @@ impl BatchStepExecution<'_, '_> {
     }
 }
 
+enum BatchReservation {
+    None,
+    New(String, IdempotencyClaim),
+    Replay(Delivery),
+}
+
 async fn send_step_call(
     state: &AppState,
     target: &StepTarget,
     args: &Value,
+    dispatch_claim: Option<(String, IdempotencyClaim)>,
+    dispatch_access: crate::daemon::types::ToolDispatchAccess,
 ) -> Result<Value, String> {
     let sender = state
         .servers
@@ -1000,6 +1161,8 @@ async fn send_step_call(
     let (reply, receiver) = oneshot::channel();
     sender
         .send(ServerMsg::CallTool {
+            dispatch_claim,
+            dispatch_access: Some(dispatch_access),
             name: target.tool.clone(),
             tool_definition: target.tool_definition.clone(),
             params: args.clone(),
@@ -1011,6 +1174,9 @@ async fn send_step_call(
         .map_err(|_| format!("Server '{}' mailbox closed", target.server))?;
     match receiver.await {
         Ok(Ok(value)) => Ok(value),
+        Ok(Err(failure @ UpstreamCallError::Dispatch(_))) => {
+            Err(state.tool_error(&target.server, failure).await.0.message)
+        }
         Ok(Err(UpstreamCallError::Timeout)) => Err("Tool execution timed out".to_string()),
         Ok(Err(UpstreamCallError::Upstream(error))) => Err(state.safe_upstream_error(error).await),
         Ok(Err(UpstreamCallError::ToolDefinitionChanged)) => {

@@ -1,10 +1,11 @@
+import { bindReversibilityRecorder } from './components/reversibility-recorder';
 import { escapeHtml } from './escape';
 import { store, BatchStepState, AppState } from './state';
 import { api, apiError } from './api';
 import type { McpServerConfig, PolicyConfig, ReversibilityConfig } from './api';
 import { readResultRules, readWebhook } from './components/trust-settings';
 import { renderOverview } from './components/overview';
-import { renderServers } from './components/servers';
+import { renderServers, serverConnection } from './components/servers';
 import { renderPlayground, renderResourceList, renderPromptList, generateSampleArgsFromSchema } from './components/playground';
 import { renderTasks } from './components/tasks';
 import { renderUndoFeed } from './components/undo';
@@ -17,6 +18,11 @@ import { bindCapabilityAutocomplete, closeCapabilitySuggestions } from './compon
 import { renderProfiles } from './components/profiles';
 import { renderSecrets } from './components/secrets';
 import { SERVER_TEMPLATES, ServerTemplate, findTemplateForServer } from './templates';
+
+function formatServerSupervision(connection: ReturnType<typeof serverConnection>, server: McpServerConfig | undefined) {
+  if (!connection.editable) return connection.address;
+  return `Auto-Restart: ${server?.resilience?.autoRestart !== false ? 'ENABLED' : 'DISABLED'}`;
+}
 
 class WarmplaneApp {
   private activeTemplateCategory: string = 'all';
@@ -1773,6 +1779,7 @@ class WarmplaneApp {
     const state = store.getState();
     const serverCfg = state.config.mcpServers?.[name];
     const statusInfo = state.serverStatuses?.[name];
+    const connection = serverConnection(serverCfg, statusInfo);
     const cb = (state.circuitBreakers || []).find(c => c.server_id === name);
 
     const modal = document.getElementById('modal-server-diagnostics');
@@ -1848,7 +1855,7 @@ class WarmplaneApp {
         <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 16px;">
           <span style="width: 10px; height: 10px; border-radius: 50%; background: ${statusColor};"></span>
           <span style="font-weight: 700; font-size: 14px; color: var(--text-main);">Current Status: <span style="color: ${statusColor}; text-transform: uppercase;">${escapeHtml(statusInfo?.status || 'unknown')}</span></span>
-          <span class="brand-badge" style="color: var(--cyan-400);">Protocol: ${escapeHtml(statusInfo?.protocol_version || '2026-07-28')}</span>
+          ${connection.protocolBadge}
           ${missingRequired.length > 0 ? `<span class="brand-badge" style="color: var(--red-400); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.1);">⚠️ Missing Required Keys</span>` : ''}
         </div>
 
@@ -1869,9 +1876,9 @@ class WarmplaneApp {
             </div>
           </div>
           <div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px;">
-            <div style="font-size: 10.5px; color: var(--text-dim);">Process Supervision</div>
+            <div style="font-size: 10.5px; color: var(--text-dim);">${connection.diagnosticsLabel}</div>
             <div style="font-weight: 700; font-size: 13px; color: var(--text-main); margin-top: 2px;">
-              Auto-Restart: ${serverCfg?.resilience?.autoRestart !== false ? 'ENABLED' : 'DISABLED'}
+              ${formatServerSupervision(connection, serverCfg)}
             </div>
           </div>
         </div>
@@ -2404,6 +2411,10 @@ class WarmplaneApp {
       const form = studio.querySelector<HTMLFormElement>('#alias-form');
       if (!form) return;
       bindCapabilityAutocomplete(form);
+      bindReversibilityRecorder(form, () => this.readAliasFields(), async () => {
+        this.resetAliasForm();
+        await this.refreshData();
+      });
       form.addEventListener('submit', event => {
         event.preventDefault();
         void this.createAlias();

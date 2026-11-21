@@ -448,6 +448,10 @@ if (cached === null) {
 
 ### 2. Describe a capability and call it
 
+For an OpenAPI source, discover the configured `source.operationId` or alias through the same tool catalog. Use the described input schema to supply distinct `path` and `query` objects, and read JSON from `structuredContent`. For a configured write, preserve the idempotency key when checking an uncertain execution. See the [OpenAPI source configuration](USER-GUIDE.md#openapi-http-sources).
+
+Trust administrators can generate a contract using `POST /v1/config/reversibility/draft`. Send the returned capability revisions and one-use confirmation token with the unchanged draft to `/v1/config/reversibility/record` after operator confirmation. Activation uses `/v1/config/reversibility/activate` with the review token from a successful recording, the draft, its revisions, and the alias. Keep the same profile across the three requests. See the [REST contract](openapi.yaml).
+
 ```typescript
 const wp = new WarmplaneClient();
 

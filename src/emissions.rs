@@ -386,6 +386,17 @@ impl HoldCoordinator {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let send_result = sender
             .send(crate::daemon::ServerMsg::CallTool {
+                dispatch_claim: record
+                    .idempotency_key
+                    .clone()
+                    .zip(emission.idempotency_claim),
+                dispatch_access: Some(crate::daemon::types::ToolDispatchAccess {
+                    capability: record.capability_id.clone(),
+                    role: emission.role.clone(),
+                    profile: emission.profile_id.clone(),
+                    grant_expires_at_epoch_secs: emission.authorization_expires_at_epoch_secs,
+                    approval_completed: emission.approval_completed,
+                }),
                 name: emission.tool_name.clone(),
                 tool_definition: emission.tool_definition.clone(),
                 params: record.args.clone(),
@@ -424,17 +435,18 @@ impl HoldCoordinator {
                     .record_failure(&record.server_id)
                     .await;
                 let message = match error {
+                    other @ (crate::daemon::UpstreamCallError::Dispatch(_)
+                    | crate::daemon::UpstreamCallError::ToolDefinitionChanged) => {
+                        let (error, _) = state.tool_error(&record.server_id, other).await;
+                        self.finish_failure(&state, &record, &error.code, error.message)
+                            .await;
+                        return;
+                    }
                     crate::daemon::UpstreamCallError::Timeout => {
                         "Upstream call timed out".to_string()
                     }
                     crate::daemon::UpstreamCallError::Upstream(message) => {
                         state.safe_upstream_error(message).await
-                    }
-                    crate::daemon::UpstreamCallError::ToolDefinitionChanged => {
-                        let error = crate::WarmplaneError::from(crate::tool_pins::PinDenied);
-                        self.finish_failure(&state, &record, &error.code, error.message)
-                            .await;
-                        return;
                     }
                 };
                 self.finish_failure(&state, &record, "UPSTREAM_CALL_FAILED", message)
@@ -534,7 +546,10 @@ impl HoldCoordinator {
         message: String,
     ) {
         let execution = match code {
-            "UPSTREAM_CALL_FAILED" | "UPSTREAM_DROPPED" | "TOOL_TIMEOUT" => "unknown",
+            "UPSTREAM_CALL_FAILED"
+            | "UPSTREAM_DROPPED"
+            | "TOOL_TIMEOUT"
+            | "UPSTREAM_OUTCOME_UNKNOWN" => "unknown",
             _ => "not_started",
         };
         state
